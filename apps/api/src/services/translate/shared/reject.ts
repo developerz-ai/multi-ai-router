@@ -257,3 +257,40 @@ export function assertPlainTextFormat(request: {
 }): void {
   assertPlainFormat(request.text?.format?.type, "text.format.type")
 }
+
+const NO_ANTHROPIC_STRUCTURED_OUTPUT =
+  "constrains the response shape, and this build carries a structured-output constraint in one direction only: from openai-chat, onto openai-responses as `text.format` or onto anthropic as a forced tool call. Nothing carries it out of anthropic, so on this hop it is refused rather than dropped"
+
+/**
+ * Anthropic's own structured-output constraint, refused on every hop that cannot carry it.
+ *
+ * Two spellings, one feature. `output_config.format` is the field Anthropic's Messages API states
+ * on the wire (`{type: "json_schema", schema: {...}}`); `output_format` is the name Anthropic's own
+ * SDKs take it under (`messages.parse(output_format=…)`, which they send as `output_config.format`).
+ * A client stating either is stating the same contract, so both are refused — each named as the
+ * caller wrote it, because that is the field the caller has to change.
+ *
+ * The third spelling of one feature, counting `response_format` (openai-chat) and `text.format`
+ * (openai-responses): one rule behind all of them is the reason this lives beside its siblings
+ * rather than in a translator — two copies could disagree about which requests are servable.
+ *
+ * Dropped, it fails at the *caller's* `JSON.parse` with nothing naming the cause: the upstream
+ * answered in prose, because the constraint never reached it. Refused, the caller gets a `400`
+ * naming the field it has to change.
+ *
+ * Absent and `null` state nothing and pass — a caller that never asked for a constrained answer
+ * must not be refused over it. `output_config` without a `format` is the reasoning dial, which is
+ * carried, not refused.
+ */
+export function assertNoAnthropicStructuredOutput(request: {
+  readonly output_format?: unknown
+  readonly output_config?: { readonly format?: unknown } | null | undefined
+}): void {
+  if (request.output_format !== null && request.output_format !== undefined) {
+    rejectField("output_format", NO_ANTHROPIC_STRUCTURED_OUTPUT)
+  }
+  const format = request.output_config?.format
+  if (format !== null && format !== undefined) {
+    rejectField("output_config.format", NO_ANTHROPIC_STRUCTURED_OUTPUT)
+  }
+}

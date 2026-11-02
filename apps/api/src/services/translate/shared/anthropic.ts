@@ -14,6 +14,11 @@ import { z } from "zod"
  * rather than carried: a field this schema does not name has no counterpart in the target dialect,
  * and forwarding it would ship a body the upstream never agreed to.
  *
+ * Two fields are named here purely so they can be **refused by name**: Anthropic's own
+ * structured-output constraint. Stripped, it would be a contract lost without a word — the upstream
+ * would answer in prose and the caller's `JSON.parse` would fail naming nothing
+ * (`shared/reject.ts`).
+ *
  * The schema is deliberately wider than what any translator carries. A block type it does not know
  * parses to {@link UNSUPPORTED_BLOCK} and is *dropped* by the translator with its type name reported
  * (`shared/drops.ts`), never refused: Claude Code sends `server_tool_use`, `web_search_tool_result`
@@ -185,9 +190,19 @@ export const anthropicRequestSchema = z.object({
     .optional()
     .catch(undefined),
   output_config: z
-    .looseObject({ effort: z.string().optional().catch(undefined) })
+    .looseObject({
+      effort: z.string().optional().catch(undefined),
+      // Anthropic's structured-output constraint, as the Messages API states it on the wire:
+      // `output_config.format` — `{type: "json_schema", schema: {...}}`. Named here so it can be
+      // refused by name instead of dropped with the rest of `output_config` (`shared/reject.ts`).
+      format: z.unknown().optional(),
+    })
     .optional()
     .catch(undefined),
+  // The same constraint under the name Anthropic's own SDKs take it: `messages.parse(output_format=…)`,
+  // which they send as `output_config.format`. A client stating it here states the same contract,
+  // so it is refused the same way — and named as the caller wrote it.
+  output_format: z.unknown().nullish(),
 })
 
 export type ParsedAnthropicRequest = z.infer<typeof anthropicRequestSchema>

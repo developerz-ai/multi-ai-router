@@ -21,7 +21,12 @@ import type {
   OpenAiResponsesRequest,
 } from "../shared/openai-responses"
 import { anthropicAskedForReasoning, openAiEffortFromAnthropic } from "../shared/reasoning-effort"
-import { assertNoStopSequence, parseRequest, rejectField } from "../shared/reject"
+import {
+  assertNoAnthropicStructuredOutput,
+  assertNoStopSequence,
+  parseRequest,
+  rejectField,
+} from "../shared/reject"
 import { replayedReasoningItem } from "../shared/sealed-reasoning"
 import { toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import {
@@ -64,8 +69,9 @@ import {
  * and **reported** through `options.onDrop`: server-side and built-in tools, a `tool_choice` naming
  * one, non-text documents, and any block type the target cannot carry; an image inside a
  * `tool_result` is hoisted into a user message item after the `function_call_output`. Refused: a
- * stated `stop_sequences` (the dialect has no stop parameter), an image on an assistant turn, and
- * anything that is not a valid Anthropic request.
+ * stated `stop_sequences` (the dialect has no stop parameter), a stated `output_config.format` or
+ * `output_format` (Anthropic's own structured-output constraint, which this dialect cannot carry),
+ * an image on an assistant turn, and anything that is not a valid Anthropic request.
  */
 
 /** What a drop report calls the thing an Anthropic block would have landed in on this side. */
@@ -96,6 +102,10 @@ export function anthropicToOpenAiResponsesRequest(
   // dialects that spell it — the same field under two names cannot be servable from one and not the
   // other.
   assertNoStopSequence(request.stop_sequences, "stop_sequences")
+
+  // The third spelling of the same feature, refused for the same reason: a JSON-Schema constraint
+  // the caller will parse cannot be carried onto a dialect that states none.
+  assertNoAnthropicStructuredOutput(request)
 
   const input: OpenAiResponsesItem[] = []
   for (const [index, message] of request.messages.entries()) {

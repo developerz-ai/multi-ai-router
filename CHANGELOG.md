@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The required typecheck gate retains the production solution build and additionally checks API smoke sources and all recursive API tests, support helpers and TypeScript fixtures through a strict, non-composite no-emit project. Imported benchmark and database-test helpers are included without changing production output paths or inherited strictness. A coverage regression enumerates sources, checks representative compiler errors in smoke, unit, integration and support, and pins the `bin/check` → `bin/lint` → typecheck wiring. Runtime versions are unchanged.
 
+## [2.42.0] — 2026-11-02
+
+### Changed
+
+- **An Anthropic structured-output constraint is refused `400` on a cross-dialect hop instead of being silently dropped.** Anthropic's Messages API states structured output as `output_config.format` (`{type: "json_schema", schema: {...}}`); `output_format` is the deprecated beta-era spelling of the same feature — the one Anthropic's own `messages.parse(output_format=…)` takes and sends as `output_config.format`. `anthropicRequestSchema` is a `z.object`, so it stripped the constraint out of the body before a translator ever saw it: on the `anthropic → openai-chat` and `anthropic → openai-responses` hops the constraint never left the router, the upstream answered in prose, and the caller's `JSON.parse` failed naming nothing. Both spellings are now refused by name — the field the caller wrote, never the schema — before any upstream call, by one rule (`assertNoAnthropicStructuredOutput`, `services/translate/shared/reject.ts`): no carrier exists for a constraint that starts in the `anthropic` dialect, since both carriers in this build (openai-chat `response_format` → openai-responses `text.format`, and → anthropic as a forced tool call) run the other way. Absent and `null` state nothing and pass, and an `output_config` without a `format` is the reasoning dial (`output_config.effort`), which is carried. **A same-dialect anthropic body is relayed untouched** — passthrough never parses the body — so an `anthropic-api` account receives the constraint exactly as the client wrote it and Anthropic enforces it itself.
+
+### Documentation
+
+- `docs/research/anthropic-structured-output.md` records Anthropic's contract: the current field `output_config.format`, the deprecated `output_format` spelling, the `{type: "json_schema", schema: {...}}` shape, the source and the date checked (2026-11-02), and the blast radius if Anthropic moves the field again.
+- `docs/idea/06-protocol-translation.md` gains the `output_config.format` / `output_format` row under "Known lossy edges" and names the third spelling of one feature in the "Unsupported" paragraph above the translation matrix; the `anthropic-api` row in `docs/idea/03-providers.md` points at the rule, and `docs/reusable-code.md` lists the new refusal helper.
+
 ## [2.41.1] — 2026-11-02
 
 ### Fixed
@@ -1754,3 +1765,4 @@ your tooling config.
 [2.40.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.3
 [2.41.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.0
 [2.41.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.1
+[2.42.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.0
