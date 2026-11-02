@@ -18,6 +18,10 @@ printf '%s\\n' "$*" >> "$FIXTURE_DIR/commands"
 case "$*" in
   *pg_isready*) exit 0 ;;
   *pg_dumpall*)
+    if [[ -f "$FIXTURE_DIR/quoted-role.sql" ]]; then
+      cat "$FIXTURE_DIR/quoted-role.sql"
+      exit 0
+    fi
     printf 'CREATE ROLE router;\\nALTER ROLE router WITH LOGIN;\\n'
     if [[ "$FIXTURE_EXTRA_ROLE" == 1 ]]; then
       printf 'CREATE ROLE legacy_app;\\nALTER ROLE legacy_app WITH LOGIN NOINHERIT;\\n'
@@ -36,10 +40,12 @@ case "$*" in
       fi
       exit 0
     fi
+    printf '%s' "$body" > "$FIXTURE_DIR/restored-roles.sql"
+    if [[ -f "$FIXTURE_DIR/quoted-role.sql" ]]; then exit 0; fi
     # Roles pass. A guarded CREATE runs only for roles the cluster lacks; a
     # bare CREATE for an existing role is the server's fatal duplicate error.
     if [[ "$body" == *'NOT EXISTS (SELECT FROM pg_roles'* ]]; then
-      names="$(grep -oE "rolname = '[^']+'" <<<"$body" | cut -d"'" -f2)"
+      names="$(grep -oE "rolname = E'[^']+'" <<<"$body" | cut -d"'" -f2)"
       for role in $names; do
         grep -qxF "$role" "$FIXTURE_DIR/roles" || printf '%s\\n' "$role" >> "$FIXTURE_DIR/roles"
       done
@@ -100,6 +106,29 @@ function run(failCopy: boolean) {
 }
 
 describe("PostgreSQL major upgrade", () => {
+  test.each([
+    ["o'reilly", "o''reilly", "$r$"],
+    ['a"b', 'a"b', "$r$"],
+    ["a\\b", "a\\\\b", "$r$"],
+    ["a$r$b", "a$r$b", "$r1$"],
+    ["a\nb", "a\nb", "$r$"],
+  ])("quotes the legacy role %j in its existence guard", (name, literal, tag) => {
+    const dir = makeFixture()
+    try {
+      const identifier = `"${name.replaceAll('"', '""')}"`
+      const create = `CREATE ROLE ${identifier};`
+      const alter = `ALTER ROLE ${identifier} WITH LOGIN;`
+      writeFileSync(join(dir, "quoted-role.sql"), `${create}\n${alter}\n`)
+      const result = runScript(dir, false, false)
+      expect(result.status).toBe(0)
+      expect(readFileSync(join(dir, "restored-roles.sql"), "utf8")).toBe(
+        `DO ${tag} BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = E'${literal}') THEN ${create} END IF; END ${tag};\n${alter}`,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("replaces a populated target and restores roles without a bootstrap collision", () => {
     const result = run(false)
     expect(result.status).toBe(0)

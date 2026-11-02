@@ -125,7 +125,37 @@ printf 'restoring roles and the router database from "%s" into postgres-data-18\
 # restores attributes/password) and every other SQL error remain fatal under
 # ON_ERROR_STOP.
 docker exec -u postgres "$CONTAINER" pg_dumpall -U "$PG_USER" --roles-only |
-  sed -E 's/^CREATE ROLE "?([^";]+)"?;$/DO $r$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '\''\1'\'') THEN CREATE ROLE "\1"; END IF; END $r$;/' |
+  # Keep pg_dumpall's identifier quoting; decode it only for the name literal.
+  # E strings escape backslashes independently of standard_conforming_strings.
+  awk -v quote="'" '
+    function literal(value, out, i, c) {
+      out = "E" quote
+      for (i = 1; i <= length(value); i++) {
+        c = substr(value, i, 1)
+        if (c == quote || c == "\\") out = out c
+        out = out c
+      }
+      return out quote
+    }
+    /^CREATE ROLE / {
+      statement = $0
+      while (statement !~ /^CREATE ROLE ("([^"]|"")*"|[^" ;]+);$/) {
+        if ((getline line) <= 0) exit 1
+        statement = statement "\n" line
+      }
+      name = substr(statement, 13, length(statement) - 13)
+      if (substr(name, 1, 1) == "\"") {
+        name = substr(name, 2, length(name) - 2)
+        gsub(/""/, "\"", name)
+      }
+      value = literal(name)
+      tag = "$r$"
+      for (i = 1; index(statement, tag) || index(value, tag); i++) tag = "$r" i "$"
+      print "DO " tag " BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = " value ") THEN " statement " END IF; END " tag ";"
+      next
+    }
+    { print }
+  ' |
   $COMPOSE exec -T postgres psql -X -v ON_ERROR_STOP=1 -U router -d postgres
 
 # Connect to the maintenance database: the dump drops/recreates router, even on
