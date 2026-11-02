@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Integration coverage for the fast-mode credential fence at the real request-services composition boundary (`apps/api/test/integration/claude-fast-response.test.ts`). The suite builds the production `createRequestServices` with `CLAUDE_FAST_MODE=true` and drives the captured `FastInvokerDeps.credential` closure, proving that fast-mode credential access is bound to the selected Account's own config directory and to that Account's metadata ownership scope: a directory that does not belong to the selected Account is refused with `UpstreamAdmissionRefused` before any credential read happens (the ownership and credential-reader spies record zero calls), and the authorized read is asserted to run with the selected Account as the active metadata owner both before and after the read. Every fixture is synthetic — per-run `mkdtemp` roots used as `CLAUDE_CONFIG_ROOT`, with synthetic `.credentials.json`/`.claude.json` written per Account — and no HOME directory, real Account directory, real credential or live provider is read. Test-only: no runtime behaviour change.
+
 ## [2.42.1] — 2026-11-02
 
 ### Fixed
