@@ -1774,4 +1774,5 @@ your tooling config.
 [2.40.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.3
 [2.41.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.0
 [2.41.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.1
+[2.42.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.1
 [2.42.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.0
