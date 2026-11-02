@@ -151,3 +151,37 @@ test("a failed settlement sweep warns and stop still resolves", async () => {
   await coordinator.stop()
   expect(warnings).toHaveLength(1)
 })
+
+test("after the drain deadline, no further sweep runs and a restart waits for the old drain", async () => {
+  const { f } = await issued()
+  const gate = Promise.withResolvers<void>()
+  const scheduled: { delay: number; run: () => void }[] = []
+  let sweeps = 0
+  const coordinator = createRecoveryCoordinator({
+    ...f.deps,
+    schedule: (run, delay) => {
+      scheduled.push({ run, delay })
+      return () => {}
+    },
+    repository: {
+      ...f.deps.repository,
+      settleIssuedForOwner: async () => {
+        sweeps += 1
+        await gate.promise
+        // A full batch would ask for another sweep, which the expired drain must not run.
+        return Array.from({ length: f.deps.config.batchSize }, () => f.state())
+      },
+    },
+  })
+  const stopping = coordinator.stop()
+  scheduled.find((entry) => entry.delay === f.deps.config.shutdownDrainMs)?.run()
+  await stopping
+  const armedBefore = scheduled.length
+  coordinator.start()
+  expect(scheduled.length).toBe(armedBefore)
+  gate.resolve()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(sweeps).toBe(1)
+  coordinator.start()
+  expect(scheduled.length).toBe(armedBefore + 1)
+})

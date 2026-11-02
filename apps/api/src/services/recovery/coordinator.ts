@@ -99,8 +99,9 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
    * No later boot hydrates this boot's permits, so one left `issued` gates its account until the
    * maximum-outcome bound. Observed verdicts go first; whatever has none proved nothing: uncertain.
    */
-  const settle = async (): Promise<void> => {
+  const settle = async (expired: () => boolean): Promise<void> => {
     for (const outcome of queues.batch(deps.config.outcomeCapacity)) {
+      if (expired()) return
       try {
         await writeOutcome(outcome)
       } catch (error) {
@@ -110,6 +111,7 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
     try {
       let rows: RecoveryRow[]
       do {
+        if (expired()) return
         rows = await deps.repository.settleIssuedForOwner({
           limit: deps.config.batchSize,
           ownerBootId: bootId,
@@ -254,27 +256,34 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       stopped = true
       loop.stop()
       const inFlight = flight
+      let expired = false
       let cancelDeadline: () => void = () => undefined
       const deadline = new Promise<void>((resolve) => {
         cancelDeadline = deps.schedule(() => {
           deps.warn(
             "recovery coordinator drain timed out; unsettled permits wait out the maximum outcome bound",
           )
+          expired = true
           resolve()
         }, deps.config.shutdownDrainMs)
       })
       // At once, so a flight stalled on the catalog cannot spend the budget; again after it, so a
       // permit whose issue was already committing when stop began is not stranded.
-      const drain = settle().then(async () => {
+      const isExpired = () => expired
+      const drain = settle(isExpired).then(async () => {
         if (inFlight === undefined) return
         await inFlight
-        await settle()
+        await settle(isExpired)
       })
-      const owned = Promise.race([drain, deadline]).finally(() => {
-        cancelDeadline()
-        stopping = undefined
-      })
+      const owned = Promise.race([drain, deadline]).finally(cancelDeadline)
       stopping = owned
+      // A restart waits for the drain itself, not the deadline: a sweep still running could mark
+      // the new run's permits uncertain.
+      void drain
+        .catch(() => undefined)
+        .finally(() => {
+          stopping = undefined
+        })
       return owned
     },
   }
