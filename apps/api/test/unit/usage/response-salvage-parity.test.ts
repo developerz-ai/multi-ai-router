@@ -318,6 +318,23 @@ test.each([
   expect(run(createResponseSalvage, text, TIGHT_CAP).rebuilt).toMatchObject({ status: "completed" })
 })
 
+test.each([
+  `"usage":0,"\\u0075sage":{"pad":"${"p".repeat(65)}"},"status":"completed"`,
+  `"usage":0,"\\u0075sage":{"pad":"${"p".repeat(45)}"},"status":"completed"`,
+])("a mixed-spelling repeat yields at the cap, keeping the frozen success: %s", (members) => {
+  const text = `{${members}}`
+  // 2.41.0 read the literal `usage` and kept the later `status`; the escaped spelling was no
+  // slot to it. The current scanner reads both as the one slot, so the escaped copy replaces the
+  // literal one — and gives way at the cap rather than failing the frame.
+  expect(run(createFrozenSalvage, text, TIGHT_CAP).rebuilt).toEqual({
+    usage: 0,
+    status: "completed",
+  })
+  const current = run(createResponseSalvage, text, TIGHT_CAP).rebuilt
+  expect(current).not.toBeNull()
+  expect(current).toEqual({ status: "completed" })
+})
+
 test("the frozen 2.41.0 scanner still shows the two divergences the current one no longer has", () => {
   // A repeated parent: 2.41.0 kept the child of the copy the later one replaced.
   const repeated = `{"response":{"usage":{"input_tokens":1}},"response":{"status":"x"}}`

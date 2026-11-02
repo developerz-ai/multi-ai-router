@@ -481,8 +481,11 @@ that pool — the policy never runs across the union.
 
 Escaped-key salvage is additive under the observation budget: captures recognized only by decoding
 an escaped key are dropped when full and released before literal-key evidence needs room. A repeat
-of an already retained literal slot inherits its priority; every repeated slot releases the earlier
-value's bytes before capturing its replacement, so duplicate copies cannot crowd out the last one.
+of an already retained literal slot inherits its priority — it is not the room a literal capture may
+take — but it still gives way at a full budget, and it gives way before the frame fails, so an
+escaped repeat never fails a frame that the literal spelling of the same slot would have salvaged.
+Every repeated slot releases the earlier value's bytes before capturing its replacement, so
+duplicate copies cannot crowd out the last one.
 
 Rules:
 

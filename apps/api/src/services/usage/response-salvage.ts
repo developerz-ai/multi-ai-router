@@ -28,7 +28,10 @@ export interface ResponseSalvage {
 export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const decoder = new TextDecoder("utf-8", { fatal: true })
   const captured = new Map<string, number[]>()
-  const decodedOnly = new Set<string>()
+  // The escaped captures a literal capture may take the room from, and the ones that stand in for
+  // a literal slot: those inherit its priority and give way only when the frame would fail.
+  const evictable = new Set<string>()
+  const inherited = new Set<string>()
   const escapedKeys = [false, false, false]
   // Only depths 1 and 2 carry keys we care about; deeper structure is counted, never stored.
   const keys: (string | null)[] = [null, null, null]
@@ -70,7 +73,8 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       if (bytes === undefined) continue
       retained -= bytes.length
       captured.delete(path)
-      decodedOnly.delete(path)
+      evictable.delete(path)
+      inherited.delete(path)
     }
   }
   // Ceiling slots lent to the error capture in progress: given back if it drops (it frees at least
@@ -108,9 +112,11 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return
     const ceiling = SLOT_MAX_BYTES.get(capture.path)
-    // Newly decoded slots must never crowd out evidence the literal-only scanner could keep.
-    if (retained >= maximumBytes && !capture.decodedOnly) release(decodedOnly)
-    if (retained >= maximumBytes && capture.decodedOnly) {
+    // A capture whose key was spelled in escapes gives way at a full budget: it drops itself
+    // rather than failing the frame. A literal capture takes the room an escaped one holds
+    // instead, so newly decoded slots never crowd out evidence the literal-only scanner kept.
+    if (retained >= maximumBytes && !capture.escaped) release(evictable)
+    if (retained >= maximumBytes && capture.escaped) {
       retained -= capture.bytes.length
       capture.bytes = []
       capture.dropped = true
@@ -137,6 +143,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       return
     }
     if (retained >= maximumBytes) evictOptional()
+    // Last resort: the frame would fail, so a repeat of a literal slot gives way instead of the
+    // frame. The member is lost, the rest of the frame survives (#209: no new failure).
+    if (retained >= maximumBytes) release(inherited)
     if (retained >= maximumBytes) {
       failed = true
       capture = null
@@ -149,10 +158,12 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     if (capture === null) return
     // A repeated key replaces the earlier capture, so release the earlier capture's bytes.
     retained -= captured.get(capture.path)?.length ?? 0
-    decodedOnly.delete(capture.path)
+    evictable.delete(capture.path)
+    inherited.delete(capture.path)
     if (!capture.dropped) {
       captured.set(capture.path, capture.bytes)
-      if (capture.decodedOnly) decodedOnly.add(capture.path)
+      if (capture.evictable) evictable.add(capture.path)
+      else if (capture.escaped) inherited.add(capture.path)
     } else captured.delete(capture.path)
     if (!capture.dropped) lent = []
     capture = null
@@ -175,14 +186,22 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     }
     const path = slotAt()
     if (path === null) return
-    const decoded = (escapedKeys[1] || (depth === 2 && escapedKeys[2])) === true
-    const lowPriority = decoded && (!captured.has(path) || decodedOnly.has(path))
+    // A key spelled in escapes is matched as the slot it decodes to, but it still gives way at a
+    // full budget: it drops itself rather than failing the frame. That holds when it replaces a
+    // literal slot too — the literal's bytes are released before the replacement is captured, so
+    // the slot reads as absent instead of the frame failing where the frozen scanner did not
+    // (#209: no new failure against the previous release).
+    const escapedKey = (escapedKeys[1] || (depth === 2 && escapedKeys[2])) === true
+    // A repeat of an already retained literal slot inherits its priority: it stands in for the
+    // evidence the literal-only scanner kept, so it is not room a literal capture may take.
+    const inherits = escapedKey && captured.has(path) && !evictable.has(path)
     release([path])
     if (SLOT_MAX_BYTES.has(path) && ceilingBlocked) return
     capture = {
       path,
       depth,
-      decodedOnly: lowPriority,
+      escaped: escapedKey,
+      evictable: escapedKey && !inherits,
       kind:
         byte === QUOTE
           ? "string"

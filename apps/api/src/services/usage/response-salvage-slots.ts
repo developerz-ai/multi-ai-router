@@ -9,8 +9,10 @@ export interface Capture {
   readonly path: string
   readonly depth: number
   readonly kind: "string" | "container" | "primitive"
-  /** Escaped-key evidence gives way before anything the literal-only scanner kept. */
-  readonly decodedOnly: boolean
+  /** A key spelled in escapes: the capture gives way at a full budget instead of failing the frame. */
+  readonly escaped: boolean
+  /** A literal capture may take the room this capture holds; it gives way before that evidence. */
+  readonly evictable: boolean
   bytes: number[]
   dropped: boolean
 }

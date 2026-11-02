@@ -559,3 +559,26 @@ test("a slot key spelled in escapes is matched, and a key that cannot be one is 
   expect(run(`{"\\xusage":1}`)).toEqual({})
   expect(run(`{"${"u".repeat(40)}":1}`)).toEqual({})
 })
+
+test("an escaped repeat of a literal slot yields at the cap instead of failing the frame (2.42.0)", () => {
+  const scanner = createResponseSalvage(64)
+  // One slot spelled twice: the escaped copy replaces the literal one, whose bytes are released
+  // before the replacement is captured. At the cap the replacement gives way instead of failing
+  // the frame, so the later `status` survives, as it does in the frozen 2.41.0 scanner.
+  const text = `{"usage":0,"\\u0075sage":{"pad":"${"p".repeat(65)}"},"status":"completed"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  // The slot reads as absent: the earlier literal value is not resurrected, since `JSON.parse`
+  // reads the escaped copy as the member.
+  expect(scanner.finish()).toEqual({ status: "completed" })
+})
+
+test("an escaped repeat of a literal slot gives way when a later member needs the room (2.42.0)", () => {
+  const scanner = createResponseSalvage(64)
+  // The escaped copy fits on its own but not beside the later `status`: it gives way before the
+  // frame fails, so the member is lost and the frame survives.
+  const text = `{"usage":0,"\\u0075sage":{"pad":"${"p".repeat(45)}"},"status":"completed"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  expect(scanner.finish()).toEqual({ status: "completed" })
+})
