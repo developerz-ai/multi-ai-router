@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The `bin/smoke` informational `responses.function_call` leg explicitly sends the boolean `store: false` in its outgoing `/v1/responses` request. An outgoing-request regression drives `runLegs` and inspects the captured JSON, rather than relying on translation coverage. This corrects the diagnostic client only: other smoke legs, required/informational exit-code semantics, router same-dialect byte-passthrough, and runtime versions are unchanged.
+- The Codex usage-gauge integration suite (`apps/api/test/integration/codex-quota-gauge.test.ts`) now reads the admin plane on the harness clock: the reply's `Date` header, the reported reset instant, the accounts service's `now` and the availability overlay's `now` are one controlled clock, and `GET /api/admin/accounts` is answered by the production `adminAccountRoutes` handler instead of a hand-written one. The fixture used to pin a reset date, so once that date passed `isWindowSpent` reported "not spent" for every window — advisory or not — and the suite's `spent: false` assertion no longer told the advisory marker from an expired reset. The suite now also injects a non-advisory twin window carrying the same reading and asserts it reads `spent: true` beside the two advisory windows' `spent: false`. Test-only: no runtime behaviour change.
 
 ### Changed
 
