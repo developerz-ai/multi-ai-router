@@ -390,7 +390,7 @@ test.each(["q", "12345678"])(
 )
 
 test.each(["code", "error", "response.error"])(
-  "an oversized optional %s restores borrowed inherited usage",
+  "an oversized optional %s is dropped, keeping the identical escaped usage",
   (path) => {
     const usage = { pad: "p".repeat(45) }
     const value = JSON.stringify(usage)
@@ -401,6 +401,8 @@ test.each(["code", "error", "response.error"])(
     const text = `{"usage":${value},"\\u0075sage":${value},${optional}}`
     const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
     const current = run(createResponseSalvage, text, TIGHT_CAP)
+    // The escaped copy holds the value the literal slot held, so it is that slot: the optional
+    // evidence is dropped at the full budget instead of borrowing the slot's room.
     expect(frozen.rebuilt).toEqual({ usage })
     expect(project(JSON.parse(text) as Record<string, unknown>)).toMatchObject({ usage })
     expect(current.rebuilt).toEqual(frozen.rebuilt)
@@ -408,6 +410,44 @@ test.each(["code", "error", "response.error"])(
     expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
   },
 )
+
+test.each(["code", "error", "response.error"])(
+  "an oversized optional %s borrows an inherited usage of another value, and restores it",
+  (path) => {
+    // The escaped copy holds a value the literal slot did not, so it may lend its room: the
+    // optional evidence is dropped by its own share, and the borrowed capture comes back.
+    const escaped = { pad: "p".repeat(45) }
+    const value = JSON.stringify(escaped)
+    const optional =
+      path === "response.error"
+        ? '"response":{"error":"12345678901234567"}'
+        : `"${path}":"12345678901234567"`
+    const text = `{"usage":0,"\\u0075sage":${value},${optional}}`
+    const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+    const current = run(createResponseSalvage, text, TIGHT_CAP)
+    // 2.41.0 read the literal `usage` — a value `JSON.parse` overwrites — and dropped the
+    // optional evidence; the current scanner keeps the value `JSON.parse` reads.
+    expect(frozen.rebuilt).toEqual({ usage: 0 })
+    expect(project(JSON.parse(text) as Record<string, unknown>)).toMatchObject({ usage: escaped })
+    expect(current.rebuilt).toEqual({ usage: escaped })
+    expect(current.retained).toBe(value.length)
+    expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+  },
+)
+
+test("an identical escaped repeat of a literal slot keeps the slot the frozen scanner kept", () => {
+  const usage = { pad: "p".repeat(45) }
+  const value = JSON.stringify(usage)
+  const text = `{"usage":${value},"\\u0075sage":${value},"code":"12345678"}`
+  const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+  const current = run(createResponseSalvage, text, TIGHT_CAP)
+  // 2.41.0 read the literal `usage` and dropped the `code`: the optional evidence did not fit
+  // beside it. The current scanner reads both spellings as the one slot, and the escaped copy
+  // holds the same value — so it is that slot, and the optional evidence yields instead.
+  expect(frozen.rebuilt).toEqual({ usage })
+  expect(current.rebuilt).toEqual({ usage })
+  expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+})
 
 test("the frozen 2.41.0 scanner still shows the two divergences the current one no longer has", () => {
   // A repeated parent: 2.41.0 kept the child of the copy the later one replaced.

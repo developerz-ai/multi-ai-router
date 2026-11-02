@@ -582,3 +582,15 @@ test("an escaped repeat of a literal slot gives way when a later member needs th
   expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
   expect(scanner.finish()).toEqual({ status: "completed" })
 })
+
+test("an identical escaped repeat of a literal slot keeps that slot at the cap (2.42.0)", () => {
+  const scanner = createResponseSalvage(64)
+  const usage = { pad: "p".repeat(45) }
+  const value = JSON.stringify(usage)
+  // The escaped copy holds the value the literal slot held, so it is that slot — not a
+  // replacement of it: the optional `code` yields its room instead of borrowing the slot's.
+  const text = `{"usage":${value},"\\u0075sage":${value},"code":"12345678"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  expect(scanner.finish()).toEqual({ usage })
+})

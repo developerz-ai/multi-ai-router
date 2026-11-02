@@ -15,6 +15,7 @@ import {
   QUOTE,
   rebuildSalvage,
   SLOT_MAX_BYTES,
+  sameBytes,
   slotKeys,
 } from "./response-salvage-slots"
 
@@ -29,9 +30,14 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const decoder = new TextDecoder("utf-8", { fatal: true })
   const captured = new Map<string, number[]>()
   // The escaped captures a literal capture may take the room from, and the ones that stand in for
-  // a literal slot: those inherit its priority and give way only when the frame would fail.
+  // a literal slot: those inherit its priority and give way only when the frame would fail. An
+  // escaped copy of the same value the literal slot held is that slot itself — it is in neither
+  // set, so no capture takes its room.
   const evictable = new Set<string>()
   const inherited = new Set<string>()
+  // The bytes each literal slot held: the value the frozen scanner kept there. An escaped copy of
+  // that same value stands in for the slot instead of replacing it (#209: no lost non-stale key).
+  const literalBytes = new Map<string, number[]>()
   const escapedKeys = [false, false, false]
   // Only depths 1 and 2 carry keys we care about; deeper structure is counted, never stored.
   const keys: (string | null)[] = [null, null, null]
@@ -121,9 +127,10 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       capture.dropped = true
       return
     }
-    // An escaped replacement — which the frozen scanner never spent room on, since it read the
-    // key as raw bytes — yields before a full-budget optional capture drops itself: the evidence
-    // the frozen scanner kept must survive (#209: no lost non-stale key).
+    // An escaped replacement of another value — which the frozen scanner never spent room on,
+    // since it read the key as raw bytes — yields before a full-budget optional capture drops
+    // itself: the evidence the frozen scanner kept must survive (#209: no lost non-stale key). A
+    // replacement of the same value is that slot, so the optional capture yields instead.
     if (retained >= maximumBytes && OPTIONAL.has(capture.path)) lend(inherited)
     // Error evidence outranks a ceiling slot: borrow its room before giving way.
     if (OPTIONAL.has(capture.path) && retained >= maximumBytes) lend(SLOT_MAX_BYTES.keys())
@@ -165,8 +172,13 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     inherited.delete(capture.path)
     if (!capture.dropped) {
       captured.set(capture.path, capture.bytes)
+      if (!capture.escaped) literalBytes.set(capture.path, capture.bytes)
       if (capture.evictable) evictable.add(capture.path)
-      else if (capture.escaped) inherited.add(capture.path)
+      // An escaped copy of the same value the literal slot held is that slot, not a replacement:
+      // its room is never lent to optional evidence and never released for room, so the key the
+      // frozen scanner kept cannot be lost (#209: no lost non-stale key).
+      else if (capture.escaped && !sameBytes(capture.bytes, literalBytes.get(capture.path)))
+        inherited.add(capture.path)
     } else captured.delete(capture.path)
     if (!capture.dropped) {
       for (const [path] of lent) {

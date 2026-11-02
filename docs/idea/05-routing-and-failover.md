@@ -486,7 +486,10 @@ before retained literal error/code evidence is evicted, before a full-budget opt
 drops itself, or the frame fails. Optional evidence borrows an inherited capture's bytes rather
 than discarding it immediately: if that evidence exceeds its own share and drops, the borrowed
 capture is restored; only a kept optional capture consumes the loan. Thus an escaped repeat cannot
-lose non-stale literal evidence that the previous scanner kept.
+lose non-stale literal evidence that the previous scanner kept. An escaped repeat that holds the
+*same* value the literal slot held is that slot, not a replacement of it: its room is never lent
+and never released, so the optional evidence yields instead and the key the previous scanner kept
+survives; an escaped repeat of a different value gives its room up as the rules above say.
 Every repeated slot releases the earlier value's bytes before capturing its replacement, so
 duplicate copies cannot crowd out the last one.
 

@@ -68,6 +68,17 @@ export function isWhitespace(byte: number): boolean {
   return byte === 32 || byte === 9 || byte === 10 || byte === 13
 }
 
+/**
+ * Whether two captures hold the same bytes. An escaped copy of a slot that holds the same value is
+ * that slot, not a replacement of it: the value the frozen scanner kept is the value `JSON.parse`
+ * reads, so the copy stands in for the slot instead of giving its room away.
+ */
+export function sameBytes(left: readonly number[], right: readonly number[] | undefined): boolean {
+  if (right === undefined || left.length !== right.length) return false
+  for (let at = 0; at < left.length; at++) if (left[at] !== right[at]) return false
+  return true
+}
+
 /** A parent key's slot list; own keys only, so a key named `constructor` is no slot at all. */
 export function slotKeys(parent: string): readonly string[] {
   return Object.hasOwn(SLOTS, parent) ? (SLOTS[parent] ?? []) : []
