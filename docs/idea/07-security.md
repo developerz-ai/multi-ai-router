@@ -271,6 +271,46 @@ Consume **then** check: the `state` is redeemed before the binding is judged, so
 it rather than leaving it available for another try. Claude subscriptions do the same with their
 pending login ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §3.1).
 
+## Dependency advisories
+
+The router ships a resolved dependency tree, and a tree is a supply chain: every package in it runs
+inside the API process, with `ENCRYPTION_KEY` and the Postgres credentials in reach. `bin/advisory`
+asks the live advisory database — OSV.dev, `https://api.osv.dev` — about the resolved packages in
+`bun.lock` (npm ecosystem). Workspace entries are excluded: `…@workspace:packages/core` is this
+repository, not a published dependency, and querying it would be asking about ourselves.
+
+**The assessment is live.** No committed report stands in for it: the answer comes from the
+database at the moment the check runs, so an advisory published today is visible to the next run
+without anything in this repository changing.
+
+Three outcomes, three exit codes, never conflated:
+
+| Outcome | Exit | Meaning |
+|---|---|---|
+| `clean` | 0 | The assessment completed and found no advisory |
+| `finding` | 1 | The assessment completed and found at least one advisory — **any** advisory fails, whatever its severity and whatever fix is available |
+| `unavailable` | 2 | The assessment did not complete: a network error, a non-2xx after the retries, an unparsable body, a query/result count mismatch, or an unparsable lockfile |
+
+**An unavailable assessment is red, and it is never a clean pass.** Exit 2 is not exit 0 with a
+warning attached: a gate that could not reach the database has proved nothing about the
+dependencies, and reporting it as clean would let a broken network read as a safe tree. A red
+"unknown" beats a green "clean". The three outcomes stay apart in the exit code, in the report's
+`status` field and in the printed summary.
+
+The report file is written on **every** outcome — clean, finding and unavailable alike — so each
+run leaves evidence of what was assessed and of what was found. CI uploads it as the
+`advisory-report` artifact, and the job summary names the assessment status.
+
+**The check needs the network, and is deliberately not part of `bin/check`.** `bin/check` is the
+local gate — lint, typecheck, tests, build — and none of it needs an outbound call, so it keeps
+working on a machine with no internet. The advisory assessment is a CI job of its own
+(`advisory` in `.github/workflows/ci.yml`) instead, where a network failure is a red job and not a
+developer's afternoon.
+
+The three outcomes are covered by tests against a local fixture server, using a synthetic package
+name and a synthetic advisory id. No real vulnerable dependency was added to `bun.lock` or to any
+manifest, and no test reaches the real OSV service.
+
 ## Blast radius
 
 | If this leaks | Then |

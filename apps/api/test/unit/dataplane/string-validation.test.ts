@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { createStringValidation } from "../../../src/services/dataplane/body/string-validation"
 
 test("small segments ignore control bytes and malformed UTF8 outside their interval", () => {
-  const chunk = new TextEncoder().encode("x".repeat(2048) + "\u0000" + "z".repeat(4096))
+  const chunk = new TextEncoder().encode(`${"x".repeat(2048)}\u0000${"z".repeat(4096)}`)
   chunk[4096] = 255
   const validation = createStringValidation()
   for (let i = 0; i < 100; i++) validation.segment(chunk, 100, 102)
@@ -16,7 +16,7 @@ test("small segments ignore control bytes and malformed UTF8 outside their inter
 })
 
 test("large segments validate their own controls without inspecting the adjacent suffix", () => {
-  const chunk = new TextEncoder().encode("x".repeat(2048) + "\u0000" + "z".repeat(4096))
+  const chunk = new TextEncoder().encode(`${"x".repeat(2048)}\u0000${"z".repeat(4096)}`)
   const outside = createStringValidation()
   outside.segment(chunk, 0, 2048)
   expect(outside.invalid).toBe(false)

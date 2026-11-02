@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.43.0] — 2026-11-02
+
+### Added
+
+- **A live dependency advisory gate.** `bin/advisory` reads the resolved packages out of `bun.lock` and asks the live advisory database (`https://api.osv.dev`) about each one; `.github/workflows/ci.yml` runs it as its own gate job, named `advisory`, with no `continue-on-error` — so an advisory affecting the resolved dependency set turns the default branch red. Three outcomes, three exit codes, never conflated: `clean` → 0 (the assessment completed and found no advisory), `finding` → 1 (the assessment completed and found at least one advisory — **any** advisory fails, whatever its severity and whatever fix exists), `unavailable` → 2 (the assessment did not complete: a network error, a non-2xx after the retries, an unparsable body, a query/result count mismatch, or an unparsable lockfile). An unavailable assessment is never reported as a clean pass: the gate has proved nothing about the dependencies, and a red "unknown" beats a green "clean" — the difference is visible in the exit code, in the report's `status` field and in the printed summary. The report file is written on **every** outcome, clean, finding and unavailable alike, and CI uploads it as the `advisory-report` artifact, so each run leaves evidence; the job summary names the assessment status, so a reviewer sees clean / finding / unavailable without reading the log. The check needs the network and is deliberately **not** part of `bin/check` — it is a CI job of its own. No real vulnerable dependency was introduced: `bun.lock` is unchanged and no manifest gained a dependency; the tests use a synthetic package name and a synthetic advisory id served by a local fixture server, with no test reaching the real OSV service. The rules live in `docs/idea/07-security.md`; the CI job is described in `docs/idea/08-observability.md`.
+
 ## [2.42.1] — 2026-11-02
 
 ### Fixed
@@ -1777,3 +1783,4 @@ your tooling config.
 [2.41.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.1
 [2.42.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.0
 [2.42.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.1
+[2.43.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.43.0
