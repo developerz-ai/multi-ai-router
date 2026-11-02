@@ -12,8 +12,8 @@
 #
 # Steps: stop the stack (volumes kept) -> start the 18 server on the fresh
 # volume -> drop the fresh `router` database (everything in postgres-data-18 is
-# disposable; the 16 volume is the data of record) -> pipe pg_dumpall of a
-# throwaway postgres:16 container running on the old volume into the 18 server
+# disposable; the 16 volume is the data of record) -> restore roles and the
+# router database from a throwaway postgres:16 container on the old volume into 18
 # -> restart the stack and print what to verify.
 #
 # Safety: the old volume is never removed — the throwaway 16 server mounts it
@@ -118,10 +118,18 @@ user_tables() { # <psql output> — user tables in a router database, or 0
 old_tables="$(user_tables "$(docker exec -u postgres "$CONTAINER" psql -U "$PG_USER" -d router -Atc \
   "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')")")"
 
-printf 'dumping "%s" into postgres-data-18 (a duplicate-role error for "%s" is\n' "$old_volume" "$PG_USER"
-printf 'expected — the fresh initdb created it; the ALTER ROLE after it restores the password)\n'
-docker exec -u postgres "$CONTAINER" pg_dumpall -U "$PG_USER" |
-  $COMPOSE exec -T postgres psql -U router -d postgres
+printf 'restoring roles and the router database from "%s" into postgres-data-18\n' "$old_volume"
+# initdb already created router. Omit only its CREATE, not its ALTER (which
+# restores its attributes/password), so every other SQL error remains fatal.
+docker exec -u postgres "$CONTAINER" pg_dumpall -U "$PG_USER" --roles-only |
+  sed '/^CREATE ROLE router;$/d' |
+  $COMPOSE exec -T postgres psql -X -v ON_ERROR_STOP=1 -U router -d postgres
+
+# Connect to the maintenance database: the dump drops/recreates router, even on
+# a populated-target rerun. Unlike pg_dumpall this has no bootstrap database or
+# role collisions that would require tolerating errors during the COPY phase.
+docker exec -u postgres "$CONTAINER" pg_dump -U "$PG_USER" --clean --if-exists --create router |
+  $COMPOSE exec -T postgres psql -X -v ON_ERROR_STOP=1 -U router -d postgres
 
 new_tables="$(user_tables "$($COMPOSE exec -T postgres psql -U router -d router -Atc \
   "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')")")"
