@@ -15,7 +15,7 @@
       "name": "@multi-ai-router/api",
       "version": "2.41.0",
       "dependencies": {
-        "@anthropic-ai/claude-agent-sdk": "^0.3.301",
+        "@anthropic-ai/claude-agent-sdk": "0.3.301",
         "@multi-ai-router/core": "workspace:*",
         "@multi-ai-router/db": "workspace:*",
         "@sentry/bun": "^11.8.0",
@@ -33,7 +33,7 @@
       "dependencies": {
         "@multi-ai-router/core": "workspace:*",
         "@solidjs/router": "^1.0.0",
-        "@tanstack/solid-query": "^5.104.3",
+        "@tanstack/solid-query": "^5.104.4",
         "solid-js": "^1.9.17",
       },
       "devDependencies": {
@@ -373,9 +373,9 @@
 
     "@stablelib/base64": ["@stablelib/base64@1.0.1", "", {}, "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ=="],
 
-    "@tanstack/query-core": ["@tanstack/query-core@5.104.3", "", {}, "sha512-DZY9TuJAOgU3UyHUhXb4CcTYEHNZszlwkPg4VViIwTxOKzLprPUU+rbaPZQd3srqkGOtpaDdKpW972UV/LKlcg=="],
+    "@tanstack/query-core": ["@tanstack/query-core@5.104.4", "", {}, "sha512-nU4Yrb8Sjn0DeVb7PKG9uiepNavys3yoxy1FX0hViY4/P6Ng/mBje2SMl7i9812rtyHKtHyqiaC/td6GkI8StA=="],
 
-    "@tanstack/solid-query": ["@tanstack/solid-query@5.104.3", "", { "dependencies": { "@tanstack/query-core": "5.104.3" }, "peerDependencies": { "solid-js": "^1.6.0" } }, "sha512-Q3HcngsnDPYy0ycX6b6mlRhjl/dVQ5d8U9BKzI7z0jiZeRxgagKgjOpPcAMGReReJdli+7cMDb6PqqBr18l+fQ=="],
+    "@tanstack/solid-query": ["@tanstack/solid-query@5.104.4", "", { "dependencies": { "@tanstack/query-core": "5.104.4" }, "peerDependencies": { "solid-js": "^1.6.0" } }, "sha512-wEJYI9lefgU+ehxgtY3gwF7ZP1n3RfOIlUrc7IarvlDUbPg4zdiAEl7ztqPlkYPcznnDaab+FvOXG4CJFHI85Q=="],
 
     "@types/babel__core": ["@types/babel__core@7.20.5", "", { "dependencies": { "@babel/parser": "^7.20.7", "@babel/types": "^7.20.7", "@types/babel__generator": "*", "@types/babel__template": "*", "@types/babel__traverse": "*" } }, "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA=="],
 
