@@ -17,18 +17,22 @@ export function historyFixture(
   // Typed explicitly (not contextually from the overloaded interface) and forwarding everything the
   // raw repository can take: filter, limit and attribution. The raw API has no id list on the
   // history side, so `ids` has nowhere to go.
-  const breakdown = (
+  const unpriced = { attempts: null, since: "infinity" }
+  const breakdown = async (
     window: UsageWindow,
     dimension: UsageDimension,
     limit: number | undefined,
     filter: UsageFilter,
     attribution?: UsageKeyAttribution,
-  ) =>
-    dimension === "owner" || dimension === "tool"
-      ? attribution === undefined
-        ? Promise.reject(new Error("owner/tool requires a key attribution"))
-        : raw.breakdown(window, dimension, undefined, limit, filter, attribution)
-      : raw.breakdown(window, dimension, undefined, limit, filter)
+  ) => {
+    const rows =
+      dimension === "owner" || dimension === "tool"
+        ? attribution === undefined
+          ? Promise.reject(new Error("owner/tool requires a key attribution"))
+          : raw.breakdown(window, dimension, undefined, limit, filter, attribution)
+        : raw.breakdown(window, dimension, undefined, limit, filter)
+    return (await rows).map((row) => ({ ...row, unpriced }))
+  }
   const seriesByDimension = (
     window: UsageWindow,
     bucket: "hour" | "day",
@@ -60,11 +64,14 @@ export function historyFixture(
       historicalPrecision: "day",
       ...overrides,
     }),
-    totals: (window, filter) => raw.totals(window, filter),
+    totals: async (window, filter) => ({ ...(await raw.totals(window, filter)), unpriced }),
     breakdown,
     series: (window, bucket, _width, filter) => raw.series(window, bucket, filter),
     seriesByDimension,
     exportRows: async () => [],
+    weekRows: async () => {
+      throw new Error("history fixture does not serve weekly reports")
+    },
     withSnapshot: (callback) => callback(history, raw),
     backfill: async () => ({ processed: 0, remaining: false }),
     rollupDay: async () => 0,

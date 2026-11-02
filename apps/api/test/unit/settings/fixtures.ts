@@ -28,11 +28,14 @@ export const MINUTE_MS = 60_000
 export const RETENTION: RetentionConfig = {
   sessionsHours: 12,
   usageDays: 45,
+  usageDailyDays: 365,
   usageReportsDays: 730,
   auditDays: 180,
+  taskRunsDays: 30,
   revokedKeysDays: 15,
   oauthStateMinutes: 7,
   orphanConfigDirHours: 12,
+  sdkTranscriptHours: 24,
 }
 
 /**
@@ -56,6 +59,12 @@ export const INTERVALS: Readonly<Record<ScheduledTaskName, number>> = {
   oauth_state_purge: 5 * MINUTE_MS,
   quota_floor_refresh: 30 * MINUTE_MS,
   config_dir_reap: 360 * MINUTE_MS,
+  sdk_transcript_sweep: 60 * MINUTE_MS,
+  admin_session_purge: 30 * MINUTE_MS,
+  idle_account_probe: 360 * MINUTE_MS,
+  model_catalog_refresh: 60 * MINUTE_MS,
+  credential_keepalive: 180 * 1_000,
+  login_lifetime_watch: 1440 * MINUTE_MS,
   usage_weekly_report: 60 * MINUTE_MS,
 }
 

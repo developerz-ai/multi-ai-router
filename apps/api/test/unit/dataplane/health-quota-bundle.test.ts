@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import type { QuotaWindowState } from "@multi-ai-router/core"
+import type { RateLimitSignal } from "../../../src/providers"
 import { createHealthStore } from "../../../src/services/dataplane/health"
 
 const facts = {
@@ -19,6 +20,14 @@ const window: QuotaWindowState = {
   lastCheckedAt: now,
 }
 
+/**
+ * A rate-limit reading with nothing provider-reported: no limiter windows and an unknown reset,
+ * so the only quota the health store folds in is the router's own named window.
+ */
+function signal(windows: readonly QuotaWindowState[]): RateLimitSignal {
+  return { limited: false, resetSource: "unknown", windows: [], quotaWindows: windows }
+}
+
 test("blocked verdict bundles only quota accepted from its exact attempt", () => {
   const bundles: (readonly QuotaWindowState[] | undefined)[] = []
   const writes: (readonly QuotaWindowState[])[] = []
@@ -28,10 +37,10 @@ test("blocked verdict bundles only quota accepted from its exact attempt", () =>
   })
   health.reconcile("a", facts)
   const older = health.captureAttempt("a", facts)
-  health.applyRateLimit("a", { limited: false, quotaWindows: [window] }, now, older)
+  health.applyRateLimit("a", signal([window]), now, older)
   const current = health.captureAttempt("a", facts)
   const currentWindow = { ...window, window: "seven_day" as const }
-  health.applyRateLimit("a", { limited: false, quotaWindows: [currentWindow] }, now, current)
+  health.applyRateLimit("a", signal([currentWindow]), now, current)
   health.recordFailure("a", { kind: "credits-exhausted", message: "offline" }, now, {}, current)
   expect(health.stateOf("a").quotaWindows).toHaveLength(2)
   expect(writes).toEqual([[window], [currentWindow]])
@@ -48,8 +57,8 @@ test("multiple readings from one attempt retain each accepted window in its stat
   health.reconcile("a", facts)
   const observation = health.captureAttempt("a", facts)
   const second = { ...window, window: "seven_day" as const }
-  health.applyRateLimit("a", { limited: false, quotaWindows: [window] }, now, observation)
-  health.applyRateLimit("a", { limited: false, quotaWindows: [second] }, now, observation)
+  health.applyRateLimit("a", signal([window]), now, observation)
+  health.applyRateLimit("a", signal([second]), now, observation)
   health.recordFailure(
     "a",
     { kind: "auth", message: "offline" },
@@ -69,7 +78,7 @@ test("superseded evidence cannot enter a replacement attempt's status bundle", (
   const stale = health.captureAttempt("a", facts)
   const replacement = { ...facts, authRecoveryVersion: 1 }
   health.reconcile("a", replacement)
-  health.applyRateLimit("a", { limited: false, quotaWindows: [window] }, now, stale)
+  health.applyRateLimit("a", signal([window]), now, stale)
   const current = health.captureAttempt("a", replacement)
   health.recordFailure("a", { kind: "credits-exhausted", message: "offline" }, now, {}, current)
   expect(bundles).toEqual([undefined])

@@ -402,7 +402,13 @@ describe("the whole path, gate into renderer", () => {
       model: "claude-opus-5",
       stream: false,
     })
-    const body = await response.json()
+    const body = (await response.json()) as {
+      type: string
+      role: string
+      stop_reason: string
+      content: readonly { type: string; name: string; input: unknown }[]
+      usage: { output_tokens: number }
+    }
 
     expect(response.status).toBe(200)
     expect(body).toMatchObject({
@@ -519,7 +525,7 @@ describe("the wrapper a flushed event arrives in", () => {
     for (const message of seen) {
       if (typeof message !== "object" || message === null) continue
       if (!("event" in message)) continue
-      expect((message as { type: unknown }).type).toBe("stream_event")
+      expect((message as { type?: unknown }).type).toBe("stream_event")
     }
     expect(types(seen).filter((type) => type === "stream_event").length).toBeGreaterThan(0)
   })

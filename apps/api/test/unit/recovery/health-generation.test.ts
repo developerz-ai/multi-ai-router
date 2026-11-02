@@ -106,13 +106,16 @@ test("outcome revision changes within one generation retain its stream observati
   const first = { ...upstream, snapshot: { ...upstream.snapshot, recovery } }
   const store = createHealthStore()
   const observation = store.captureAttempt("a", accountHealthFacts(first))
-  store.reconcile(
-    "a",
-    accountHealthFacts({
-      ...first,
-      snapshot: { ...first.snapshot, recovery: { ...recovery, revision: 2, state: "succeeded" } },
-    }),
-  )
+  // The stored recovery row moved on (a new revision, a settled state) while the generation stayed
+  // the same — the facts the health store reconciles from are deliberately narrower than the row.
+  const updated = {
+    ...first,
+    snapshot: {
+      ...first.snapshot,
+      recovery: { ...recovery, revision: 2, state: "succeeded" as const },
+    },
+  }
+  store.reconcile("a", accountHealthFacts(updated))
   store.recordFailure(
     "a",
     { kind: "credits-exhausted", message: "current stream" },

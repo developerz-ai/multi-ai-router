@@ -56,6 +56,9 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
     seriesByDimension: async () => [],
     latency: async () => ({ p50Ms: null, p95Ms: null, routerOverheadP95Ms: null, ttfbP95Ms: null }),
     outcomes: async () => [...(stub.outcomes ?? [])],
+    tokensSince: async () => {
+      throw new Error("the summary must not read quota tokens")
+    },
   }
   const history: UsageHistoryRepository = {
     clock: async () => ({ dbNow: NOW, earliestAt: NOW }),
@@ -79,6 +82,12 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
     series: async () => [],
     seriesByDimension: async () => [],
     breakdown: async () => [...rows],
+    exportRows: async () => {
+      throw new Error("the summary must not export usage rows")
+    },
+    weekRows: async () => {
+      throw new Error("the summary must not read weekly report rows")
+    },
   }
   return createUsageService({
     exportMaxRows: 50_000,
@@ -147,7 +156,7 @@ describe("window resolution", () => {
 
 describe("breakdown labelling", () => {
   test("a known id gets its name", async () => {
-    const result = await service([groupRow("key-1")]).summary({ window: "today" })
+    const result = await service([groupRow("key-1")]).summary({ window: "today" }, {})
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -155,7 +164,7 @@ describe("breakdown labelling", () => {
   })
 
   test("a deleted subject still renders, marked deleted", async () => {
-    const result = await service([groupRow("key-gone")]).summary({ window: "today" })
+    const result = await service([groupRow("key-gone")]).summary({ window: "today" }, {})
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -165,7 +174,7 @@ describe("breakdown labelling", () => {
   })
 
   test("a null id means the dimension did not apply, which is not the same as deleted", async () => {
-    const result = await service([groupRow(null)]).summary({ window: "today" })
+    const result = await service([groupRow(null)]).summary({ window: "today" }, {})
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -174,14 +183,14 @@ describe("breakdown labelling", () => {
   })
 
   test("a null model stays unattributed rather than becoming a deleted model", async () => {
-    const result = await service([groupRow(null)]).summary({ window: "today" })
+    const result = await service([groupRow(null)]).summary({ window: "today" }, {})
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error("summary failed")
     expect(result.value.byModel[0]).toMatchObject({ id: null, label: null, note: "none" })
   })
 
   test("a model is its own label and is never marked deleted", async () => {
-    const result = await service([groupRow("glm-4.7")]).summary({ window: "today" })
+    const result = await service([groupRow("glm-4.7")]).summary({ window: "today" }, {})
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -203,7 +212,7 @@ describe("the failure split", () => {
         { outcome: "credits_exhausted", attempts: 3 },
       ],
       totals: { ...ZERO, attempts: 100 },
-    }).summary({ window: "today" })
+    }).summary({ window: "today" }, {})
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -223,7 +232,7 @@ describe("the failure split", () => {
         { outcome: "upstream_timeout", attempts: 2 },
       ],
       totals: { ...ZERO, attempts: 1000 },
-    }).summary({ window: "today" })
+    }).summary({ window: "today" }, {})
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -232,7 +241,7 @@ describe("the failure split", () => {
   })
 
   test("a quiet window is an empty split, not a missing field", async () => {
-    const result = await service([]).summary({ window: "today" })
+    const result = await service([]).summary({ window: "today" }, {})
 
     expect(result.ok).toBe(true)
     if (!result.ok) return

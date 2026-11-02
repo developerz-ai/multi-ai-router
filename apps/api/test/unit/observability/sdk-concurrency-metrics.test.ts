@@ -3,6 +3,7 @@ import { createLogger, type Logger } from "../../../src/logging/logger"
 import { createRuntimeMetrics, type RuntimeMetricsDeps } from "../../../src/observability"
 import { createSdkConcurrency, type SdkConcurrency } from "../../../src/providers"
 import { createHealthStore, type RoutingCatalog } from "../../../src/services/dataplane"
+import type { UsageStats } from "../../../src/services/usage"
 
 /**
  * The `claude` subprocess ceiling, seen from outside the process.
@@ -21,13 +22,21 @@ import { createHealthStore, type RoutingCatalog } from "../../../src/services/da
 const EMPTY: RoutingCatalog = { accounts: () => [], pools: () => [] }
 const SILENT: Logger = createLogger({ level: "error", write: () => {} })
 
+/** A recorder that has written nothing: every counter at zero. */
+const NO_USAGE: UsageStats = {
+  rejectedAfterStop: 0,
+  depth: 0,
+  dropped: 0,
+  written: 0,
+  writeFailures: 0,
+  writeDiscarded: 0,
+}
+
 function harness(sdkConcurrency?: SdkConcurrency) {
   const deps: RuntimeMetricsDeps = {
     catalog: EMPTY,
     health: createHealthStore(),
-    usage: () => ({
-      stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
-    }),
+    usage: () => ({ stats: () => NO_USAGE }),
     ...(sdkConcurrency === undefined ? {} : { sdkConcurrency }),
     logger: SILENT,
   }

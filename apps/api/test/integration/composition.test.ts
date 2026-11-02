@@ -198,11 +198,11 @@ describe("an observed quota reading reaches the durable writer", () => {
     // re-publishes it out of a bucket nobody cleared.
     const { health, sdkQuota } = runtimeWith({})
     sdkQuota.ingest("a", { status: "rejected", rateLimitType: "five_hour" }, NOW)
-    expect(sdkQuota.snapshot("a")).not.toBeNull()
+    expect(sdkQuota.snapshot("a", NOW)).not.toBeNull()
 
     health.reset("a")
 
-    expect(sdkQuota.snapshot("a")).toBeNull()
+    expect(sdkQuota.snapshot("a", NOW)).toBeNull()
   })
 })
 

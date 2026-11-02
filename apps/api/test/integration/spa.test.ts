@@ -11,6 +11,8 @@ import {
   createDeviceConnectService,
   createOAuthConnectService,
   createRecheckService,
+  type DiscoverModelsService,
+  type TestNowService,
 } from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
 import type { OIDCFlow } from "../../src/services/admin-auth/oidc/flow"
@@ -28,6 +30,10 @@ import { createUsageService } from "../../src/services/usage-read"
 import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 import {
   account,
   cipher as accountCipher,
@@ -298,7 +304,7 @@ describe("the full app, mounted end to end", () => {
       usage: { record: () => {} },
       // Never reached: an unauthenticated request is rejected by `routerKeyAuth` first.
       fetch: () => Promise.reject(new Error("no upstream in this harness")),
-      clock: { now, monotonic: () => 0 },
+      clock: { now, elapsed: () => 0 },
       onRequest: () => {},
       options: { failover: { maxAttempts: 3 } },
     })
@@ -350,6 +356,8 @@ describe("the full app, mounted end to end", () => {
               adminSubject: null,
               scopes: ["openid", "profile", "email"],
               clockSkewSeconds: 60,
+              requiredClaims: [],
+              requestTimeoutMs: 10_000,
             },
             encryptionKey: Buffer.alloc(32, 7).toString("base64"),
           },
@@ -395,6 +403,7 @@ describe("the full app, mounted end to end", () => {
               seriesByDimension: unreached,
               breakdown: unreached,
               outcomes: unreached,
+              tokensSince: unreached,
             },
             now(),
           ),
@@ -402,6 +411,15 @@ describe("the full app, mounted end to end", () => {
           labels: async () => ({ keys: new Map(), accounts: new Map(), pools: new Map() }),
           now,
         }),
+        usageReports: unreachableUsageReports(),
+        usageReportDelivery: unreachableReportDelivery(),
+        testNow: {
+          test: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
+          lastCheckedAt: () => null,
+        } as TestNowService,
+        discoverModels: {
+          discover: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
+        } as DiscoverModelsService,
         settings: createSettingsService({
           prices: memoryPrices(),
           scheduledTasks: memoryTasks(),
@@ -420,11 +438,21 @@ describe("the full app, mounted end to end", () => {
         }),
         recheck: createRecheckService({
           accounts: store.accounts,
-          health: createHealthStore(),
+          recovery: {
+            reserveOperatorCheck: () =>
+              Promise.reject(new Error("not exercised by an unauthenticated request")),
+            finalizeOperatorCheck: () =>
+              Promise.reject(new Error("not exercised by an unauthenticated request")),
+            releaseOperatorCheck: () =>
+              Promise.reject(new Error("not exercised by an unauthenticated request")),
+            readOperatorCooldown: () =>
+              Promise.reject(new Error("not exercised by an unauthenticated request")),
+            beginOperatorRecovery: () =>
+              Promise.reject(new Error("not exercised by an unauthenticated request")),
+          },
           audit,
           refreshCatalog: async () => {},
           cooldownSeconds: 60,
-          now,
         }),
         connect: createConnectService({
           accounts: store.accounts,

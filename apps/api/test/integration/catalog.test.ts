@@ -103,14 +103,12 @@ describe("GET /v1/catalog", () => {
       models: models({ "acct-zai": { "glm-5.2": { contextTokens: 1_048_576 } } }),
     }
 
-    const listed = await harness(options)
-      .app.request("/v1/models", { headers: bearer() })
-      .then((res) => res.json() as Promise<{ data: { id: string }[] }>)
+    const listedResponse = await harness(options).app.request("/v1/models", { headers: bearer() })
+    const listed = (await listedResponse.json()) as { data: { id: string }[] }
     expect(listed.data).toEqual([])
 
-    const catalog = await harness(options)
-      .app.request("/v1/catalog", { headers: bearer() })
-      .then((res) => res.json() as Promise<CatalogBody>)
+    const catalogResponse = await harness(options).app.request("/v1/catalog", { headers: bearer() })
+    const catalog = (await catalogResponse.json()) as CatalogBody
     expect(catalog.data.map((entry) => entry.id)).toEqual(["glm-5.2"])
   })
 

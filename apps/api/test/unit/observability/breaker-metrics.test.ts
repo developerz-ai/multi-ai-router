@@ -24,7 +24,14 @@ describe("router_breaker_state", () => {
       catalog: catalog([account("acct-1")]),
       health: createHealthStore(),
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => NOW,
@@ -39,12 +46,23 @@ describe("router_breaker_state", () => {
 
   test("a tripped account reads open until its reset passes, then half-open", () => {
     const health = createHealthStore()
-    health.recordFailure("acct-1", { kind: "rate-limited", retryAfterSeconds: 60 }, NOW)
+    health.recordFailure(
+      "acct-1",
+      { kind: "rate-limited", retryAfterSeconds: 60, message: "rate limited" },
+      NOW,
+    )
     const metrics = createRuntimeMetrics({
       catalog: catalog([account("acct-1")]),
       health,
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => NOW,
@@ -57,7 +75,14 @@ describe("router_breaker_state", () => {
       catalog: catalog([account("acct-1")]),
       health,
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => past,
@@ -69,12 +94,19 @@ describe("router_breaker_state", () => {
 
   test("exhausted reads blocked, never open — the two must never be conflated", () => {
     const health = createHealthStore()
-    health.recordFailure("acct-1", { kind: "credits-exhausted" }, NOW)
+    health.recordFailure("acct-1", { kind: "credits-exhausted", message: "out of credits" }, NOW)
     const metrics = createRuntimeMetrics({
       catalog: catalog([account("acct-1")]),
       health,
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => NOW,
@@ -87,13 +119,20 @@ describe("router_breaker_state", () => {
 
   test("a deleted account's phase is not left reporting stale — the gauge is cleared per scrape", () => {
     const health = createHealthStore()
-    health.recordFailure("acct-1", { kind: "credits-exhausted" }, NOW)
+    health.recordFailure("acct-1", { kind: "credits-exhausted", message: "out of credits" }, NOW)
     let accounts = [account("acct-1")]
     const metrics = createRuntimeMetrics({
       catalog: { accounts: () => accounts, pools: () => [] },
       health,
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => NOW,
@@ -111,7 +150,14 @@ describe("router_breaker_probe_admissions_total", () => {
       catalog: catalog([account("acct-1")]),
       health: createHealthStore(),
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => NOW,
@@ -124,13 +170,24 @@ describe("router_breaker_probe_admissions_total", () => {
 
   test("counts one admission and every refusal behind it, as a delta per scrape", () => {
     const health = createHealthStore()
-    health.recordFailure("acct-1", { kind: "rate-limited", retryAfterSeconds: 60 }, NOW)
+    health.recordFailure(
+      "acct-1",
+      { kind: "rate-limited", retryAfterSeconds: 60, message: "rate limited" },
+      NOW,
+    )
     const past = new Date(NOW.getTime() + 61_000)
     const metrics = createRuntimeMetrics({
       catalog: catalog([account("acct-1")]),
       health,
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => past,
@@ -161,7 +218,14 @@ describe("router_credential_rejected", () => {
       catalog: catalog(accounts),
       health,
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => NOW,
@@ -178,7 +242,11 @@ describe("router_credential_rejected", () => {
 
   test("a spent window and a healthy account both read 0 — the series is there, not absent", () => {
     const health = createHealthStore()
-    health.recordFailure("spent", { kind: "rate-limited", retryAfterSeconds: 60 }, NOW)
+    health.recordFailure(
+      "spent",
+      { kind: "rate-limited", retryAfterSeconds: 60, message: "rate limited" },
+      NOW,
+    )
     const body = metricsFor(health, [account("spent"), account("fine")]).expose()
 
     expect(body).toContain('router_credential_rejected{account_id="spent"} 0')
@@ -202,7 +270,14 @@ describe("router_credential_rejected", () => {
       catalog: { accounts: () => accounts, pools: () => [] },
       health,
       usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
+        stats: () => ({
+          depth: 0,
+          dropped: 0,
+          written: 0,
+          writeFailures: 0,
+          writeDiscarded: 0,
+          rejectedAfterStop: 0,
+        }),
       }),
       logger: SILENT,
       now: () => NOW,

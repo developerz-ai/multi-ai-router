@@ -184,8 +184,18 @@ identically — there is no second source of truth to drift.
 
 Readiness probes are injected into `createApp` and stores come from `test/support/memory-store.ts`,
 so **integration tests need no database**. The one test that wants a live PostgreSQL skips cleanly
-when `DATABASE_URL` is unset. `rootDir` is `src`, so `tsc --build` does not type-check `test/` —
-`bun test` is what exercises it.
+when `DATABASE_URL` is unset.
+
+**The test and smoke trees are type-checked too.** The production project keeps `rootDir` at `src`,
+so `tsc --build` alone still covers `src/` only. A second, no-emit project —
+`apps/api/tsconfig.tests.json` — includes every `.ts` under `test/` and `smoke/`, inherits the same
+strictness from `tsconfig.base.json` and emits nothing; a module it pulls in transitively (a bench
+helper, a `packages/db` test helper) is checked as well, because that project sets no `rootDir`.
+`bun run typecheck` runs the solution build first and that project second, and `bin/check` reaches
+it through `bin/lint`, so a type error in a test file fails the gate. `bun test` is what *runs* the
+tests — Bun strips types at runtime and never type-checks them.
+`test/unit/typecheck-coverage.test.ts` pins the coverage: every discovered test and smoke file must
+be in the project, and the gate wiring must stay.
 
 **No test hits a real provider, ever** — the upstream is an injected `fetch`, and the Agent SDK is
 stubbed at the `query()` boundary when that path lands.

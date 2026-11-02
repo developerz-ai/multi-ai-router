@@ -537,6 +537,7 @@ describe("the subprocess slot", () => {
         // The Account is identified by CLAUDE_CONFIG_DIR, not by cwd: the cwd is now one shared
         // neutral workspace and carries no account identity at all (#296).
         const configDir = (options.env as Record<string, string>).CLAUDE_CONFIG_DIR
+        if (configDir === undefined) throw new Error("no CLAUDE_CONFIG_DIR was launched")
         const accountId = configDir.endsWith("/acct-a") ? "acct-a" : "acct-b"
         launchedConfigDir[accountId] = configDir
         launchedCwds.push(options.cwd as string)

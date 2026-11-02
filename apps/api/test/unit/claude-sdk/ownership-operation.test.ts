@@ -31,7 +31,7 @@ test.skipIf(process.platform !== "linux")(
         shutdownDrainMs: 1000,
       },
       {
-        spawn: () => child as Pick<ChildProcess, "once" | "kill">,
+        spawn: () => child as unknown as Pick<ChildProcess, "once" | "kill">,
         schedule(callback, duration) {
           expect(duration).toBe(25)
           deadline = callback

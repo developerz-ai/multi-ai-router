@@ -7,7 +7,7 @@ import { type ChainContext, runChain } from "../../../src/services/dataplane/cha
 import type { HealthStore } from "../../../src/services/dataplane/health"
 import type { RecoveryAttempt } from "../../../src/services/dataplane/recovery-access"
 import { createRuntime, type RuntimeInput } from "../../../src/services/dataplane/runtime"
-import type { RoutableAccount } from "../../../src/services/routing"
+import type { RoutableAccount } from "../../../src/services/dataplane/types"
 import { candidate } from "../routing/fixtures"
 import { account, catalog, cipher, clock, subscriptionAccount } from "./fixtures"
 
@@ -84,7 +84,12 @@ function chain(
     bodyBytes: body,
     modelSpan: null,
     translation: { created: 0, model: "claude", fallbackId: "test" },
-    translated: { bodyFor: () => body },
+    translated: {
+      includeUsage: () => false,
+      clientStreams: () => false,
+      promptCacheKey: () => undefined,
+      bodyFor: () => body,
+    },
     failover: undefined,
     log,
   }

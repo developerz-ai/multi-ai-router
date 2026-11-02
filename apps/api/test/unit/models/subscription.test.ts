@@ -22,6 +22,7 @@ function snapshot(overrides: Partial<AccountSnapshot> = {}): AccountSnapshot {
     status: "active",
     weight: 100,
     priority: 0,
+    health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
     ...overrides,
   }
 }
@@ -147,10 +148,12 @@ describe("what an account contributes to GET /v1/models", () => {
 
   test("a swept subscription lists its rows first, the live word wins, and the shipped aliases stay listed", () => {
     const rows = shippedSubscriptionModels()
+    const base = rows[0]
+    if (base === undefined) throw new Error("the shipped subscription catalog is empty")
     const live = [
-      { ...rows[0], id: "claude-opus-5", listingSource: "live" as const },
+      { ...base, id: "claude-opus-5", listingSource: "live" as const },
       {
-        ...rows[0],
+        ...base,
         id: "sonnet",
         listingSource: "live" as const,
         resolvedModel: "claude-sonnet-6",
@@ -158,7 +161,7 @@ describe("what an account contributes to GET /v1/models", () => {
       // What the CLI actually reports for a 1M-context plan: a suffixed alias the shipped table
       // never spells, listed as it came.
       {
-        ...rows[0],
+        ...base,
         id: "opus[1m]",
         listingSource: "live" as const,
         resolvedModel: "claude-opus-5[1m]",

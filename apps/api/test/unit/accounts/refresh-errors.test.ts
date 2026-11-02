@@ -264,7 +264,7 @@ test("acknowledgment loss waits for strict catalog and shutdown bounds that wait
   const repository = fakeAccounts(rows)
   const entered = deferred<void>()
   const release = deferred<void>()
-  let visible: string | null = null
+  const visible: { material: string | null } = { material: null }
   const h = harness(
     rows,
     { shutdownDrainMs: 25 },
@@ -277,7 +277,7 @@ test("acknowledgment loss waits for strict catalog and shutdown bounds that wait
         },
       },
       refreshCatalogAfterMutation: async () => {
-        visible = rows[0]?.authMaterial ?? null
+        visible.material = rows[0]?.authMaterial ?? null
         entered.resolve()
         await release.promise
       },
@@ -288,7 +288,7 @@ test("acknowledgment loss waits for strict catalog and shutdown bounds that wait
     settled = true
   })
   await entered.promise
-  expect(visible).toBe(rows[0]?.authMaterial ?? null)
+  expect(visible.material).toBe(rows[0]?.authMaterial ?? null)
   expect(settled).toBe(false)
   const stopping = h.refresher.stop()
   h.scheduled.findLast((call) => call.delay === 25 && !call.cancelled)?.run()

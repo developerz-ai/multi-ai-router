@@ -27,11 +27,19 @@ export interface QueryMeasure {
 const dialect = new PgDialect()
 const label = new AsyncLocalStorage<string>()
 
-function serializeParam(v: unknown): unknown {
+/**
+ * The EXPLAIN re-run hands its parameters back to postgres.js, which only accepts serializable
+ * ones. Narrow to that set here rather than casting the array across: an unsupported parameter
+ * is a bug in the query that produced it, and saying so beats letting the driver fail on it.
+ */
+function serializeParam(v: unknown): string | number | boolean | null | Buffer {
   if (Array.isArray(v))
     return `{${v.map((x) => (x === null ? "null" : `"${String(x).replace(/["\\]/g, "\\$&")}"`)).join(",")}}`
   if (v instanceof Date) return v.toISOString()
-  return v as unknown
+  if (v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+    return v
+  if (Buffer.isBuffer(v)) return v
+  throw new Error("bench-usage: unsupported query parameter")
 }
 
 function compile(query: unknown): { sql: string; params: unknown[] } {

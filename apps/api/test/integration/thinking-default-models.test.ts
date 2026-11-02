@@ -179,17 +179,21 @@ describe("OPENAI_CHAT_THINKING_DEFAULT_MODELS end to end", () => {
 })
 
 describe("openai-responses egress is never touched", () => {
-  const RESPONSES_REPLY = new Response(
-    [
-      `data: ${JSON.stringify({ type: "response.output_text.delta", item_id: "m", content_index: 0, delta: "hi" })}\n\n`,
-      `data: ${JSON.stringify({ type: "response.output_text.done", item_id: "m", content_index: 0, text: "hi" })}\n\n`,
-      `data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 2, output_tokens: 1 } } })}\n\n`,
-    ].join(""),
-    { status: 200, headers: { "content-type": "text/event-stream" } },
-  )
+  const RESPONSES_BODY = [
+    `data: ${JSON.stringify({ type: "response.output_text.delta", item_id: "m", content_index: 0, delta: "hi" })}\n\n`,
+    `data: ${JSON.stringify({ type: "response.output_text.done", item_id: "m", content_index: 0, text: "hi" })}\n\n`,
+    `data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 2, output_tokens: 1 } } })}\n\n`,
+  ].join("")
 
   test("in-set model on a Responses target gets no enable_thinking field (egress gate)", async () => {
-    const upstream = mockUpstream([() => RESPONSES_REPLY.clone()])
+    // A fresh response per call: the upstream may be asked twice, and a body can only be read once.
+    const upstream = mockUpstream([
+      () =>
+        new Response(RESPONSES_BODY, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    ])
     const usage = usageSink()
     const health = createHealthStore({ jitter: () => 0 })
     const testClock = clock()

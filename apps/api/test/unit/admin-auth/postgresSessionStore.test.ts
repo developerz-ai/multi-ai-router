@@ -74,7 +74,7 @@ function harness() {
   const replica = (cacheMaxEntries = 10) =>
     createPostgresSessionStore({
       repository,
-      logger: createLogger({ level: "silent" }),
+      logger: createLogger({ level: "error", write: () => {} }),
       cacheMaxEntries,
       revalidateAfterMs: 100,
       now: () => now,

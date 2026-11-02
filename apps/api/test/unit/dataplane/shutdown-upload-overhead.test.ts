@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { createDispatcher } from "../../../src/services/dataplane"
 import { createActiveRequestRegistry } from "../../../src/services/dataplane/active-requests"
+import { createHealthStore } from "../../../src/services/dataplane/health"
 import type { UsageRecord } from "../../../src/services/usage"
 import { account, catalog, cipher, clock } from "./fixtures"
 
@@ -27,6 +28,7 @@ for (const cause of ["shutdown", "caller"] as const) {
       clock: timer,
       catalog: catalog([account("offline")]),
       cipher: cipher(),
+      health: createHealthStore(),
       usage: { record: (row) => void rows.push(row) },
       fetch: async () => {
         fetches++

@@ -444,7 +444,10 @@ describe("the headerless fingerprint", () => {
 })
 
 describe("a plan carried in from another account", () => {
-  const resume = (lineage: LineageClass, deltaFrom: number): SessionPlan => ({
+  const resume = (
+    lineage: LineageClass,
+    deltaFrom: number,
+  ): Extract<SessionPlan, { readonly kind: "resume" }> => ({
     kind: "resume",
     sdkSessionId: "sess_a",
     lineage,

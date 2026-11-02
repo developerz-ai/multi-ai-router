@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.42.0] — 2026-11-02
 
+### Changed
+
+- The required typecheck gate retains the production solution build and additionally checks API smoke sources and all recursive API tests, support helpers and TypeScript fixtures through a strict, non-composite no-emit project. Imported benchmark and database-test helpers are included without changing production output paths or inherited strictness. A coverage regression enumerates sources, checks representative compiler errors in smoke, unit, integration and support, and pins the `bin/check` → `bin/lint` → typecheck wiring. Runtime versions are unchanged.
+
 ### Fixed
 
 - **A repeated root parent no longer keeps the children of the copy it replaced.** The scanner that salvages an over-cap upstream frame released only the ceiling child (`base_resp.status_code`) when a root key repeated, so the members captured under the earlier copy stayed captured and were merged into the later copy's parent: `{"response":{"usage":{"input_tokens":1}},"response":{"status":"x"}}` rebuilt `{response:{usage:{input_tokens:1},status:"x"}}`, while `JSON.parse` reads `{response:{status:"x"}}`. A repeated parent now releases every member captured under the earlier copy before the new copy is read — `message.usage`, `response.usage`, `response.status`, `response.incomplete_details`, `response.error`, `base_resp.status_code` — and nothing is lent at that moment: a member lent to an error capture in progress is given back, or forgotten, when that capture ends, which is before the next root value starts, so a give-back cannot resurrect a superseded member. The byte budget, the ceiling and optional slot rules, the structural-violation block, the fail-closed `null` and the retained-bytes accounting are unchanged.

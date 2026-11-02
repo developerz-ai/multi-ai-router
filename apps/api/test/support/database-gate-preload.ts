@@ -12,7 +12,11 @@
  */
 import { databaseGateRefusal } from "./database-gate"
 
-const refusal = databaseGateRefusal(process.env)
+const refusal = databaseGateRefusal({
+  DATABASE_URL: process.env.DATABASE_URL,
+  CI: process.env.CI,
+  ROUTER_TEST_REQUIRE_DATABASE: process.env.ROUTER_TEST_REQUIRE_DATABASE,
+})
 
 if (refusal !== null) {
   process.stderr.write(`\n\x1b[0;31m✘\x1b[0m  ${refusal}\n\n`)

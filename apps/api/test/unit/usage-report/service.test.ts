@@ -19,6 +19,12 @@ const idleReports: UsageReportRepository = {
   findByPeriodStart: async () => undefined,
   list: async () => [],
   deleteOlderThan: async () => 0,
+  claimForDelivery: async () => undefined,
+  markDelivered: async () => false,
+  markPendingFailed: async () => false,
+  markFailed: async () => false,
+  recordNotConfigured: async () => false,
+  lastDeliveredAt: async () => null,
 }
 
 function serviceAt(maxRows: number) {

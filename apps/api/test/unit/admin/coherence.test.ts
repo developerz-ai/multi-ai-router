@@ -24,7 +24,7 @@ function trackedRefresh() {
 }
 
 const VIEW = { id: "acc-1" } as never
-const DELETED = { id: "acc-1", deleted: true as const }
+const DELETED = { id: "acc-1", deleted: true as const, cleanup: "removed" as const }
 
 function fakeAccountsService(overrides: Partial<AccountsService> = {}): AccountsService {
   return {

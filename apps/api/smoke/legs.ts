@@ -99,8 +99,15 @@ const TOOL_DEFINITION = {
 
 export function buildBody(leg: LegSpec, model: string): unknown {
   if (leg.endpoint === "/v1/messages") return buildMessagesBody(leg.expectation, model)
-  if (leg.endpoint === "/v1/chat/completions")
+  if (leg.endpoint === "/v1/chat/completions") {
+    // `LegSpec` types the endpoint and the expectation as two independent axes, so the compiler
+    // cannot pair "/v1/chat/completions" with the chat expectation. Assert the pairing instead
+    // of casting across it: a mismatched leg is an internal bug, and the guard names it rather
+    // than sending a Responses-shaped body to the chat endpoint.
+    if (leg.expectation.kind !== "chat_completions_required_tool")
+      throw new Error("internal: chat completions leg has a non-chat expectation")
     return buildChatCompletionsBody(leg.expectation, model)
+  }
   return buildResponsesBody(leg.expectation, model)
 }
 

@@ -33,8 +33,11 @@ import { bearer, harness, KEY } from "./harness"
 interface ListedRow {
   readonly id: string
   readonly object: string
+  readonly created: number
   readonly owned_by: string
   readonly resolved_model?: string
+  readonly context_length?: number
+  readonly max_completion_tokens?: number
 }
 
 const POOL_ID = "subs"

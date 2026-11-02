@@ -113,7 +113,10 @@ describe("usage recorder", () => {
     const shed: UsageRecord[] = []
     const recorder = createUsageRecorder(collectingWriter(), {
       maxQueued: 3,
-      onShed: (dropped) => void shed.push(dropped),
+      onShed: (dropped) => {
+        if (!("eventId" in dropped)) throw new Error("expected an attempt to be shed")
+        shed.push(dropped)
+      },
     })
 
     for (let attempt = 1; attempt <= 6; attempt += 1) recorder.record(record({ attempt }))

@@ -42,7 +42,13 @@ test("content, thinking, and tool deltas are model output in every dialect", () 
 
 test("the wrapper keeps the driver's policy and verdict", () => {
   let seen = 0
-  const verdict = { kind: "server-error", status: 500, retryable: true, signal: "x" } as const
+  const verdict = {
+    kind: "server-error",
+    status: 500,
+    retryable: true,
+    signal: "x",
+    rateLimit: null,
+  } as const
   const wrapped = observingModelOutput(
     "anthropic",
     { terminalPolicy: "require-completion", inspectPayload: () => verdict },

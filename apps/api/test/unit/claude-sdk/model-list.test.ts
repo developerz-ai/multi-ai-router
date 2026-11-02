@@ -272,7 +272,17 @@ describe("listing a subscription's models through the Agent SDK", () => {
     expect(canUseTool).toBeDefined()
     if (canUseTool === undefined) return
     for (const tool of ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]) {
-      expect(await canUseTool(tool, {}, { signal: new AbortController().signal })).toMatchObject({
+      expect(
+        await canUseTool(
+          tool,
+          {},
+          {
+            signal: new AbortController().signal,
+            toolUseID: "toolu_1",
+            requestId: "req-1",
+          },
+        ),
+      ).toMatchObject({
         behavior: "deny",
       })
     }

@@ -287,8 +287,13 @@ describe("a tool schema carrying a regex lookaround", () => {
     const input = JSON.parse(JSON.stringify(TOOL_WITH_LOOKAROUND)) as typeof TOOL_WITH_LOOKAROUND
     const codex = sent("anthropic", input, CODEX_RESPONSES_EGRESS)
     expect(
-      (codex.body.tools?.[0]?.parameters?.properties?.login as { pattern?: string } | undefined)
-        ?.pattern,
+      (
+        (
+          codex.body.tools as ReadonlyArray<{
+            parameters?: { properties?: Record<string, unknown> }
+          }>
+        )?.[0]?.parameters?.properties?.login as { pattern?: string } | undefined
+      )?.pattern,
     ).toBeUndefined()
 
     // The same input, fed to a non-Codex surface: nothing changed upstream.

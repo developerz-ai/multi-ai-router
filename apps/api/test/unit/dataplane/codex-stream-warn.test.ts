@@ -138,6 +138,7 @@ describe("codex in-stream refusal flows through the data plane", () => {
     const warns = f.lines.filter((l) => l.msg === "upstream stream failure")
     expect(warns).toHaveLength(1)
     const warn = warns[0]
+    if (warn === undefined) throw new Error("no warn line")
     expect(warn).toMatchObject({
       level: "warn",
       accountId: "a",

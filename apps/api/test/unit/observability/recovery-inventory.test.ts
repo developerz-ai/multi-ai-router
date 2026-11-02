@@ -5,7 +5,18 @@ import { createHealthStore } from "../../../src/services/dataplane"
 import { createRecoveryAccess } from "../../../src/services/dataplane/recovery-access"
 import { createRecoveryCapabilities } from "../../../src/services/dataplane/recovery-capability"
 import type { RecoveryCoordinator } from "../../../src/services/recovery"
+import type { UsageStats } from "../../../src/services/usage"
 import { account, catalog, NOW } from "../dataplane/fixtures"
+
+/** A recorder that has written nothing: every counter at zero. */
+const NO_USAGE: UsageStats = {
+  rejectedAfterStop: 0,
+  depth: 0,
+  dropped: 0,
+  written: 0,
+  writeFailures: 0,
+  writeDiscarded: 0,
+}
 
 test("runtime inventory reads actual replica permits without consuming or requesting recovery", () => {
   const issued = account("issued", {
@@ -84,9 +95,7 @@ test("runtime inventory reads actual replica permits without consuming or reques
       metricInventory: { pool: ["model"] },
       now: () => NOW,
       logger: createLogger({ level: "error", write: () => {} }),
-      usage: () => ({
-        stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
-      }),
+      usage: () => ({ stats: () => NO_USAGE }),
     })
   const permit = {
     revision: 1,

@@ -51,7 +51,11 @@ describe("an expired subscription, in every spelling the CLI has for it", () => 
     expect(clientMessage).not.toContain(diagnostic)
     const state = recordFailure(
       HEALTHY,
-      { kind: failoverKind(classification.kind, classification.status), status: 401 },
+      {
+        kind: failoverKind(classification.kind, classification.status),
+        status: 401,
+        message: "the subscription needs re-authenticating",
+      },
       NOW,
       { authKind: "oauth" },
     )

@@ -12,6 +12,10 @@ import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/
 import { createUsageService } from "../../src/services/usage-read"
 import { USAGE_EXPORT_HEADER } from "../../src/services/usage-read/export"
 import { records } from "../support/csv-sums"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 
 /**
  * The export's refusals (issue #226): the row cap, malformed and unknown query keys, and the
@@ -54,6 +58,8 @@ describe.skipIf(!historyUrl)("usage CSV export refusals", () => {
         ADMIN_USAGE_BASE_PATH,
         adminUsageRoutes({
           service,
+          reports: unreachableUsageReports(),
+          delivery: unreachableReportDelivery(),
           guard:
             guard === "open"
               ? async (_c, next) => next()

@@ -22,7 +22,7 @@
     "lint": "biome check .",
     "setup": "bin/setup",
     "test": "bin/test",
-    "typecheck": "tsc --build --verbose"
+    "typecheck": "tsc --build --verbose && tsc --project apps/api/tsconfig.tests.json"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

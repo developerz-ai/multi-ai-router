@@ -73,12 +73,11 @@ function jsonResponse(status: number, body: unknown): Response {
 
 describe("createDiscoverModelsService", () => {
   test("reads the Anthropic listing and writes the ids, deduplicated and sorted", async () => {
-    let seenUrl: string | null = null
-    let seenMethod: string | null = null
+    const seen: { url: string | null; method: string | null } = { url: null, method: null }
     const { service, writes } = harness({
       fetch: async (request) => {
-        seenUrl = request.url
-        seenMethod = request.method
+        seen.url = request.url
+        seen.method = request.method
         return jsonResponse(200, {
           data: [
             { type: "model", id: "glm-4.7", display_name: "GLM 4.7" },
@@ -96,17 +95,17 @@ describe("createDiscoverModelsService", () => {
     expect(result.value.models).toEqual(["glm-4.6", "glm-4.7"])
     expect(result.value.saved).toBe(true)
     // z.ai's default surface is Anthropic, whose listing lives at `/v1/models`.
-    expect(seenUrl).toContain("/v1/models")
-    expect(seenMethod).toBe("GET")
+    expect(seen.url).toContain("/v1/models")
+    expect(seen.method).toBe("GET")
     expect(writes).toEqual([{ id: "acc-1", patch: { supportedModels: ["glm-4.6", "glm-4.7"] } }])
   })
 
   test("reads the OpenAI listing off the same field, at that dialect's own path", async () => {
-    let seenUrl: string | null = null
+    const seen: { url: string | null } = { url: null }
     const { service, writes } = harness({
       row: accountRow({ dialect: "openai-chat" }),
       fetch: async (request) => {
-        seenUrl = request.url
+        seen.url = request.url
         return jsonResponse(200, {
           object: "list",
           data: [{ id: "glm-4.7", object: "model", owned_by: "zai" }],
@@ -116,24 +115,24 @@ describe("createDiscoverModelsService", () => {
 
     const result = await service.discover("acc-1")
     expect(result.ok).toBe(true)
-    expect(seenUrl).toContain("/models")
-    expect(seenUrl).not.toContain("/v1/models")
+    expect(seen.url).toContain("/models")
+    expect(seen.url).not.toContain("/v1/models")
     expect(writes[0]?.patch).toEqual({ supportedModels: ["glm-4.7"] })
   })
 
   test("asks for the whole catalog rather than the provider's default page", async () => {
     // Anthropic's listing pages at 20 by default. Discovering 20 of 60 models and writing them as
     // the declaration would take the other 40 out of selection.
-    let seenUrl: string | null = null
+    const seen: { url: string | null } = { url: null }
     const { service } = harness({
       fetch: async (request) => {
-        seenUrl = request.url
+        seen.url = request.url
         return jsonResponse(200, { data: [{ id: "glm-4.7" }] })
       },
     })
 
     await service.discover("acc-1")
-    expect(new URL(seenUrl ?? "https://x.test").searchParams.get("limit")).toBe("1000")
+    expect(new URL(seen.url ?? "https://x.test").searchParams.get("limit")).toBe("1000")
   })
 
   test("an empty listing writes nothing — it is not a claim that the account serves nothing", async () => {
@@ -241,16 +240,16 @@ describe("createDiscoverModelsService", () => {
   test("presents the account's credential upstream, the same way a real attempt would", async () => {
     // Through `runAttempt`, so the header form is the driver's — a compatible vendor's key on
     // `Authorization: Bearer`, with the mandated version header alongside it.
-    let seen: Headers | null = null
+    const seen: { headers: Headers | null } = { headers: null }
     const { service } = harness({
       fetch: async (request) => {
-        seen = new Headers(request.headers)
+        seen.headers = new Headers(request.headers)
         return jsonResponse(200, { data: [{ id: "glm-4.7" }] })
       },
     })
 
     await service.discover("acc-1")
-    expect(seen?.get("authorization")).toBe("Bearer plaintext-key")
-    expect(seen?.get("anthropic-version")).toBe("2023-06-01")
+    expect(seen.headers?.get("authorization")).toBe("Bearer plaintext-key")
+    expect(seen.headers?.get("anthropic-version")).toBe("2023-06-01")
   })
 })

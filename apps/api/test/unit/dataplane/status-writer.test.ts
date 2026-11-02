@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountStatus } from "@multi-ai-router/core"
-import type { AccountRow } from "@multi-ai-router/db"
+import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import { createLogger, type Logger } from "../../../src/logging/logger"
 import {
   type AccountStatusWriterDeps,
@@ -64,7 +64,13 @@ function repository(rows: Record<string, AccountStatus> = { a: "active", b: "act
   return {
     rows,
     writes,
-    transitionObservedStatus: async ({ id, expected, status }): Promise<AccountRow | undefined> => {
+    transitionObservedStatus: async ({
+      id,
+      expected,
+      status,
+    }: Parameters<AccountRepository["transitionObservedStatus"]>[0]): Promise<
+      AccountRow | undefined
+    > => {
       writes.push({ id, expected, to: status })
       if (
         rows[id] !== expected.status ||
@@ -271,10 +277,11 @@ describe("account status writer", () => {
 
 test("late obsolete callback cannot overwrite a newer pending credential verdict", async () => {
   const store = createMemoryStore()
-  const row = await store.accounts.create(
-    { label: "synthetic", provider: "openai-oauth", authMaterial: "old-cipher" },
-    NOW,
-  )
+  const row = await store.accounts.create({
+    label: "synthetic",
+    provider: "openai-oauth",
+    authMaterial: "old-cipher",
+  })
   const old = observation({ authMaterial: row.authMaterial })
   const replacement = await store.accounts.updateOperatorAccount({
     id: row.id,

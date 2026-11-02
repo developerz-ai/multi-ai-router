@@ -305,6 +305,7 @@ describe("parking a dead login", () => {
         configuredStatus: "active",
         resetsAt: null,
         resetSource: "unknown",
+        cooldownReason: null,
         lastCheckedAt: null,
         consecutiveFailures: 0,
         inFlight: 0,

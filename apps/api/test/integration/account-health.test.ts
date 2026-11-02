@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { AccountStatus } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import { createLogger } from "../../src/logging/logger"
-import { createAccountStatusWriter } from "../../src/services/dataplane"
+import { createAccountStatusWriter, type HealthStoreOptions } from "../../src/services/dataplane"
 import { accountRow } from "../support/account-row"
 import { account, jsonResponse, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
@@ -48,7 +48,13 @@ function durableHealth(initial?: Record<string, AccountStatus>) {
     flushIntervalMs: 60_000,
     now: () => new Date("2026-01-01T12:00:00.000Z"),
   })
-  return { accounts, writer, hook: { onBlocked: writer.record } }
+  const hook: HealthStoreOptions = {
+    onBlocked: (accountId, status, observation, quotaWindows) => {
+      if (observation === undefined) throw new Error("durable health requires an observation")
+      writer.record(accountId, status, observation, quotaWindows)
+    },
+  }
+  return { accounts, writer, hook }
 }
 
 const DEAD_BALANCE = () =>

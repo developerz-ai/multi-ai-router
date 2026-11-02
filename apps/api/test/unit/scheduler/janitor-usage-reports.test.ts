@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { RetentionConfig } from "../../../src/config/env"
-import { createJanitorTask } from "../../../src/scheduler"
+import { createJanitorTask, type TaskOutcome } from "../../../src/scheduler"
 import { silentLogger } from "./fixtures"
 
 /**
@@ -24,6 +24,9 @@ const RETENTION: RetentionConfig = {
 }
 
 const never = async () => 0
+
+/** The janitor's own per-category counts, on top of the shared task outcome. */
+type Report = TaskOutcome & { readonly counts: Record<string, number> }
 
 describe("the janitor's weekly report sweep", () => {
   test("sweeps usage_reports at exactly now minus the window, and counts it", async () => {
@@ -54,7 +57,7 @@ describe("the janitor's weekly report sweep", () => {
     })
 
     expect(cutoffs[0]?.toISOString()).toBe("2026-10-04T23:59:59.000Z")
-    expect((result as { counts: Record<string, number> }).counts.usageReports).toBe(2)
+    expect((result as Report).counts.usageReports).toBe(2)
     expect(result.itemsProcessed).toBe(2)
   })
 })

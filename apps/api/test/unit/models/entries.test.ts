@@ -94,9 +94,9 @@ describe("turning an upstream listing entry into a catalog row", () => {
 
 describe("the shipped context table", () => {
   test("a dated snapshot resolves to its family, the way the price table does", () => {
-    expect(lookupContextWindow("anthropic-api", "claude-sonnet-4-5-20250929")).toEqual(
-      lookupContextWindow("anthropic-api", "claude-sonnet-4-5") ?? {},
-    )
+    const family = lookupContextWindow("anthropic-api", "claude-sonnet-4-5")
+    expect(family).not.toBeNull()
+    expect(lookupContextWindow("anthropic-api", "claude-sonnet-4-5-20250929")).toEqual(family)
   })
 
   test("a model with no row is unknown — a sibling's window is never borrowed", () => {
