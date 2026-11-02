@@ -135,8 +135,9 @@ verification. The shipped long cards use 2× input, cache-read and cache-write r
 Separately, the router's implementation convention replaces the standard card for the **whole
 request** when total prompt (`tokensIn + cacheReadTokens + cacheWriteTokens`) is **>=272_000**,
 including reads and writes, as for the GPT-5.6 rows. This convention is not a claim of verbatim
-agreement with the recorded vendor pages. Older OpenAI evidence remains inherited:
-`PRICE_SOURCES` keeps `verifiedAt: null`. `gpt-reserve` and `codex-auto-review` stay unpriced —
+agreement with the recorded vendor pages. The older OpenAI rows in the same table were not re-read
+for this change and keep their inherited evidence: `PRICE_SOURCES` keeps `verifiedAt: null`.
+`gpt-reserve` and `codex-auto-review` stay unpriced —
 no published price was found for either.
 
 ### The four providers that ship no price
