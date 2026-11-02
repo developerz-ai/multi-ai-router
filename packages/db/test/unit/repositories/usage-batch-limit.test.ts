@@ -119,6 +119,9 @@ describe("usage insert bind budget", () => {
   })
 })
 
+// The batch is oversized on purpose: 11,000 rows are split into statements of ~65k parameters
+// each, and building them costs seconds of CPU. Bun's 5 s default is not a budget for that
+// shape, and the assertions below are about the statements, not about how fast they are built.
 test("oversized direct terminal batches and combined receipts use bounded statements in one transaction", async () => {
   const terminals = Array.from({ length: 11000 }, () => ({
     correlationId: crypto.randomUUID(),
@@ -166,4 +169,4 @@ test("oversized direct terminal batches and combined receipts use bounded statem
   expect(h.statements.every((statement) => statement.params.length <= PG_MAX_BIND_PARAMETERS)).toBe(
     true,
   )
-})
+}, 60_000)

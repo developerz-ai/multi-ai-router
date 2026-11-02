@@ -54,7 +54,8 @@ beforeAll(async () => {
   await runMigrations({ url: uri.toString(), migrationsFolder: defaultMigrationsFolder() })
   handle = createDatabase({ url: uri.toString(), maxConnections: 2 })
   db = handle.db
-})
+  // Creating a database and running every migration outlasts bun's 5 s hook default on a busy box.
+}, 60_000)
 
 afterAll(async () => {
   if (handle !== undefined) {
@@ -70,7 +71,7 @@ afterAll(async () => {
   await handle?.close()
   await admin?.sql.unsafe(`drop database if exists "${databaseName}" with (force)`)
   await admin?.close()
-})
+}, 30_000)
 
 describe.skipIf(!runnable)("bounded retention deletes against a live database", () => {
   test("usage records: the batch stops at the limit and the count is what went", async () => {
