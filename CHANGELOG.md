@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.42.1] — 2026-11-02
+
 ### Fixed
 
+- **A restart at the wrong second no longer takes a whole account out for `RECOVERY_MAXIMUM_OUTCOME_MS`.** `stop()` set `stopped` and returned, so a designated attempt's `router_shutdown` verdict sat in the in-memory queue unwritten and the row stayed `issued` under a boot that was gone. No later boot may hydrate another boot's permit, so every request to that account answered `429` until the row aged out (prod, 2026-11-02, v2.41.0 rollout: 600 s of one z.ai account). Shutdown now writes every queued verdict and then marks each permit this boot still holds `uncertain`, with the ordinary `RECOVERY_COOLDOWN_MS` before a successor, within `RECOVERY_SHUTDOWN_DRAIN_MS`; a second pass catches an issue that was already committing when stop began. Another boot's permit is never touched and `succeeded` is written only for an observed verdict. New permits stop at the shutdown signal, alongside request admission, while issued permits and outcomes keep flowing through the HTTP drain. A hard crash, or a database lost during shutdown, still waits out the 600 s bound: nothing distinguishes a dead owner from a live one holding a long stream. That default is unchanged.
 - The `bin/smoke` informational `responses.function_call` leg explicitly sends the boolean `store: false` in its outgoing `/v1/responses` request. An outgoing-request regression drives `runLegs` and inspects the captured JSON, rather than relying on translation coverage. This corrects the diagnostic client only: other smoke legs, required/informational exit-code semantics, router same-dialect byte-passthrough, and runtime versions are unchanged.
 
 ### Changed

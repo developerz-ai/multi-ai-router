@@ -5,6 +5,7 @@ import type {
   RecoveryCapability,
   RecoveryCoordinator,
   RecoveryCoordinatorDeps,
+  RecoveryOutcome,
   RecoveryRow,
 } from "./types"
 
@@ -22,6 +23,7 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
   const offered = new Map<string, string>()
   let flight: Promise<void> | undefined
   let stopped = false
+  let issuanceClosed = false
   let dirty = false
   let stopping: Promise<void> | undefined
   const coherent = async (): Promise<boolean> => {
@@ -77,6 +79,48 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
     offered.set(row.accountId, row.permitId)
     queues.satisfied(row.accountId)
   }
+  const issuing = (): boolean => !stopped && !issuanceClosed
+  const writeOutcome = async (outcome: RecoveryOutcome): Promise<void> => {
+    const { ownershipEpoch, ...rest } = outcome
+    dirty = true
+    const committed = await deps.repository.outcome({
+      ...rest,
+      expectedEpoch: ownershipEpoch,
+      ownerBootId: bootId,
+      cooldownMs: deps.config.cooldownMs,
+      quotaSpentThreshold: deps.config.quotaSpentThreshold,
+    })
+    // Undefined means fenced by newer account/generation; never resend a provider probe.
+    queues.completed(outcome)
+    if (committed !== undefined) dirty = true
+    deps.retire(outcome.accountId, outcome.generation)
+  }
+  /**
+   * No later boot hydrates this boot's permits, so one left `issued` gates its account until the
+   * maximum-outcome bound. Observed verdicts go first; whatever has none proved nothing: uncertain.
+   */
+  const settle = async (): Promise<void> => {
+    for (const outcome of queues.batch(deps.config.outcomeCapacity)) {
+      try {
+        await writeOutcome(outcome)
+      } catch (error) {
+        deps.warn("recovery outcome lost during shutdown; settling it as uncertain", error)
+      }
+    }
+    try {
+      let rows: RecoveryRow[]
+      do {
+        rows = await deps.repository.settleIssuedForOwner({
+          limit: deps.config.batchSize,
+          ownerBootId: bootId,
+          cooldownMs: deps.config.cooldownMs,
+        })
+        for (const row of rows) deps.retire(row.accountId, row.generation)
+      } while (rows.length === deps.config.batchSize)
+    } catch (error) {
+      deps.warn("recovery permits not settled; they wait out the maximum outcome bound", error)
+    }
+  }
   const work = async (): Promise<void> => {
     await coherent()
     for (const request of queues.automaticBatch(deps.config.batchSize)) {
@@ -91,19 +135,7 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
     }
     for (const outcome of queues.batch(deps.config.batchSize)) {
       if (stopped) return
-      const { ownershipEpoch, ...rest } = outcome
-      dirty = true
-      const committed = await deps.repository.outcome({
-        ...rest,
-        expectedEpoch: ownershipEpoch,
-        ownerBootId: bootId,
-        cooldownMs: deps.config.cooldownMs,
-        quotaSpentThreshold: deps.config.quotaSpentThreshold,
-      })
-      // Undefined means fenced by newer account/generation; never resend a provider probe.
-      queues.completed(outcome)
-      if (committed !== undefined) dirty = true
-      deps.retire(outcome.accountId, outcome.generation)
+      await writeOutcome(outcome)
     }
     await coherent()
     if (stopped) return
@@ -136,13 +168,13 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       if (stopped) return
       await expose(row)
     }
-    if (stopped) return
+    if (!issuing()) return
     const pending = await deps.repository.listPending({
       limit: deps.config.batchSize,
       accountIds: demandedIds,
     })
     for (const row of pending) {
-      if (stopped) return
+      if (!issuing()) return
       if (!queues.demanded(row.accountId, deps.now().getTime(), deps.config.demandTtlMs)) continue
       const assigned = await deps.repository.assignPending({
         accountId: row.accountId,
@@ -151,10 +183,10 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
         ownerBootId: bootId,
         leaseMs: deps.config.preparationLeaseMs,
       })
-      if (stopped || assigned === undefined || assigned.ownerBootId !== bootId) continue
+      if (!issuing() || assigned === undefined || assigned.ownerBootId !== bootId) continue
       const account = await deps.accounts.findById(row.accountId)
       if (
-        stopped ||
+        !issuing() ||
         account === undefined ||
         account.lifecycleVersion !== assigned.lifecycleVersion ||
         account.status === "disabled" ||
@@ -207,24 +239,38 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       if (!stopped) queues.demand(id, deps.now().getTime())
     },
     recordOutcome: (outcome) => !stopped && queues.outcome(outcome),
+    closeIssuance: () => {
+      issuanceClosed = true
+    },
     tick,
     start: () => {
       if (stopping !== undefined || flight !== undefined) return
       stopped = false
+      issuanceClosed = false
       loop.start()
     },
     stop: () => {
       if (stopping !== undefined) return stopping
       stopped = true
       loop.stop()
+      const inFlight = flight
       let cancelDeadline: () => void = () => undefined
       const deadline = new Promise<void>((resolve) => {
         cancelDeadline = deps.schedule(() => {
-          deps.warn("recovery coordinator drain timed out; issued outcomes remain uncertain")
+          deps.warn(
+            "recovery coordinator drain timed out; unsettled permits wait out the maximum outcome bound",
+          )
           resolve()
         }, deps.config.shutdownDrainMs)
       })
-      const owned = Promise.race([flight ?? Promise.resolve(), deadline]).finally(() => {
+      // At once, so a flight stalled on the catalog cannot spend the budget; again after it, so a
+      // permit whose issue was already committing when stop began is not stranded.
+      const drain = settle().then(async () => {
+        if (inFlight === undefined) return
+        await inFlight
+        await settle()
+      })
+      const owned = Promise.race([drain, deadline]).finally(() => {
         cancelDeadline()
         stopping = undefined
       })

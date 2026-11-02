@@ -59,6 +59,7 @@ test("runtime inventory reads actual replica permits without consuming or reques
   }
   const coordinator: RecoveryCoordinator = {
     bootId: "local-boot",
+    closeIssuance: touched,
     demand: touched,
     forget: touched,
     start: touched,
