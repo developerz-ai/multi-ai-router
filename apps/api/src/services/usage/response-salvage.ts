@@ -1,5 +1,6 @@
 import {
   BACKSLASH,
+  type Capture,
   CLOSE_ARRAY,
   CLOSE_OBJECT,
   COLON,
@@ -17,24 +18,6 @@ import {
   slotKeys,
 } from "./response-salvage-slots"
 
-/**
- * Bounded salvage of an oversized JSON payload: an upstream echoes the whole request into a
- * terminal frame (Codex `response.completed`), pushing it past the observation cap while the usage
- * that settles the attempt sits inside. This scanner walks the oversized bytes once, retains only
- * the shallow members usage and terminal evidence are read from, and rebuilds a small payload from
- * them. It never counts more than `maximumBytes`; anything it cannot account for honestly yields
- * `null`.
- */
-
-interface Capture {
-  readonly path: string
-  readonly depth: number
-  readonly kind: "string" | "container" | "primitive"
-  bytes: number[]
-  /** An optional slot that outgrew its share: its bytes are released and nothing is kept. */
-  dropped: boolean
-}
-
 export interface ResponseSalvage {
   push(byte: number): void
   /** The rebuilt shallow payload, or null when the scanned bytes were not one closed object. */
@@ -45,6 +28,8 @@ export interface ResponseSalvage {
 export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const decoder = new TextDecoder("utf-8", { fatal: true })
   const captured = new Map<string, number[]>()
+  const decodedOnly = new Set<string>()
+  const escapedKeys = [false, false, false]
   // Only depths 1 and 2 carry keys we care about; deeper structure is counted, never stored.
   const keys: (string | null)[] = [null, null, null]
   const objects: boolean[] = [false, false, false]
@@ -58,8 +43,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   let keyBytes: number[] | null = null
   let capture: Capture | null = null
   let retained = 0
-  // A root `error` object was seen. The flag is never cleared: a later root `error` value of
-  // another shape does not unsee it, so a root error that cannot be kept still reads as a failure.
+  // Only the latest root error's shape can justify a dropped-object placeholder.
   let sawRootErrorObject = false
   // Depths 1-2: a second value under a key, or a non-string value where a key or colon belongs, is
   // invalid JSON, so the frame keeps no ceiling slot, even one kept earlier (#209). Not a validator.
@@ -86,6 +70,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       if (bytes === undefined) continue
       retained -= bytes.length
       captured.delete(path)
+      decodedOnly.delete(path)
     }
   }
   // Ceiling slots lent to the error capture in progress: given back if it drops (it frees at least
@@ -123,6 +108,14 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   const keep = (byte: number) => {
     if (capture === null || capture.dropped) return
     const ceiling = SLOT_MAX_BYTES.get(capture.path)
+    // Newly decoded slots must never crowd out evidence the literal-only scanner could keep.
+    if (retained >= maximumBytes && !capture.decodedOnly) release(decodedOnly)
+    if (retained >= maximumBytes && capture.decodedOnly) {
+      retained -= capture.bytes.length
+      capture.bytes = []
+      capture.dropped = true
+      return
+    }
     // Error evidence outranks a ceiling slot: borrow its room before giving way.
     if (OPTIONAL.has(capture.path) && retained >= maximumBytes && lent.length === 0) lend()
     if (
@@ -156,16 +149,17 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     if (capture === null) return
     // A repeated key replaces the earlier capture, so release the earlier capture's bytes.
     retained -= captured.get(capture.path)?.length ?? 0
-    if (!capture.dropped) captured.set(capture.path, capture.bytes)
-    else captured.delete(capture.path)
+    decodedOnly.delete(capture.path)
+    if (!capture.dropped) {
+      captured.set(capture.path, capture.bytes)
+      if (capture.decodedOnly) decodedOnly.add(capture.path)
+    } else captured.delete(capture.path)
     if (!capture.dropped) lent = []
     capture = null
   }
   const beginValue = (byte: number, fresh: boolean) => {
-    // A root `error` object was seen: `{}` stands in for one that could not be kept, so the frame
-    // reads as a failure and never as a success.
-    if (depth === 1 && objects[1] && !expectKey[1] && keys[1] === "error" && byte === OPEN_OBJECT)
-      sawRootErrorObject = true
+    if (fresh && depth === 1 && objects[1] && !expectKey[1] && keys[1] === "error")
+      sawRootErrorObject = byte === OPEN_OBJECT
     if (fresh && depth <= 2 && objects[depth]) {
       if (expectKey[depth] || valueStarted[depth]) blockCeiling()
       valueStarted[depth] = true
@@ -181,13 +175,14 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     }
     const path = slotAt()
     if (path === null) return
-    if (SLOT_MAX_BYTES.has(path)) {
-      release([path])
-      if (ceilingBlocked) return
-    }
+    const decoded = (escapedKeys[1] || (depth === 2 && escapedKeys[2])) === true
+    const lowPriority = decoded && (!captured.has(path) || decodedOnly.has(path))
+    release([path])
+    if (SLOT_MAX_BYTES.has(path) && ceilingBlocked) return
     capture = {
       path,
       depth,
+      decodedOnly: lowPriority,
       kind:
         byte === QUOTE
           ? "string"
@@ -209,6 +204,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
           inString = false
           if (keyBytes !== null) {
             keys[depth] = decodeSlotKey(keyBytes)
+            escapedKeys[depth] = keyBytes.includes(BACKSLASH)
             keyBytes = null
           } else if (capture?.kind === "string" && capture.depth === depth) endCapture()
           return

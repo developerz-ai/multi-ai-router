@@ -526,15 +526,16 @@ test("a later non-object root error keeps its own value (2.42.0)", () => {
   expect(scanner.finish()).toEqual({ error: "boom" })
 })
 
-test("a root error too large to keep still reads as a failure (2.42.0)", () => {
-  const scanner = createResponseSalvage(64)
-  // The optional share is maximumBytes/4 = 16 bytes, so the later string is dropped: `{}` stands in
-  // for the root error, and the frame reads as a failure instead of a success.
-  const text = `{"error":{"code":"x"},"error":"${"b".repeat(40)}"}`
-  for (const byte of encoder.encode(text)) scanner.push(byte)
-  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
-  expect(scanner.finish()).toEqual({ error: {} })
-})
+test.each(["{}", '{"code":"x"}'])(
+  "a dropped non-object error replaces the earlier %s without a stale placeholder (2.42.0)",
+  (earlier) => {
+    const scanner = createResponseSalvage(64)
+    const text = `{"error":${earlier},"error":"${"b".repeat(40)}"}`
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+    expect(scanner.finish()).toEqual({})
+  },
+)
 
 test("an escaped slot key is matched as the key it decodes to (2.42.0)", () => {
   const scanner = createResponseSalvage(1024)

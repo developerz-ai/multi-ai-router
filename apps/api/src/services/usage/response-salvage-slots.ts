@@ -5,6 +5,16 @@ import { responseObject } from "./response-usage"
  * kept apart from the byte-level state machine in `response-salvage.ts`.
  */
 
+export interface Capture {
+  readonly path: string
+  readonly depth: number
+  readonly kind: "string" | "container" | "primitive"
+  /** Escaped-key evidence gives way before anything the literal-only scanner kept. */
+  readonly decodedOnly: boolean
+  bytes: number[]
+  dropped: boolean
+}
+
 // Shallow members kept verbatim, by parent key (root = ""). Everything else is skipped unread.
 const SLOTS: Readonly<Record<string, readonly string[]>> = {
   "": ["type", "usage", "status", "incomplete_details", "error", "code"],
@@ -126,7 +136,7 @@ export function decodeSlotKey(raw: readonly number[]): string | null {
 /**
  * The rebuilt shallow payload from the captured slots, or null when a required or optional member
  * does not parse. A malformed ceiling slot is lost as if it never existed. `sawRootErrorObject`
- * says a root `error` object was seen: `{}` stands in for one that could not be kept, so the frame
+ * says the latest root `error` was an object: `{}` stands in for one that could not be kept, so the frame
  * still reads as a failure and never as a success. A kept root `error` value — of any shape — is
  * left alone.
  */

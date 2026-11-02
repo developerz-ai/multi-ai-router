@@ -161,7 +161,9 @@ function run(create: (maximumBytes: number) => Salvage, text: string, cap: numbe
 function valueFor(name: string, rand: () => number): string {
   switch (name) {
     case "usage":
-      return `{"input_tokens":${1 + Math.floor(rand() * 100)}}`
+      return rand() < 0.3
+        ? `{"pad":"${"p".repeat(40 + Math.floor(rand() * 50))}"}`
+        : `{"input_tokens":${1 + Math.floor(rand() * 100)}}`
     case "status":
       return rand() < 0.5 ? '"completed"' : '"failed"'
     case "incomplete_details":
@@ -289,6 +291,13 @@ test("a tight budget still bounds the retained bytes, and keeps only slots JSON.
       throw new Error(
         report(`retained ${current.peak}/${frozen.peak} bytes over the cap ${TIGHT_CAP}`),
       )
+    if (frozen.rebuilt !== null && current.rebuilt === null)
+      throw new Error(report("current failed where 2.41.0 succeeded"))
+    const currentSlots = flatten(current.rebuilt)
+    for (const [path, value] of flatten(frozen.rebuilt)) {
+      if (sameValue(value, flatten(projection).get(path)) && !currentSlots.has(path))
+        throw new Error(report(`current lost ${path}, which 2.41.0 and JSON.parse kept`))
+    }
     // A slot may be dropped on purpose here, but no slot may be one JSON.parse did not read.
     const projected = flatten(projection)
     for (const path of flatten(current.rebuilt).keys()) {
@@ -296,6 +305,17 @@ test("a tight budget still bounds the retained bytes, and keeps only slots JSON.
         throw new Error(report(`current kept ${path}, which JSON.parse did not`))
     }
   }
+})
+
+test.each([
+  `"\\u0075sage":{"pad":"${"p".repeat(65)}"},"status":"completed"`,
+  `"\\u0075sage":{"pad":"${"p".repeat(45)}"},"status":"completed"`,
+  `"\\u0072esponse":{"usage":{"pad":"${"p".repeat(65)}"}},"status":"completed"`,
+  `"response":{"\\u0075sage":{"pad":"${"p".repeat(65)}"}},"status":"completed"`,
+])("escaped slots cannot lose a frozen tight-cap success: %s", (members) => {
+  const text = `{${members}}`
+  expect(run(createFrozenSalvage, text, TIGHT_CAP).rebuilt).toEqual({ status: "completed" })
+  expect(run(createResponseSalvage, text, TIGHT_CAP).rebuilt).toMatchObject({ status: "completed" })
 })
 
 test("the frozen 2.41.0 scanner still shows the two divergences the current one no longer has", () => {
