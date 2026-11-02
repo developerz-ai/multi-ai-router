@@ -26,7 +26,8 @@ const PATTERNS: readonly ScrubPattern[] = [
   // at the nested scheme hands that URL to the query and userinfo rules below. The scheme is
   // bounded at 32 characters, so the per-position check stays bounded and the scan stays linear.
   {
-    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@(?:(?!\b[a-z][a-z0-9+.-]{0,31}:\/\/)[^\s"'<>])*/g,
+    pattern:
+      /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@(?:(?!\b[a-z][a-z0-9+.-]{0,31}:\/\/)[^\s"'<>])*/gi,
     replacement: `://${SCRUBBED}`,
   },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.

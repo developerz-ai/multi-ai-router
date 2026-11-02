@@ -51,7 +51,7 @@ const PRE_FIX_SERVER_PATTERNS: readonly FrozenPattern[] = [
     replacement: REDACTED,
   },
   {
-    pattern: /:\/\/(?:[^\s/:@?#&=\"]*:[^\s@\"?#:&=]{1,256}={0,2}|[^\s/:@]*:[^\s/@]+)@/g,
+    pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}={0,2}|[^\s/:@]*:[^\s/@]+)@/g,
     replacement: `://${REDACTED}@`,
   },
   {
@@ -78,7 +78,7 @@ const PRE_FIX_SERVER_PATTERNS: readonly FrozenPattern[] = [
 const PRE_FIX_BOOT_PATTERNS: readonly FrozenPattern[] = [
   {
     pattern:
-      /(?<=\b[a-z][a-z0-9+.-]*):\/\/(?:[^\s/:@?#&=\"]*:[^\s@\"?#:&=]{1,256}(?:(?<!\b(?:password|passwd|pwd|secret|token|api[-_]?key|encryption[-_]?key))={1,2})?|[^\s/@]+)@/gi,
+      /(?<=\b[a-z][a-z0-9+.-]*):\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}(?:(?<!\b(?:password|passwd|pwd|secret|token|api[-_]?key|encryption[-_]?key))={1,2})?|[^\s/@]+)@/gi,
     replacement: `://${REDACTED}@`,
   },
   {
@@ -159,6 +159,16 @@ const REPORTED_CASES = [
  * and keep its host.
  */
 const NESTED_URL_CASES = [
+  {
+    text: 'postgres://u:p?x=@POSTGRES://v:a"SECRET_TAIL@db',
+    secret: "SECRET_TAIL",
+    expected: "postgres://[REDACTED]POSTGRES://[REDACTED]@db",
+  },
+  {
+    text: 'postgres://u:p?x=@PoStGrEs://v:a"SECRET_TAIL@db',
+    secret: "SECRET_TAIL",
+    expected: "postgres://[REDACTED]PoStGrEs://[REDACTED]@db",
+  },
   {
     text: 'postgres://u:p?x=@postgres://v:a"SECRET_TAIL@db',
     secret: "SECRET_TAIL",
@@ -347,7 +357,6 @@ function compare(
     }
     if (beforeHas) {
       more += 1
-      continue
     }
     // Neither carries the secret: the two outputs differ somewhere else in the text. Not a
     // direction, and not a failure.

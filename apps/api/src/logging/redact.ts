@@ -88,7 +88,8 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // first, then userinfo), which scrub its credential and keep its host. The scheme is bounded
   // at 32 characters, so the per-position check stays bounded and the scan stays linear.
   {
-    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@(?:(?!\b[a-z][a-z0-9+.-]{0,31}:\/\/)[^\s"'<>])*/g,
+    pattern:
+      /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@(?:(?!\b[a-z][a-z0-9+.-]{0,31}:\/\/)[^\s"'<>])*/gi,
     replacement: `://${REDACTED}`,
   },
   // Discord incoming webhook URLs: the `/webhooks/<id>/<token>` path pair *is* the credential —
