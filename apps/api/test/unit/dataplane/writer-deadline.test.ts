@@ -72,9 +72,13 @@ test("status deadline retains later exact observations instead of issuing late a
   })
   const observation = {
     lifecycleVersion: 0,
+    healthRecoveryVersion: 0,
+    authRecoveryVersion: 0,
     authMaterial: null,
     status: "active" as const,
     recoveryGeneration: null,
+    observationGeneration: 1,
+    verdictVersion: 0,
   }
   writer.record("a", "exhausted", observation)
   writer.record("b", "needs_reauth", observation)

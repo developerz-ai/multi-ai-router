@@ -15,7 +15,12 @@ const key: VerifiedKey = {
   expiresAt: null,
 }
 
-for (const scenario of [
+const scenarios: readonly {
+  readonly name: string
+  readonly body: string
+  readonly headers: Record<string, string>
+  readonly status: number
+}[] = [
   { name: "missing model", body: "{}", headers: {}, status: 400 },
   {
     name: "encoded body",
@@ -29,7 +34,9 @@ for (const scenario of [
     headers: { "content-length": "100" },
     status: 413,
   },
-]) {
+]
+
+for (const scenario of scenarios) {
   test(`authenticated ${scenario.name} records one unstarted event with the rendered response status`, async () => {
     const rows: UsageRecord[] = []
     const dispatcher = createDispatcher({

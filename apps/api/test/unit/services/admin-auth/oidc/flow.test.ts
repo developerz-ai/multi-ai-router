@@ -16,6 +16,12 @@ const ISSUER = "https://sso.test"
 const CLIENT_ID = "multi-ai-router"
 const ADMIN_EMAIL = "admin@test"
 
+/**
+ * The JWK `crypto.subtle.exportKey("jwk", …)` returns. The DOM library is not loaded here, so the
+ * global `JsonWebKey` name does not exist; this is the shape the JWKS cache reads.
+ */
+type JsonWebKey = Record<string, unknown>
+
 type KeyPair = { privateKey: CryptoKey; publicJwk: JsonWebKey }
 
 async function newKeyPair(kid: string): Promise<KeyPair> {
@@ -113,7 +119,10 @@ async function buildHarness(
   const discovery = buildDiscovery()
   const jwksUri = `${ISSUER}/oauth2/v2/keys`
 
-  const fetchImpl: typeof fetch = async (url, init) => {
+  const requestImpl = async (
+    url: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ) => {
     if (url === `${ISSUER}/.well-known/openid-configuration`) {
       return new Response(JSON.stringify(discovery), { status: 200 })
     }
@@ -161,12 +170,17 @@ async function buildHarness(
     }
     return new Response("not found", { status: 404 })
   }
+  const fetchImpl: typeof fetch = Object.assign(requestImpl, {
+    preconnect: () => {
+      throw new Error("OIDC fixture must not preconnect")
+    },
+  })
   return { h, fetch: fetchImpl }
 }
 
 function buildFlow(
   h: Harness,
-  fetch: typeof fetch,
+  fetchImpl: typeof fetch,
   config: Parameters<typeof createOIDCFlow>[0]["config"],
 ) {
   return createOIDCFlow({
@@ -177,7 +191,7 @@ function buildFlow(
       stateMinutes: 10,
       now: () => new Date(h.now.ms),
     },
-    fetch,
+    fetch: fetchImpl,
     now: () => new Date(h.now.ms),
   })
 }
@@ -455,25 +469,33 @@ for (const delayedBody of [false, true]) {
     const flow = createOIDCFlow({
       config: baseConfig(),
       requestTimeoutMs: 10,
-      stateStore: { states: h.store.oauthStates, cipher: h.cipher, stateMinutes: 10 },
-      fetch: async (_url, init) => {
-        observedSignal = init?.signal
-        if (!observedSignal) throw new Error("deadline missing")
-        const signal = observedSignal
-        if (delayedBody)
-          return new Response(
-            new ReadableStream({
-              start(controller) {
-                signal.addEventListener("abort", () => controller.error(signal.reason), {
-                  once: true,
-                })
-              },
-            }),
-          )
-        return new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true })
-        })
+      stateStore: {
+        states: h.store.oauthStates,
+        cipher: h.cipher,
+        stateMinutes: 10,
+        now: () => new Date(h.now.ms),
       },
+      fetch: Object.assign(
+        async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          observedSignal = init?.signal
+          if (!observedSignal) throw new Error("deadline missing")
+          const signal = observedSignal
+          if (delayedBody)
+            return new Response(
+              new ReadableStream({
+                start(controller) {
+                  signal.addEventListener("abort", () => controller.error(signal.reason), {
+                    once: true,
+                  })
+                },
+              }),
+            )
+          return new Promise<Response>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+          })
+        },
+        { preconnect: () => {} },
+      ),
     })
     await expect(flow.start()).rejects.toBeDefined()
     expect(observedSignal?.aborted).toBe(true)

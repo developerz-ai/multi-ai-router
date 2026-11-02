@@ -5,8 +5,8 @@ import {
   type RateLimitSignal,
   type SdkTestProbe,
   type SdkTestProbeInput,
-  type SdkTestProbeResult,
 } from "../../../src/providers"
+import type { SdkTestProbeResult } from "../../../src/providers/claude-sdk/test-probe"
 import { createTestNowService } from "../../../src/services/accounts"
 import type { AuditEventInput } from "../../../src/services/admin"
 import { accountRow as durableAccountRow } from "../../support/account-row"
@@ -95,10 +95,10 @@ function jsonResponse(status: number, body: unknown): Response {
 
 describe("createTestNowService — HTTP accounts", () => {
   test("reports a real success against the account's own driver", async () => {
-    let seenUrl: string | null = null
+    const seen: { url: string | null } = { url: null }
     const { service, audited } = harness({
       fetch: async (request) => {
-        seenUrl = request.url
+        seen.url = request.url
         return jsonResponse(200, { id: "msg_1", content: [] })
       },
     })
@@ -109,7 +109,7 @@ describe("createTestNowService — HTTP accounts", () => {
     expect(result.value.tested).toBe(true)
     expect(result.value.outcome).toBe("ok")
     // The default surface is Anthropic — z.ai's primary client speaks it.
-    expect(seenUrl).toBe("https://api.z.ai/api/anthropic/v1/messages")
+    expect(seen.url).toBe("https://api.z.ai/api/anthropic/v1/messages")
     expect(audited).toHaveLength(1)
     expect(audited[0]?.kind).toBe("account.tested")
   })

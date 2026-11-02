@@ -10,6 +10,9 @@ const earliestAt = new Date("2025-01-01T00:00:00Z")
 
 test("lifetime retains modern history, exact historical counts and explicit raw-detail coverage", async () => {
   const raw: UsageReadRepository = {
+    tokensSince: async () => {
+      throw new Error("summary must not read quota token spans")
+    },
     totals: async () => {
       throw new Error("history totals must not scan raw")
     },
@@ -79,11 +82,14 @@ test("lifetime retains modern history, exact historical counts and explicit raw-
       breakdownMaxRows: 1,
     },
     { window: "lifetime" },
+    {},
   )
   expect(summary.from).toBe(earliestAt.toISOString())
   expect(summary.axis.length).toBeLessThanOrEqual(12)
   expect(summary.series.at(-1)?.requests).toBe(10)
-  expect(summary.coverage.bucketWidth).toBe(widths[0])
+  const width = widths[0]
+  if (width === undefined) throw new Error("history series was not read")
+  expect(summary.coverage.bucketWidth).toBe(width)
   expect(summary.totals.attempts).toBe(20)
   expect(summary.failures).toMatchObject({ attempts: 2, errors: 2, partial: true })
   expect(summary.coverage.retainedDetail).toMatchObject({
@@ -112,6 +118,9 @@ test("lifetime retains modern history, exact historical counts and explicit raw-
 
 test("the maximum group setting queries a sentinel and only charts selected groups", async () => {
   const raw: UsageReadRepository = {
+    tokensSince: async () => {
+      throw new Error("summary must not read quota token spans")
+    },
     totals: async () => EMPTY_TOTALS,
     breakdown: async () => [],
     series: async () => [],
@@ -145,6 +154,7 @@ test("the maximum group setting queries a sentinel and only charts selected grou
       breakdownMaxRows: 1000,
     },
     { window: "today" },
+    {},
   )
   expect(limits).toEqual([1001, 1001, 1001, 1001, 1001, 1001])
   expect(selected).toEqual([1000, 1000, 1000, 1000, 1000, 1000])
@@ -161,6 +171,9 @@ test("the maximum group setting queries a sentinel and only charts selected grou
 
 test("pending legacy detail keeps its numerator while disclosing the unfinished historical denominator", async () => {
   const raw: UsageReadRepository = {
+    tokensSince: async () => {
+      throw new Error("summary must not read quota token spans")
+    },
     totals: async () => EMPTY_TOTALS,
     breakdown: async () => [],
     series: async () => [],
@@ -177,6 +190,7 @@ test("pending legacy detail keeps its numerator while disclosing the unfinished 
       labels: { keys: new Map(), accounts: new Map(), pools: new Map() },
     },
     { window: "today" },
+    {},
   )
   expect(summary.totals.attempts).toBe(0)
   expect(summary.failures).toMatchObject({ attempts: 1, errors: 1, partial: true })

@@ -13,7 +13,7 @@ import { createLogger } from "../../../src/logging/logger"
 import { requestLogger } from "../../../src/middleware/logger"
 import type { AppEnv } from "../../../src/types"
 
-function completed(headers: Record<string, string>) {
+async function completed(headers: Record<string, string>) {
   const lines: Record<string, unknown>[] = []
   const log = createLogger({
     level: "debug",
@@ -23,9 +23,8 @@ function completed(headers: Record<string, string>) {
   hono.use("*", requestLogger(log))
   hono.post("/v1/chat/completions", (c) => c.json({ ok: true }))
 
-  return hono
-    .request("/v1/chat/completions", { method: "POST", headers })
-    .then(() => lines.find((line) => line.msg === "request completed") ?? {})
+  await hono.request("/v1/chat/completions", { method: "POST", headers })
+  return lines.find((line) => line.msg === "request completed") ?? {}
 }
 
 describe("the request-completed line", () => {
@@ -112,8 +111,12 @@ describe("quiet paths", () => {
     hono.get("/readyz", (c) => c.json({ ok: status < 400 }, status))
     hono.get("/readyz/deep", (c) => c.json({ ok: true }))
 
-    return (path = "/readyz") =>
-      hono.request(path).then(() => lines.find((line) => line.msg === "request completed") ?? {})
+    // `hono.request` is typed `Promise<Response> | Response`, so it cannot carry a `.then`;
+    // awaiting it is the only form that holds for both branches.
+    return async (path = "/readyz") => {
+      await hono.request(path)
+      return lines.find((line) => line.msg === "request completed") ?? {}
+    }
   }
 
   test("a failing probe keeps its normal level — that line is the point", async () => {

@@ -139,8 +139,14 @@ process.stdout.write(
           tracesSampleRate: options.tracesSampleRate,
           traceLifecycle: options.traceLifecycle,
           sendClientReports: options.sendClientReports,
-          enableOpenTelemetrySetup: options.enableOpenTelemetrySetup,
-          enableRuntimeChannelInjection: options.enableRuntimeChannelInjection,
+          // Bun's own flags. The SDK's `ClientOptions` type does not declare them, so they are
+          // read through the `in` narrowing rather than off the type.
+          enableOpenTelemetrySetup:
+            "enableOpenTelemetrySetup" in options ? options.enableOpenTelemetrySetup : undefined,
+          enableRuntimeChannelInjection:
+            "enableRuntimeChannelInjection" in options
+              ? options.enableRuntimeChannelInjection
+              : undefined,
           tracePropagationTargets: options.tracePropagationTargets,
           dataCollection: options.dataCollection,
         }

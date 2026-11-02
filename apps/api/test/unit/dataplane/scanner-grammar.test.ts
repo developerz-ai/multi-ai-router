@@ -277,7 +277,7 @@ test("bounds, capture ownership, opening identity and byte-exact alias span", ()
     throw Error("Responses collision")
   if (decodeString([...enc.encode(String.raw`\uD83D\uDE00`)]) !== "😀")
     throw Error("surrogate decode")
-  const aliasBody = String.raw`{"model":"claude-sonnet","other":"verbatim  whitespace","input":"hello"}`
+  const aliasBody = '{"model":"claude-sonnet","other":"verbatim  whitespace","input":"hello"}'
   const aliasScan = scan(aliasBody, 13),
     wire = enc.encode(aliasBody)
   if (!aliasScan.modelSpan) throw Error("missing model span")

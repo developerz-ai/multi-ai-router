@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { UpstreamFailureKind } from "../../../src/providers"
 import {
   CODEX_STREAM_ERROR_REQUEST_CODES,
   inspectCodexStreamFrame,
@@ -253,7 +254,7 @@ describe("inspectCodexStreamFrame", () => {
     )
   })
 
-  test.each([
+  test.each<readonly [string, unknown, string, UpstreamFailureKind]>([
     [
       "error.type usage_limit_reached, no code",
       { type: "error", error: { type: "usage_limit_reached" } },

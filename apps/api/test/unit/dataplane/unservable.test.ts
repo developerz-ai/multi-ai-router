@@ -3,6 +3,7 @@ import {
   CreditsExhaustedError,
   NoHealthyAccountError,
   QuotaExhaustedError,
+  type RouterError,
   TranslationError,
 } from "@multi-ai-router/core"
 import type { CandidatePlan } from "../../../src/services/dataplane"
@@ -57,6 +58,16 @@ const CANNOT_COUNT: CandidatePlan = {
 /** Only the Anthropic account could ever have counted; the OpenAI one never could. */
 const capable = (accountId: string): boolean => accountId === "anthropic"
 
+/**
+ * The error as the quota error it must be. `retryAfterSeconds` rides the quota error alone, so
+ * reading it is also the assertion that the router answered with the right class.
+ */
+function quotaError(error: RouterError): QuotaExhaustedError {
+  expect(error).toBeInstanceOf(QuotaExhaustedError)
+  if (!(error instanceof QuotaExhaustedError)) throw new Error("expected a quota error")
+  return error
+}
+
 describe("a capable account held back by its health", () => {
   test("answers 429 with a Retry-After, not the operation gap, when it is cooling down", () => {
     const error = unservableError({
@@ -68,7 +79,7 @@ describe("a capable account held back by its health", () => {
 
     expect(error).toBeInstanceOf(QuotaExhaustedError)
     expect(error.status).toBe(429)
-    expect(error.retryAfterSeconds).toBe(90)
+    expect(quotaError(error).retryAfterSeconds).toBe(90)
     expect(error.message).toContain("anthropic")
   })
 
@@ -93,7 +104,7 @@ describe("a capable account held back by its health", () => {
     })
 
     expect(error.status).toBe(429)
-    expect(error.retryAfterSeconds).toBeGreaterThan(0)
+    expect(quotaError(error).retryAfterSeconds).toBeGreaterThan(0)
   })
 
   test("counts only the accounts that could have served it, never the whole rejected set", () => {
@@ -218,6 +229,6 @@ describe("a held-back capable account outranks a resolvable endpoint failure too
     })
 
     expect(error.status).toBe(429)
-    expect(error.retryAfterSeconds).toBe(90)
+    expect(quotaError(error).retryAfterSeconds).toBe(90)
   })
 })

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import type { AccountStatus } from "@multi-ai-router/core"
 import { createHealthStore } from "../../../src/services/dataplane/health"
 import type { HealthAccountFacts } from "../../../src/services/dataplane/health-observation"
 import type { AttemptFailure } from "../../../src/services/routing"
@@ -109,7 +110,7 @@ test("routine ciphertext rotation preserves a configured cooldown and its probe 
   expect(health.stateOf("a").breaker).toBe(before)
 })
 
-const failures: readonly { failure: AttemptFailure; expected: string }[] = [
+const failures: readonly { failure: AttemptFailure; expected: AccountStatus }[] = [
   { failure: { kind: "auth", message: "synthetic auth" }, expected: "needs_reauth" },
   { failure: { kind: "credits-exhausted", message: "synthetic billing" }, expected: "exhausted" },
   {

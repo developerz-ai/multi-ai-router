@@ -50,6 +50,12 @@ function replica(now: () => number): { store: SessionStore; auth: AdminAuthServi
     local: {
       isConfigured: async () => true,
       verify: async (password) => password === PASSWORD,
+      set: async () => {
+        throw new Error("unexpected credential mutation")
+      },
+      remove: async () => {
+        throw new Error("unexpected credential mutation")
+      },
     },
     store,
     now,

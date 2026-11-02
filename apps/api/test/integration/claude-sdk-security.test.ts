@@ -49,13 +49,23 @@ function launchFor(configDir: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 /** Calls the launch's `canUseTool` gate without a non-null assertion — it must be set on every launch. */
-function askToUseTool(
+async function askToUseTool(
   launch: ReturnType<typeof launchFor>,
   toolName: string,
 ): Promise<PermissionResult> {
   const canUseTool = launch.options.canUseTool
   if (canUseTool === undefined) throw new Error("canUseTool must be set on every launch")
-  return canUseTool(toolName, {}, { signal: new AbortController().signal })
+  const result = await canUseTool(
+    toolName,
+    {},
+    {
+      signal: new AbortController().signal,
+      toolUseID: "toolu_security",
+      requestId: "request_security",
+    },
+  )
+  if (result === null) throw new Error("canUseTool must explicitly deny host tool execution")
+  return result
 }
 
 describe("the tool allowlist a query() launch is given", () => {
@@ -310,7 +320,16 @@ describe("the probe's query() launch — one of three call sites", () => {
     if (canUseTool === undefined) throw new Error("canUseTool must be set on every launch")
 
     for (const toolName of [...HOST_TOOLS, "SomeFutureBuiltin"]) {
-      const result = await canUseTool(toolName, {}, { signal: new AbortController().signal })
+      const result = await canUseTool(
+        toolName,
+        {},
+        {
+          signal: new AbortController().signal,
+          toolUseID: "toolu_probe_security",
+          requestId: "request_probe_security",
+        },
+      )
+      if (result === null) throw new Error("canUseTool must explicitly deny host tool execution")
       expect(result.behavior).toBe("deny")
     }
   })
@@ -508,7 +527,16 @@ describe("the launch the production invoker actually builds", () => {
     if (canUseTool === undefined) throw new Error("canUseTool must be set on every launch")
 
     for (const toolName of [...HOST_TOOLS, "SomeFutureBuiltin"]) {
-      const result = await canUseTool(toolName, {}, { signal: new AbortController().signal })
+      const result = await canUseTool(
+        toolName,
+        {},
+        {
+          signal: new AbortController().signal,
+          toolUseID: "toolu_probe_security",
+          requestId: "request_probe_security",
+        },
+      )
+      if (result === null) throw new Error("canUseTool must explicitly deny host tool execution")
       expect(result.behavior).toBe("deny")
     }
   })

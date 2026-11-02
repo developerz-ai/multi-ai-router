@@ -567,6 +567,18 @@ Multi-arch (`linux/amd64`, `linux/arm64`), published to `ghcr.io/developerz-ai/m
 **A tagged release is the only thing that publishes an image.** Pushing to `main` runs the quality
 gate (lint, typecheck, test, build) and stops there — it deliberately publishes nothing.
 
+The required typecheck runs the existing production TypeScript solution build, then the separate
+`apps/api/tsconfig.tests.json` no-emit project. `bin/check` reaches both through `bin/lint` and the
+root `typecheck` script; CI uses that same script. The additional project recursively includes
+`apps/api/test/**/*.ts` (unit, integration, support helpers and TypeScript fixtures) and
+`apps/api/smoke/**/*.ts`. Imported benchmark modules and `packages/db/test` helpers are checked too:
+there is no restrictive `rootDir` or composite file-list boundary. It inherits the same strict and
+unused checks from `tsconfig.base.json`, emits no JavaScript or declarations, and leaves production
+output paths unchanged. Bun runtime execution, including `bun test`, does **not** typecheck sources.
+The coverage regression enumerates test and smoke files and checks strict compiler diagnostics in
+isolated virtual fixtures, plus the required gate wiring. This clarifies the development gate;
+runtime deployment and runtime versions are unchanged.
+
 The reason is that a registry accumulating one image per commit makes "which tag is real" ambiguous,
 and a moving `main` tag invites deploying an untagged commit. The release tag is the only ref
 anything should deploy. CI still *builds* the artifact on every push, so a commit that cannot

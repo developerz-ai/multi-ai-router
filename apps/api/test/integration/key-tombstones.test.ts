@@ -37,6 +37,7 @@ const RETENTION: RetentionConfig = {
   oauthStateMinutes: 10,
   orphanConfigDirHours: 24,
   usageReportsDays: 730,
+  sdkTranscriptHours: 24,
 }
 const DAY = 86_400_000
 const none = async () => 0
@@ -105,9 +106,9 @@ async function recordUsage(apiKeyId: string) {
 }
 
 async function readKeyRow(usage: ReturnType<typeof services>["usage"], id: string) {
-  const summary = await usage.summary({ window: "lifetime" } as never)
+  const summary = await usage.summary({ window: "lifetime" }, {})
   if (!summary.ok) throw new Error("summary failed")
-  const recent = await usage.recent({ limit: 50 } as never)
+  const recent = await usage.recent({ limit: 50 })
   if (!recent.ok) throw new Error("recent failed")
   return {
     byKey: summary.value.byKey.find((row) => row.id === id),

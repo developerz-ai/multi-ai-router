@@ -22,23 +22,28 @@ const FUTURE = new Date(NOW.getTime() + 60 * 60 * 1000)
 function accountRow(): AccountRow {
   return {
     id: ACCOUNT_ID,
+    label: "codex-luna",
+    provider: "openai-oauth",
+    status: "active",
     lifecycleVersion: 0,
     healthRecoveryVersion: 0,
     authRecoveryVersion: 0,
+    authorizationAttemptId: null,
+    billing: "subscription",
     authMaterial: null,
-    status: "active",
-    label: "codex-luna",
-    provider: "openai-oauth",
+    configDir: null,
+    tokenExpiresAt: null,
+    lastUsedAt: null,
     baseUrl: null,
     dialect: null,
     modelAliases: null,
     supportedModels: null,
-    billing: "subscription",
+    windowTokenLimits: null,
     weight: 1,
     priority: 0,
-    lastError: null,
     createdAt: NOW,
-  } as AccountRow
+    updatedAt: NOW,
+  }
 }
 
 function repo(): AccountRepository {

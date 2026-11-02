@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { httpDriver, parseRateLimitHeaders } from "../../../src/providers"
+import { httpDriver, parseRateLimitHeaders, type RateLimitWindow } from "../../../src/providers"
 import {
   anthropicRateLimitHeaders,
   openAiRateLimitHeaders,
@@ -13,7 +13,7 @@ import {
  * which is what makes the UI's "unknown — will retry with backoff" honest.
  */
 
-function windowNamed(windows: readonly { limiter: string }[], limiter: string) {
+function windowNamed(windows: readonly RateLimitWindow[], limiter: string): RateLimitWindow {
   const found = windows.find((window) => window.limiter === limiter)
   if (!found) throw new Error(`no window for ${limiter}`)
   return found

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { relayResponse } from "../../../src/services/dataplane"
+import type { BodyReader } from "../../support/body-reader"
 import { slowStream } from "./fixtures"
 
 /**
@@ -13,7 +14,7 @@ import { slowStream } from "./fixtures"
 
 const decoder = new TextDecoder()
 
-async function readOne(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+async function readOne(reader: BodyReader): Promise<string> {
   const { value, done } = await reader.read()
   if (done || value === undefined) throw new Error("stream ended early")
   return decoder.decode(value)
@@ -120,10 +121,10 @@ describe("stream relay", () => {
 
   test("reports the end once, with the byte count", async () => {
     const upstream = slowStream(["abc", "de"])
-    let ended: number | null = null
+    const ends: number[] = []
     const relayed = relayResponse(upstream.response, {
       onEnd: (bytes) => {
-        ended = bytes
+        ends.push(bytes)
       },
     })
     if (relayed.body === null) throw new Error("expected a body")
@@ -133,7 +134,7 @@ describe("stream relay", () => {
     upstream.finish()
     await relayed.text()
 
-    expect(ended).toBe(5)
+    expect(ends).toEqual([5])
   })
 
   test("relays the status and the response headers", async () => {

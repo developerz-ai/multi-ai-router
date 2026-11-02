@@ -34,9 +34,13 @@ function view(overrides: Partial<AccountView> = {}): AccountView {
     baseUrl: null,
     dialect: null,
     modelAliases: null,
+    supportedModels: null,
+    windowTokenLimits: null,
     weight: 1,
     priority: 0,
+    billing: "subscription",
     tokenExpiresAt: null,
+    lastUsedAt: null,
     createdAt: NOW.toISOString(),
     updatedAt: NOW.toISOString(),
     ...overrides,
@@ -68,6 +72,7 @@ function routable(quotaWindows?: readonly QuotaWindowState[]): RoutableAccount {
     healthRecoveryVersion: 0,
     authRecoveryVersion: 0,
     configDir: "/data/claude/one",
+    billing: "subscription",
   }
 }
 
@@ -293,7 +298,13 @@ describe("measuring a window against a configured ceiling", () => {
         usage: {
           tokensSince: async (input) => {
             spans.push(...input.map((s) => ({ ...s })))
-            return input.map((s) => ({ accountId: s.accountId, window: s.window, tokens: 1_500 }))
+            return input.map((s) => ({
+              accountId: s.accountId,
+              window: s.window,
+              tokens: 1_500,
+              // No shape was asked for, so the series is empty.
+              series: [],
+            }))
           },
         },
       },

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { REQUIRED_LEG_NAMES, SMOKE_CLAUDE_CODE_SESSION_ID } from "../../smoke/legs"
+import type { LegSpec } from "../../smoke/grade"
+import { buildBody, REQUIRED_LEG_NAMES, SMOKE_CLAUDE_CODE_SESSION_ID } from "../../smoke/legs"
 import {
   buildLegs,
   buildReport,
@@ -237,7 +238,9 @@ describe("bin/smoke — leg construction", () => {
     expect(legs.filter((leg) => leg.stream)).toHaveLength(2)
     // Exactly the six core Messages legs gate the exit code — the Claude Code replay is optional
     // because `bin/smoke` runs against live deployments.
-    expect(legs.filter((leg) => leg.required).map((leg) => leg.name)).toEqual(REQUIRED_LEG_NAMES)
+    expect(legs.filter((leg) => leg.required).map((leg) => leg.name)).toEqual([
+      ...REQUIRED_LEG_NAMES,
+    ])
     expect(legs.filter((leg) => leg.required).every((leg) => leg.endpoint === "/v1/messages")).toBe(
       true,
     )
@@ -251,6 +254,23 @@ describe("bin/smoke — leg construction", () => {
     expect(leg.stream).toBe(true)
     expect(leg.required).toBe(false)
     expect(leg.headers?.[CLAUDE_CODE_SESSION_HEADER]).toBe(SMOKE_CLAUDE_CODE_SESSION_ID)
+  })
+
+  test("buildBody refuses a chat completions leg carrying a non-chat expectation", () => {
+    // `LegSpec` types the endpoint and the expectation as two independent axes, so a leg that
+    // pairs the chat endpoint with the Responses expectation is representable. `buildBody` must
+    // refuse it by name instead of sending a Responses-shaped body to `/v1/chat/completions` —
+    // the runner never builds such a leg, so only this test covers the refusal.
+    const mismatched: LegSpec = {
+      endpoint: "/v1/chat/completions",
+      stream: false,
+      name: "chat_completions.mismatched",
+      expectation: { kind: "responses_function_call" },
+      required: false,
+    }
+    expect(() => buildBody(mismatched, "claude-opus-5")).toThrow(
+      "internal: chat completions leg has a non-chat expectation",
+    )
   })
 })
 

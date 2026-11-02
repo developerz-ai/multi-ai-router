@@ -24,7 +24,10 @@ export function gradeChatCompletions(status: number, body: unknown): LegOutcome 
   if (status !== 200) return fail(`http-${status}`, openAiErrorMessage(body))
   const parsed = parseObject(body)
   if (parsed === null) return fail("unparsable-body")
-  const choices = parsed.choices
+  // `parseObject` types the body with the Messages shape, which does not declare `choices`;
+  // read it through an `in` guard so the value stays `unknown` and the array check below is
+  // still the only thing that decides malformed vs. graded.
+  const choices = "choices" in parsed ? parsed.choices : undefined
   if (!Array.isArray(choices)) return fail("malformed-body")
   const choice = choices[0]
   if (choice === undefined) return fail("no-choice")
@@ -47,7 +50,9 @@ export function gradeResponses(status: number, body: unknown): LegOutcome {
   if (status !== 200) return fail(`http-${status}`, openAiErrorMessage(body))
   const parsed = parseObject(body)
   if (parsed === null) return fail("unparsable-body")
-  const rawOutput = parsed.output
+  // Same guard as `choices` above: `output` is not part of the Messages shape `parseObject`
+  // returns, and a body without it is malformed rather than empty.
+  const rawOutput = "output" in parsed ? parsed.output : undefined
   if (!Array.isArray(rawOutput)) return fail("malformed-body")
   // Every element must be a `{type: string}` object; one bad element makes the whole body
   // malformed, the same per-element rule the Messages grader applies to `content`. An empty array

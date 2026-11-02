@@ -19,6 +19,7 @@ const EMPTY: RoutingCatalog = { accounts: () => [], pools: () => [] }
 const SILENT: Logger = createLogger({ level: "error", write: () => {} })
 
 const HEALTHY: UsageStats = {
+  rejectedAfterStop: 0,
   depth: 0,
   dropped: 0,
   written: 0,

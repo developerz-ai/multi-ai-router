@@ -87,7 +87,7 @@ describe("the container base image", () => {
       // The known-bad variants: the legacy 16 volume declared or mounted again, and any
       // volume mounted at the pre-18 data path (18 would write outside it and lose data).
       expect(compose).not.toMatch(/^[ \t]+- (?:dev-)?postgres-data:/m)
-      expect(compose).not.toMatch(/^  (?:dev-)?postgres-data:[ \t]*$/m)
+      expect(compose).not.toMatch(/^ {2}(?:dev-)?postgres-data:[ \t]*$/m)
       expect(compose).not.toMatch(/:\s*\/var\/lib\/postgresql\/data\b/)
     }
   })

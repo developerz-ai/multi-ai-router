@@ -54,7 +54,12 @@ function fixture(status: number, headers: Record<string, string>, unknownRetry =
     bodyBytes: body,
     modelSpan: null,
     translation: { created: 0, model: "fixture", fallbackId: "test" },
-    translated: { bodyFor: () => body },
+    translated: {
+      includeUsage: () => false,
+      clientStreams: () => false,
+      promptCacheKey: () => undefined,
+      bodyFor: () => body,
+    },
     failover: undefined,
     log: undefined,
   }

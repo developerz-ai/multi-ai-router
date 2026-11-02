@@ -104,7 +104,9 @@ describe("rendering two internal turns", () => {
       stream: false,
     })
 
-    const body = (await response.json()) as { content: readonly { text: string }[] }
+    const body = (await response.json()) as {
+      content: readonly { type: string; text: string }[]
+    }
     expect(body.content).toEqual([
       { type: "text", text: "hi" },
       { type: "text", text: "hi" },

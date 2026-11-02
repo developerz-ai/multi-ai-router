@@ -7,13 +7,11 @@ import {
   createUsageReportRepository,
   defaultMigrationsFolder,
   runMigrations,
-  scheduledTask,
 } from "@multi-ai-router/db"
 import * as Sentry from "@sentry/bun"
 import { Hono } from "hono"
 import { parseEnv } from "../../src/config/env"
 import { createLogger } from "../../src/logging/logger"
-import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
 import { adminAuth } from "../../src/middleware/adminAuth"
 import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { initSentry } from "../../src/observability/sentry"
@@ -25,6 +23,8 @@ import { createSettingsService } from "../../src/services/settings"
 import { createUsageService } from "../../src/services/usage-read"
 import { createUsageReportService } from "../../src/services/usage-report"
 import { createReportDeliveryService } from "../../src/services/usage-report/delivery"
+import type { AppEnv } from "../../src/types"
+import { INTERVALS } from "../unit/settings/fixtures"
 import { STUB_WEBHOOK_URL } from "./report-delivery"
 import { storedPayload } from "./weekly-report"
 
@@ -85,13 +85,18 @@ try {
   // The webhook stub: records the request, then a fetch error quoting the whole URL — message and
   // cause — the way a real `fetch` failure names the address it tried.
   const stubRequests: string[] = []
-  const fetchImpl = (async (input: string | URL | Request) => {
-    stubRequests.push(String(input))
-    throw new Error(
-      `request to ${STUB_WEBHOOK_URL}?wait=true failed, reason: connect ECONNREFUSED`,
-      { cause: new Error(`posting to ${STUB_WEBHOOK_URL} hit ECONNREFUSED 10.0.0.1:443`) },
-    )
-  }) as typeof globalThis.fetch
+  const fetchImpl: typeof globalThis.fetch = Object.assign(
+    async (input: string | URL | Request) => {
+      stubRequests.push(String(input))
+      throw new Error(
+        `request to ${STUB_WEBHOOK_URL}?wait=true failed, reason: connect ECONNREFUSED`,
+        { cause: new Error(`posting to ${STUB_WEBHOOK_URL} hit ECONNREFUSED 10.0.0.1:443`) },
+      )
+    },
+    // Bun's `fetch` carries `preconnect`; the stub never calls it, but the option is typed as the
+    // whole global, so it has to be there.
+    { preconnect: globalThis.fetch.preconnect },
+  )
 
   const audit: AuditRecorder = { record: async () => undefined }
   const now = () => new Date("2026-10-12T01:00:00.000Z")
@@ -148,7 +153,7 @@ try {
     listLimit: 10,
     now,
   })
-  const app = new Hono<AdminAuthEnv>()
+  const app = new Hono<AppEnv>()
   app.onError(errorHandler(logger))
   app.notFound(notFoundHandler())
   app.route(
@@ -165,6 +170,8 @@ try {
             csrfToken: "csrf",
             createdAtMs: Date.now(),
             lastSeenAtMs: Date.now(),
+            idleExpiryMs: 60 * 60 * 1000,
+            absoluteExpiryMs: 12 * 60 * 60 * 1000,
           }),
           assertCsrf: (_session, token) => {
             if (token !== "csrf") throw new AdminAuthError("CSRF token invalid")
@@ -191,7 +198,7 @@ try {
     audit,
     usageReports: reports,
     env,
-    intervals: Object.fromEntries(scheduledTask.enumValues.map((task) => [task, 3_600_000])),
+    intervals: INTERVALS,
     now,
   })
   const settingsView = await settings.read()

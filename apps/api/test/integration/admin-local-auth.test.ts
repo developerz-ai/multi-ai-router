@@ -113,9 +113,11 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
               clientSecret: null,
               redirectUri: "https://router.test/api/admin/auth/oidc/callback",
               adminEmails: ["admin@test"],
+              requiredClaims: [],
               adminSubject: null,
               scopes: ["openid"],
               clockSkewSeconds: 60,
+              requestTimeoutMs: 1_000,
             },
       encryptionKey: ENCRYPTION_KEY,
     },
@@ -253,6 +255,9 @@ describe("POST /api/admin/auth/login", () => {
 describe("the per-IP throttle", () => {
   const fast = { maxFailedAttempts: 3, lockoutSeconds: 60 } as const
 
+  // Every sign-in attempt spends one argon2id pass (Bun's 64 MiB default) and
+  // the harness spends one more to mint the credential, so each test below runs
+  // five or six of them — more than bun's 5 s default allows on a busy box.
   test("locks after the configured failures, with Retry-After, then recovers", async () => {
     const h = await harness({ oidc: false, password: PASSWORD, config: fast })
 
@@ -271,7 +276,7 @@ describe("the per-IP throttle", () => {
     h.clock.nowMs += 61_000
     const after = await postJson(h.app, LOGIN, { password: PASSWORD })
     expect(after.status).toBe(200)
-  })
+  }, 30_000)
 
   test("a success inside the window resets the failure count", async () => {
     const h = await harness({ oidc: false, password: PASSWORD, config: fast })
@@ -284,7 +289,7 @@ describe("the per-IP throttle", () => {
     expect((await postJson(h.app, LOGIN, { password: "wrong" })).status).toBe(401)
     expect((await postJson(h.app, LOGIN, { password: "wrong" })).status).toBe(401)
     expect((await postJson(h.app, LOGIN, { password: PASSWORD })).status).toBe(200)
-  })
+  }, 30_000)
 })
 
 describe("OIDC routes when OIDC is not configured", () => {

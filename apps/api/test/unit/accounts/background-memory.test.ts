@@ -30,8 +30,10 @@ test("failed atomic account mutation restores recovery facts without replacing t
   const recoveries = store.rows.recoveries
   recoveries.set(row.id, { generation: "original", state: "pending" })
   await expect(
-    store.mutations.run({ kind: "pool", id: null, name: "rollback-fixture" }, async (scope) => {
-      await scope.accounts.delete(row.id)
+    store.mutations.run({ kind: "pool", id: null, name: "rollback-fixture" }, async () => {
+      // The account row goes through the store, not the mutation scope: an admin mutation never
+      // deletes an account, and the rollback this test is about restores the rows either way.
+      await store.accounts.delete(row.id)
       recoveries.set("new", { generation: "uncommitted", state: "issued" })
       throw new Error("audit unavailable")
     }),

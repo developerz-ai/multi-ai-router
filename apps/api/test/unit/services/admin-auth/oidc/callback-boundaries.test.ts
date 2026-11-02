@@ -34,10 +34,13 @@ function fixture() {
         },
         stateStore: stateDeps,
         now: stateDeps.now,
-        fetch: async () => {
-          fetches += 1
-          return new Response(null, { status: 503 })
-        },
+        fetch: Object.assign(
+          async () => {
+            fetches += 1
+            return new Response(null, { status: 503 })
+          },
+          { preconnect: () => {} },
+        ),
       }),
   }
 }

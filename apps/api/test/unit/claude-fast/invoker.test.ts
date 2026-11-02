@@ -113,7 +113,10 @@ describe("Claude fast invoker", () => {
   test("nonstream folds usage and content, releases its permit", async () => {
     const h = setup()
     const response = await h.invoke(input(false))
-    const body = await response.json()
+    const body = (await response.json()) as {
+      content: readonly { type: string; text: string }[]
+      usage: { cache_read_input_tokens: number; output_tokens: number }
+    }
     expect(body.content).toEqual([{ type: "text", text: "ok" }])
     expect(body.usage.cache_read_input_tokens).toBe(8)
     expect(body.usage.output_tokens).toBe(1)

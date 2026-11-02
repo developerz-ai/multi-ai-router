@@ -109,7 +109,9 @@ function fakeHealth(lastSignalAt: Record<string, Date | null>) {
       inFlight: 0,
       recentTokens: 0,
       limiterWindows: [],
+      quotaWindows: [],
       lastSignalAt: lastSignalAt[accountId] ?? null,
+      probeHeldUntil: null,
     }),
   }
 }

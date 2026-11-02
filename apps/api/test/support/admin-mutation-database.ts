@@ -1,6 +1,10 @@
 import {
   type AdminMutationRepository,
   type AdminMutationScope,
+  type ApiKeyRepository,
+  type ApiKeyRow,
+  type ApiKeyTombstoneRow,
+  type AuditEventRow,
   createAccountRepository,
   createAdminMutationRepository,
   createApiKeyRepository,
@@ -8,11 +12,30 @@ import {
   createAuditRepository,
   createDatabase,
   createPoolRepository,
+  type PoolMemberRow,
+  type PoolRow,
 } from "@multi-ai-router/db"
 import { createAuditRecorder } from "../../src/services/admin"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { createKeysService } from "../../src/services/keys"
 import { createPoolsService } from "../../src/services/pools"
+
+/**
+ * The scope rows the key repository returns. Named here through the repository's own signature,
+ * because the db package does not export the row type itself and an inferred type could not name
+ * it.
+ */
+type ScopeTargetRows = Awaited<ReturnType<ApiKeyRepository["listTargetsForKeys"]>>
+
+/** What a snapshot holds: the rows a transaction may have added, changed or removed. */
+interface AdminMutationSnapshot {
+  keys: ApiKeyRow[]
+  pools: PoolRow[]
+  targets: ScopeTargetRows
+  members: PoolMemberRow[]
+  tombstones: ApiKeyTombstoneRow[]
+  audit: AuditEventRow[]
+}
 
 export function adminMutationDatabase(url: string, maxConnections = 2) {
   const handle = createDatabase({ url, maxConnections })
@@ -84,7 +107,7 @@ export function adminMutationDatabase(url: string, maxConnections = 2) {
       accountIds.add(row.id)
       return row
     },
-    snapshot: async () => {
+    snapshot: async (): Promise<AdminMutationSnapshot> => {
       const keyRows = (await keys.list()).filter((row) => subjects.has(row.id))
       const poolRows = (await pools.list()).filter((row) => subjects.has(row.id))
       return {

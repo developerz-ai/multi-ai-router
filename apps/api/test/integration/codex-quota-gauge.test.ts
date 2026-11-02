@@ -142,6 +142,8 @@ function stubSession(): MiddlewareHandler<AdminAuthEnv> {
       csrfToken: "csrf",
       createdAtMs: Date.now(),
       lastSeenAtMs: Date.now(),
+      idleExpiryMs: 60 * 60 * 1000,
+      absoluteExpiryMs: 12 * 60 * 60 * 1000,
     })
     await next()
   }

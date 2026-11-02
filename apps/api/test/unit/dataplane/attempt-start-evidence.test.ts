@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test"
+import { DEFAULT_OPENAI_CHAT_CEILING } from "@multi-ai-router/core"
 import { claudeSdkDriver } from "../../../src/providers/claude-sdk/driver"
 import { openAiCompatibleDriver } from "../../../src/providers/drivers/openai-compatible"
 import { UpstreamAdmissionRefused } from "../../../src/providers/upstream-admission"
 import { runAttempt } from "../../../src/services/dataplane/attempt"
 import { runSdkAttempt } from "../../../src/services/dataplane/sdk-attempt"
+import { DEFAULT_RESPONSES_EGRESS } from "../../../src/services/translate"
 import { account, cipher, subscriptionAccount } from "./fixtures"
 
 for (const mode of ["decrypt", "headers", "guard", "fetch-error", "success"] as const) {
@@ -85,6 +87,9 @@ test("SDK attempt forwards start evidence without treating invoker construction 
       dialect: "anthropic",
       configDir: "/offline/sub",
       upstreamModel: "model",
+      // The SDK is asked nothing about either; it carries the planner's defaults.
+      chatCeiling: DEFAULT_OPENAI_CHAT_CEILING,
+      responsesEgress: DEFAULT_RESPONSES_EGRESS,
       translation: null,
       egressMode: "agent-sdk",
     },

@@ -315,6 +315,7 @@ describe("the billed keepalive over idle accounts", () => {
       idleAfterMs: SEVEN_DAYS_MS,
       batchSize: 1,
       paidTurn: true,
+      warmCredentials: true,
     })
 
     await task.run({
@@ -474,6 +475,7 @@ describe("what the run row says about the sweep itself", () => {
       idleAfterMs: SEVEN_DAYS_MS,
       batchSize: 1,
       paidTurn: true,
+      warmCredentials: true,
     })
 
     const result = await task.run({
@@ -509,6 +511,7 @@ describe("what the run row says about the sweep itself", () => {
       idleAfterMs: SEVEN_DAYS_MS,
       batchSize: 1,
       paidTurn: true,
+      warmCredentials: true,
     })
 
     await task.run({

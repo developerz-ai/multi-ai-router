@@ -16,6 +16,12 @@ const ISSUER = "https://sso.test"
 const CLIENT_ID = "multi-ai-router"
 const KID = "test-key-1"
 
+/**
+ * The JWK `crypto.subtle.exportKey("jwk", …)` returns. The DOM library is not loaded here, so the
+ * global `JsonWebKey` name does not exist; this is the shape the JWKS cache reads.
+ */
+type JsonWebKey = Record<string, unknown>
+
 type KeyPair = { privateKey: CryptoKey; publicJwk: JsonWebKey }
 
 async function newKeyPair(): Promise<KeyPair> {
@@ -100,8 +106,12 @@ describe("verifyIdToken", () => {
     const { token, jwks } = await buildJwksAndToken()
     // Flip the last byte of the signature: the verify call must reject.
     const parts = token.split(".")
-    const sig = Buffer.from(parts[2], "base64url")
-    sig[0] ^= 0xff
+    const encodedSignature = parts[2]
+    if (encodedSignature === undefined) throw new Error("the fixture token had no signature")
+    const sig = Buffer.from(encodedSignature, "base64url")
+    const firstByte = sig[0]
+    if (firstByte === undefined) throw new Error("the fixture signature was empty")
+    sig[0] = firstByte ^ 0xff
     const badSig = `${parts[0]}.${parts[1]}.${sig.toString("base64url")}`
 
     try {

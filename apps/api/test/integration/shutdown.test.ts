@@ -19,7 +19,7 @@ afterEach(async () => {
 })
 
 interface Streaming {
-  readonly server: Bun.Server
+  readonly server: Bun.Server<undefined>
   readonly url: string
   /** Resolves once a request is actually being served, so a drain cannot start before one exists. */
   readonly serving: Promise<void>

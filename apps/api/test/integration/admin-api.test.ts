@@ -24,7 +24,6 @@ import {
   createDeviceConnectService,
   createDiscoverModelsService,
   createOAuthConnectService,
-  createRecheckService,
   createTestNowService,
   OAUTH_CALLBACK_PATH,
 } from "../../src/services/accounts"
@@ -32,9 +31,10 @@ import { createAuditRecorder } from "../../src/services/admin"
 import type { OIDCFlow } from "../../src/services/admin-auth/oidc/flow"
 import { createAdminAuthService } from "../../src/services/admin-auth/service"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
-import { createHealthStore } from "../../src/services/dataplane"
+import type { FetchLike } from "../../src/services/dataplane"
 import { createKeysService } from "../../src/services/keys"
 import { createPoolsService } from "../../src/services/pools"
+import type { AppEnv } from "../../src/types"
 import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
@@ -62,11 +62,11 @@ interface HarnessOptions {
   readonly clock?: { now: Date }
   readonly pendingLoginMinutes?: number
   /** The OAuth token-endpoint stand-in the callback route's exchange calls. */
-  readonly oauthFetch?: typeof fetch
+  readonly oauthFetch?: (request: Request) => Promise<Response>
   /** The upstream "Test now" addresses. Defaults to a stub that fails any test hitting it by name. */
-  readonly testNowFetch?: typeof fetch
+  readonly testNowFetch?: FetchLike
   /** The upstream "Discover models" reads its listing from. Same default, same reason. */
-  readonly discoverFetch?: typeof fetch
+  readonly discoverFetch?: FetchLike
 }
 
 function harness(
@@ -81,7 +81,7 @@ function harness(
   const configDirs = createMemoryConfigDirs()
   const login = options.login ?? fakeLogin()
 
-  const app = new Hono<AdminAuthEnv>()
+  const app = new Hono<AppEnv>()
   const logLines: string[] = []
   // `debug` so a login failure's `logger.warn(...)` line is captured too — the token-leak
   // assertions need every line the router would actually write, not just what an operator sees.
@@ -135,6 +135,7 @@ function harness(
     keys: store.keys,
     cipher,
     configDirs: configDirs.dirs,
+    ...accountDeletionFixture(configDirs.dirs),
     audit,
     now,
   })
@@ -147,14 +148,14 @@ function harness(
       // The dispatching service `app.ts` mounts, not one backend of it: which login an account
       // takes is decided from the provider registry, and that decision is part of the surface.
       connect,
-      recheck: createRecheckService({
-        accounts: store.accounts,
-        health: createHealthStore(),
-        audit,
-        refreshCatalog: async () => {},
-        cooldownSeconds: 60,
-        now,
-      }),
+      recheck: {
+        recheck: async () => {
+          throw new Error("recheck is not exercised by this CRUD harness")
+        },
+        recheckAll: async () => {
+          throw new Error("recheck is not exercised by this CRUD harness")
+        },
+      },
       testNow: createTestNowService({
         accounts: store.accounts,
         cipher,
@@ -270,6 +271,8 @@ function stubSession(): MiddlewareHandler<AdminAuthEnv> {
       csrfToken: "csrf",
       createdAtMs: NOW.getTime(),
       lastSeenAtMs: NOW.getTime(),
+      idleExpiryMs: NOW.getTime() + 3_600_000,
+      absoluteExpiryMs: NOW.getTime() + 86_400_000,
     })
     await next()
   }
@@ -317,6 +320,8 @@ describe("the guard", () => {
           adminSubject: null,
           scopes: ["openid", "profile", "email"],
           clockSkewSeconds: 60,
+          requiredClaims: [],
+          requestTimeoutMs: 1_000,
         },
         encryptionKey: ENCRYPTION_KEY,
       },
@@ -902,7 +907,7 @@ describe("the OAuth callback route", () => {
       id_token: `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })).toString("base64url")}.sig`,
     }),
   ) {
-    return (async () => response) as typeof fetch
+    return async () => response
   }
 
   async function newOAuthAccount(app: App) {
@@ -947,6 +952,8 @@ describe("the OAuth callback route", () => {
           adminSubject: null,
           scopes: ["openid", "profile", "email"],
           clockSkewSeconds: 60,
+          requiredClaims: [],
+          requestTimeoutMs: 1_000,
         },
         encryptionKey: ENCRYPTION_KEY,
       },
@@ -1035,7 +1042,7 @@ describe("device-code sign-in routes", () => {
   /** A mocked auth.openai.com: one user code, one pending poll, then approval. */
   function issuer() {
     let polls = 0
-    return (async (input: RequestInfo | URL) => {
+    return async (input: Request) => {
       const url = input instanceof Request ? input.url : String(input)
       const reply = (body: unknown, status = 200) =>
         new Response(JSON.stringify(body), {
@@ -1053,7 +1060,7 @@ describe("device-code sign-in routes", () => {
         return reply({ access_token: ACCESS, refresh_token: "rt_ROUTE_SECRET", expires_in: 3600 })
       }
       throw new Error(`unexpected upstream ${url}`)
-    }) as typeof fetch
+    }
   }
 
   test("start, wait, approve: the code is shown, nothing secret is returned or logged", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createSessionStore, type SessionStore } from "../../../src/providers"
+import { createSessionStore, type SessionStore, type StoredBinding } from "../../../src/providers"
 import { hashMessages, readConversation } from "../../../src/providers/claude-sdk/session"
 import type {
   SessionCarrier,
@@ -94,10 +94,14 @@ describe("a turn that failed before answering", () => {
     failed.release("failed")
     await Bun.sleep(0)
 
+    // The binding the store hands back carries the lineage it keeps beside it, which the declared
+    // binding type does not name — so the expectation is typed as the row as it is stored.
     expect(await store.binding("key-1", "conv-1")).toEqual({
       accountId: "acct-1",
       sdkSessionId: "sess_1",
       lineage: { prefixHashes: hashesOf(opening), assistantUuids: ["", "uuid-1"] },
+    } as StoredBinding & {
+      lineage: { prefixHashes: string[]; assistantUuids: string[] }
     })
     expect([...repository.rows.values()][0]).toMatchObject({
       accountId: "acct-1",

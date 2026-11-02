@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { toErrorResponse } from "../../../src/errors/render"
+import { type ErrorResponse, toErrorResponse } from "../../../src/errors/render"
 import { createDispatcher, createHealthStore } from "../../../src/services/dataplane"
 import type { UsageRecord, UsageRequestTerminal } from "../../../src/services/usage"
 import { account, catalog, cipher, clock } from "./fixtures"
@@ -50,7 +50,7 @@ for (const statuses of [
         )
       },
     })
-    let response: Response | undefined
+    let response: Response | ErrorResponse | undefined
     try {
       response = await dispatcher.dispatch({
         ingress: "anthropic",
@@ -76,6 +76,7 @@ for (const statuses of [
       response = toErrorResponse(error, "anthropic")
     }
     expect(calls).toBe(2)
+    if (response === undefined) throw new Error("no response")
     expect(response.status).toBe(statuses[0])
     expect(rows).toHaveLength(2)
     expect(terminals).toHaveLength(1)

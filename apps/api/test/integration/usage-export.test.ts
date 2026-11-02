@@ -24,6 +24,10 @@ import {
   type UsageSummary,
 } from "../../src/services/usage-read"
 import { micros, records, sum, sumMicros } from "../support/csv-sums"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 
 /**
  * The CSV export (issue #226) through the real route, resolver, repositories and Postgres.
@@ -188,7 +192,12 @@ describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
       const target = new Hono<AdminAuthEnv>()
       target.route(
         ADMIN_USAGE_BASE_PATH,
-        adminUsageRoutes({ service, guard: async (_c, next) => next() }),
+        adminUsageRoutes({
+          service,
+          guard: async (_c, next) => next(),
+          reports: unreachableUsageReports(),
+          delivery: unreachableReportDelivery(),
+        }),
       )
       return target
     }

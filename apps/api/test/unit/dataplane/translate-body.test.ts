@@ -85,11 +85,11 @@ describe("createTranslatedRequestBody", () => {
       unsupportedFields: ["temperature"],
     }
 
-    translated.bodyFor(pair, "gpt-6-luna", undefined, undefined, {
+    translated.bodyFor(pair, "gpt-6-luna", "max_tokens", undefined, {
       ...base,
       stripLookaroundPatterns: true,
     })
-    translated.bodyFor(pair, "gpt-6-luna", undefined, undefined, {
+    translated.bodyFor(pair, "gpt-6-luna", "max_tokens", undefined, {
       ...base,
       stripLookaroundPatterns: false,
     })

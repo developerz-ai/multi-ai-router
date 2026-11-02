@@ -105,8 +105,12 @@ describe("the idle usage probe", () => {
       concurrency: createSdkConcurrency({ global: 2, perAccount: 1 }),
       cliPathOverride: "/nope",
       timeoutMs: 1_000,
-      resolveCli: () =>
-        ({ ok: false, source: "override", reason: "not executable" }) as CliResolution,
+      resolveCli: () => ({
+        ok: false,
+        source: "override",
+        reason: "not executable",
+        attempts: [],
+      }),
       runQuery,
     })
 

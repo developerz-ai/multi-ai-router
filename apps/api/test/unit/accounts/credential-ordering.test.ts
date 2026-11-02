@@ -17,6 +17,7 @@ const LIVE: CredentialMetadata = {
   subscriptionType: "max",
   rateLimitTier: null,
   refreshTokenExpiresAt: null,
+  accessTokenExpiresAt: null,
 }
 const DEAD: CredentialMetadata = { ...LIVE, hasTokens: false }
 function deferred<T>() {

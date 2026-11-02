@@ -86,7 +86,9 @@ test("a run row whose task name no longer exists is swept, not thrown on", async
   // a throw here would strand every *other* orphan behind it in the cursor's sort order.
   const repo = memoryTaskRepository()
   const removed = await repo.begin("usage_rollup", new Date(0))
-  repo.rows[0].task = "removed_task_name" as (typeof repo.rows)[number]["task"]
+  const [firstRow] = repo.rows
+  if (firstRow === undefined) throw new Error("the fixture wrote no run row")
+  firstRow.task = "removed_task_name" as (typeof repo.rows)[number]["task"]
   await createInterruptedRunMaintenance({
     repo,
     lock: alwaysFree(),

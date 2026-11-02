@@ -315,7 +315,17 @@ describe("an idle Agent SDK query", () => {
     expect(canUseTool).toBeDefined()
     if (canUseTool === undefined) return
     for (const tool of ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch"]) {
-      expect(await canUseTool(tool, {}, { signal: new AbortController().signal })).toMatchObject({
+      expect(
+        await canUseTool(
+          tool,
+          {},
+          {
+            signal: new AbortController().signal,
+            toolUseID: "toolu_1",
+            requestId: "req-1",
+          },
+        ),
+      ).toMatchObject({
         behavior: "deny",
       })
     }

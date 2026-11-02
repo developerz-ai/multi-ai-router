@@ -35,7 +35,7 @@ describe("SDK final upstream admission", () => {
     const invoke = createSdkInvoker({
       concurrency,
       resolveCli: () => cli,
-      freshness: { ensureFresh: () => waiting },
+      freshness: { ensureFresh: () => waiting, wouldRefresh: async () => false },
       runQuery: () => {
         calls += 1
         return sdkQueryStream({ turns: [turn] })

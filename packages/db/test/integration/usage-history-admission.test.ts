@@ -110,6 +110,8 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
       "immutable usage identity",
     )
   })
+  // 13 500 admitted terminals across three batches, each one a transaction with
+  // its own rollup: the work outlasts bun's 5 s default on a busy box.
   test("terminal batches beyond one Bind statement commit once and later-chunk failure rolls back", async () => {
     const attempt = historyAttempt({ createdAt: new Date("1984-01-20T12:00:00Z") })
     const terminals = Array.from({ length: 4500 }, () =>
@@ -152,5 +154,5 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
         .from(usageRequestTerminals)
         .where(eq(usageRequestTerminals.correlationId, first.correlationId)),
     ).toHaveLength(0)
-  })
+  }, 60_000)
 })
