@@ -494,6 +494,11 @@ Equality compares decoded JSON values, not source bytes: whitespace, string esca
 order and equivalent number spellings do not change a value. Each literal slot retains only a
 SHA-256 semantic fingerprint (64 hex characters), never its historical payload array or parsed
 object. Parsing and canonical traversal are temporary and bounded by the captured slot size.
+Before an equivalent escaped capture gains non-evictable priority, insignificant JSON whitespace
+outside strings is removed from its retained encoding and the byte count is reduced accordingly.
+At a 64-byte cap, a 53-byte literal usage object, its equivalent escaped copy with four extra
+spaces, and the 11-byte `"completed"` status therefore still fit together; string contents remain
+unchanged.
 Every repeated slot releases the earlier value's bytes before capturing its replacement, so
 duplicate copies cannot crowd out the last one.
 

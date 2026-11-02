@@ -69,6 +69,22 @@ export function isWhitespace(byte: number): boolean {
   return byte === 32 || byte === 9 || byte === 10 || byte === 13
 }
 
+/** Remove insignificant whitespace without changing strings or requiring recursive serialization. */
+export function compactSlotEncoding(bytes: readonly number[]): number[] {
+  let inString = false
+  let escaped = false
+  return bytes.filter((byte) => {
+    if (inString) {
+      if (escaped) escaped = false
+      else if (byte === BACKSLASH) escaped = true
+      else if (byte === QUOTE) inString = false
+      return true
+    }
+    if (byte === QUOTE) inString = true
+    return !isWhitespace(byte)
+  })
+}
+
 /** Fixed-size comparison metadata; never retain a historical capture or its parsed value. */
 export function semanticFingerprint(bytes: readonly number[], decoder: TextDecoder): string | null {
   try {

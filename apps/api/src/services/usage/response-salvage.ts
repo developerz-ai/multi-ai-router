@@ -5,6 +5,7 @@ import {
   CLOSE_OBJECT,
   COLON,
   COMMA,
+  compactSlotEncoding,
   decodeSlotKey,
   isWhitespace,
   KEY_MAX_BYTES,
@@ -171,8 +172,19 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     evictable.delete(capture.path)
     inherited.delete(capture.path)
     if (!capture.dropped) {
-      captured.set(capture.path, capture.bytes)
       const fingerprint = semanticFingerprint(capture.bytes, decoder)
+      if (
+        capture.escaped &&
+        !capture.evictable &&
+        fingerprint !== null &&
+        fingerprint === literalValues.get(capture.path)
+      ) {
+        // Equivalent spellings must not spend extra room before inheriting literal priority.
+        const compact = compactSlotEncoding(capture.bytes)
+        retained -= capture.bytes.length - compact.length
+        capture.bytes = compact
+      }
+      captured.set(capture.path, capture.bytes)
       if (!capture.escaped) literalValues.set(capture.path, fingerprint)
       if (capture.evictable) evictable.add(capture.path)
       // An escaped copy of the same value the literal slot held is that slot, not a replacement:

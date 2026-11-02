@@ -454,6 +454,23 @@ test.each(["", " ", "\t", "\r\n"])(
   },
 )
 
+test.each(["    ", "\t\r\n "])(
+  "an equivalent expanded repeat leaves room for required status: %j",
+  (whitespace) => {
+    const usage = { pad: "p".repeat(43) }
+    const value = JSON.stringify(usage)
+    const expanded = value.replace(":", `:${whitespace}`)
+    const text = `{"usage":${value},"\\u0075sage":${expanded},"status":"completed"}`
+    const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+    const current = run(createResponseSalvage, text, TIGHT_CAP)
+    expect(frozen.rebuilt).toEqual({ usage, status: "completed" })
+    expect(frozen.retained).toBe(64)
+    expect(current.rebuilt).toEqual(frozen.rebuilt)
+    expect(current.retained).toBe(64)
+    expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+  },
+)
+
 test("historical comparison metadata stays fixed-size for a 60,000-byte replacement", () => {
   const value = JSON.stringify({ pad: "p".repeat(59_990) })
   expect(value.length).toBe(60_000)
