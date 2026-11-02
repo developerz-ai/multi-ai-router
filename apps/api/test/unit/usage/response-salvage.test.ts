@@ -488,3 +488,73 @@ test("a block drops a code still being captured, so its bytes stop counting (#20
   expect(scanner.retainedBytes).toBe('{"input_tokens":1}'.length)
   expect(scanner.finish()).toEqual({ usage: { input_tokens: 1 } })
 })
+
+/**
+ * A repeated root parent is replaced by its last copy, as `JSON.parse` reads it: the members
+ * captured under the earlier copy are gone, not merged into the later one.
+ */
+test("a repeated response parent keeps no child of the copy it replaced (2.42.0)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"response":{"usage":{"input_tokens":1}},"response":{"status":"x"}}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(JSON.parse(text)).toEqual({ response: { status: "x" } })
+  expect(scanner.finish()).toEqual({ response: { status: "x" } })
+})
+
+test("a repeated message parent keeps no child of the copy it replaced (2.42.0)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"message":{"usage":{"input_tokens":1}},"message":{"type":"x"}}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(JSON.parse(text)).toEqual({ message: { type: "x" } })
+  // `message.type` is no slot, so the last copy holds nothing the scanner keeps.
+  expect(scanner.finish()).toEqual({})
+})
+
+test("a repeated parent replaced by a plain value keeps no child of the copy it replaced (2.42.0)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"response":{"usage":{"input_tokens":1}},"response":"x"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(JSON.parse(text)).toEqual({ response: "x" })
+  expect(scanner.finish()).toEqual({})
+})
+
+test("a later non-object root error keeps its own value (2.42.0)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"error":{"code":"x"},"error":"boom"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(JSON.parse(text)).toEqual({ error: "boom" })
+  expect(scanner.finish()).toEqual({ error: "boom" })
+})
+
+test("a root error too large to keep still reads as a failure (2.42.0)", () => {
+  const scanner = createResponseSalvage(64)
+  // The optional share is maximumBytes/4 = 16 bytes, so the later string is dropped: `{}` stands in
+  // for the root error, and the frame reads as a failure instead of a success.
+  const text = `{"error":{"code":"x"},"error":"${"b".repeat(40)}"}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
+  expect(scanner.finish()).toEqual({ error: {} })
+})
+
+test("an escaped slot key is matched as the key it decodes to (2.42.0)", () => {
+  const scanner = createResponseSalvage(1024)
+  const text = `{"\\u0075sage":{"input_tokens":1}}`
+  for (const byte of encoder.encode(text)) scanner.push(byte)
+  expect(JSON.parse(text)).toEqual({ usage: { input_tokens: 1 } })
+  expect(scanner.finish()).toEqual({ usage: { input_tokens: 1 } })
+})
+
+test("a slot key spelled in escapes is matched, and a key that cannot be one is not (2.42.0)", () => {
+  const run = (text: string) => {
+    const scanner = createResponseSalvage(1024)
+    for (const byte of encoder.encode(text)) scanner.push(byte)
+    return scanner.finish()
+  }
+  expect(run(`{"\\u0075\\u0073\\u0061\\u0067\\u0065":{"input_tokens":1}}`)).toEqual({
+    usage: { input_tokens: 1 },
+  })
+  // Not pure ASCII, an invalid escape, and a raw key over the 32-byte bound: no slot, no frame.
+  expect(run(`{"usag\\u00e9":1}`)).toEqual({})
+  expect(run(`{"\\xusage":1}`)).toEqual({})
+  expect(run(`{"${"u".repeat(40)}":1}`)).toEqual({})
+})

@@ -1,14 +1,16 @@
 import {
   BACKSLASH,
-  CEILING_CHILDREN,
   CLOSE_ARRAY,
   CLOSE_OBJECT,
   COLON,
   COMMA,
+  decodeSlotKey,
+  isWhitespace,
   KEY_MAX_BYTES,
   OPEN_ARRAY,
   OPEN_OBJECT,
   OPTIONAL,
+  PARENT_CHILDREN,
   QUOTE,
   rebuildSalvage,
   SLOT_MAX_BYTES,
@@ -16,13 +18,12 @@ import {
 } from "./response-salvage-slots"
 
 /**
- * Bounded salvage of an oversized JSON payload. Some upstreams echo the whole request into a
- * terminal frame (Codex `response.completed` carries instructions, tools and output), pushing it
- * past the observation cap while the usage that settles the attempt sits inside. This scanner
- * walks the oversized bytes once, retains only the few shallow members usage and terminal
- * evidence are read from, and rebuilds a small payload from them. It never counts more than
- * `maximumBytes`; one lent ceiling slot (32 bytes at most) is held aside beyond it. Anything it
- * cannot account for honestly yields `null`.
+ * Bounded salvage of an oversized JSON payload: an upstream echoes the whole request into a
+ * terminal frame (Codex `response.completed`), pushing it past the observation cap while the usage
+ * that settles the attempt sits inside. This scanner walks the oversized bytes once, retains only
+ * the shallow members usage and terminal evidence are read from, and rebuilds a small payload from
+ * them. It never counts more than `maximumBytes`; anything it cannot account for honestly yields
+ * `null`.
  */
 
 interface Capture {
@@ -57,10 +58,11 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   let keyBytes: number[] | null = null
   let capture: Capture | null = null
   let retained = 0
-  let errorObject = false
+  // A root `error` object was seen. The flag is never cleared: a later root `error` value of
+  // another shape does not unsee it, so a root error that cannot be kept still reads as a failure.
+  let sawRootErrorObject = false
   // Depths 1-2: a second value under a key, or a non-string value where a key or colon belongs, is
-  // invalid JSON, so the frame keeps no ceiling slot, even one kept earlier. Not a validator: other
-  // malformed frames can still yield a code (#209). `primitiveRun` marks continuation bytes.
+  // invalid JSON, so the frame keeps no ceiling slot, even one kept earlier (#209). Not a validator.
   const valueStarted: boolean[] = [false, false, false]
   let primitiveRun = false
   let ceilingBlocked = false
@@ -70,13 +72,11 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       const key = keys[1]
       return key != null && slotKeys("").includes(key) ? key : null
     }
-    if (depth === 2 && objects[2] && !expectKey[2]) {
-      const parent = keys[1]
-      const key = keys[2]
-      if (parent == null || key == null) return null
-      return slotKeys(parent).includes(key) ? `${parent}.${key}` : null
-    }
-    return null
+    if (depth !== 2 || !objects[2] || expectKey[2]) return null
+    const parent = keys[1]
+    const key = keys[2]
+    if (parent == null || key == null) return null
+    return slotKeys(parent).includes(key) ? `${parent}.${key}` : null
   }
   const optionalMaxBytes = Math.floor(maximumBytes / 4)
   // Release completed captures for room: ceiling slots first, optional evidence only if still full.
@@ -162,17 +162,22 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     capture = null
   }
   const beginValue = (byte: number, fresh: boolean) => {
+    // A root `error` object was seen: `{}` stands in for one that could not be kept, so the frame
+    // reads as a failure and never as a success.
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] === "error" && byte === OPEN_OBJECT)
-      errorObject = true
+      sawRootErrorObject = true
     if (fresh && depth <= 2 && objects[depth]) {
       if (expectKey[depth] || valueStarted[depth]) blockCeiling()
       valueStarted[depth] = true
     }
     if (capture !== null) return
     // Last wins, as in JSON.parse: a new parent value, or a repeated slot in one parent, replaces
-    // what the slot held. Keys are compared as raw bytes, escapes not decoded, like every slot (#209).
+    // what the slot held. Keys are compared decoded, so an escaped slot key is the slot it decodes to.
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] != null) {
-      release(CEILING_CHILDREN.get(keys[1]) ?? [])
+      const children = PARENT_CHILDREN.get(keys[1]) ?? []
+      release(children)
+      // A member lent to an error capture in progress is dropped, not given back: its copy is gone.
+      lent = lent.filter(([lentPath]) => !children.includes(lentPath))
     }
     const path = slotAt()
     if (path === null) return
@@ -193,8 +198,6 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       dropped: false,
     }
   }
-  const whitespace = (byte: number) => byte === 32 || byte === 9 || byte === 10 || byte === 13
-
   return {
     push(byte) {
       if (failed) return
@@ -205,7 +208,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
         else if (byte === QUOTE) {
           inString = false
           if (keyBytes !== null) {
-            keys[depth] = keyBytes.length <= KEY_MAX_BYTES ? String.fromCharCode(...keyBytes) : null
+            keys[depth] = decodeSlotKey(keyBytes)
             keyBytes = null
           } else if (capture?.kind === "string" && capture.depth === depth) endCapture()
           return
@@ -213,7 +216,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
         if (keyBytes !== null && keyBytes.length <= KEY_MAX_BYTES) keyBytes.push(byte)
         return
       }
-      if (whitespace(byte)) {
+      if (isWhitespace(byte)) {
         primitiveRun = false
         if (capture?.kind === "primitive" && capture.depth === depth) endCapture()
         else keep(byte)
@@ -291,7 +294,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     },
     finish() {
       if (failed || !closed || inString) return null
-      return rebuildSalvage(captured, errorObject, decoder)
+      return rebuildSalvage(captured, sawRootErrorObject, decoder)
     },
     get retainedBytes() {
       return retained

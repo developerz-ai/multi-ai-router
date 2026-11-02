@@ -31,10 +31,15 @@ export const OPTIONAL: ReadonlySet<string> = new Set(["error", "code", "response
  * code is a small integer; anything longer cannot classify anyway.
  */
 export const SLOT_MAX_BYTES: ReadonlyMap<string, number> = new Map([["base_resp.status_code", 32]])
-/** Each ceiling slot by the root key that parents it, so a repeated parent releases its children. */
-export const CEILING_CHILDREN: ReadonlyMap<string, readonly string[]> = Map.groupBy(
-  SLOT_MAX_BYTES.keys(),
-  (path) => path.split(".")[0] ?? "",
+/**
+ * Every slot member by the root key that parents it, so a repeated parent releases the members
+ * captured under the copy it replaces: `JSON.parse` reads the last copy only, and a member left
+ * behind would be merged into it.
+ */
+export const PARENT_CHILDREN: ReadonlyMap<string, readonly string[]> = new Map(
+  Object.entries(SLOTS)
+    .filter(([parent]) => parent !== "")
+    .map(([parent, slots]) => [parent, slots.map((slot) => `${parent}.${slot}`)] as const),
 )
 export const KEY_MAX_BYTES = 32
 export const QUOTE = 34
@@ -46,18 +51,88 @@ export const CLOSE_ARRAY = 93
 export const COLON = 58
 export const COMMA = 44
 
+/** The bytes between tokens: space, tab, line feed, carriage return. */
+export function isWhitespace(byte: number): boolean {
+  return byte === 32 || byte === 9 || byte === 10 || byte === 13
+}
+
 /** A parent key's slot list; own keys only, so a key named `constructor` is no slot at all. */
 export function slotKeys(parent: string): readonly string[] {
   return Object.hasOwn(SLOTS, parent) ? (SLOTS[parent] ?? []) : []
 }
 
+const HEX_ESCAPE = /^[0-9a-fA-F]{4}$/
+
+/**
+ * The name a JSON member has, decoded from the raw bytes of its key: `\"`, `\\`, `\/`, `\b`, `\f`,
+ * `\n`, `\r`, `\t` and `\uXXXX`. A key that is not pure ASCII, an invalid escape, or a raw key over
+ * `KEY_MAX_BYTES` is no slot at all: every slot name is ASCII, so such a key could never be one.
+ */
+export function decodeSlotKey(raw: readonly number[]): string | null {
+  if (raw.length > KEY_MAX_BYTES) return null
+  let key = ""
+  for (let at = 0; at < raw.length; at++) {
+    const byte = raw[at]
+    if (byte === undefined) return null
+    if (byte !== BACKSLASH) {
+      if (byte > 0x7f) return null
+      key += String.fromCharCode(byte)
+      continue
+    }
+    const escapeByte = raw[at + 1]
+    at++
+    switch (escapeByte) {
+      case QUOTE:
+        key += '"'
+        break
+      case BACKSLASH:
+        key += "\\"
+        break
+      case 47: // "/"
+        key += "/"
+        break
+      case 98: // "b"
+        key += "\b"
+        break
+      case 102: // "f"
+        key += "\f"
+        break
+      case 110: // "n"
+        key += "\n"
+        break
+      case 114: // "r"
+        key += "\r"
+        break
+      case 116: // "t"
+        key += "\t"
+        break
+      case 117: {
+        // "u": the four hex digits of the code point that follows.
+        const hex = String.fromCharCode(...raw.slice(at + 1, at + 5))
+        if (!HEX_ESCAPE.test(hex)) return null
+        at += 4
+        const code = Number.parseInt(hex, 16)
+        if (code > 0x7f) return null
+        key += String.fromCharCode(code)
+        break
+      }
+      default:
+        return null
+    }
+  }
+  return key
+}
+
 /**
  * The rebuilt shallow payload from the captured slots, or null when a required or optional member
- * does not parse. A malformed ceiling slot is lost as if it never existed.
+ * does not parse. A malformed ceiling slot is lost as if it never existed. `sawRootErrorObject`
+ * says a root `error` object was seen: `{}` stands in for one that could not be kept, so the frame
+ * still reads as a failure and never as a success. A kept root `error` value — of any shape — is
+ * left alone.
  */
 export function rebuildSalvage(
   captured: ReadonlyMap<string, readonly number[]>,
-  errorObject: boolean,
+  sawRootErrorObject: boolean,
   decoder: TextDecoder,
 ): Record<string, unknown> | null {
   const parts: Record<string, unknown> = {}
@@ -83,6 +158,8 @@ export function rebuildSalvage(
   } catch {
     return null
   }
-  if (errorObject && responseObject(parts.error) === undefined) parts.error = {}
+  // The placeholder stands in only for a root error that could not be kept: a kept value — object,
+  // string, null, number — is left as it is.
+  if (sawRootErrorObject && parts.error === undefined) parts.error = {}
   return parts
 }

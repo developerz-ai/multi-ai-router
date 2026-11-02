@@ -26,7 +26,8 @@ export function usageHistoryFixture() {
     fixtureUrl = uri.toString()
     await runMigrations({ url: uri.toString(), migrationsFolder: defaultMigrationsFolder() })
     handle = createDatabase({ url: uri.toString(), maxConnections: 1 })
-  })
+    // Creating a database and running every migration outlasts bun's 5 s hook default on a busy box.
+  }, 60_000)
   afterAll(async () => {
     try {
       await handle?.close()
@@ -37,7 +38,7 @@ export function usageHistoryFixture() {
         await admin?.close()
       }
     }
-  })
+  }, 30_000)
   const get = () => {
     if (!handle) throw new Error("fixture uninitialized")
     return handle
