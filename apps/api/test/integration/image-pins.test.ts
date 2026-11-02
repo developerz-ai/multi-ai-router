@@ -60,13 +60,36 @@ function fromLines(): readonly string[] {
 }
 
 describe("the container base image", () => {
-  test("pins the build frontend and database images without changing existing volume majors", () => {
+  test("pins the build frontend and database images with matching compose versions", () => {
     expect(DOCKERFILE).toMatch(/^# syntax=docker\/dockerfile:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$/m)
     expect(CI_WORKFLOW).toMatch(/image: postgres:18\.\d+@sha256:[a-f0-9]{64}/)
     const development = readFileSync(`${ROOT}docker-compose.dev.yml`, "utf8")
-    const pin = /image: (postgres:16\.\d+@sha256:[a-f0-9]{64})/
+    const pin = /image: (postgres:18\.\d+@sha256:[a-f0-9]{64})/
     expect(COMPOSE.match(pin)?.[1]).toBeDefined()
     expect(development.match(pin)?.[1]).toBe(COMPOSE.match(pin)?.[1])
+  })
+
+  test("mounts PostgreSQL 18 above a fresh, major-specific data volume", () => {
+    const development = readFileSync(`${ROOT}docker-compose.dev.yml`, "utf8")
+    // PostgreSQL 18 cannot start on — or beside — a 16 data directory, so each compose file
+    // must mount a volume minted for 18 at the parent of the 18/docker layout. The volumes
+    // the bundle shipped for 16 (`postgres-data`, `dev-postgres-data`) must be gone entirely:
+    // reusing one under the 18 image strands the operator's data, and at the old mount path
+    // it refuses to boot outright. Old volumes migrate via bin/pg-upgrade-16-to-18, never by
+    // remounting them here.
+    const fresh: (readonly [string, string])[] = [
+      [COMPOSE, "postgres-data-18"],
+      [development, "dev-postgres-data-18"],
+    ]
+    for (const [compose, volume] of fresh) {
+      expect(compose).toMatch(new RegExp(`^\\s+- ${volume}:\\/var\\/lib\\/postgresql\\s*$`, "m"))
+      expect(compose).toMatch(new RegExp(`^  ${volume}:\\s*$`, "m"))
+      // The known-bad variants: the legacy 16 volume declared or mounted again, and any
+      // volume mounted at the pre-18 data path (18 would write outside it and lose data).
+      expect(compose).not.toMatch(/^[ \t]+- (?:dev-)?postgres-data:/m)
+      expect(compose).not.toMatch(/^  (?:dev-)?postgres-data:[ \t]*$/m)
+      expect(compose).not.toMatch(/:\s*\/var\/lib\/postgresql\/data\b/)
+    }
   })
 
   test("pins workflow actions and preserves digest artifact transfer", () => {

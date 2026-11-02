@@ -31,7 +31,7 @@ services:
       # USING AN EXISTING / MANAGED POSTGRES: replace this one line with your own
       # URL (e.g. postgres://user:pass@db.internal:5432/router?sslmode=require),
       # then delete the `postgres` service, the `depends_on` block, and the
-      # `postgres-data` volume. Nothing else changes.
+      # `postgres-data-18` volume. Nothing else changes.
       DATABASE_URL: postgres://router:router@postgres:5432/router
 
     depends_on:
@@ -123,10 +123,12 @@ services:
       start_period: 20s
 
   postgres:
-    # 16 is the floor the schema targets (spec §4). Pinned to a major, not `latest`:
-    # a major bump is a manual, dump-and-restore migration, never something a
-    # `docker compose pull` should do to you.
-    image: postgres:16.15@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+    # The schema supports 16+; this bundle runs 18. Pinned, not `latest`.
+    # 18 cannot start on a 16 data directory, so this service reads a FRESH
+    # `postgres-data-18` volume (below), never the `postgres-data` one earlier
+    # releases shipped. Upgrading an existing deployment: stop the stack and
+    # run bin/pg-upgrade-16-to-18 — it dumps the 16 volume and restores it here.
+    image: postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
 
     environment:
       POSTGRES_USER: router
@@ -140,7 +142,10 @@ services:
     volumes:
       # All durable state: accounts, encrypted credentials, pools, keys, usage,
       # audit. The container is disposable; this volume is not.
-      - postgres-data:/var/lib/postgresql/data
+      # Fresh per major: 18 cannot read the 16 `postgres-data` volume, so it is
+      # not reused here — migrate it with bin/pg-upgrade-16-to-18. PostgreSQL 18
+      # stores data under 18/docker, so mount the parent directory.
+      - postgres-data-18:/var/lib/postgresql
 
     restart: unless-stopped
 
@@ -156,5 +161,5 @@ services:
       start_period: 30s
 
 volumes:
-  postgres-data:
+  postgres-data-18:
   claude-config:
