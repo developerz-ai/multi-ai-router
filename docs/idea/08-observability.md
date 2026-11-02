@@ -1115,7 +1115,27 @@ query string, `Bearer` and `Basic` header values, and the vendor key shapes (`sk
 `xai-`, `gsk_`). Redaction is default-on and is a tested unit — see
 [07-security.md](07-security.md).
 
-Three properties of the redactor are load-bearing enough to state:
+**A query-string credential is redacted whole, `@`-tail included.** Both redactors first
+scrub ambiguous `scheme://X:Y?…@…` text, preserving only the scheme.
+Numeric `Y` is not exempt: `postgres://user:1234?key=1@host` and
+`postgres://user:pw?TAIL@host` both become `postgres://[REDACTED]`. This intentionally loses
+host:port diagnostics on @-bearing queries without an intervening path: they are indistinguishable
+from userinfo. The check runs before query redaction can erase that evidence.
+
+That scrub stops at a nested `scheme://`. A tail that is a URL of its own —
+`postgres://u:p?x=@postgres://v:a"…"@db` — carries userinfo of its own, and swallowing it whole
+took the `://` with it: the userinfo rule then had no anchor to end on and the nested password
+reached the line in the clear, where the previous release's rule had removed it. The nested URL
+is handed to the query and userinfo rules instead, so its credential is scrubbed and only its
+host survives.
+
+Otherwise the query rule runs before userinfo and consumes credential values whole. Neither later
+userinfo rule crosses `?`. No-port `postgres://db?password=Ab:cd@ef` and
+`postgres://db?password=x@y` become `postgres://db?password=[REDACTED]`.
+Credential parameter names end in `key` / `token` / `secret` / `password` (`api_key`,
+`access_token`), or are `passwd` / `pwd` / `code` / `code_verifier` / `state`.
+
+Four properties of the redactor are load-bearing enough to state:
 
 - **The whole line is covered, `msg` included.** Every call site passes a constant message today;
   the scrub is there so the day one interpolates an upstream's reply, the guarantee above still
@@ -1166,7 +1186,14 @@ timestamps only. The field names avoid `token`, which the redactor masks by name
 One logger runs before this one exists: the boot-time migration logger in `packages/db` writes
 JSON to stderr directly, and it scrubs its own lines (connection-string userinfo, obvious key
 material — `scrubCredentials` in `packages/core`) because a connect failure at that moment echoes
-`DATABASE_URL` back, credentials included.
+`DATABASE_URL` back, credentials included. It applies the same ambiguity guard and query-string rule as the server
+redactor: numeric ambiguous userinfo and non-credential query tails are scrubbed, and query
+credentials lose their entire @-bearing value. Both take the same parameter names, and both stop
+the ambiguity guard at a nested `scheme://`, so a URL inside the ambiguous tail is handed to the
+same query and userinfo rules and its own credential is scrubbed. The boot path
+also redacts query names it previously ignored (`?job_key=build-42` → `?job_key=[REDACTED]`).
+Ambiguous userinfo loses its host and query diagnostics; a DSN with no query string keeps its host.
+A port-plus-@ path still loses its host — the price that predates this fix.
 
 ## Error tracking (GlitchTip)
 

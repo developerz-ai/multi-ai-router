@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.41.1] — 2026-11-02
+
+### Fixed
+
+- **Query-string credential tails escaped both redactors (#208).** Server and boot redaction now consume query credentials whole before the later userinfo rules, including `postgres://db?password=Ab:cd@ef` and the boot-only `postgres://db?password=x@y` repro. Both accept the same credential parameter names. To preserve previous userinfo coverage, an earlier guard scrubs ambiguous `scheme://X:Y?…@…` URLs whole (scheme retained), including numeric passwords (`user:1234?key=1@host`) and non-credential tails (`user:pw?TAIL@host`). That guard stops at a nested `scheme://` instead of swallowing it: a tail that is a URL of its own (`postgres://u:p?x=@postgres://v:a"…"@db`) is handed to the query and userinfo rules, so its own credential is scrubbed and only its host survives — swallowing it whole took the `://` with it and left the nested password in the clear, where the previous release had removed it. The ambiguous scrub intentionally sacrifices host:port and query diagnostics for that indistinguishable shape rather than leaking a possible password. Ordinary DSNs and unambiguous queries keep their diagnostics. Unit tests pin the exact issue inputs, frozen previous-release redactors verify their leaking tails and preserved coverage, and the seeded differential comparator rejects planted secrets even when both outputs are identical.
+
 ## [2.41.0] — 2026-10-30
 
 ### Added
@@ -1743,3 +1749,4 @@ your tooling config.
 [2.40.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.2
 [2.40.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.3
 [2.41.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.0
+[2.41.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.1
