@@ -31,8 +31,10 @@ services:
       timeout: 3s
       retries: 30
       start_period: 20s
+    # PostgreSQL 18 stores data under 18/docker; mount its parent, not the old data path.
+    # Existing PostgreSQL 16 volumes require dump-and-restore before use with 18.
     volumes:
-      - dev-postgres-data:/var/lib/postgresql/data
+      - dev-postgres-data:/var/lib/postgresql
 
 volumes:
   dev-postgres-data:

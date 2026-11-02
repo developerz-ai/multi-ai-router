@@ -60,13 +60,21 @@ function fromLines(): readonly string[] {
 }
 
 describe("the container base image", () => {
-  test("pins the build frontend and database images without changing existing volume majors", () => {
+  test("pins the build frontend and database images with matching compose versions", () => {
     expect(DOCKERFILE).toMatch(/^# syntax=docker\/dockerfile:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$/m)
     expect(CI_WORKFLOW).toMatch(/image: postgres:18\.\d+@sha256:[a-f0-9]{64}/)
     const development = readFileSync(`${ROOT}docker-compose.dev.yml`, "utf8")
-    const pin = /image: (postgres:16\.\d+@sha256:[a-f0-9]{64})/
+    const pin = /image: (postgres:18\.\d+@sha256:[a-f0-9]{64})/
     expect(COMPOSE.match(pin)?.[1]).toBeDefined()
     expect(development.match(pin)?.[1]).toBe(COMPOSE.match(pin)?.[1])
+  })
+
+  test("mounts PostgreSQL 18 volumes above its major-specific data directory", () => {
+    const development = readFileSync(`${ROOT}docker-compose.dev.yml`, "utf8")
+    for (const compose of [COMPOSE, development]) {
+      expect(compose).toMatch(/^\s+- (?:dev-)?postgres-data:\/var\/lib\/postgresql\s*$/m)
+      expect(compose).not.toMatch(/:\/var\/lib\/postgresql\/data\b/)
+    }
   })
 
   test("pins workflow actions and preserves digest artifact transfer", () => {
