@@ -1,0 +1,57 @@
+# Weekly, with minor and patch updates grouped per ecosystem; a major update arrives on its own.
+# The 14-day cooldown lets a compromised release get caught before it reaches us. Security updates
+# are unaffected.
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    cooldown:
+      default-days: 14
+    groups:
+      bun-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    cooldown:
+      default-days: 14
+    groups:
+      docker-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # The bun image moves with .bun-version and ci.yml's BUN_VERSION as one change; the drift test
+      # in apps/api/test/integration/image-pins.test.ts fails a bump of the image alone.
+      - dependency-name: "oven/bun"
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    cooldown:
+      default-days: 14
+    groups:
+      docker-compose-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "sunday"
+      time: "16:00"
+    cooldown:
+      default-days: 14
+    groups:
+      github-actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
