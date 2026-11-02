@@ -21,6 +21,10 @@ export interface RawAnthropicRequest {
   stream?: boolean
   tools?: unknown[]
   tool_choice?: unknown
+  /** Anthropic's reasoning dial and its structured-output constraint; the wire shape is not ours. */
+  output_config?: unknown
+  /** The same structured-output constraint under the name Anthropic's own SDKs take it. */
+  output_format?: unknown
 }
 
 export function anthropicRequest(

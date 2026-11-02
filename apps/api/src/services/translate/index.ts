@@ -92,6 +92,7 @@ export type {
   OpenAiResponsesToolChoice,
 } from "./shared/openai-responses"
 export {
+  assertNoAnthropicStructuredOutput,
   assertNoStopSequence,
   assertPlainTextFormat,
   assertStatelessResponses,

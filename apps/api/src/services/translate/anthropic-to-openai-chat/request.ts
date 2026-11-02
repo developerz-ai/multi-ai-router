@@ -20,7 +20,7 @@ import type {
 } from "../shared/openai-chat"
 import { chatCeiling } from "../shared/openai-chat"
 import { openAiEffortFromAnthropic, reasoningBesideToolChoice } from "../shared/reasoning-effort"
-import { parseRequest, rejectField } from "../shared/reject"
+import { assertNoAnthropicStructuredOutput, parseRequest, rejectField } from "../shared/reject"
 import { forcesOpenAiChatTool, toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
 
@@ -45,7 +45,10 @@ import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
  * rest of `output_config`, `context_management`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped and **reported** through
  * `options.onDrop`: server-side and built-in tools, a `tool_choice` naming one, non-text documents,
  * and any block type the target cannot carry. An image inside a `tool_result` is hoisted into a
- * user turn after the originating turn's complete tool-result run. Refused: only what is not a valid Anthropic request.
+ * user turn after the originating turn's complete tool-result run. Refused: a stated
+ * `output_config.format` or `output_format` (Anthropic's own structured-output constraint — this
+ * dialect cannot carry it, and the one crossing that carries it runs the other way,
+ * `shared/structured-output-anthropic.ts`), and anything that is not a valid Anthropic request.
  *
  * Anthropic **requires** `max_tokens`, so every request through here carries a ceiling the caller
  * chose, and which of openai-chat's two names it is emitted under is the target's answer, not
@@ -75,6 +78,10 @@ export function anthropicToOpenAiChatRequest(
   options: AnthropicToOpenAiChatOptions = {},
 ): OpenAiChatRequest {
   const request = parseRequest(anthropicRequestSchema, body, "anthropic")
+  // Anthropic's own structured-output field cannot cross into openai-chat: the constraint is a
+  // contract the caller will parse, and this build carries it in the other direction only. Refused
+  // by name, before any work — `shared/reject.ts` owns the rule for all three spellings.
+  assertNoAnthropicStructuredOutput(request)
   const onDrop = options.onDrop ?? IGNORE_DROPS
   const drafts: Draft[] = []
 
