@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import { createResponseSalvage } from "../../../src/services/usage/response-salvage"
-import { semanticFingerprint } from "../../../src/services/usage/response-salvage-slots"
+import {
+  compactSlotEncoding,
+  semanticFingerprint,
+} from "../../../src/services/usage/response-salvage-slots"
 import { createResponseSalvage as createFrozenSalvage } from "../../fixtures/response-salvage-v2.41.0"
 
 /**
@@ -144,6 +147,20 @@ function flatten(payload: Record<string, unknown> | null): Map<string, unknown> 
   return out
 }
 
+function assertRetainedValues(
+  rebuilt: Record<string, unknown> | null,
+  projection: Record<string, unknown>,
+  report: (what: string) => string,
+): void {
+  const projected = flatten(projection)
+  for (const [path, value] of flatten(rebuilt)) {
+    // Only a dropped root error object deliberately rebuilds as an empty placeholder.
+    const placeholder = path === "error" && isObject(projected.get(path)) && sameValue(value, {})
+    if (!projected.has(path) || (!placeholder && !sameValue(value, projected.get(path))))
+      throw new Error(report(`current kept ${path}=${JSON.stringify(value)}, unlike JSON.parse`))
+  }
+}
+
 /** The bytes the scanner holds when it keeps every slot: the source bytes of each kept value. */
 function keptBytes(projection: Record<string, unknown>): number {
   let total = 0
@@ -279,6 +296,19 @@ function document(rand: () => number, seedIndex: number): string {
   return `{${members.map((entry) => `${entry.key.text}:${entry.value}`).join(",")}}`
 }
 
+test.each([
+  '{"pad":"\\u0070","\\u006e":1.0}',
+  '[1e20,1e-6,-0,1e400,-1e400,true,null,"é"]',
+  '{"a":1,"a":2,"b":[{},[]]}',
+  `${"[".repeat(10_000)}0${"]".repeat(10_000)}`,
+])("normalization preserves values without expanding the byte budget: %.40s", (text) => {
+  const bytes = [...encoder.encode(text)]
+  const compact = compactSlotEncoding(bytes)
+  expect(compact.length).toBeLessThanOrEqual(bytes.length)
+  const decoder = new TextDecoder()
+  expect(semanticFingerprint(compact, decoder)).toBe(semanticFingerprint(bytes, decoder))
+})
+
 test("the current scanner reads a document as JSON.parse does, over the whole slot surface", () => {
   for (let index = 0; index < ITERATIONS; index++) {
     const seed = (BASE_SEED + index) >>> 0
@@ -305,6 +335,7 @@ test("the current scanner reads a document as JSON.parse does, over the whole sl
         report(`current ${JSON.stringify(current.rebuilt)} is not ${JSON.stringify(projection)}`),
       )
 
+    assertRetainedValues(current.rebuilt, projection, report)
     // No key the 2.41.0 scanner kept is lost, unless `JSON.parse` says that value was stale.
     const currentSlots = flatten(current.rebuilt)
     const frozenSlots = flatten(frozen.rebuilt)
@@ -339,12 +370,8 @@ test("a tight budget still bounds the retained bytes, and keeps only slots JSON.
       if (sameValue(value, flatten(projection).get(path)) && !currentSlots.has(path))
         throw new Error(report(`current lost ${path}, which 2.41.0 and JSON.parse kept`))
     }
-    // A slot may be dropped on purpose here, but no slot may be one JSON.parse did not read.
-    const projected = flatten(projection)
-    for (const path of flatten(current.rebuilt).keys()) {
-      if (!projected.has(path))
-        throw new Error(report(`current kept ${path}, which JSON.parse did not`))
-    }
+    // Dropping a slot is intentional; changing a retained value is not.
+    assertRetainedValues(current.rebuilt, projection, report)
   }
 })
 
@@ -467,6 +494,45 @@ test.each(["    ", "\t\r\n "])(
     expect(frozen.retained).toBe(64)
     expect(current.rebuilt).toEqual(frozen.rebuilt)
     expect(current.retained).toBe(64)
+    expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+  },
+)
+
+test("the tight-cap oracle rejects a changed status but permits only a root error placeholder", () => {
+  const projection = { status: "completed", error: { code: "upstream" } }
+  expect(() => assertRetainedValues({ status: "failed" }, projection, String)).toThrow()
+  expect(() => assertRetainedValues({ error: {} }, projection, String)).not.toThrow()
+  expect(() => assertRetainedValues({ usage: {} }, { usage: { tokens: 1 } }, String)).toThrow()
+  expect(() => assertRetainedValues({ error: {} }, { error: "failed" }, String)).toThrow()
+})
+
+test("an equivalent string escape leaves room for required status", () => {
+  const usage = { pad: "p".repeat(43) }
+  const value = JSON.stringify(usage)
+  const expanded = value.replace("p".repeat(43), `\\u0070${"p".repeat(42)}`)
+  const text = `{"usage":${value},"\\u0075sage":${expanded},"status":"completed"}`
+  const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+  const current = run(createResponseSalvage, text, TIGHT_CAP)
+  expect(frozen.rebuilt).toEqual({ usage, status: "completed" })
+  expect(current.rebuilt).toEqual(frozen.rebuilt)
+  expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+})
+
+test.each([false, true])(
+  "a replaced parent carries priority, not stale children: %j",
+  (omitUsage) => {
+    const usage = { pad: "p".repeat(45) }
+    const value = JSON.stringify(usage)
+    const text = `{"response":{"usage":${value}},"\\u0072esponse":${omitUsage ? "{}" : `{"usage":${value}}`},"code":"12345678"}`
+    const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+    const current = run(createResponseSalvage, text, TIGHT_CAP)
+    expect(frozen.rebuilt).toEqual({ response: { usage } })
+    expect(current.rebuilt).toEqual(omitUsage ? { code: "12345678" } : { response: { usage } })
+    assertRetainedValues(
+      current.rebuilt,
+      project(JSON.parse(text) as Record<string, unknown>),
+      String,
+    )
     expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
   },
 )

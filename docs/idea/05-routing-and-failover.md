@@ -494,11 +494,15 @@ Equality compares decoded JSON values, not source bytes: whitespace, string esca
 order and equivalent number spellings do not change a value. Each literal slot retains only a
 SHA-256 semantic fingerprint (64 hex characters), never its historical payload array or parsed
 object. Parsing and canonical traversal are temporary and bounded by the captured slot size.
-Before an equivalent escaped capture gains non-evictable priority, insignificant JSON whitespace
-outside strings is removed from its retained encoding and the byte count is reduced accordingly.
+Before an equivalent escaped capture gains non-evictable priority, its JSON encoding is normalized:
+whitespace, string/key escapes and number spellings are compacted without changing decoded values
+or increasing retained bytes. Serialization is iterative, including for deeply nested values.
 At a 64-byte cap, a 53-byte literal usage object, its equivalent escaped copy with four extra
-spaces, and the 11-byte `"completed"` status therefore still fit together; string contents remain
-unchanged.
+spaces or one padding character spelled `\u0070`, and the 11-byte `"completed"` status still fit.
+A repeated parent transfers only the prior children's priority eligibility, never their bytes:
+a child actually present in the new parent can inherit that priority (and becomes non-evictable
+only if its value equals the literal fingerprint); absent children remain absent. Thus an identical
+escaped `response` repeat cannot lose `response.usage` to later optional `code` evidence.
 Every repeated slot releases the earlier value's bytes before capturing its replacement, so
 duplicate copies cannot crowd out the last one.
 

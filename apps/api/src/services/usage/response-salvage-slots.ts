@@ -69,20 +69,47 @@ export function isWhitespace(byte: number): boolean {
   return byte === 32 || byte === 9 || byte === 10 || byte === 13
 }
 
-/** Remove insignificant whitespace without changing strings or requiring recursive serialization. */
+/** Normalize equivalent JSON encodings without recursive serialization of nested values. */
 export function compactSlotEncoding(bytes: readonly number[]): number[] {
-  let inString = false
-  let escaped = false
-  return bytes.filter((byte) => {
-    if (inString) {
-      if (escaped) escaped = false
-      else if (byte === BACKSLASH) escaped = true
-      else if (byte === QUOTE) inString = false
-      return true
+  type Task = { value: unknown } | { text: string }
+  const value: unknown = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes)),
+  )
+  const pending: Task[] = [{ value }]
+  const parts: string[] = []
+  while (pending.length > 0) {
+    const task = pending.pop()
+    if (task === undefined) break
+    if ("text" in task) {
+      parts.push(task.text)
+      continue
     }
-    if (byte === QUOTE) inString = true
-    return !isWhitespace(byte)
-  })
+    const item = task.value
+    if (item !== null && typeof item === "object") {
+      const array = Array.isArray(item)
+      const entries = Object.entries(item)
+      parts.push(array ? "[" : "{")
+      pending.push({ text: array ? "]" : "}" })
+      for (let at = entries.length - 1; at >= 0; at--) {
+        const entry = entries[at]
+        if (entry === undefined) continue
+        if (at < entries.length - 1) pending.push({ text: "," })
+        pending.push({ value: entry[1] })
+        if (!array) pending.push({ text: `${JSON.stringify(entry[0])}:` })
+      }
+    } else if (typeof item === "number") {
+      // JSON.stringify expands short exponent literals and substitutes null for infinities.
+      const plain = String(item)
+      const exponent = Number.isFinite(item)
+        ? item.toExponential().replace("e+", "e")
+        : item < 0
+          ? "-1e999"
+          : "1e999"
+      parts.push(Number.isFinite(item) && plain.length <= exponent.length ? plain : exponent)
+    } else parts.push(JSON.stringify(item))
+  }
+  const compact = [...new TextEncoder().encode(parts.join(""))]
+  return compact.length <= bytes.length ? compact : [...bytes]
 }
 
 /** Fixed-size comparison metadata; never retain a historical capture or its parsed value. */

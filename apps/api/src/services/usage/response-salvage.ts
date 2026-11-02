@@ -36,6 +36,8 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
   // set, so no capture takes its room.
   const evictable = new Set<string>()
   const inherited = new Set<string>()
+  // Priority alone crosses a parent replacement; no child bytes may survive it.
+  const replacedChildren = new Set<string>()
   // One fixed-size semantic digest per literal slot; historical payload arrays must not survive
   // release. Equivalent JSON spellings stand in for the slot the frozen scanner kept (#209).
   const literalValues = new Map<string, string | null>()
@@ -217,6 +219,10 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     // what the slot held. Keys are compared decoded, so an escaped slot key is the slot it decodes to.
     if (depth === 1 && objects[1] && !expectKey[1] && keys[1] != null) {
       const children = PARENT_CHILDREN.get(keys[1]) ?? []
+      replacedChildren.clear()
+      for (const child of children) {
+        if (captured.has(child) && !evictable.has(child)) replacedChildren.add(child)
+      }
       release(children)
       // A member lent to an error capture in progress is dropped, not given back: its copy is gone.
       lent = lent.filter(([lentPath]) => !children.includes(lentPath))
@@ -231,7 +237,9 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     const escapedKey = (escapedKeys[1] || (depth === 2 && escapedKeys[2])) === true
     // A repeat of an already retained literal slot inherits its priority: it stands in for the
     // evidence the literal-only scanner kept, so it is not room a literal capture may take.
-    const inherits = escapedKey && captured.has(path) && !evictable.has(path)
+    const inherits =
+      escapedKey && ((captured.has(path) && !evictable.has(path)) || replacedChildren.has(path))
+    replacedChildren.delete(path)
     release([path])
     if (SLOT_MAX_BYTES.has(path) && ceilingBlocked) return
     capture = {
