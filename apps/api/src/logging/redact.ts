@@ -75,12 +75,20 @@ type ValuePattern = { readonly pattern: RegExp; readonly replacement: string }
  * redacts — a scrubbed log line costs a debugging session, a leaked one costs a credential.
  */
 const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
+  // Ambiguous unencoded userinfo: `user:1234?key=1@host` is indistinguishable from
+  // a host:port with an @-bearing query. Scrub the whole URL before query redaction
+  // can erase the @ evidence. Keeping diagnostics here would expose numeric passwords
+  // or non-credential query tails (`user:pw?TAIL@host`).
+  {
+    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@[^\s"'<>]*/g,
+    replacement: `://${REDACTED}`,
+  },
   // Discord incoming webhook URLs: the `/webhooks/<id>/<token>` path pair *is* the credential —
   // anyone holding it can post to the channel — and a delivery failure message (fetch error,
   // response snippet, `last_error`, Sentry extra) is exactly where a URL likes to appear. Covers
   // both official hosts, the ptb/canary deployments, any `/api/v<N>/` prefix and the documented
   // query suffixes (`?wait=`, `?thread_id=`). Unlike the URL shapes below, the whole match goes:
-  // the path is the secret, so there is no diagnostic half to keep. First in the list so a token
+  // the path is the secret, so there is no diagnostic half to keep. Ahead of key patterns so a token
   // segment that happens to contain another shape (`sk-…`) is swallowed whole, not nibbled. A
   // trailing sentence period after a query is consumed with it; over-redacting punctuation is
   // the point.
@@ -146,17 +154,8 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
     pattern: /:\/\/(?:[^\s/:@?#&="]*:[^\s@"?#:&=]{1,256}={0,2}|[^\s/:@]*:[^\s/@?]+)@/g,
     replacement: `://${REDACTED}@`,
   },
-  // A URL whose authority carries a userinfo password the query rule above has already taken the
-  // `@` from: `postgres://user:pw?key=1@host` — the query value consumed the `@` that terminated
-  // the userinfo, so the rule above has nothing left to end on and the password survives. This
-  // rule reads the authority itself as the password — never query text — and it fires only when
-  // the authority's second component cannot be a port: RFC 3986 ends an authority at the first
-  // `?`, so `db.internal:5432?query` is a host and a port and carries no credential, while
-  // `user:pw?query` cannot be a port and is a userinfo password.
-  // It runs after the userinfo rule above, which keeps the first word on a normal userinfo — and
-  // on the slash-password shape, where `postgres://u:p/ss@h` is one password whole.
-  // Price: the authority is replaced whole, so that shape loses its host and its username; and a
-  // password that is all digits (`user:1234?key=1@host`) reads as a port and survives.
+  // Without an @-bearing ambiguous query, a nonnumeric authority component still
+  // cannot be a port. Redact it conservatively even when no userinfo terminator remains.
   {
     pattern: /:\/\/[^\s:/?#@]*:(?=[^\s/?#@]*[^\s/?#@0-9])[^\s/?#@]*/g,
     replacement: `://${REDACTED}`,

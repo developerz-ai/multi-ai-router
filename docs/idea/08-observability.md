@@ -1115,20 +1115,18 @@ query string, `Bearer` and `Basic` header values, and the vendor key shapes (`sk
 `xai-`, `gsk_`). Redaction is default-on and is a tested unit — see
 [07-security.md](07-security.md).
 
-**A query-string credential is redacted whole, `@`-tail included.** The query rule runs before the
-URL-userinfo rule, and the userinfo rule does not cross `?` at all, so the two rules claim disjoint
-text: a query value is read as a query value and never as a URL password. In
-`postgres://db.internal:5432?user=app&password=p@ssw0rd` the value `p@ssw0rd` is replaced whole
-(`?password=[REDACTED]`) — the `@` belongs to the secret, not to a host — while the host and the
-non-secret parameters survive. The parameter names are the credential ones: a name ending in `key`
-/ `token` / `secret` / `password` (`api_key`, `access_token`), or `passwd` / `pwd` / `code` /
-`code_verifier` / `state`.
+**A query-string credential is redacted whole, `@`-tail included.** Both redactors first
+scrub ambiguous `scheme://X:Y?…@…` text through the end of the URL, preserving only the scheme.
+Numeric `Y` is not exempt: `postgres://user:1234?key=1@host` and
+`postgres://user:pw?TAIL@host` both become `postgres://[REDACTED]`. This intentionally loses
+host:port diagnostics on @-bearing queries without an intervening path: they are indistinguishable
+from userinfo. The check runs before query redaction can erase that evidence.
 
-The query rule wins that `@`, so a URL that carries a userinfo password *and* a query string
-(`postgres://user:pw?key=1@host`) is covered by an authority rule that reads the authority itself as
-the password: `postgres://[REDACTED]?key=[REDACTED]`. Price: that shape loses its host and its
-username; an authority whose second component is all digits is read as a host and a port, so it
-keeps its host.
+Otherwise the query rule runs before userinfo and consumes credential values whole. Neither later
+userinfo rule crosses `?`. No-port `postgres://db?password=Ab:cd@ef` and
+`postgres://db?password=x@y` become `postgres://db?password=[REDACTED]`.
+Credential parameter names end in `key` / `token` / `secret` / `password` (`api_key`,
+`access_token`), or are `passwd` / `pwd` / `code` / `code_verifier` / `state`.
 
 Four properties of the redactor are load-bearing enough to state:
 
@@ -1181,18 +1179,12 @@ timestamps only. The field names avoid `token`, which the redactor masks by name
 One logger runs before this one exists: the boot-time migration logger in `packages/db` writes
 JSON to stderr directly, and it scrubs its own lines (connection-string userinfo, obvious key
 material — `scrubCredentials` in `packages/core`) because a connect failure at that moment echoes
-`DATABASE_URL` back, credentials included. It applies the same query-string rule as the server
-redactor: a query credential is redacted whole, `@`-tail included, and the userinfo rule never reads
-query text as a password — neither userinfo rule crosses `?`, so the two rules claim disjoint
-text. The parameter names are the same ones, so a value the boot path scrubs is
-not one the server redactor exposes. Its price is the accepted over-redaction — it now redacts query
-parameter names it ignored before, so a `?job_key=build-42` on a migration line is logged as
-`?job_key=[REDACTED]`. The query rule wins the `@`, so a URL that carries a userinfo password *and*
-a query string is covered by an authority rule that reads the authority itself as the password
-(`postgres://user:pw?key=1@host` → `postgres://[REDACTED]?key=[REDACTED]`); that shape loses its host
-and its username, and an authority whose second component is all digits is read as a host and a
-port, so it keeps its host. A DSN with no query string keeps its host, and the port-plus-`@` URL still
-loses its host — the price that predates this.
+`DATABASE_URL` back, credentials included. It applies the same ambiguity guard and query-string rule as the server
+redactor: numeric ambiguous userinfo and non-credential query tails are scrubbed, and query
+credentials lose their entire @-bearing value. Both take the same parameter names. The boot path
+also redacts query names it previously ignored (`?job_key=build-42` → `?job_key=[REDACTED]`).
+Ambiguous userinfo loses its host and query diagnostics; a DSN with no query string keeps its host.
+A port-plus-@ path still loses its host — the price that predates this fix.
 
 ## Error tracking (GlitchTip)
 

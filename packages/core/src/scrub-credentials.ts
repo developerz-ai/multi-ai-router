@@ -14,6 +14,14 @@ const SCRUBBED = "[REDACTED]"
 type ScrubPattern = { readonly pattern: RegExp; readonly replacement: string }
 
 const PATTERNS: readonly ScrubPattern[] = [
+  // Ambiguous unencoded userinfo: `user:1234?key=1@host` is indistinguishable from
+  // a host:port with an @-bearing query. Scrub the whole URL before query redaction
+  // can erase the @ evidence. Keeping diagnostics here would expose numeric passwords
+  // or non-credential query tails (`user:pw?TAIL@host`).
+  {
+    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@[^\s"'<>]*/g,
+    replacement: `://${SCRUBBED}`,
+  },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.
   // This rule runs BEFORE the URL-userinfo rule below, and it consumes the value whole — the `@`
   // tail included. A query value is a query value, never a URL password: the userinfo rule below
@@ -64,17 +72,8 @@ const PATTERNS: readonly ScrubPattern[] = [
       /\b((?:password|passwd|pwd|secret|token|api[-_]?key|encryption[-_]?key)\s*=\s*)[^\s&"']+/gi,
     replacement: `$1${SCRUBBED}`,
   },
-  // A URL whose authority carries a userinfo password the query rule above has already taken the
-  // `@` from: `postgres://user:pw?key=1@host` — the query value consumed the `@` that terminated
-  // the userinfo, so the userinfo rule above has nothing left to end on and the password survives.
-  // This rule reads the authority itself as the password — never query text — and it fires only
-  // when the authority's second component cannot be a port: RFC 3986 ends an authority at the
-  // first `?`, so `db.internal:5432?query` is a host and a port and carries no credential, while
-  // `user:pw?query` cannot be a port and is a userinfo password.
-  // It runs after the key=value rule above, which has to see the raw `password=…` text this one
-  // would otherwise swallow whole.
-  // Price: the authority is replaced whole, so that shape loses its host and its username; and a
-  // password that is all digits (`user:1234?key=1@host`) reads as a port and survives.
+  // Without an @-bearing ambiguous query, a nonnumeric authority component still
+  // cannot be a port. Redact it conservatively even when no userinfo terminator remains.
   {
     pattern: /:\/\/[^\s:/?#@]*:(?=[^\s/?#@]*[^\s/?#@0-9])[^\s/?#@]*/g,
     replacement: `://${SCRUBBED}`,

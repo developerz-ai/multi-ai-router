@@ -22,12 +22,8 @@ import { redactValue } from "../../src/logging/redact"
  * The counts of both directions — "new scrubs more" and "new scrubs less" — ride in the assertion
  * message, so a rule change that quietly shifts the balance shows up in the failure output.
  *
- * The shape where the query rule wins the `@` is in the corpus, not beside it: a URL whose only
- * `@` sits inside a query value (`postgres://user:pw?key=1@host`) has no `@` left for the userinfo
- * rule once the query rule has consumed the value, so the authority rule has to read the authority
- * itself as the password. The old implementation covered that password by accident — by eating the
- * query text as one password — and the new one has to cover it on purpose, or the corpus entry
- * fails as "new scrubs less" and the guard never fires.
+ * Ambiguous userinfo (including numeric passwords and non-credential query tails)
+ * stays in the corpus, so preserving query coverage cannot silently lose old coverage.
  */
 
 const REDACTED = "[REDACTED]"
@@ -116,22 +112,38 @@ const OLD_BOOT = applyPatterns(PRE_FIX_BOOT_PATTERNS)
 
 type CorpusEntry = { readonly text: string; readonly secret?: string }
 
-/** The three reported cases: the secret after the `@` used to reach the log line in the clear. */
+const PRESERVED_CASES = [
+  { text: "postgres://user:1234?key=1@host", secret: "1234" },
+  { text: "postgres://user:pw?TAIL@host", secret: "TAIL" },
+] as const
+
+/** Reported cases: the secret after the `@` used to reach the log line in the clear. */
 const REPORTED_CASES = [
+  {
+    text: "postgres://db?password=Ab:cd@ef",
+    secret: "ef",
+    expected: "postgres://db?password=[REDACTED]",
+  },
+  {
+    text: "postgres://db?password=x@y",
+    secret: "y",
+    expected: "postgres://db?password=[REDACTED]",
+    bootOnly: true,
+  },
   {
     text: "postgresql://db.internal:5432?user=app&password=p@ssw0rd",
     secret: "ssw0rd",
-    expected: "postgresql://db.internal:5432?user=app&password=[REDACTED]",
+    expected: "postgresql://[REDACTED]",
   },
   {
     text: "redis://cache:6379?password=hunter@2secret",
     secret: "2secret",
-    expected: "redis://cache:6379?password=[REDACTED]",
+    expected: "redis://[REDACTED]",
   },
   {
     text: "connect https://h:8443?token=tok@en_SECRET_TAIL failed",
     secret: "en_SECRET_TAIL",
-    expected: "connect https://h:8443?token=[REDACTED] failed",
+    expected: "connect https://[REDACTED] failed",
   },
 ] as const
 
@@ -211,7 +223,7 @@ const PROSE = [
  */
 function buildCorpus(): CorpusEntry[] {
   const random = seeded(0x5eed)
-  const entries: CorpusEntry[] = []
+  const entries: CorpusEntry[] = [...PRESERVED_CASES, ...REPORTED_CASES]
   for (let index = 0; index < 240; index += 1) {
     const scheme = pick(SCHEMES, random)
     const host = pick(HOSTS, random)
@@ -279,7 +291,12 @@ function compare(
   for (const entry of entries) {
     const before = oldScrub(entry.text)
     const after = newScrub(entry.text)
-    if (before === after) continue
+    if (before === after) {
+      if (entry.secret !== undefined && after.includes(entry.secret)) {
+        failures.push(`${label}: planted secret "${entry.secret}" survives in equal outputs`)
+      }
+      continue
+    }
     changed += 1
     const secret = entry.secret
     if (secret === undefined) {
@@ -315,7 +332,7 @@ function compare(
 }
 
 describe("redact — differential against the previous release", () => {
-  test("the three reported cases go from leaking to scrubbed, in both redactors", () => {
+  test("reported cases go from leaking to scrubbed in the affected redactors", () => {
     for (const reported of REPORTED_CASES) {
       for (const [label, oldScrub, newScrub] of [
         ["server", OLD_SERVER, redactValue],
@@ -323,9 +340,26 @@ describe("redact — differential against the previous release", () => {
       ] as const) {
         const before = oldScrub(reported.text)
         const after = newScrub(reported.text)
-        expect(before, `${label}: leaked ${reported.secret}`).toContain(reported.secret)
+        if (!("bootOnly" in reported) || label === "boot") {
+          expect(before, `${label}: leaked ${reported.secret}`).toContain(reported.secret)
+        }
         expect(after, `${label}: leaked ${reported.secret}`).not.toContain(reported.secret)
         expect(after).toBe(reported.expected)
+      }
+    }
+  })
+
+  test("equal leaking outputs still fail the comparator", () => {
+    const identity = (text: string) => text
+    const result = compare("equal", identity, identity, [{ text: "secret", secret: "secret" }])
+    expect(result.failures).toEqual(['equal: planted secret "secret" survives in equal outputs'])
+    expect(result.changed).toBe(0)
+  })
+
+  test("ambiguous userinfo preserves frozen coverage", () => {
+    for (const entry of PRESERVED_CASES) {
+      for (const scrub of [OLD_SERVER, OLD_BOOT, redactValue, scrubCredentials]) {
+        expect(scrub(entry.text)).not.toContain(entry.secret)
       }
     }
   })

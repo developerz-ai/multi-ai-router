@@ -107,22 +107,46 @@ describe("scrubCredentials — a credential in a query string", () => {
    */
   const cases = [
     {
+      name: "original no-port colon password",
+      input: "postgres://db?password=Ab:cd@ef",
+      tail: "ef",
+      expected: "postgres://db?password=[REDACTED]",
+    },
+    {
+      name: "original boot-only no-port password",
+      input: "postgres://db?password=x@y",
+      tail: "y",
+      expected: "postgres://db?password=[REDACTED]",
+    },
+    {
+      name: "numeric ambiguous userinfo",
+      input: "postgres://user:1234?key=1@host",
+      tail: "1234",
+      expected: "postgres://[REDACTED]",
+    },
+    {
+      name: "non-credential ambiguous userinfo tail",
+      input: "postgres://user:pw?TAIL@host",
+      tail: "TAIL",
+      expected: "postgres://[REDACTED]",
+    },
+    {
       name: "a DSN with a port and a query string",
       input: "postgresql://db.internal:5432?user=app&password=p@ssw0rd",
       tail: "ssw0rd",
-      expected: "postgresql://db.internal:5432?user=app&password=[REDACTED]",
+      expected: "postgresql://[REDACTED]",
     },
     {
       name: "a Redis URL with a query string",
       input: "redis://cache:6379?password=hunter@2secret",
       tail: "2secret",
-      expected: "redis://cache:6379?password=[REDACTED]",
+      expected: "redis://[REDACTED]",
     },
     {
       name: "an error text quoting a callback URL",
       input: "connect https://h:8443?token=tok@en_SECRET_TAIL failed",
       tail: "en_SECRET_TAIL",
-      expected: "connect https://h:8443?token=[REDACTED] failed",
+      expected: "connect https://[REDACTED] failed",
     },
   ] as const
 
@@ -136,14 +160,11 @@ describe("scrubCredentials — a credential in a query string", () => {
   }
 
   test("a userinfo password in front of a credential-named query value is gone", () => {
-    // The query rule consumes the value whole — the `@` included — so the userinfo rule has no
-    // `@` left to end on, and the password in the authority used to survive the whole scrub. The
-    // authority rule reads the authority itself as the password; the query value is still
-    // redacted whole.
+    // The ambiguous shape is scrubbed before the query rule can erase its @ evidence.
     const scrubbed = scrubCredentials("postgres://user:pw?key=1@host")
 
     expect(scrubbed).not.toContain("pw")
-    expect(scrubbed).toBe("postgres://[REDACTED]?key=[REDACTED]")
+    expect(scrubbed).toBe("postgres://[REDACTED]")
   })
 })
 
