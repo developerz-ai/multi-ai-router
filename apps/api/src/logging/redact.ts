@@ -79,8 +79,16 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // a host:port with an @-bearing query. Scrub the whole URL before query redaction
   // can erase the @ evidence. Keeping diagnostics here would expose numeric passwords
   // or non-credential query tails (`user:pw?TAIL@host`).
+  //
+  // The tail stops at a nested `scheme://` instead of swallowing it. A tail that carries a
+  // URL of its own — `postgres://u:p?x=@postgres://v:a"…"@db` — has userinfo of its own, and
+  // eating its `://` left the userinfo rule below with no anchor to end on: the nested password
+  // reached the log line in the clear, while the previous release's rules had removed it.
+  // Stopping at the nested scheme hands that URL to the rules that understand URLs (query
+  // first, then userinfo), which scrub its credential and keep its host. The scheme is bounded
+  // at 32 characters, so the per-position check stays bounded and the scan stays linear.
   {
-    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@[^\s"'<>]*/g,
+    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@(?:(?!\b[a-z][a-z0-9+.-]{0,31}:\/\/)[^\s"'<>])*/g,
     replacement: `://${REDACTED}`,
   },
   // Discord incoming webhook URLs: the `/webhooks/<id>/<token>` path pair *is* the credential —

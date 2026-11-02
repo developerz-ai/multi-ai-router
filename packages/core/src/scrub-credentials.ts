@@ -18,8 +18,15 @@ const PATTERNS: readonly ScrubPattern[] = [
   // a host:port with an @-bearing query. Scrub the whole URL before query redaction
   // can erase the @ evidence. Keeping diagnostics here would expose numeric passwords
   // or non-credential query tails (`user:pw?TAIL@host`).
+  //
+  // The tail stops at a nested `scheme://` instead of swallowing it, exactly as the server
+  // redactor's guard does (`apps/api/src/logging/redact.ts`): a tail that carries a URL of
+  // its own has userinfo of its own, and eating its `://` left the userinfo rule below with
+  // no anchor to end on, so the nested password reached the boot log in the clear. Stopping
+  // at the nested scheme hands that URL to the query and userinfo rules below. The scheme is
+  // bounded at 32 characters, so the per-position check stays bounded and the scan stays linear.
   {
-    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@[^\s"'<>]*/g,
+    pattern: /:\/\/[^\s/:@?]*:[^\s/@?]+\?[^\s/@]*@(?:(?!\b[a-z][a-z0-9+.-]{0,31}:\/\/)[^\s"'<>])*/g,
     replacement: `://${SCRUBBED}`,
   },
   // A credential passed in a query string, keeping the endpoint and the parameter that carried it.

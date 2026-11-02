@@ -148,6 +148,30 @@ const REPORTED_CASES = [
 ] as const
 
 /**
+ * The nested-URL case: an ambiguous userinfo whose tail is a URL of its own.
+ *
+ * `postgres://u:p?x=@postgres://v:a"SECRET_TAIL@db` — the tail carries userinfo of its own. The
+ * ambiguity guard used to scrub that tail whole, nested scheme and `://` included, which left
+ * the userinfo rule that runs after it with no anchor to end on: the nested password reached the
+ * log line in the clear. Both frozen baselines removed it, so it is coverage the new rules may
+ * not lose. The guard now stops at the nested `scheme://` and hands that URL to the rules that
+ * understand URLs — the query rule first, then the userinfo rule — which scrub its credential
+ * and keep its host.
+ */
+const NESTED_URL_CASES = [
+  {
+    text: 'postgres://u:p?x=@postgres://v:a"SECRET_TAIL@db',
+    secret: "SECRET_TAIL",
+    expected: "postgres://[REDACTED]postgres://[REDACTED]@db",
+  },
+  {
+    text: "postgres://u:p?x=@postgres://v:aSECRET_TAIL@db",
+    secret: "SECRET_TAIL",
+    expected: "postgres://[REDACTED]postgres://[REDACTED]@db",
+  },
+] as const
+
+/**
  * The shapes that must not move. A userinfo password holding an unencoded `/` or base64 `=`
  * padding is still scrubbed whole and still keeps its host; a query string with no credential in
  * it is still left exactly as it was; a URL with a port and an `@` in its path still pays the
@@ -223,7 +247,7 @@ const PROSE = [
  */
 function buildCorpus(): CorpusEntry[] {
   const random = seeded(0x5eed)
-  const entries: CorpusEntry[] = [...PRESERVED_CASES, ...REPORTED_CASES]
+  const entries: CorpusEntry[] = [...PRESERVED_CASES, ...REPORTED_CASES, ...NESTED_URL_CASES]
   for (let index = 0; index < 240; index += 1) {
     const scheme = pick(SCHEMES, random)
     const host = pick(HOSTS, random)
@@ -360,6 +384,22 @@ describe("redact — differential against the previous release", () => {
     for (const entry of PRESERVED_CASES) {
       for (const scrub of [OLD_SERVER, OLD_BOOT, redactValue, scrubCredentials]) {
         expect(scrub(entry.text)).not.toContain(entry.secret)
+      }
+    }
+  })
+
+  test("an ambiguous userinfo whose tail is a URL of its own keeps the nested credential covered", () => {
+    for (const entry of NESTED_URL_CASES) {
+      // The frozen baselines removed it. The new rules may not expose what they removed.
+      expect(OLD_SERVER(entry.text)).not.toContain(entry.secret)
+      expect(OLD_BOOT(entry.text)).not.toContain(entry.secret)
+      for (const [label, scrub] of [
+        ["server", redactValue],
+        ["boot", scrubCredentials],
+      ] as const) {
+        const scrubbed = scrub(entry.text)
+        expect(scrubbed, `${label}: leaked ${entry.secret}`).not.toContain(entry.secret)
+        expect(scrubbed, `${label}: ${entry.text}`).toBe(entry.expected)
       }
     }
   })

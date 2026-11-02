@@ -335,6 +335,15 @@ describe("redact — a credential in a query string", () => {
       tail: "en_SECRET_TAIL",
       expected: `connect https://${REDACTED} failed`,
     },
+    {
+      // The ambiguous userinfo's tail is a URL of its own, with a password of its own. The guard
+      // used to swallow that URL whole — scheme and `://` included — and the userinfo rule then
+      // had no anchor to end on, so the nested password reached the log line in the clear.
+      name: "an ambiguous userinfo whose tail is a URL of its own",
+      input: 'postgres://u:p?x=@postgres://v:a"SECRET_TAIL@db',
+      tail: "SECRET_TAIL",
+      expected: `postgres://${REDACTED}postgres://${REDACTED}@db`,
+    },
   ] as const
 
   for (const { name, input, tail, expected } of cases) {
