@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# One-shot migration of an existing PostgreSQL 16 deployment onto the bundled
+# PostgreSQL 18 compose file. PostgreSQL cannot start a new major on an old data
+# directory, so the bundled compose file now mounts a fresh `postgres-data-18`
+# volume; this script fills that fresh volume from the old 16 one.
+#
+#   bin/pg-upgrade-16-to-18 [pg-user]
+#
+#   [pg-user]      superuser of the old cluster (default: router)
+#   LEGACY_VOLUME  set it when the old `postgres-data` volume cannot be looked
+#                  up unambiguously (a host running several compose projects)
+#
+# Steps: stop the stack (volumes kept) -> start the 18 server on the fresh
+# volume -> drop the fresh `router` database (everything in postgres-data-18 is
+# disposable; the 16 volume is the data of record) -> pipe pg_dumpall of a
+# throwaway postgres:16 container running on the old volume into the 18 server
+# -> restart the stack and print what to verify.
+#
+# Safety: the old volume is never removed — the throwaway 16 server mounts it
+# read-write (PostgreSQL cannot run on a read-only data directory) but nothing
+# else writes it, and deleting it is left to the operator, by hand, only after
+# the deployment is verified. The script is idempotent: rerunning drops and
+# re-restores the fresh database, so an interrupted run is fixed by rerunning.
+# Run it from a checkout of the release being deployed (it drives
+# docker-compose.yml in the repository root), with the same ENCRYPTION_KEY the
+# 16 rows were written under — restored rows are ciphertext only that key
+# decrypts.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  awk 'NR > 1 && !/^#/ { exit } NR > 1 { print substr($0, 3) }' "$0"
+  exit 0
+fi
+
+COMPOSE="docker compose -f docker-compose.yml"
+CONTAINER="pg-upgrade-16-legacy"
+# The exact image this bundle shipped while it ran PostgreSQL 16. A 16.x server
+# reads the old data directory; 15.x or the new 18 image may not.
+LEGACY_IMAGE="postgres:16.15@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54"
+PG_USER="${1:-router}"
+
+cleanup() {
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+# Physical volume names are "<compose project>_postgres-data". Accept exactly
+# one candidate; anything else is the operator's call, not ours to guess.
+old_volume="${LEGACY_VOLUME:-}"
+if [ -z "$old_volume" ]; then
+  candidates="$(docker volume ls --format '{{.Name}}' | grep -E '(^|_)postgres-data$' || true)"
+  count="$(printf '%s' "$candidates" | grep -c . || true)"
+  if [ "$count" -eq 1 ]; then
+    old_volume="$candidates"
+  elif [ "$count" -eq 0 ]; then
+    echo "no legacy 'postgres-data' volume found: a fresh deployment needs no migration." >&2
+    echo "Start the stack with: docker compose up -d" >&2
+    exit 0
+  else
+    echo "expected exactly one legacy 'postgres-data' volume, found $count:" >&2
+    printf '%s\n' "$candidates" >&2
+    echo "set LEGACY_VOLUME=<name> to pick one." >&2
+    exit 1
+  fi
+fi
+
+printf 'This stops the stack and REPLACES the fresh postgres-data-18 database with the\ndata of the "%s" volume. The 16 volume is not modified or removed.\nType "migrate" to confirm: ' "$old_volume"
+read -r confirm
+[ "$confirm" = "migrate" ] || { echo "aborted"; exit 1; }
+
+# The old server must be fully stopped before anything else touches its volume.
+$COMPOSE down
+
+$COMPOSE up -d postgres
+printf 'waiting for the 18 server'
+ready=false
+for _ in $(seq 1 60); do
+  if $COMPOSE exec -T postgres pg_isready -U router -d router >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  printf '.'
+  sleep 1
+done
+printf '\n'
+if [ "$ready" = false ]; then
+  echo "the 18 server never became ready; check: docker compose logs postgres" >&2
+  exit 1
+fi
+
+# Throwaway 16 server on the old volume: no published ports, so it is reachable
+# only via docker exec, and the official image trusts local-socket connections,
+# so the dump needs no credentials.
+docker run -d --name "$CONTAINER" -v "$old_volume:/var/lib/postgresql/data" "$LEGACY_IMAGE" >/dev/null
+printf 'waiting for the 16 server'
+ready=false
+for _ in $(seq 1 60); do
+  if docker exec "$CONTAINER" pg_isready -U "$PG_USER" -d router >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
+  printf '.'
+  sleep 1
+done
+printf '\n'
+if [ "$ready" = false ]; then
+  echo "the 16 server never became ready; check: docker logs $CONTAINER" >&2
+  exit 1
+fi
+
+user_tables() { # <psql output> — user tables in a router database, or 0
+  case "${1:-}" in
+    '' | *[!0-9]*) echo 0 ;;
+    *) echo "$1" ;;
+  esac
+}
+old_tables="$(user_tables "$(docker exec -u postgres "$CONTAINER" psql -U "$PG_USER" -d router -Atc \
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')")")"
+
+printf 'dumping "%s" into postgres-data-18 (a duplicate-role error for "%s" is\n' "$old_volume" "$PG_USER"
+printf 'expected — the fresh initdb created it; the ALTER ROLE after it restores the password)\n'
+docker exec -u postgres "$CONTAINER" pg_dumpall -U "$PG_USER" |
+  $COMPOSE exec -T postgres psql -U router -d postgres
+
+new_tables="$(user_tables "$($COMPOSE exec -T postgres psql -U router -d router -Atc \
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')")")"
+echo "user tables: 16 volume: $old_tables -> 18 volume: $new_tables"
+if [ "$new_tables" -eq 0 ]; then
+  echo "the restore produced no tables; check the output above and rerun this script." >&2
+  exit 1
+fi
+
+$COMPOSE up -d
+echo "stack restarted on the migrated data. Verify the deployment (admin UI: accounts,"
+echo "keys, usage history), then delete the old volume by hand:"
+echo "  docker volume rm $old_volume"
