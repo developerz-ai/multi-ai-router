@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Salvage canonicalization checks each output byte against the capture budget, including end-of-value output, rather than charging source bytes. Deferred fraction zeros stream directly to the budgeted sink and stop on rejection, avoiding unbounded temporary arrays; equivalent escaped `usage:1.0` still fits beside a 63-byte status at cap 64. Numeric tokens reset their own state, preserve interior fraction zeros, and handle exponent digits separately. Regression tests cover multi-number usage, million-zero fractions, sink rejection, and end-only output under required, escaped, optional, and ceiling-slot budgets.
+
 - The `bin/smoke` informational `responses.function_call` leg explicitly sends the boolean `store: false` in its outgoing `/v1/responses` request. An outgoing-request regression drives `runLegs` and inspects the captured JSON, rather than relying on translation coverage. This corrects the diagnostic client only: other smoke legs, required/informational exit-code semantics, router same-dialect byte-passthrough, and runtime versions are unchanged.
 
 ### Changed

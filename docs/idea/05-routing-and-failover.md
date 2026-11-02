@@ -501,7 +501,10 @@ literal slot fits the room that slot freed and cannot crowd out another member. 
 changes no decoded value and never grows a capture; malformed input stays malformed — an invalid
 escape, a number's stray point and the whitespace between two primitives are written as they
 stand, so invalid JSON cannot become valid. Serialization is iterative, including for deeply
-nested values.
+nested values. Every canonical output byte, including end-of-value output, passes the capture's
+budget and priority checks before storage; source bytes that emit nothing spend no room. Deferred
+fraction zeros are counted, not buffered, and emission stops immediately if the sink rejects a byte.
+Each numeric token resets its fraction/exponent state; exponent digits bypass fraction-zero handling.
 At a 64-byte cap, a 53-byte literal usage object, its equivalent escaped copy with twelve extra
 spaces or one padding character spelled `\u0070`, and the 11-byte `"completed"` status still fit —
 and so does a `1` repeated as `1.` followed by sixty-four zeros, including when the repeat

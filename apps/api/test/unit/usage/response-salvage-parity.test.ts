@@ -68,6 +68,55 @@ const NOISE_KEYS: readonly KeySpec[] = [
 ]
 const KEYS: readonly KeySpec[] = [...ROOT_KEYS, ...PARENT_KEYS, ...NOISE_KEYS]
 
+test.each([
+  '{"usage":{"input_tokens":1.5,"output_tokens":20}}',
+  '{"usage":{"input_tokens":1.203,"output_tokens":2.304e10,"other":20}}',
+  '{"usage":[1.05e20,1.02e-10,20,3.004,10]}',
+])("numeric tokens retain independent fraction and exponent state: %s", (text) => {
+  expect(run(createResponseSalvage, text, 4096).rebuilt).toEqual(JSON.parse(text))
+})
+
+test("a rejected output byte stops deferred-digit emission permanently", () => {
+  let attempts = 0
+  const canonical = createSlotCanonicalizer(() => ++attempts <= 64)
+  for (const byte of new TextEncoder().encode(`0.${"0".repeat(1_000_000)}1`)) canonical.push(byte)
+  canonical.end()
+  canonical.push(49)
+  expect(attempts).toBe(65)
+})
+
+test.each(["usage", "\\u0075sage", "code", "base_resp"])(
+  "deferred digits cannot overrun the capture budget: %s",
+  (key) => {
+    const number = `0.${"0".repeat(1_000_000)}1`
+    const value = key === "base_resp" ? `{"status_code":${number}}` : number
+    const current = run(createResponseSalvage, `{"${key}":${value}}`, 64)
+    expect(current.peak).toBeLessThanOrEqual(64)
+  },
+)
+
+test.each(["usage", "\\u0075sage", "code", "base_resp.status_code"])(
+  "end-only output respects the budget for %s",
+  (path) => {
+    const cap = path === "code" ? 4 : path === "base_resp.status_code" ? 32 : 64
+    const value = `${"1".repeat(cap)}.`
+    const text =
+      path === "base_resp.status_code"
+        ? `{"base_resp":{"status_code":${value}}}`
+        : `{"${path}":${value}}`
+    const current = run(createResponseSalvage, text, path === "code" ? 16 : cap)
+    expect(current.peak).toBeLessThanOrEqual(cap)
+    expect(current.rebuilt).toEqual(path === "usage" ? null : {})
+  },
+)
+
+test("a full budget charges canonical bytes, not redundant fraction digits", () => {
+  const text = `{"usage":1,"status":"${"s".repeat(61)}","\\u0075sage":1.0}`
+  const frozen = run(createFrozenSalvage, text, 64)
+  expect(frozen.rebuilt).toEqual(JSON.parse(text))
+  expect(run(createResponseSalvage, text, 64).rebuilt).toEqual(frozen.rebuilt)
+})
+
 const encoder = new TextEncoder()
 /** A cap no generated document reaches: every slot it holds is kept. */
 const CAP = 4096
@@ -108,14 +157,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 /** The canonical form of a value, as the scanner writes it while the value is read. */
 function canonicalize(text: string): string {
-  const canonical = createSlotCanonicalizer()
   const out: number[] = []
-  for (const byte of encoder.encode(text)) {
-    canonical.push(byte)
-    for (const part of canonical.written) out.push(part)
-  }
+  const canonical = createSlotCanonicalizer((byte) => {
+    out.push(byte)
+    return true
+  })
+  for (const byte of encoder.encode(text)) canonical.push(byte)
   canonical.end()
-  for (const part of canonical.written) out.push(part)
   return new TextDecoder().decode(Uint8Array.from(out))
 }
 

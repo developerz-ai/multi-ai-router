@@ -1,14 +1,9 @@
 /**
  * The canonical form of a JSON value, built as its bytes arrive.
  *
- * A slot's room must be what its value costs, not what its encoding spent: an escaped repeat of
- * a literal slot holds the same value in a longer spelling, and the room the literal freed must
- * hold it. The canonicalizer rewrites a value while it is read — whitespace dropped, string
- * escapes resolved, a number's redundant digits removed — without changing the value it decodes
- * to, so an equivalent repeat never crowds out another slot (#209).
- *
- * The rewrite is incremental: the scanner reads a frame one byte at a time, and every byte of a
- * captured value is canonicalized as it arrives, so the retained bytes are the canonical ones.
+ * Rewrite values incrementally: whitespace dropped, escapes resolved, redundant digits removed.
+ * Equivalent escaped repeats must fit the room a literal slot freed (#209). Output goes directly
+ * to a budgeted sink; returning false permanently stops emission without an output queue.
  * Malformed input stays malformed: an invalid escape, a stray point and the whitespace between
  * two primitives are written as they stand.
  */
@@ -72,23 +67,20 @@ function utf8Bytes(code: number): number[] {
 }
 
 export interface SlotCanonicalizer {
-  /** The canonical bytes the last `push` (or `end`) produced. */
-  readonly written: readonly number[]
   /** Feed one source byte of the value. */
   push(byte: number): void
   /** Close the value: the bytes that only its end knows are written. */
   end(): void
 }
 
-export function createSlotCanonicalizer(): SlotCanonicalizer {
+export function createSlotCanonicalizer(emit: (byte: number) => boolean): SlotCanonicalizer {
   let mode: "value" | "string" | "number" | "literal" = "value"
   // The escape being read: a backslash, then its target, then four hex digits.
   let escapeState: "none" | "simple" | "unicode" = "none"
   let hexDigits = 0
   let hexText = ""
   let codePoint = 0
-  // The number being read: its fraction, the zeros dropped from the fraction's tail, and whether
-  // the fraction's point has been written.
+  // Fraction zeros wait for a significant digit; exponent digits never share that state.
   let inFraction = false
   let inExponent = false
   let fractionDigits = 0
@@ -99,14 +91,21 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
   let spacePending = false
   let spaceAfterPrimitive = false
   let afterPrimitive = false
-  const written: number[] = []
+  let active = true
+  // No output queue: a rejected byte stops even a source-sized run of deferred zeros.
+  const write = (...bytes: number[]): void => {
+    for (const byte of bytes) {
+      if (!active) break
+      active = emit(byte)
+    }
+  }
 
   /** The fraction's point and the zeros dropped after it, written when a digit survives them. */
   const writePoint = (): void => {
-    if (!inFraction || pointWritten) return
+    if (!inFraction) return
+    if (!pointWritten) write(DOT)
     pointWritten = true
-    written.push(DOT)
-    for (let at = 0; at < droppedZeros; at++) written.push(ZERO)
+    for (let at = 0; active && at < droppedZeros; at++) write(ZERO)
     droppedZeros = 0
   }
 
@@ -115,7 +114,7 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
     if (inFraction && !pointWritten) {
       pointWritten = true
       // `1.` is not a number: its point stays, so the frame stays malformed.
-      if (fractionDigits === 0) written.push(DOT)
+      if (fractionDigits === 0) write(DOT)
     }
     afterPrimitive = true
   }
@@ -124,16 +123,16 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
   const writeCodePoint = (code: number): void => {
     const escaped = CODE_POINT_BYTES.get(code)
     if (escaped !== undefined) {
-      for (const part of escaped) written.push(part)
+      for (const part of escaped) write(part)
       return
     }
     // A control character, and a surrogate whose pair may still follow: both stay escaped.
     if (code < 0x20 || (code >= 0xd800 && code <= 0xdfff)) {
-      written.push(BACKSLASH, 117)
-      for (const digit of code.toString(16).padStart(4, "0")) written.push(digit.charCodeAt(0))
+      write(BACKSLASH, 117)
+      for (const digit of code.toString(16).padStart(4, "0")) write(digit.charCodeAt(0))
       return
     }
-    for (const part of utf8Bytes(code)) written.push(part)
+    for (const part of utf8Bytes(code)) write(part)
   }
 
   /** A value: the byte starts one, or ends the number or literal before it. */
@@ -146,35 +145,37 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
     if (spacePending) {
       // The whitespace after a primitive stays a separator: `1 2`, `1 e 2` and `tr ue` are
       // malformed, and dropping the space would make them one token.
-      if (spaceAfterPrimitive) written.push(SPACE)
+      if (spaceAfterPrimitive) write(SPACE)
       spacePending = false
       spaceAfterPrimitive = false
     }
     if (byte === QUOTE) {
-      written.push(QUOTE)
+      write(QUOTE)
       mode = "string"
       afterPrimitive = false
       return
     }
     if (byte === MINUS || (byte >= ZERO && byte <= NINE)) {
-      written.push(byte)
+      write(byte)
       mode = "number"
+      inFraction = inExponent = pointWritten = false
+      fractionDigits = droppedZeros = 0
       afterPrimitive = false
       return
     }
     if (byte === 116 || byte === 102 || byte === 110) {
-      written.push(byte)
+      write(byte)
       mode = "literal"
       afterPrimitive = false
       return
     }
     // Structure, and anything the grammar does not allow: written as it stands.
-    written.push(byte)
+    write(byte)
     afterPrimitive = false
   }
 
   const push = (byte: number): void => {
-    written.length = 0
+    if (!active) return
     switch (mode) {
       case "string": {
         if (escapeState === "simple") {
@@ -189,19 +190,19 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
           const escaped = ESCAPE_BYTES.get(byte)
           if (escaped === undefined) {
             // An escape the grammar does not allow: written as it stands.
-            written.push(BACKSLASH, byte)
+            write(BACKSLASH, byte)
             return
           }
-          for (const part of escaped) written.push(part)
+          for (const part of escaped) write(part)
           return
         }
         if (escapeState === "unicode") {
           const digit = hexValue(byte)
           if (digit < 0) {
             // An invalid escape stays verbatim: the frame is malformed and must fail.
-            written.push(BACKSLASH, 117)
-            for (const part of hexText) written.push(part.charCodeAt(0))
-            written.push(byte)
+            write(BACKSLASH, 117)
+            for (const part of hexText) write(part.charCodeAt(0))
+            write(byte)
             escapeState = "none"
             return
           }
@@ -214,7 +215,7 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
           return
         }
         if (byte === QUOTE) {
-          written.push(QUOTE)
+          write(QUOTE)
           mode = "value"
           afterPrimitive = false
           return
@@ -223,13 +224,13 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
           escapeState = "simple"
           return
         }
-        written.push(byte)
+        write(byte)
         return
       }
       case "number": {
         if (byte >= ZERO && byte <= NINE) {
-          if (!inFraction) {
-            written.push(byte)
+          if (!inFraction || inExponent) {
+            write(byte)
             return
           }
           fractionDigits++
@@ -239,7 +240,7 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
             return
           }
           writePoint()
-          written.push(byte)
+          write(byte)
           return
         }
         if (byte === DOT && !inFraction && !inExponent) {
@@ -252,11 +253,11 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
           inExponent = true
           // The fraction is settled: its zeros come back, and its point with them.
           writePoint()
-          written.push(byte)
+          write(byte)
           return
         }
         if ((byte === PLUS || byte === MINUS) && inExponent) {
-          written.push(byte)
+          write(byte)
           return
         }
         endNumber()
@@ -266,7 +267,7 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
       }
       case "literal": {
         if ((byte >= 97 && byte <= 122) || (byte >= 65 && byte <= 90)) {
-          written.push(byte)
+          write(byte)
           return
         }
         // The literal ends here: the whitespace that follows may still belong to it.
@@ -281,19 +282,19 @@ export function createSlotCanonicalizer(): SlotCanonicalizer {
   }
 
   const end = (): void => {
-    written.length = 0
+    if (!active) return
     if (mode === "string") {
       // An unfinished escape stays verbatim: the value is malformed, and it must fail as it
       // stands rather than as a shorter string.
-      if (escapeState === "simple") written.push(BACKSLASH)
+      if (escapeState === "simple") write(BACKSLASH)
       else if (escapeState === "unicode") {
-        written.push(BACKSLASH, 117)
-        for (const part of hexText) written.push(part.charCodeAt(0))
+        write(BACKSLASH, 117)
+        for (const part of hexText) write(part.charCodeAt(0))
       }
       return
     }
     if (mode === "number") endNumber()
   }
 
-  return { written, push, end }
+  return { push, end }
 }

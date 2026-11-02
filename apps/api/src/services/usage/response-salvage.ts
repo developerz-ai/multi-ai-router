@@ -118,7 +118,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
     release(SLOT_MAX_BYTES.keys())
     if (retained >= maximumBytes) release(OPTIONAL)
   }
-  const keep = (byte: number) => {
+  const keepCanonical = (byte: number) => {
     if (capture === null || capture.dropped) return
     const ceiling = SLOT_MAX_BYTES.get(capture.path)
     // A capture whose key was spelled in escapes gives way at a full budget: it drops itself
@@ -168,28 +168,24 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       capture = null
       return
     }
-    // The captured bytes are canonical: an escaped repeat spends the room its value costs, not
-    // the room its spelling spent.
-    capture.canonical.push(byte)
-    for (const part of capture.canonical.written) {
-      capture.bytes.push(part)
-      retained++
-    }
+    capture.bytes.push(byte)
+    retained++
   }
+  const emit = (byte: number): boolean => {
+    keepCanonical(byte)
+    return capture !== null && !capture.dropped
+  }
+  const keep = (byte: number) => capture?.canonical.push(byte)
   const endCapture = () => {
+    if (capture === null) return
+    // End-only output (for example a stray decimal point) spends the same budget.
+    capture.canonical.end()
     if (capture === null) return
     // A repeated key replaces the earlier capture, so release the earlier capture's bytes.
     retained -= captured.get(capture.path)?.length ?? 0
     evictable.delete(capture.path)
     inherited.delete(capture.path)
     if (!capture.dropped) {
-      // The last bytes of a value are known only at its end: a number's stray point, a fraction
-      // of nothing but zeros.
-      capture.canonical.end()
-      for (const part of capture.canonical.written) {
-        capture.bytes.push(part)
-        retained++
-      }
       const fingerprint = semanticFingerprint(capture.bytes, decoder)
       if (
         capture.escaped &&
@@ -269,7 +265,7 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
           : byte === OPEN_OBJECT || byte === OPEN_ARRAY
             ? "container"
             : "primitive",
-      canonical: createSlotCanonicalizer(),
+      canonical: createSlotCanonicalizer(emit),
       bytes: [],
       dropped: false,
     }
