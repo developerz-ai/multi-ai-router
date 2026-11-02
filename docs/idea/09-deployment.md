@@ -87,6 +87,12 @@ failed, and never serves traffic on a half-migrated schema. `docker compose up -
 restarting container and the reason in `docker compose logs router`, which is the correct outcome —
 a router answering requests against a schema it does not understand is worse than one that is down.
 
+### Operational smoke check
+
+Run `bin/smoke --url URL --model ID --key-env NAME` against a deployed router, with the router key in the named environment variable. The informational `responses.function_call` leg sends an explicit boolean `store: false` in its outgoing `/v1/responses` JSON. This is a smoke-client-owned request default, not a requirement shared by all providers; it does not change the other legs or required/informational exit-code semantics.
+
+The router's same-dialect byte-passthrough remains untouched: it does not inject this flag into callers' bodies. An outgoing-request regression drives `runLegs` and inspects captured JSON to guard the client's serialized flag independently of translation. Runtime versions and deployment contracts are unchanged.
+
 ## Environment reference
 
 Env is validated by **Zod at boot**. A missing or malformed value exits **non-zero** with a message

@@ -796,6 +796,54 @@ describe("bin/smoke — a malformed informational reply never gates the run", ()
   })
 })
 
+describe("bin/smoke — the Responses leg", () => {
+  test("POSTs the selected model and explicit store: false to /v1/responses", async () => {
+    const requests: { method: string; path: string; body: string }[] = []
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (req) => {
+        requests.push({
+          method: req.method,
+          path: new URL(req.url).pathname,
+          body: await req.text(),
+        })
+        return jsonResponse(200, {
+          output: [
+            {
+              type: "function_call",
+              call_id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Paris"}',
+            },
+          ],
+        })
+      },
+    })
+    try {
+      const leg = buildLegs().find((candidate) => candidate.name === "responses.function_call")
+      if (leg === undefined) throw new Error("responses.function_call leg missing")
+      const results = await runLegs({
+        url: `http://127.0.0.1:${server.port}`,
+        model: "smoke-selected-model",
+        key: KEY,
+        legs: [leg],
+      })
+      expect(results[0]?.outcome.verdict).toBe("PASS")
+      expect(requests).toHaveLength(1)
+      const request = requests[0]
+      if (request === undefined) throw new Error("the Responses leg never reached the server")
+      expect(request.method).toBe("POST")
+      expect(request.path).toBe("/v1/responses")
+      const body = JSON.parse(request.body) as Record<string, unknown>
+      expect(body.store).toBe(false)
+      expect(body.model).toBe("smoke-selected-model")
+    } finally {
+      server.stop()
+    }
+  })
+})
+
 describe("bin/smoke — the Claude Code turn leg", () => {
   // A bare capture server, not the router: what this leg sends is the claim, so the server records
   // the request itself rather than asserting what the router relays.

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `bin/smoke` informational `responses.function_call` leg explicitly sends the boolean `store: false` in its outgoing `/v1/responses` request. An outgoing-request regression drives `runLegs` and inspects the captured JSON, rather than relying on translation coverage. This corrects the diagnostic client only: other smoke legs, required/informational exit-code semantics, router same-dialect byte-passthrough, and runtime versions are unchanged.
+
+### Changed
+
 - Equivalent escaped salvage repeats normalize whitespace, string/key escapes and number encodings before gaining non-evictable priority, without increasing retained bytes. At cap 64, a 53-byte usage object repeated with four extra spaces or an escaped padding character no longer crowds out the 11-byte completed status; differential regressions pin both slots against frozen 2.41.0, with normalization guards for nested values, exponent numbers and overflowing numeric literals.
 - Repeated salvage parents preserve priority eligibility for children actually recaptured, without retaining stale child bytes. An identical escaped `response` repeat at cap 64 keeps its 55-byte `usage` instead of losing it to later optional `code` evidence. The parity oracle now compares every retained value with the `JSON.parse` projection, except the intentional dropped-root-error `{}` placeholder; a mutation regression rejects `status:"failed"` in place of `status:"completed"`.
 - Salvage compares repeated literal/escaped slots by semantic JSON fingerprints rather than source bytes. Whitespace-only changes no longer lose non-stale usage to optional code evidence at the cap. Historical captures now retain only fixed-size SHA-256 metadata instead of unaccounted payload arrays; regressions cover the 60,000-byte replacement and whitespace variants against frozen 2.41.0.
