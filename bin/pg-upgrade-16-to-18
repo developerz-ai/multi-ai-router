@@ -119,10 +119,13 @@ old_tables="$(user_tables "$(docker exec -u postgres "$CONTAINER" psql -U "$PG_U
   "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')")")"
 
 printf 'restoring roles and the router database from "%s" into postgres-data-18\n' "$old_volume"
-# initdb already created router. Omit only its CREATE, not its ALTER (which
-# restores its attributes/password), so every other SQL error remains fatal.
+# Existence-aware CREATE: initdb already created router, and a rerun after a
+# failed database import has already restored every other role — a bare CREATE
+# ROLE aborts both. Each guard wraps only its own CREATE, so the ALTER (which
+# restores attributes/password) and every other SQL error remain fatal under
+# ON_ERROR_STOP.
 docker exec -u postgres "$CONTAINER" pg_dumpall -U "$PG_USER" --roles-only |
-  sed '/^CREATE ROLE router;$/d' |
+  sed -E 's/^CREATE ROLE "?([^";]+)"?;$/DO $r$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '\''\1'\'') THEN CREATE ROLE "\1"; END IF; END $r$;/' |
   $COMPOSE exec -T postgres psql -X -v ON_ERROR_STOP=1 -U router -d postgres
 
 # Connect to the maintenance database: the dump drops/recreates router, even on

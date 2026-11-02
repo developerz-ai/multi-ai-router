@@ -8,50 +8,89 @@ import { fileURLToPath } from "node:url"
 const script = fileURLToPath(new URL("../../../../bin/pg-upgrade-16-to-18", import.meta.url))
 
 // Model Docker's process boundary: a populated target conflicts unless the dump
-// replaces it, and psql hides COPY errors unless ON_ERROR_STOP is enabled.
+// replaces it, psql hides COPY errors unless ON_ERROR_STOP is enabled, and role
+// state persists on the target across runs — $FIXTURE_DIR/roles seeds the
+// initdb-created router role and records what a restore created, so a second
+// run sees the first run's roles exactly like a rerun after a failed import.
 const docker = `#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$*" >> "$FIXTURE_DIR/commands"
 case "$*" in
   *pg_isready*) exit 0 ;;
-  *pg_dumpall*) printf 'CREATE ROLE router;\\nALTER ROLE router WITH LOGIN;\\n'; exit 0 ;;
+  *pg_dumpall*)
+    printf 'CREATE ROLE router;\\nALTER ROLE router WITH LOGIN;\\n'
+    if [[ "$FIXTURE_EXTRA_ROLE" == 1 ]]; then
+      printf 'CREATE ROLE legacy_app;\\nALTER ROLE legacy_app WITH LOGIN NOINHERIT;\\n'
+    fi
+    exit 0 ;;
   *pg_dump*) printf 'DROP DATABASE IF EXISTS router;\\nCREATE DATABASE router;\\nCOPY fixture FROM stdin;\\nlegacy\\n'; exit 0 ;;
   *psql*)
     if [[ "$*" == *-Atc* ]]; then echo 1; exit 0; fi
     body="$(cat)"
-    if [[ "$body" == *'CREATE ROLE router;'* ]]; then exit 3; fi
-    if [[ "$body" == *COPY* ]]; then
+    if [[ "$body" == *'DROP DATABASE IF EXISTS router;'* ]]; then
       if [[ "$FIXTURE_FAIL_COPY" == 1 ]]; then
         echo 'ERROR: invalid input syntax in COPY' >&2
         [[ "$*" != *ON_ERROR_STOP=1* ]] || exit 3
-      elif [[ "$*" == *pg_dumpall* || "$body" != *'DROP DATABASE IF EXISTS router;'* ]]; then
-        echo 'ERROR: duplicate key value violates unique constraint' >&2
       else
         printf legacy > "$FIXTURE_DIR/rows"
       fi
+      exit 0
+    fi
+    # Roles pass. A guarded CREATE runs only for roles the cluster lacks; a
+    # bare CREATE for an existing role is the server's fatal duplicate error.
+    if [[ "$body" == *'NOT EXISTS (SELECT FROM pg_roles'* ]]; then
+      names="$(grep -oE "rolname = '[^']+'" <<<"$body" | cut -d"'" -f2)"
+      for role in $names; do
+        grep -qxF "$role" "$FIXTURE_DIR/roles" || printf '%s\\n' "$role" >> "$FIXTURE_DIR/roles"
+      done
+      exit 0
+    fi
+    if [[ "$body" == *'CREATE ROLE'* ]]; then
+      names="$(grep -oE '^CREATE ROLE [^ ;]+' <<<"$body" | awk '{print $3}')"
+      for role in $names; do
+        if grep -qxF "$role" "$FIXTURE_DIR/roles"; then
+          echo "ERROR:  role \\"$role\\" already exists" >&2
+          exit 3
+        fi
+        printf '%s\\n' "$role" >> "$FIXTURE_DIR/roles"
+      done
     fi
     exit 0 ;;
 esac
 `
 
-function run(failCopy: boolean) {
+function makeFixture() {
   const dir = mkdtempSync(join(tmpdir(), "router-pg-upgrade-"))
+  writeFileSync(join(dir, "docker"), docker, { mode: 0o755 })
+  writeFileSync(join(dir, "rows"), "legacy,stale-target-row")
+  // The fresh postgres-data-18 cluster's initdb has already created router.
+  writeFileSync(join(dir, "roles"), "router\n")
+  return dir
+}
+
+function runScript(dir: string, failCopy: boolean, extraRole: boolean) {
+  return spawnSync("bash", [script], {
+    input: "migrate\n",
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${dir}:${process.env.PATH}`,
+      LEGACY_VOLUME: "fixture-postgres-data",
+      FIXTURE_DIR: dir,
+      FIXTURE_FAIL_COPY: failCopy ? "1" : "0",
+      FIXTURE_EXTRA_ROLE: extraRole ? "1" : "0",
+    },
+  })
+}
+
+function run(failCopy: boolean) {
+  const dir = makeFixture()
   try {
-    writeFileSync(join(dir, "docker"), docker, { mode: 0o755 })
-    writeFileSync(join(dir, "rows"), "legacy,stale-target-row")
-    const result = spawnSync("bash", [script], {
-      input: "migrate\n",
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${dir}:${process.env.PATH}`,
-        LEGACY_VOLUME: "fixture-postgres-data",
-        FIXTURE_DIR: dir,
-        FIXTURE_FAIL_COPY: failCopy ? "1" : "0",
-      },
-    })
+    const result = runScript(dir, failCopy, false)
     return {
-      ...result,
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
       commands: readFileSync(join(dir, "commands"), "utf8"),
       rows: readFileSync(join(dir, "rows"), "utf8"),
     }
@@ -77,5 +116,27 @@ describe("PostgreSQL major upgrade", () => {
     expect(result.commands).not.toMatch(/compose -f docker-compose.yml up -d\n/)
     expect(result.stdout).not.toContain("docker volume rm")
     expect(result.commands).toContain("rm -f pg-upgrade-16-legacy")
+  })
+
+  test("a rerun after a failed import reuses the roles the first attempt restored", () => {
+    // The legacy cluster carries a role the fresh 18 cluster does not have. The
+    // first attempt restores it, the database import fails, and the rerun must
+    // skip the existing CREATEs and still finish: a bare CREATE ROLE aborts on
+    // the duplicate — the fingerprint of the pre-fix script.
+    const dir = makeFixture()
+    try {
+      const first = runScript(dir, true, true)
+      expect(first.status).not.toBe(0)
+      expect(first.stderr).toContain("ERROR: invalid input syntax in COPY")
+      expect(readFileSync(join(dir, "roles"), "utf8")).toBe("router\nlegacy_app\n")
+
+      const retry = runScript(dir, false, true)
+      expect(retry.status).toBe(0)
+      expect(readFileSync(join(dir, "roles"), "utf8")).toBe("router\nlegacy_app\n")
+      expect(readFileSync(join(dir, "rows"), "utf8")).toBe("legacy")
+      expect(retry.stdout).toContain("stack restarted on the migrated data")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
