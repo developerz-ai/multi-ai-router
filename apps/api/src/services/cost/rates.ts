@@ -4,7 +4,7 @@ import type { AccountBilling, ProviderId } from "@multi-ai-router/core"
  * The shape of a price and the two helpers every table under `tables/` is written with.
  *
  * Apart from the vendor tables themselves, this is the whole vocabulary of pricing: four numbers
- * per million tokens, optionally replaced wholesale above a prompt-size threshold. Kept here rather
+ * per million tokens, optionally replaced wholesale at or above a total-prompt threshold. Kept here rather
  * than in `prices.ts` so a vendor table imports the shape without importing the assembled catalog,
  * and so the override book (`book.ts`) shares one definition with the shipped rows.
  */
@@ -18,13 +18,12 @@ export interface RateCard {
 }
 
 /**
- * A long-context tier: the rate that **replaces** the standard card once a request's prompt
- * reaches `fromPromptTokens`.
+ * A long-context tier: the router replaces the whole standard card when total prompt tokens
+ * are >= `fromPromptTokens`. Total prompt = tokensIn + cacheReadTokens + cacheWriteTokens;
+ * output tokens do not select the tier.
  *
- * Replaces, not tops up. Every vendor that publishes one of these — OpenAI above 272k, Google and
- * xAI above 200k — bills the *entire* request at the higher rate once the prompt crosses the line,
- * rather than charging the excess separately, and pricing it as a surcharge would understate a
- * long-context request by roughly half.
+ * The selected card prices every token direction for the entire request, not only the tokens
+ * beyond the threshold. These are router estimation semantics, not a vendor-wide billing claim.
  */
 export interface LongContextTier extends RateCard {
   readonly fromPromptTokens: number
@@ -94,7 +93,7 @@ export function rates(
   }
 }
 
-/** A standard card plus the tier that replaces it above `fromPromptTokens`. */
+/** A standard card plus its replacement when tokensIn + cacheReadTokens + cacheWriteTokens >= fromPromptTokens. */
 export function tiered(standard: RateCard, fromPromptTokens: number, long: RateCard): ModelRates {
   return { ...standard, longContext: { fromPromptTokens, ...long } }
 }

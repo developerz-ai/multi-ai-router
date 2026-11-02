@@ -3,9 +3,11 @@ import { type ModelTable, rates, tiered } from "../rates"
 /**
  * OpenAI's published per-Mtok prices, **standard service tier**.
  *
- * Provenance: platform.openai.com/docs/pricing, the "Standard" column, verified on the date
- * `PRICE_TABLE_AS_OF` names. Blast radius: the metered total for `openai-api` accounts and the
- * notional total for ChatGPT/Codex subscriptions, which are valued against this same table.
+ * Provenance: older rows inherit platform.openai.com/docs/pricing, the "Standard" column,
+ * without a recorded verification date. GPT-6 model-page evidence is recorded below;
+ * `PRICE_TABLE_AS_OF` is not blanket verification of this table. Blast radius: the metered total
+ * for `openai-api` accounts and the notional total for ChatGPT/Codex subscriptions, which are
+ * valued against this same table.
  *
  * Three deliberate omissions, each because the published number is not the one a `UsageRecord` can
  * be priced against:
@@ -54,11 +56,15 @@ export const OPENAI_MODELS: ModelTable = {
   ),
 
   /**
-   * GPT-6 family — read 2026-10-10 from
-   * https://developers.openai.com/api/docs/models/gpt-6-{luna,sol,astra}, .1-sol.
-   * Each page states: input / cached input / cache write / output USD per 1M tokens, and a
-   * long-context rule of 2x input and cache, 1.5x output, for the whole request above 272k input
-   * tokens. The same LONG_CONTEXT_FROM constant the GPT-5.6 rows use.
+   * GPT-6 family — model-page evidence recorded 2026-10-10 (not reverified here):
+   * https://developers.openai.com/api/docs/models/gpt-6-luna
+   * https://developers.openai.com/api/docs/models/gpt-6-sol
+   * https://developers.openai.com/api/docs/models/gpt-6.1-sol
+   * https://developers.openai.com/api/docs/models/gpt-6-astra
+   * Recorded rates below are USD per 1M input / output / cached-read / cache-write tokens.
+   * Router semantics, not a verbatim source quotation: total prompt tokens = tokensIn +
+   * cacheReadTokens + cacheWriteTokens; at >=272_000, the long-context card replaces the
+   * whole standard card. LONG_CONTEXT_FROM is shared with the GPT-5.6 rows.
    */
   "gpt-6-luna": tiered(
     rates(0.1, 0.5, { read: 0.01, write: 0.125 }),
