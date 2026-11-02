@@ -15,10 +15,11 @@ async function subject(
   store: ReturnType<typeof createMemoryStore>,
   status: "active" | "needs_reauth" = "active",
 ) {
-  const row = await store.accounts.create(
-    { label: "synthetic Claude", provider: "anthropic-oauth", configDir: "/synthetic/config" },
-    now,
-  )
+  const row = await store.accounts.create({
+    label: "synthetic Claude",
+    provider: "anthropic-oauth",
+    configDir: "/synthetic/config",
+  })
   if (status === "active") return row
   const next = await store.accounts.updateOperatorAccount({ id: row.id, patch: { status }, now })
   if (next === undefined) throw new Error("missing fixture")

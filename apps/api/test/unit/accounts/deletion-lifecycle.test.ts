@@ -7,10 +7,7 @@ for (const auditFailure of [false, true]) {
   test(`durable deletion/barrier precedes deferred owned-directory cleanup even auditFailure=${auditFailure}`, async () => {
     const store = createMemoryStore()
     const config = createMemoryConfigDirs()
-    const row = await store.accounts.create(
-      { provider: "anthropic-oauth", label: "fixture" },
-      new Date(),
-    )
+    const row = await store.accounts.create({ provider: "anthropic-oauth", label: "fixture" })
     const directory = await config.dirs.provision(row.id)
     const original = store.rows.accounts.find((account) => account.id === row.id)
     if (!original) throw new Error("fixture missing")
@@ -67,7 +64,6 @@ for (const auditFailure of [false, true]) {
         expected: {
           lifecycleVersion: original.lifecycleVersion,
           authMaterial: original.authMaterial,
-          status: original.status,
         },
         now: new Date(),
       }),

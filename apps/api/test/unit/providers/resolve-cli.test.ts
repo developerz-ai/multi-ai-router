@@ -197,9 +197,8 @@ describe("the platform-package rung", () => {
       }),
     }
 
-    expect(resolveClaudeCli(probe(both)).ok && resolveClaudeCli(probe(both)).path).toBe(
-      GLIBC_BINARY,
-    )
+    const glibc = resolveClaudeCli(probe(both))
+    expect(glibc.ok && glibc.path).toBe(GLIBC_BINARY)
 
     const musl = resolveClaudeCli(probe({ ...both, preferMusl: true }))
     expect(musl.ok && musl.path).toBe(MUSL_BINARY)

@@ -36,6 +36,7 @@ const factories: Record<string, Factory> = {
           id: "price",
           provider: "openai-api",
           model: "test-model",
+          accountId: null,
           inputPerMtok: await load(),
           outputPerMtok: 1,
           cacheReadPerMtok: 0,

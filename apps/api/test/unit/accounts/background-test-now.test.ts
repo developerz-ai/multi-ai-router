@@ -6,10 +6,11 @@ import { createMemoryStore } from "../../support/memory-store"
 for (const mode of ["background", "interactive"] as const) {
   test(`${mode} test preserves explicit caller semantics and guards only background starts`, async () => {
     const store = createMemoryStore()
-    const account = await store.accounts.create(
-      { provider: "openrouter", label: "fixture", authMaterial: "cipher" },
-      new Date(),
-    )
+    const account = await store.accounts.create({
+      provider: "openrouter",
+      label: "fixture",
+      authMaterial: "cipher",
+    })
     let guards = 0,
       fetches = 0,
       audits = 0
@@ -55,10 +56,7 @@ for (const mode of ["background", "interactive"] as const) {
 
 test("unconfigured background admission fails closed before taking the local cooldown", async () => {
   const store = createMemoryStore()
-  const account = await store.accounts.create(
-    { provider: "openrouter", label: "fixture" },
-    new Date(),
-  )
+  const account = await store.accounts.create({ provider: "openrouter", label: "fixture" })
   const service = createTestNowService({
     accounts: store.accounts,
     cipher: { decrypt: () => "key" },
@@ -80,10 +78,7 @@ test("unconfigured background admission fails closed before taking the local coo
 
 test("background subject freezes before the first asynchronous account reread", async () => {
   const store = createMemoryStore()
-  const account = await store.accounts.create(
-    { provider: "openrouter", label: "fixture" },
-    new Date(),
-  )
+  const account = await store.accounts.create({ provider: "openrouter", label: "fixture" })
   const originalVersion = account.lifecycleVersion
   let observedVersion = -1
   const service = createTestNowService({

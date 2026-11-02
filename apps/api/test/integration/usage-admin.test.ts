@@ -9,6 +9,11 @@ import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler
 import { requestId } from "../../src/middleware/requestId"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/usage"
 import { createUsageService } from "../../src/services/usage-read"
+import type { AppEnv } from "../../src/types"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 import { historyFixture } from "../unit/usage/history-fixture"
 
 /**
@@ -32,13 +37,15 @@ function attemptRow(over: Partial<RecentAttemptRow> = {}): RecentAttemptRow {
     apiKeyId: "key-1",
     accountId: "acct-1",
     poolId: null,
-    provider: "anthropic",
+    provider: "anthropic-api",
     model: "claude-sonnet-5",
     upstreamModel: "claude-sonnet-5",
     ingressDialect: "anthropic",
     egressMode: "passthrough",
     outcome: "upstream_error",
     httpStatus: 503,
+    // The attempt never reached the client: no response of our own was produced.
+    responseStatus: null,
     errorClass: "UpstreamError",
     latencyMs: 412,
     ttfbMs: null,
@@ -66,6 +73,7 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
         seriesByDimension: unreached,
         breakdown: unreached,
         outcomes: unreached,
+        tokensSince: unreached,
       },
       NOW,
     ),
@@ -91,12 +99,20 @@ function harness(rows: readonly RecentAttemptRow[] = [attemptRow()], guard = stu
     now: () => NOW,
   })
 
-  const app = new Hono<AdminAuthEnv>()
+  const app = new Hono<AppEnv>()
   const logger = createLogger({ level: "error", write: () => {} })
   app.use("*", requestId())
   app.onError(errorHandler(logger))
   app.notFound(notFoundHandler())
-  app.route(ADMIN_USAGE_BASE_PATH, adminUsageRoutes({ guard, service }))
+  app.route(
+    ADMIN_USAGE_BASE_PATH,
+    adminUsageRoutes({
+      guard,
+      service,
+      reports: unreachableUsageReports(),
+      delivery: unreachableReportDelivery(),
+    }),
+  )
   return app
 }
 
@@ -231,6 +247,7 @@ function summaryHarness(outcomes: readonly UsageOutcomeCount[], guard = stubSess
         seriesByDimension: async () => [],
         breakdown: async () => [],
         outcomes: async () => [...outcomes],
+        tokensSince: async () => [],
       },
       NOW,
     ),
@@ -245,12 +262,20 @@ function summaryHarness(outcomes: readonly UsageOutcomeCount[], guard = stubSess
     now: () => NOW,
   })
 
-  const app = new Hono<AdminAuthEnv>()
+  const app = new Hono<AppEnv>()
   const logger = createLogger({ level: "error", write: () => {} })
   app.use("*", requestId())
   app.onError(errorHandler(logger))
   app.notFound(notFoundHandler())
-  app.route(ADMIN_USAGE_BASE_PATH, adminUsageRoutes({ guard, service }))
+  app.route(
+    ADMIN_USAGE_BASE_PATH,
+    adminUsageRoutes({
+      guard,
+      service,
+      reports: unreachableUsageReports(),
+      delivery: unreachableReportDelivery(),
+    }),
+  )
   return app
 }
 
@@ -275,6 +300,8 @@ function stubSession(): MiddlewareHandler<AdminAuthEnv> {
       csrfToken: "csrf",
       createdAtMs: NOW.getTime(),
       lastSeenAtMs: NOW.getTime(),
+      idleExpiryMs: 60 * 60 * 1000,
+      absoluteExpiryMs: 12 * 60 * 60 * 1000,
     })
     await next()
   }

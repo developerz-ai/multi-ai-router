@@ -49,11 +49,21 @@ test("health rejects superseded observations and forwards only accepted original
   health.reconcile("a", facts)
   const old = health.captureAttempt("a", facts)
   expect(health.acceptsObservation("a", old)).toBe(true)
-  health.applyRateLimit("a", { limited: false, quotaWindows: [window] }, new Date(), old)
+  health.applyRateLimit(
+    "a",
+    { limited: false, resetSource: "unknown", windows: [], quotaWindows: [window] },
+    new Date(),
+    old,
+  )
   expect(events).toEqual([old])
   health.reconcile("a", { ...facts, recoveryGeneration: "new" })
   expect(health.acceptsObservation("a", old)).toBe(false)
-  health.applyRateLimit("a", { limited: true, quotaWindows: [window] }, new Date(), old)
+  health.applyRateLimit(
+    "a",
+    { limited: true, resetSource: "unknown", windows: [], quotaWindows: [window] },
+    new Date(),
+    old,
+  )
   expect(events).toHaveLength(1)
 })
 

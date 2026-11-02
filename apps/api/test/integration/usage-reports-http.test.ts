@@ -9,13 +9,14 @@ import {
   usageHistoryFixture,
 } from "../../../../packages/db/test/integration/usage-history-fixture"
 import { createLogger } from "../../src/logging/logger"
-import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
 import { adminAuth } from "../../src/middleware/adminAuth"
 import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/usage"
 import { createUsageService } from "../../src/services/usage-read"
 import type { WeeklyReport } from "../../src/services/usage-report"
 import { createUsageReportService } from "../../src/services/usage-report"
+import type { AppEnv } from "../../src/types"
+import { unreachableReportDelivery } from "../support/unreachable-usage-reports"
 
 /**
  * The weekly report end to end: real Postgres rollups, the real builder, the real repository and
@@ -35,7 +36,7 @@ const P1 = crypto.randomUUID()
 const P2 = crypto.randomUUID()
 const EMAIL_LABEL = "someone@example.com"
 
-let app: Hono<AdminAuthEnv>
+let app: Hono<AppEnv>
 let service: ReturnType<typeof createUsageReportService>
 let reports: ReturnType<typeof createUsageReportRepository>
 // Module-scoped so the over-cap route test can mount a second app with a tight reports service.
@@ -72,6 +73,8 @@ const csrfGuard = adminAuth(
       csrfToken: "csrf",
       createdAtMs: NOW.getTime(),
       lastSeenAtMs: NOW.getTime(),
+      idleExpiryMs: 60 * 60 * 1000,
+      absoluteExpiryMs: 12 * 60 * 60 * 1000,
     }),
     assertCsrf: (_session, token) => {
       if (token !== "csrf") throw new AdminAuthError("CSRF token invalid")
@@ -148,13 +151,18 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       now: () => NOW,
       exportMaxRows: 1000,
     })
-    app = new Hono<AdminAuthEnv>()
+    app = new Hono<AppEnv>()
     const logger = createLogger({ level: "error", write: () => {} })
     app.onError(errorHandler(logger))
     app.notFound(notFoundHandler())
     app.route(
       ADMIN_USAGE_BASE_PATH,
-      adminUsageRoutes({ service: usage, reports: service, guard: csrfGuard }),
+      adminUsageRoutes({
+        service: usage,
+        reports: service,
+        delivery: unreachableReportDelivery(),
+        guard: csrfGuard,
+      }),
     )
   })
 
@@ -292,12 +300,17 @@ describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () =
       maxRows: 1,
       now: () => NOW,
     })
-    const tightApp = new Hono<AdminAuthEnv>()
+    const tightApp = new Hono<AppEnv>()
     tightApp.onError(errorHandler(createLogger({ level: "error", write: () => {} })))
     tightApp.notFound(notFoundHandler())
     tightApp.route(
       ADMIN_USAGE_BASE_PATH,
-      adminUsageRoutes({ service: usage, reports: tight, guard: csrfGuard }),
+      adminUsageRoutes({
+        service: usage,
+        reports: tight,
+        delivery: unreachableReportDelivery(),
+        guard: csrfGuard,
+      }),
     )
     const before = await count()
     const response = await tightApp.request(`${ADMIN_USAGE_BASE_PATH}/reports/preview`, {

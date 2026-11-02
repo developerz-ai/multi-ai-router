@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test"
+import { DEFAULT_OPENAI_CHAT_CEILING } from "@multi-ai-router/core"
+import type { SessionRow } from "@multi-ai-router/db"
 import { createSessionStore, type SessionStore } from "../../../src/providers"
+import { claudeSdkDriver } from "../../../src/providers/claude-sdk/driver"
 import {
   type AttemptOutcome,
   runSdkAttempt,
   type SdkServableCandidate,
   type SdkSessionContext,
 } from "../../../src/services/dataplane"
+import { DEFAULT_RESPONSES_EGRESS } from "../../../src/services/translate"
 import { subscriptionAccount } from "./fixtures"
 
 /**
@@ -22,11 +26,34 @@ import { subscriptionAccount } from "./fixtures"
  */
 
 const SDK_PLAN: SdkServableCandidate = {
+  kind: "sdk",
+  candidate: {
+    account: {
+      id: "sub-1",
+      label: "sub-1",
+      provider: "anthropic-oauth",
+      status: "active",
+      weight: 100,
+      priority: 0,
+      health: { consecutiveFailures: 0, inFlight: 0, recentTokens: 0 },
+    },
+    poolId: null,
+    weight: 100,
+    priority: 0,
+    order: 0,
+    upstreamModel: "claude-opus-5",
+    halfOpen: false,
+  },
   account: subscriptionAccount("sub-1"),
+  driver: claudeSdkDriver,
+  dialect: "anthropic",
   configDir: "/data/accounts/sub-1",
   upstreamModel: "claude-opus-5",
-  poolId: null,
+  // The SDK is asked nothing about either; it carries the planner's defaults.
+  chatCeiling: DEFAULT_OPENAI_CHAT_CEILING,
+  responsesEgress: DEFAULT_RESPONSES_EGRESS,
   translation: null,
+  egressMode: "agent-sdk",
 }
 
 const NOW = new Date("2026-09-06T00:00:00.000Z")
@@ -42,13 +69,25 @@ function body(turns: number): Uint8Array {
 }
 
 function storeAndContext(): { readonly store: SessionStore; readonly session: SdkSessionContext } {
-  const rows = new Map<string, unknown>()
+  const rows = new Map<string, SessionRow>()
   const store = createSessionStore({
     repository: {
       findByKey: () => Promise.resolve(undefined),
+      clearAccount: () => Promise.resolve(0),
       upsert: (input) => {
-        rows.set(input.key, input)
-        return Promise.resolve()
+        const row: SessionRow = {
+          id: `${input.apiKeyId}::${input.key}`,
+          key: input.key,
+          apiKeyId: input.apiKeyId,
+          accountId: input.accountId ?? null,
+          sdkSessionId: input.sdkSessionId ?? null,
+          lineageState: input.lineageState ?? null,
+          fingerprintSource: input.fingerprintSource ?? null,
+          lastUsedAt: input.lastUsedAt,
+          createdAt: input.lastUsedAt,
+        }
+        rows.set(input.key, row)
+        return Promise.resolve(row)
       },
     },
     now: () => NOW,

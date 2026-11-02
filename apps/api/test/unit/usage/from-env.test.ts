@@ -260,10 +260,14 @@ test("production admission duration observes success, retry and terminal-only ba
       metrics.observeUsageAdmission(duration)
     },
     records: {
-      insertBatch: async () => {
+      insertBatch: async (input) => {
         attempts++
         elapsed += attempts === 1 ? 25 : 50
         if (attempts === 1) throw new Error("retry")
+        return {
+          insertedAttempts: input.attempts.length,
+          insertedTerminals: input.terminals.length,
+        }
       },
     },
     accounts: {
@@ -312,8 +316,12 @@ test("throwing admission observer cannot cause a committed write to be retried",
       throw new Error("metric unavailable")
     },
     records: {
-      insertBatch: async () => {
+      insertBatch: async (input) => {
         writes++
+        return {
+          insertedAttempts: input.attempts.length,
+          insertedTerminals: input.terminals.length,
+        }
       },
     },
     accounts: { markUsed: async () => {} },

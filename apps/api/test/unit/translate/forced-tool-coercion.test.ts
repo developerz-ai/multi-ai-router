@@ -166,14 +166,16 @@ describe("coerceStream", () => {
       "message_delta",
       "message_stop",
     ])
-    expect(events.map((e) => e.data.type)).toEqual(events.map((e) => e.event))
+    expect(events.map((e) => e.data.type)).toEqual(events.map((e) => e.event ?? ""))
     expect(events[0]?.data.message.usage).toEqual({ input_tokens: 3 })
     expect(events[1]?.data.content_block).toMatchObject({
       type: "tool_use",
       id: "toolu_test",
       name: "json",
     })
-    expect(JSON.parse(events[2]?.data.delta.partial_json)).toEqual({ ok: true })
+    const partial = events[2]?.data.delta.partial_json
+    if (typeof partial !== "string") throw new Error("no tool argument delta")
+    expect(JSON.parse(partial)).toEqual({ ok: true })
     expect(events[4]?.data.delta.stop_reason).toBe("tool_use")
     expect(events[4]?.data.usage).toEqual({ output_tokens: 7 })
   })

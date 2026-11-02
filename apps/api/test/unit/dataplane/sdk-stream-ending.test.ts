@@ -27,7 +27,7 @@ const CONTEXT: TranslationContext = {
   created: 1_700_000_000,
   model: "default",
   fallbackId: "chatcmpl_test",
-  openAiChatCeiling: { defaultMaxTokens: 4_096 },
+  defaultMaxTokens: 4_096,
 }
 
 /** The pair an openai-chat client gets when the account behind it speaks Anthropic — the SDK. */
@@ -240,19 +240,19 @@ describe("a healthy turn is unchanged", () => {
  */
 describe("what the truncation alarm reports", () => {
   async function alarmFor(messages: AsyncIterable<unknown>) {
-    let detail: TruncatedTurn | null = null
+    const captured: { detail: TruncatedTurn | null } = { detail: null }
     const response = await renderSdkResponse({
       messages,
       model: "claude-opus-5",
       stream: true,
       observer: {
         onTruncatedTurn: (seen) => {
-          detail = seen
+          captured.detail = seen
         },
       },
     })
     await response.text()
-    return detail
+    return captured.detail
   }
 
   test("it names what was left open, so a truncated tool call is not read as truncated prose", async () => {

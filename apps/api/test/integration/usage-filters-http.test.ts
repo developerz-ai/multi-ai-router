@@ -20,6 +20,10 @@ import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/
 import { createAuditRecorder } from "../../src/services/admin/audit"
 import { createKeysService } from "../../src/services/keys"
 import { catalogLabels, createUsageService, type UsageSummary } from "../../src/services/usage-read"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 
 /**
  * Usage filters (issue #225) through the real route, resolver, repositories and Postgres.
@@ -189,7 +193,12 @@ describe.skipIf(!historyUrl)("usage filters over HTTP and Postgres", () => {
     app = new Hono<AdminAuthEnv>()
     app.route(
       ADMIN_USAGE_BASE_PATH,
-      adminUsageRoutes({ service, guard: async (_c, next) => next() }),
+      adminUsageRoutes({
+        service,
+        guard: async (_c, next) => next(),
+        reports: unreachableUsageReports(),
+        delivery: unreachableReportDelivery(),
+      }),
     )
   })
 

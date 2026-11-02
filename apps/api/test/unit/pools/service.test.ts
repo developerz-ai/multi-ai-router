@@ -376,7 +376,7 @@ describe("membership weight and priority", () => {
     const { service, store } = harness()
     const heavy = await store.accounts.create({
       label: "max-20x",
-      provider: "anthropic",
+      provider: "anthropic-api",
       weight: 500,
       priority: 4,
     })

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The required typecheck gate retains the production solution build and additionally checks API smoke sources and all recursive API tests, support helpers and TypeScript fixtures through a strict, non-composite no-emit project. Imported benchmark and database-test helpers are included without changing production output paths or inherited strictness. A coverage regression enumerates sources, checks representative compiler errors in smoke, unit, integration and support, and pins the `bin/check` → `bin/lint` → typecheck wiring. Runtime versions are unchanged.
+
 ## [2.41.1] — 2026-11-02
 
 ### Fixed

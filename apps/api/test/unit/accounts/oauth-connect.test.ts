@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import type { OAuthConnectCompleted, OAuthConnectService } from "../../../src/services/accounts"
+import type { OAuthConnectService } from "../../../src/services/accounts"
 import { createOAuthConnectService } from "../../../src/services/accounts"
-import { createAuditRecorder } from "../../../src/services/admin"
+import {
+  type AdminFailure,
+  type AdminResult,
+  createAuditRecorder,
+} from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 import { pasteOnlyFlow } from "../../support/oauth-flows"
@@ -17,12 +21,18 @@ function tokenResponse(body: unknown, status = 200): Response {
 }
 interface FakeFetch {
   readonly fetch: (request: Request) => Promise<Response>
-  readonly requests: Request[]
+  /**
+   * The request the upstream was called with, cloned so its body can still be read. The clone is
+   * typed by the fetch lib's own `Request`, which is not the global one, so the array is typed by
+   * what is actually pushed into it.
+   */
+  readonly requests: SentRequest[]
   readonly bodies: string[]
   next(response: Response): void
 }
+type SentRequest = ReturnType<Request["clone"]>
 function fakeFetch(): FakeFetch {
-  const requests: Request[] = []
+  const requests: SentRequest[] = []
   const bodies: string[] = []
   let queued: Response = tokenResponse({
     access_token: "access-1",
@@ -78,13 +88,13 @@ function harness(options: { stateMinutes?: number; upstream?: FakeFetch } = {}):
     },
   }
 }
-function failure(result: { ok: boolean } & Record<string, unknown>) {
+function failure(result: AdminResult<unknown>): AdminFailure {
   if (result.ok) throw new Error("expected a failure")
-  return (result as { failure: { code: string; message: string } }).failure
+  return result.failure
 }
-function completed(result: { ok: boolean } & Record<string, unknown>): OAuthConnectCompleted {
+function completed<T>(result: AdminResult<T>): T {
   if (!result.ok) throw new Error(`expected success, got ${JSON.stringify(result)}`)
-  return (result as { value: OAuthConnectCompleted }).value
+  return result.value
 }
 describe("starting an authorization", () => {
   test("mints a state and a PKCE pair the provider never sees the raw verifier of", async () => {
@@ -109,6 +119,7 @@ describe("starting an authorization", () => {
     if (!started.ok) throw new Error(started.failure.message)
     const url = new URL(started.value.authorizeUrl)
     const challenge = url.searchParams.get("code_challenge")
+    if (challenge === null) throw new Error("no code challenge")
     const pending = h.store.rows.oauthStates.find(
       (row) => row.state === url.searchParams.get("state"),
     )

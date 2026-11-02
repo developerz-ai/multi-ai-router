@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { ClientFrame } from "../../../src/providers/claude-sdk/render"
 import { createEnvelope } from "../../../src/providers/claude-sdk/render/envelope"
 import { readSdkMessage, readWireEvent } from "../../../src/providers/claude-sdk/render/events"
 import { createBlockIndexMap } from "../../../src/providers/claude-sdk/render/index-map"
@@ -120,7 +121,17 @@ describe("the message envelope", () => {
       { type: "message_delta", delta: { stop_reason: "end_turn" } },
       { type: "message_stop" },
     ])
-    frames.push(...env.finish({ stopReason: null, usage: { output_tokens: 9 } }))
+    frames.push(
+      ...env.finish({
+        stopReason: null,
+        usage: {
+          input_tokens: null,
+          output_tokens: 9,
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+        },
+      }),
+    )
 
     const types = frames.map((frame) => frame.type)
     expect(types.filter((type) => type === "message_start")).toHaveLength(1)
@@ -186,7 +197,7 @@ describe("the message envelope", () => {
   test("a synthesized id is CSPRNG-backed, never derived from the clock", () => {
     const first = createEnvelope({ model: MODEL }).finish({ stopReason: null, usage: null })
     const second = createEnvelope({ model: MODEL }).finish({ stopReason: null, usage: null })
-    const idOf = (frames: readonly { readonly message?: unknown }[]): string => {
+    const idOf = (frames: readonly ClientFrame[]): string => {
       const message = frames[0]?.message
       return typeof message === "object" && message !== null && "id" in message
         ? String((message as { id: unknown }).id)
@@ -304,7 +315,17 @@ describe("the non-streaming fold", () => {
         { type: "content_block_stop", index: 1 },
       ]),
     )
-    fold.push(env.finish({ stopReason: "tool_use", usage: { output_tokens: 12 } }))
+    fold.push(
+      env.finish({
+        stopReason: "tool_use",
+        usage: {
+          input_tokens: null,
+          output_tokens: 12,
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+        },
+      }),
+    )
 
     expect(fold.body()).toEqual({
       id: "msg_upstream",

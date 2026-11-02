@@ -13,7 +13,11 @@ import {
 } from "../../../src/services/accounts"
 import { withAvailability } from "../../../src/services/accounts/availability"
 import type { AccountsService } from "../../../src/services/accounts/service"
-import { createAuditRecorder } from "../../../src/services/admin"
+import {
+  type AdminFailure,
+  type AdminResult,
+  createAuditRecorder,
+} from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import {
   createHealthStore,
@@ -235,7 +239,6 @@ function harness(
   const decorated = withAvailability(accounts, {
     catalog: { accounts: () => catalogAccounts, pools: () => [] },
     health,
-    recheck: { lastCheckedAt: () => null },
     now: () => clock.now,
   })
 
@@ -263,10 +266,9 @@ function harness(
 /** One macrotask, so every continuation an unawaited call has queued has run. */
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-function failure(result: { ok: boolean } & Record<string, unknown>) {
+function failure(result: AdminResult<unknown>): AdminFailure {
   if (result.ok) throw new Error("expected a failure")
-  const { failure: reason } = result as { failure: { code: string; message: string } }
-  return reason
+  return result.failure
 }
 
 describe("starting a login", () => {

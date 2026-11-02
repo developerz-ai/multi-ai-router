@@ -9,7 +9,7 @@ describe("applicable reset deadlines", () => {
     for (const [absolute, relative] of [
       [10, 300],
       [300, 10],
-    ]) {
+    ] as const) {
       const facts = {
         resetsAt: new Date(now.getTime() + absolute * 1000),
         retryAfterSeconds: relative,

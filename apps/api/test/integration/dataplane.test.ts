@@ -1778,7 +1778,13 @@ describe("GET /v1/models/:id", () => {
     const { app } = harness({ accounts: aliased, responses: [() => jsonResponse(200, {})] })
 
     const res = await app.request("/v1/models/claude-opus-5", { headers: { "x-api-key": KEY } })
-    const body = (await res.json()) as { type: string; id: string; display_name: string }
+    const body = (await res.json()) as {
+      type: string
+      id: string
+      display_name: string
+      max_input_tokens: number | null
+      max_tokens: number | null
+    }
 
     expect(res.status).toBe(200)
     // Anthropic's `ModelInfo` always carries both sizes, null when unknown — and nothing swept here.

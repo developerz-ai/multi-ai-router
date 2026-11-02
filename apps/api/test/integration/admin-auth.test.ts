@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createHash } from "node:crypto"
+import { createHash, type webcrypto } from "node:crypto"
 import { generateRouterKey, ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
 import { Hono } from "hono"
 import type { RequiredClaim } from "../../src/config/env-admin-types"
@@ -50,7 +50,10 @@ const ISSUER = "https://sso.test"
 const CLIENT_ID = "multi-ai-router"
 const ADMIN_EMAIL = "admin@test"
 
-type KeyPair = { privateKey: CryptoKey; publicJwk: JsonWebKey }
+type KeyPair = {
+  privateKey: CryptoKey
+  publicJwk: webcrypto.JsonWebKey & { kid: string; alg: string }
+}
 
 async function newKeyPair(kid: string): Promise<KeyPair> {
   const pair = await crypto.subtle.generateKey(
@@ -143,7 +146,10 @@ async function harness(
     sub: overlaps.sub ?? null,
     verified: overlaps.verified ?? null,
   }
-  const fetchImpl: typeof fetch = async (url, init) => {
+  const requestImpl = async (
+    url: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ) => {
     if (url === `${ISSUER}/.well-known/openid-configuration`) {
       return new Response(JSON.stringify(discoveryDoc(`${ISSUER}/oauth2/v2/keys`)), {
         status: 200,
@@ -190,6 +196,11 @@ async function harness(
     }
     return new Response("not found", { status: 404 })
   }
+  const fetchImpl: typeof fetch = Object.assign(requestImpl, {
+    preconnect: () => {
+      throw new Error("OIDC fixture must not preconnect")
+    },
+  })
   const oidc = createOIDCFlow({
     config: {
       issuerUrl: ISSUER,
@@ -221,6 +232,7 @@ async function harness(
         adminSubject: null,
         scopes: ["openid", "profile", "email"],
         clockSkewSeconds: 60,
+        requestTimeoutMs: 1_000,
       },
       encryptionKey: ENCRYPTION_KEY,
     },
@@ -259,11 +271,19 @@ async function harness(
 type LogLine = { level: string; msg: string } & Record<string, unknown>
 type App = Hono<AppEnv>
 
-function get(app: App, path: string, headers: Record<string, string> = {}): Promise<Response> {
+async function get(
+  app: App,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<Response> {
   return app.request(path, { headers })
 }
 
-function post(app: App, path: string, headers: Record<string, string> = {}): Promise<Response> {
+async function post(
+  app: App,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<Response> {
   return app.request(path, { method: "POST", headers })
 }
 
@@ -354,7 +374,7 @@ describe("GET /api/admin/auth/oidc/callback", () => {
   test("the full HTTP dance: callback sets the session cookie and /session returns admin", async () => {
     const h = await harness()
     const { cookie } = await completeLogin(h)
-    expect(cookie).toContain(HARDENED_NAME.split("=")[0])
+    expect(cookie).toContain(HARDENED_NAME)
   })
 
   /**
@@ -620,7 +640,11 @@ describe("the two credential spaces never overlap", () => {
     const h = await harness()
     const key = generateRouterKey()
     expect(key).toStartWith(ROUTER_KEY_PREFIX)
-    for (const headers of [{ authorization: `Bearer ${key}` }, { "x-api-key": key }]) {
+    const headerCases: Record<string, string>[] = [
+      { authorization: `Bearer ${key}` },
+      { "x-api-key": key },
+    ]
+    for (const headers of headerCases) {
       const res = await get(h.app, KEYS, headers)
       expect(res.status).toBe(401)
       expect(await res.json()).toMatchObject(refused)

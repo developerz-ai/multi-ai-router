@@ -214,7 +214,7 @@ test("OpenAI nonempty tools retain both parallel policies and explicit choice", 
   for (const parallel_tool_calls of [false, true]) {
     for (const tool_choice of [undefined, "required"] as const) {
       const expected = {
-        type: tool_choice === undefined ? "auto" : "any",
+        type: tool_choice === undefined ? ("auto" as const) : ("any" as const),
         disable_parallel_tool_use: !parallel_tool_calls,
       }
       expect(

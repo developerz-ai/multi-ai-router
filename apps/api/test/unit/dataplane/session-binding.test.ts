@@ -28,6 +28,7 @@ function spyStore(): SessionStore & { readonly reads: string[]; readonly dropped
     invalidate: (apiKeyId, sessionKey) => {
       dropped.push(`${apiKeyId}/${sessionKey}`)
     },
+    invalidateAccount: () => Promise.resolve(),
     resolve: () => {
       const turn: SessionTurn = {
         plan: { kind: "fresh", reason: "no-session" },

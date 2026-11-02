@@ -163,7 +163,15 @@ describe("router_price_table_asof_timestamp_seconds", () => {
 
   test("survives the per-scrape rebuild that clears the account gauges", () => {
     const metrics = createMetrics()
-    metrics.setAccounts([{ id: "acct-1", provider: "openai-api", status: "active" }])
+    metrics.setAccounts([
+      {
+        id: "acct-1",
+        provider: "openai-api",
+        status: "active",
+        breakerPhase: "closed",
+        credentialRejected: false,
+      },
+    ])
 
     expect(metrics.expose()).toContain("router_price_table_asof_timestamp_seconds")
   })

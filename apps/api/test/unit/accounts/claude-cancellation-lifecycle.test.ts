@@ -16,10 +16,12 @@ test("deletion cancels a login before its URL and preserves the directory until 
   const store = createMemoryStore(),
     config = createMemoryConfigDirs()
   const id = crypto.randomUUID()
-  const row = await store.accounts.create(
-    { id, provider: "anthropic-oauth", label: "fixture", configDir: config.dirs.pathFor(id) },
-    new Date(),
-  )
+  const row = await store.accounts.create({
+    id,
+    provider: "anthropic-oauth",
+    label: "fixture",
+    configDir: config.dirs.pathFor(id),
+  })
   await config.dirs.provision(id)
   const entered = deferred(),
     url = deferred(),
@@ -106,10 +108,11 @@ test("deletion cancels a login before its URL and preserves the directory until 
 test("stored config path mismatch refuses before provisioning or login launch", async () => {
   const store = createMemoryStore(),
     config = createMemoryConfigDirs()
-  const row = await store.accounts.create(
-    { provider: "anthropic-oauth", label: "fixture", configDir: "/other-root/account" },
-    new Date(),
-  )
+  const row = await store.accounts.create({
+    provider: "anthropic-oauth",
+    label: "fixture",
+    configDir: "/other-root/account",
+  })
   let starts = 0
   const connect = createClaudeConnectService({
     accounts: store.accounts,
@@ -137,10 +140,12 @@ test("metadata settle returning after the shutdown deadline cannot begin a late 
   const store = createMemoryStore(),
     config = createMemoryConfigDirs()
   const id = crypto.randomUUID()
-  await store.accounts.create(
-    { id, provider: "anthropic-oauth", label: "fixture", configDir: config.dirs.pathFor(id) },
-    new Date(),
-  )
+  await store.accounts.create({
+    id,
+    provider: "anthropic-oauth",
+    label: "fixture",
+    configDir: config.dirs.pathFor(id),
+  })
   const entered = deferred(),
     settle = deferred()
   let audits = 0

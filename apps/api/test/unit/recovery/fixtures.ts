@@ -75,6 +75,10 @@ export function fixture() {
       retired.push(generation)
     },
     repository: {
+      reserveOperatorCheck: async () => undefined,
+      finalizeOperatorCheck: async () => undefined,
+      releaseOperatorCheck: async () => undefined,
+      readOperatorCooldown: async () => undefined,
       beginOperatorRecovery: async () => undefined,
       beginAutomaticRecovery: async () => row,
       cancel: async () => undefined,

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { ProviderId } from "@multi-ai-router/core"
+import { type AuthKind, ProviderId } from "@multi-ai-router/core"
 import { HTTP_DRIVERS, httpDriver, PROVIDER_REGISTRY } from "../../../src/providers"
 
 /**
@@ -34,7 +34,7 @@ const OAUTH_PROVIDERS: readonly string[] = ["openai-oauth"]
 /** …and the local endpoint, which authenticates nobody. */
 const NO_AUTH_PROVIDERS: readonly string[] = ["ollama"]
 
-function expectedAuthKind(id: string): string {
+function expectedAuthKind(id: string): AuthKind {
   if (OAUTH_PROVIDERS.includes(id)) return "oauth"
   return NO_AUTH_PROVIDERS.includes(id) ? "none" : "api-key"
 }
@@ -149,7 +149,7 @@ describe("PROVIDER_REGISTRY", () => {
  */
 describe("the openai-chat output ceiling", () => {
   /** OpenAI deprecated `max_tokens` and its reasoning models refuse it outright. Nobody else has. */
-  const NEW_NAME: readonly string[] = ["openai-api"]
+  const NEW_NAME: readonly ProviderId[] = ["openai-api"]
 
   test("only OpenAI's own platform states max_completion_tokens", () => {
     const renamed = HTTP_DRIVERS.filter(

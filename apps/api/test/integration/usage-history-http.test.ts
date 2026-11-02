@@ -10,6 +10,10 @@ import {
 import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/usage"
 import { createUsageService, type UsageSummary } from "../../src/services/usage-read"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 
 const fixture = usageHistoryFixture()
 
@@ -60,7 +64,12 @@ describe.skipIf(!historyUrl)("historical usage through actual HTTP and Postgres"
     const app = new Hono<AdminAuthEnv>()
     app.route(
       ADMIN_USAGE_BASE_PATH,
-      adminUsageRoutes({ service, guard: async (_c, next) => next() }),
+      adminUsageRoutes({
+        service,
+        guard: async (_c, next) => next(),
+        reports: unreachableUsageReports(),
+        delivery: unreachableReportDelivery(),
+      }),
     )
     const response = await app.request(`${ADMIN_USAGE_BASE_PATH}?window=lifetime`)
     expect(response.status).toBe(200)

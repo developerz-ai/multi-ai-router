@@ -179,7 +179,10 @@ describe("a Claude Code 2.1.x turn toward openai-chat", () => {
   })
 
   test("the request-level knobs the target cannot carry are stripped, never forwarded", () => {
-    const out = anthropicToOpenAiChatRequest(claudeCodeRequest()) as Record<string, unknown>
+    const out = anthropicToOpenAiChatRequest(claudeCodeRequest()) as unknown as Record<
+      string,
+      unknown
+    >
 
     for (const field of [
       "thinking",

@@ -24,7 +24,9 @@ function targetAnswering(body: string, status = 400) {
   return {
     webhookUrl: STUB_WEBHOOK_URL,
     timeoutMs: 1_000,
-    fetchImpl: (async () => new Response(body, { status })) as typeof globalThis.fetch,
+    fetchImpl: Object.assign(async () => new Response(body, { status }), {
+      preconnect: () => {},
+    }),
   }
 }
 

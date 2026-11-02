@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import {
   createSdkConcurrency,
   createSdkInvoker,
@@ -31,8 +32,10 @@ for (const mode of ["invoker", "probe", "supplied"] as const) {
       },
     }
     const runQuery = () => ({
-      async *[Symbol.asyncIterator]() {
-        if (mode === "probe") yield { type: "assistant", message: { content: [] } }
+      async *[Symbol.asyncIterator](): AsyncGenerator<SDKMessage> {
+        if (mode === "probe") {
+          yield { type: "assistant", message: { content: [] } } as unknown as SDKMessage
+        }
         yield* sdkQueryStream({
           turns: [
             sdkTurn({
@@ -44,7 +47,7 @@ for (const mode of ["invoker", "probe", "supplied"] as const) {
               ],
             }),
           ],
-        })
+        }) as AsyncIterable<SDKMessage>
       },
     })
     const resolveCli = () => ({
@@ -55,7 +58,13 @@ for (const mode of ["invoker", "probe", "supplied"] as const) {
     })
     let pending: Promise<unknown>
     if (mode === "probe") {
-      const probe = createSdkTestProbe({ concurrency, runQuery, resolveCli, usageGauge: gauge })
+      const probe = createSdkTestProbe({
+        cliPathOverride: null,
+        concurrency,
+        runQuery,
+        resolveCli,
+        usageGauge: gauge,
+      })
       pending = probe.run({ accountId: "sub", configDir: "/offline/sub", model: "model", signal })
     } else {
       const invoke = createSdkInvoker({ concurrency, runQuery, resolveCli, usageGauge: gauge })

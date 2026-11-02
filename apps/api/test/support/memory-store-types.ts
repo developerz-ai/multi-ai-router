@@ -48,7 +48,6 @@ export type MemoryKeys = Pick<
   | "findById"
   | "findByName"
   | "update"
-  | "delete"
   | "markRevoked"
   | "listPoolTargets"
   | "listAccountTargets"

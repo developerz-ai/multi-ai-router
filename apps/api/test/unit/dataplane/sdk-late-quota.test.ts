@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test"
+import { DEFAULT_OPENAI_CHAT_CEILING } from "@multi-ai-router/core"
 import { createSdkConcurrency, createSdkInvoker, createSdkQuotaStore } from "../../../src/providers"
 import { claudeSdkDriver } from "../../../src/providers/claude-sdk/driver"
 import { createHealthStore } from "../../../src/services/dataplane/health"
 import { accountHealthFacts } from "../../../src/services/dataplane/health-observation"
 import { runSdkAttempt } from "../../../src/services/dataplane/sdk-attempt"
 import { rateLimitCapture } from "../../../src/services/dataplane/sdk-attempt-response"
+import { DEFAULT_RESPONSES_EGRESS } from "../../../src/services/translate"
 import { sdkTurn } from "../claude-sdk/fixtures"
 import { subscriptionAccount } from "./fixtures"
 
@@ -33,6 +35,9 @@ function plan() {
     dialect: "anthropic" as const,
     configDir: "/offline/sub",
     upstreamModel: "model",
+    // The SDK is asked nothing about either; it carries the planner's defaults.
+    chatCeiling: DEFAULT_OPENAI_CHAT_CEILING,
+    responsesEgress: DEFAULT_RESPONSES_EGRESS,
     translation: null,
     egressMode: "agent-sdk" as const,
   }

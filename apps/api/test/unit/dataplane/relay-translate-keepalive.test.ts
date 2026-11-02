@@ -24,7 +24,7 @@ const CONTEXT: TranslationContext = {
   created: 1_700_000_000,
   model: "default",
   fallbackId: "chatcmpl_test",
-  openAiChatCeiling: { defaultMaxTokens: 4_096 },
+  defaultMaxTokens: 4_096,
 }
 
 const PAIR = translationPair("openai-chat", "anthropic")

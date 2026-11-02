@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { NoHealthyAccountError } from "@multi-ai-router/core"
+import { DEFAULT_OPENAI_CHAT_CEILING, NoHealthyAccountError } from "@multi-ai-router/core"
 import type { Logger } from "../../../src/logging/logger"
 import {
   claudeSdkDriver,
@@ -16,6 +16,7 @@ import {
   type SdkSessionContext,
 } from "../../../src/services/dataplane"
 import { type Candidate, HEALTHY, isRetryable, recordFailure } from "../../../src/services/routing"
+import { DEFAULT_RESPONSES_EGRESS } from "../../../src/services/translate"
 import { account, catalog, subscriptionAccount } from "./fixtures"
 
 /**
@@ -141,6 +142,10 @@ const SDK_PLAN: SdkServableCandidate = {
   dialect: "anthropic",
   configDir: "/data/accounts/sub",
   upstreamModel: "claude-sonnet-4-6",
+  // The SDK is asked nothing about either: it renders into Anthropic Messages, so it carries the
+  // defaults the planner gives an Agent-SDK candidate.
+  chatCeiling: DEFAULT_OPENAI_CHAT_CEILING,
+  responsesEgress: DEFAULT_RESPONSES_EGRESS,
   translation: null,
   egressMode: "agent-sdk",
 }
@@ -233,6 +238,7 @@ function sessionDouble(plan: SessionPlan): {
   const store: SessionStore = {
     binding: () => Promise.resolve(undefined),
     invalidate: (apiKeyId, sessionKey) => invalidated.push(`${apiKeyId}::${sessionKey}`),
+    invalidateAccount: () => Promise.resolve(),
     resolve: () => unrecordedTurn(plan, () => {}),
   }
   return {
@@ -440,6 +446,7 @@ describe("the truncated-turn alarm reaches the log", () => {
           frames: 5,
           declaredTools: 0,
           passthrough: false,
+          flushedBlocks: 0,
         })
         return new Response('{"type":"message"}', { status: 200 })
       },
@@ -466,6 +473,8 @@ describe("the truncated-turn alarm reaches the log", () => {
         // two explanations for a `tool_use` block that never closed.
         declaredTools: 0,
         passthrough: false,
+        // And nothing was flushed: the rewriter was holding no block of its own.
+        flushedBlocks: 0,
       },
     ])
   })
@@ -485,10 +494,7 @@ describe("the truncated-turn alarm reaches the log", () => {
     const bare = await runSdkAttempt({
       plan: SDK_PLAN,
       body: null,
-      invoke: async (invocation) => {
-        invocation.onForcedBlockClose?.(1)
-        return new Response('{"type":"message"}', { status: 200 })
-      },
+      invoke: async () => new Response('{"type":"message"}', { status: 200 }),
       session: undefined,
       timeoutMs: 1_000,
     })
@@ -505,6 +511,7 @@ describe("what the lineage plan is told", () => {
     const store: SessionStore = {
       binding: () => Promise.resolve(undefined),
       invalidate: () => {},
+      invalidateAccount: () => Promise.resolve(),
       resolve: (input) => {
         resolved.push({
           ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),

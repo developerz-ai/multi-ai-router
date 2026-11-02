@@ -163,7 +163,7 @@ describe("the tasks read", () => {
         janitor_sweep: [run({ startedAt: at(5), finishedAt: at(4), outcome: "success" })],
         // The survived row, keyed where no current task will ever read it.
         removed_task_name: [removed],
-      } as Parameters<typeof harness>[0]["runs"],
+      } as NonNullable<Parameters<typeof harness>[0]>["runs"],
     })
 
     const result = await service.tasks()

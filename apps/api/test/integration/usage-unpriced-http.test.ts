@@ -9,6 +9,10 @@ import {
 import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/usage"
 import { createUsageService, type UsageSummary } from "../../src/services/usage-read"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 
 /**
  * The unpriced measure through real HTTP and Postgres, once per serving path: the receipts query
@@ -28,7 +32,12 @@ const app = () => {
   const hono = new Hono<AdminAuthEnv>()
   hono.route(
     ADMIN_USAGE_BASE_PATH,
-    adminUsageRoutes({ service, guard: async (_c, next) => next() }),
+    adminUsageRoutes({
+      service,
+      guard: async (_c, next) => next(),
+      reports: unreachableUsageReports(),
+      delivery: unreachableReportDelivery(),
+    }),
   )
   return hono
 }

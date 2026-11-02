@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createLogger } from "../../src/logging/logger"
 import type { PoolSnapshot } from "../../src/services/routing"
+import type { BodyReader } from "../support/body-reader"
 import { account, jsonResponse, slowStream } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
 
@@ -24,7 +25,7 @@ function openAiChunk(body: Record<string, unknown>): string {
 
 const DONE = "data: [DONE]\n\n"
 
-async function drain(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+async function drain(reader: BodyReader): Promise<string> {
   let out = ""
   for (;;) {
     const { done, value } = await reader.read()
@@ -227,7 +228,14 @@ describe("cross-dialect streaming (translate egress)", () => {
     const res = await app.request("/v1/responses", post(RESPONSES_BODY, bearer()))
     const parsed = (await res.json()) as {
       status: string
-      output: { type: string; name?: string; arguments?: string }[]
+      output: {
+        type: string
+        id?: string
+        call_id?: string
+        name?: string
+        arguments?: string
+        status?: string
+      }[]
     }
     await settle()
 

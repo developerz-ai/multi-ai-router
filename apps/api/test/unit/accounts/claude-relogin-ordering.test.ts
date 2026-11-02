@@ -12,10 +12,10 @@ async function completeAfter(
   change: (store: ReturnType<typeof createMemoryStore>, id: string) => Promise<void>,
 ) {
   const store = createMemoryStore()
-  const row = await store.accounts.create(
-    { label: "synthetic Claude", provider: "anthropic-oauth" },
-    NOW,
-  )
+  const row = await store.accounts.create({
+    label: "synthetic Claude",
+    provider: "anthropic-oauth",
+  })
   const configDirs = createMemoryConfigDirs()
   row.configDir = configDirs.dirs.pathFor(row.id)
   const audit = createAuditRecorder(store.audit)

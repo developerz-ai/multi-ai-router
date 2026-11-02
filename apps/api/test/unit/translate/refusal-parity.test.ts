@@ -92,7 +92,10 @@ test("a refusal-only answer is content: null plus message.refusal, finish_reason
     },
     { created: 0 },
   ).body as {
-    choices: { message: { content: string | null; refusal?: string }; finish_reason: string }[]
+    choices: {
+      message: { role: string; content: string | null; refusal?: string }
+      finish_reason: string
+    }[]
   }
   expect(out.choices[0]?.message).toEqual({
     role: "assistant",

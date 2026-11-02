@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import type { UsageRequestTerminalInsert } from "@multi-ai-router/db"
 import { createLogger } from "../../../src/logging/logger"
 import { createUsageRecorder, type UsageRequestTerminal } from "../../../src/services/usage"
 import { createUsageRecorderFromEnv } from "../../../src/services/usage/fromEnv"
@@ -22,7 +23,7 @@ const terminal = (correlationId: string): UsageRequestTerminal => ({
 })
 
 test("production terminal-only flush persists its owner without stamping account use", async () => {
-  const persisted: UsageRequestTerminal[] = []
+  const persisted: UsageRequestTerminalInsert[] = []
   let stamps = 0
   let observed = 0
   const recorder = createUsageRecorderFromEnv({

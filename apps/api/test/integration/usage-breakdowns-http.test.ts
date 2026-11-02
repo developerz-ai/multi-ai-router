@@ -19,6 +19,10 @@ import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/
 import { createAuditRecorder } from "../../src/services/admin/audit"
 import { createKeysService } from "../../src/services/keys"
 import { catalogLabels, createUsageService } from "../../src/services/usage-read"
+import {
+  unreachableReportDelivery,
+  unreachableUsageReports,
+} from "../support/unreachable-usage-reports"
 
 /**
  * Owner and tool breakdowns, the three non-owner buckets and the retired marker (issue #246),
@@ -204,6 +208,7 @@ describe.skipIf(!historyUrl)("usage owner and tool breakdowns over HTTP and Post
     })
     const build = (breakdownMaxRows: number) => {
       const service = createUsageService({
+        exportMaxRows: 50_000,
         history: fixture.history(),
         recent: createUsageRecentRepository(db),
         labels: catalogLabels({
@@ -217,7 +222,12 @@ describe.skipIf(!historyUrl)("usage owner and tool breakdowns over HTTP and Post
       const hono = new Hono<AdminAuthEnv>()
       hono.route(
         ADMIN_USAGE_BASE_PATH,
-        adminUsageRoutes({ service, guard: async (_c, next) => next() }),
+        adminUsageRoutes({
+          service,
+          guard: async (_c, next) => next(),
+          reports: unreachableUsageReports(),
+          delivery: unreachableReportDelivery(),
+        }),
       )
       return hono
     }

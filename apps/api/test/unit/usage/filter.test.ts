@@ -30,7 +30,7 @@ describe("resolveUsageFilter", () => {
   })
 
   test("owner and tool resolve to key ids, OR within a dimension", () => {
-    expect(resolveUsageFilter(parse({ owner: ["alice"] }), keys).apiKeyIds?.sort()).toEqual([
+    expect(resolveUsageFilter(parse({ owner: ["alice"] }), keys).apiKeyIds?.toSorted()).toEqual([
       "11111111-1111-4111-8111-111111111111",
       "22222222-2222-4222-8222-222222222222",
     ])

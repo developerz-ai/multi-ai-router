@@ -10,33 +10,33 @@ import { fixture } from "./fixtures"
 
 for (const designated of [false, true]) {
   test(`${designated ? "designated revision mismatch" : "ordinary fresh quota"} honors custom threshold at final guard`, async () => {
-    const upstream = account("a")
-    upstream.snapshot = {
-      ...upstream.snapshot,
-      quotaWindows: [
-        {
-          window: "five_hour",
-          utilization: 0.97,
-          utilizationSource: "continuous",
-          resetSource: "provider-reported",
-          resetsAt: new Date(NOW.getTime() + 60000),
-          lastCheckedAt: NOW,
-          revision: 2,
-        },
-      ],
-      ...(designated
-        ? {
-            recovery: {
-              revision: 1,
-              generation: "g",
-              lifecycleVersion: 0,
-              state: "issued" as const,
-              quotaRevisions: { five_hour: 1 },
-              nextAllowedAt: NOW,
-            },
-          }
-        : {}),
-    }
+    const upstream = account("a", {
+      snapshot: {
+        quotaWindows: [
+          {
+            window: "five_hour",
+            utilization: 0.97,
+            utilizationSource: "continuous",
+            resetSource: "provider-reported",
+            resetsAt: new Date(NOW.getTime() + 60000),
+            lastCheckedAt: NOW,
+            revision: 2,
+          },
+        ],
+        ...(designated
+          ? {
+              recovery: {
+                revision: 1,
+                generation: "g",
+                lifecycleVersion: 0,
+                state: "issued" as const,
+                quotaRevisions: { five_hour: 1 },
+                nextAllowedAt: NOW,
+              },
+            }
+          : {}),
+      },
+    })
     const c = catalog([upstream])
     const health = createHealthStore()
     const caps = createRecoveryCapabilities("boot", () => ({

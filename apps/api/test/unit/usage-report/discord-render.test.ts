@@ -223,6 +223,8 @@ describe("renderReportCsv", () => {
   })
 
   test("the fixture's report renders no account label, and the CSV guards formulas", () => {
+    const firstPerson = weeklyReportFixture().sections.people.lines[0]
+    if (firstPerson === undefined) throw new Error("fixture must include a person")
     const csv = renderReportCsv(
       weeklyReportFixture({
         sections: {
@@ -230,7 +232,7 @@ describe("renderReportCsv", () => {
           people: {
             lines: [
               {
-                ...weeklyReportFixture().sections.people.lines[0],
+                ...firstPerson,
                 owner: '=HYPERLINK("http://evil.example")',
               },
             ],

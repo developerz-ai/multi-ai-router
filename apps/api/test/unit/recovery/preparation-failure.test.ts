@@ -93,7 +93,12 @@ for (const designated of [false, true]) {
         bodyBytes: body,
         modelSpan: null,
         translation: { created: 0, model: "claude", fallbackId: "test" },
-        translated: { bodyFor: () => body },
+        translated: {
+          includeUsage: () => false,
+          clientStreams: () => false,
+          promptCacheKey: () => undefined,
+          bodyFor: () => body,
+        },
         failover: undefined,
         log: undefined,
       }

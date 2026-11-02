@@ -49,7 +49,7 @@ test("failed status flush retains exact original quota bundle and complete obser
   expect(
     await store.accounts.upsertObservedQuotaWindow({
       accountId: account.id,
-      expected: observation,
+      expected: { ...observation, recoveryGeneration: observation.recoveryGeneration ?? null },
       state: window,
     }),
   ).toBeUndefined()

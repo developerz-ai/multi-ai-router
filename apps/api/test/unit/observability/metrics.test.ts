@@ -37,7 +37,15 @@ describe("router_build_info", () => {
 
   test("survives the per-scrape rebuild that clears the account gauges", () => {
     const metrics = createMetrics()
-    metrics.setAccounts([{ id: "acct-1", provider: "anthropic-api", status: "active" }])
+    metrics.setAccounts([
+      {
+        id: "acct-1",
+        provider: "anthropic-api",
+        status: "active",
+        breakerPhase: "closed",
+        credentialRejected: false,
+      },
+    ])
 
     const body = metrics.expose()
     expect(body).toContain(BUILD_INFO)

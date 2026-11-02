@@ -124,7 +124,7 @@ describe("the emitted order", () => {
   test("each emitted event repeats its type inside the payload, as Anthropic does", () => {
     const { events } = run([openAiChatChunk({ content: "a" }), finish("stop"), DONE])
     for (const event of events) {
-      expect((JSON.parse(event.data) as AnthropicEvent).type).toBe(event.event)
+      expect((JSON.parse(event.data) as AnthropicEvent).type).toBe(event.event ?? "")
     }
   })
 })

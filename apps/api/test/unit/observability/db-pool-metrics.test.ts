@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createLogger, type Logger } from "../../../src/logging/logger"
 import { createRuntimeMetrics, type RuntimeMetricsDeps } from "../../../src/observability"
 import { createHealthStore, type RoutingCatalog } from "../../../src/services/dataplane"
+import type { UsageStats } from "../../../src/services/usage"
 
 /**
  * `router_db_pool_connections`, read from the pool wrapper's own sample
@@ -12,13 +13,21 @@ import { createHealthStore, type RoutingCatalog } from "../../../src/services/da
 const EMPTY: RoutingCatalog = { accounts: () => [], pools: () => [] }
 const SILENT: Logger = createLogger({ level: "error", write: () => {} })
 
+/** A recorder that has written nothing: every counter at zero. */
+const NO_USAGE: UsageStats = {
+  rejectedAfterStop: 0,
+  depth: 0,
+  dropped: 0,
+  written: 0,
+  writeFailures: 0,
+  writeDiscarded: 0,
+}
+
 function harness(dbPool?: RuntimeMetricsDeps["dbPool"]) {
   return createRuntimeMetrics({
     catalog: EMPTY,
     health: createHealthStore(),
-    usage: () => ({
-      stats: () => ({ depth: 0, dropped: 0, written: 0, writeFailures: 0, writeDiscarded: 0 }),
-    }),
+    usage: () => ({ stats: () => NO_USAGE }),
     ...(dbPool === undefined ? {} : { dbPool }),
     logger: SILENT,
   })
