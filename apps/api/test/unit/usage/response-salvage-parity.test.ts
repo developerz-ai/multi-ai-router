@@ -70,6 +70,8 @@ const CAP = 4096
 const TIGHT_CAP = 64
 const BASE_SEED = 0x2f6a6b21
 const ITERATIONS = 300
+/** Every third document is the planted budget shape, so the corpus reaches it every time. */
+const PLANTED_EVERY = 3
 
 interface Salvage {
   push(byte: number): void
@@ -161,7 +163,10 @@ function run(create: (maximumBytes: number) => Salvage, text: string, cap: numbe
 function valueFor(name: string, rand: () => number): string {
   switch (name) {
     case "usage":
-      return rand() < 0.3
+      // A small literal usage, and a padded object that crowds the budget: the two together are
+      // the shape in which a later `code` had no room.
+      if (rand() < 0.2) return "0"
+      return rand() < 0.35
         ? `{"pad":"${"p".repeat(40 + Math.floor(rand() * 50))}"}`
         : `{"input_tokens":${1 + Math.floor(rand() * 100)}}`
     case "status":
@@ -175,7 +180,11 @@ function valueFor(name: string, rand: () => number): string {
         ? `"${CODES[Math.floor(rand() * CODES.length)] ?? "unknown"}"`
         : `{"code":"${CODES[Math.floor(rand() * CODES.length)] ?? "unknown"}"}`
     case "code":
-      return `"${CODES[Math.floor(rand() * CODES.length)] ?? "unknown"}"`
+      // A short code fits the optional share at the tight cap; a long one never does — in this
+      // scanner and in the frozen one alike, so only the short one tells the two apart.
+      return rand() < 0.4
+        ? `"${Math.floor(rand() * 100_000_000)}"`
+        : `"${CODES[Math.floor(rand() * CODES.length)] ?? "unknown"}"`
     case "status_code":
       return `${1000 + Math.floor(rand() * 900)}`
     case "type":
@@ -190,6 +199,11 @@ function childKey(slot: string, rand: () => number): string {
   if (rand() < 0.25)
     return `"\\u${slot.charCodeAt(0).toString(16).padStart(4, "0")}${slot.slice(1)}"`
   return `"${slot}"`
+}
+
+/** The spellings of one name: the literal one and the escaped one. */
+function spellingsOf(name: string): readonly KeySpec[] {
+  return KEYS.filter((key) => key.name === name)
 }
 
 function parentValue(parent: string, rand: () => number): string {
@@ -220,17 +234,43 @@ function member(rand: () => number, members: readonly Member[]): Member {
   // A repeated key: the last copy wins, as `JSON.parse` reads it.
   if (members.length > 0 && rand() < 0.3) {
     const earlier = members[Math.floor(rand() * members.length)]
-    if (earlier) return { key: earlier.key, value: valueForKey(earlier.key, rand) }
+    if (earlier) {
+      // The repeat is spelled the other way half the time: 2.41.0 read the two spellings as two
+      // members, the current scanner reads them as the one slot.
+      const others = spellingsOf(earlier.key.name).filter((key) => key.text !== earlier.key.text)
+      const other = others[Math.floor(rand() * others.length)]
+      const key = other !== undefined && rand() < 0.5 ? other : earlier.key
+      return { key, value: valueForKey(key, rand) }
+    }
   }
   const key = KEYS[Math.floor(rand() * KEYS.length)] ?? { text: '"type"', name: "type" }
   return { key, value: valueForKey(key, rand) }
 }
 
+/**
+ * The shape that lost a later `code` at the cap: a root slot spelled both ways — the literal
+ * first, the escaped copy after it, so the escaped copy replaces it — the escaped copy padded
+ * until it fills the budget, and a short `code` behind it. The random corpus reached that shape
+ * by luck alone, so it is planted: the escaped copy yields before the `code` is dropped, or the
+ * `code` is lost and 2.41.0 kept it (#209: no lost non-stale key).
+ */
+function plantedBudgetShape(rand: () => number): string {
+  // 45..54 padding characters: the escaped copy is 55..64 bytes, so it fills the 64-byte cap
+  // and leaves the `code` behind it no room.
+  const pad = "p".repeat(45 + Math.floor(rand() * 10))
+  // A code inside the optional share (a quarter of the cap): a longer one is dropped by its own
+  // ceiling, in this scanner and in the frozen one alike.
+  const code = `"${Math.floor(rand() * 100_000_000)}"`
+  return `{"usage":0,"\\u0075sage":{"pad":"${pad}"},"code":${code},"status":"completed"}`
+}
+
 /** A valid JSON document over the slot surface, with repeated keys and escaped ones. */
-function document(rand: () => number): string {
+function document(rand: () => number, seedIndex: number): string {
+  // Every third document is the planted budget shape, so the corpus reaches it every time.
+  if (seedIndex % PLANTED_EVERY === 0) return plantedBudgetShape(rand)
   const members: Member[] = []
   const count = 2 + Math.floor(rand() * 5)
-  for (let index = 0; index < count; index++) members.push(member(rand, members))
+  for (let at = 0; at < count; at++) members.push(member(rand, members))
   if (members.length > 0 && rand() < 0.4) {
     const earlier = members[Math.floor(rand() * members.length)]
     if (earlier) members.push({ key: earlier.key, value: valueForKey(earlier.key, rand) })
@@ -242,7 +282,7 @@ test("the current scanner reads a document as JSON.parse does, over the whole sl
   for (let index = 0; index < ITERATIONS; index++) {
     const seed = (BASE_SEED + index) >>> 0
     const rand = prng(seed)
-    const text = document(rand)
+    const text = document(rand, index)
     const report = (what: string) => `seed=${seed} input=${text}\n${what}`
     const doc = JSON.parse(text) as Record<string, unknown>
     const projection = project(doc)
@@ -281,7 +321,7 @@ test("a tight budget still bounds the retained bytes, and keeps only slots JSON.
   for (let index = 0; index < ITERATIONS; index++) {
     const seed = (BASE_SEED + index) >>> 0
     const rand = prng(seed)
-    const text = document(rand)
+    const text = document(rand, index)
     const report = (what: string) => `seed=${seed} input=${text}\n${what}`
     const doc = JSON.parse(text) as Record<string, unknown>
     const projection = project(doc)
@@ -335,16 +375,19 @@ test.each([
   expect(current).toEqual({ status: "completed" })
 })
 
-test("an inherited escaped capture yields before non-stale literal code evidence", () => {
-  const text = `{"usage":0,"\\u0075sage":{"pad":"${"p".repeat(45)}"},"code":"q","status":"completed"}`
-  const projection = project(JSON.parse(text) as Record<string, unknown>)
-  const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
-  const current = run(createResponseSalvage, text, TIGHT_CAP)
-  expect(frozen.rebuilt).toEqual({ usage: 0, code: "q", status: "completed" })
-  expect(projection).toMatchObject({ code: "q", status: "completed" })
-  expect(current.rebuilt).toEqual({ code: "q", status: "completed" })
-  expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
-})
+test.each(["q", "12345678"])(
+  "an inherited escaped capture yields before non-stale literal code evidence: %s",
+  (code) => {
+    const text = `{"usage":0,"\\u0075sage":{"pad":"${"p".repeat(45)}"},"code":"${code}","status":"completed"}`
+    const projection = project(JSON.parse(text) as Record<string, unknown>)
+    const frozen = run(createFrozenSalvage, text, TIGHT_CAP)
+    const current = run(createResponseSalvage, text, TIGHT_CAP)
+    expect(frozen.rebuilt).toEqual({ usage: 0, code, status: "completed" })
+    expect(projection).toMatchObject({ code, status: "completed" })
+    expect(current.rebuilt).toEqual({ code, status: "completed" })
+    expect(current.peak).toBeLessThanOrEqual(TIGHT_CAP)
+  },
+)
 
 test("the frozen 2.41.0 scanner still shows the two divergences the current one no longer has", () => {
   // A repeated parent: 2.41.0 kept the child of the copy the later one replaced.
@@ -364,8 +407,9 @@ test("the corpus reaches every shape the two scanners read differently", () => {
   let staleChild = 0
   let placeholder = 0
   let escapedSlot = 0
+  let budgetShape = 0
   for (let index = 0; index < ITERATIONS; index++) {
-    const text = document(prng((BASE_SEED + index) >>> 0))
+    const text = document(prng((BASE_SEED + index) >>> 0), index)
     const current = flatten(run(createResponseSalvage, text, CAP).rebuilt)
     const frozen = flatten(run(createFrozenSalvage, text, CAP).rebuilt)
     // A member 2.41.0 kept under a replaced parent, and one the current scanner matched by decoding.
@@ -373,8 +417,14 @@ test("the corpus reaches every shape the two scanners read differently", () => {
     if ([...current.keys()].some((path) => !frozen.has(path))) escapedSlot++
     // The `{}` 2.41.0 rebuilt in place of a later non-object root error.
     if (frozen.has("error") && sameValue(frozen.get("error"), {})) placeholder++
+    // The budget shape: at the tight cap the escaped copy of a root slot gave way, so the `code`
+    // behind it survived — a shape 2.41.0 read with both members.
+    const tight = flatten(run(createResponseSalvage, text, TIGHT_CAP).rebuilt)
+    const tightFrozen = flatten(run(createFrozenSalvage, text, TIGHT_CAP).rebuilt)
+    if (tight.has("code") && tightFrozen.has("code") && !tight.has("usage")) budgetShape++
   }
   expect(staleChild).toBeGreaterThan(0)
   expect(escapedSlot).toBeGreaterThan(0)
   expect(placeholder).toBeGreaterThan(0)
+  expect(budgetShape).toBeGreaterThan(0)
 })

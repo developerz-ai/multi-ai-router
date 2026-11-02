@@ -122,6 +122,10 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       capture.dropped = true
       return
     }
+    // An escaped replacement — which the frozen scanner never spent room on, since it read the
+    // key as raw bytes — yields before a full-budget optional capture drops itself: the evidence
+    // the frozen scanner kept must survive (#209: no lost non-stale key).
+    if (retained >= maximumBytes && OPTIONAL.has(capture.path)) release(inherited)
     // Error evidence outranks a ceiling slot: borrow its room before giving way.
     if (OPTIONAL.has(capture.path) && retained >= maximumBytes && lent.length === 0) lend()
     if (
