@@ -180,6 +180,18 @@ plugin({
       const result = transformSync(source, {
         filename: args.path,
         cwd: WEB_ROOT,
+        // Babel 8's `@babel/preset-typescript` no longer turns JSX parsing on
+        // for a `.tsx` file — it dropped the `isTSX` option that used to make
+        // the TypeScript syntax plugin enable `jsx` too — and a parser without
+        // `jsx` beside `typescript` reads `<Foo />` as a type argument list:
+        // "Unexpected token, expected ','". The syntax plugin is asked for here.
+        //
+        // `@babel/core` has to be on the preset's major for a second reason:
+        // Babel 8 renamed the AST field that carries a call's type arguments,
+        // and its TypeScript transform clears only the new name. Left on
+        // Babel 7 it would emit `createSignal<T>(...)`, which Bun reads as a
+        // comparison rather than a call.
+        plugins: ["@babel/plugin-syntax-jsx"],
         presets: [
           [solidPreset, { generate: "dom", hydratable: false }],
           "@babel/preset-typescript",
