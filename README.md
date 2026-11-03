@@ -99,7 +99,7 @@ Marked ⏳ where the design is settled but the code is not — see [Status](#-st
 - ⏱️ **Reset visibility** — every unavailable account shows its reset as an absolute time *and* a countdown, per window for Claude subs (5-hour, 7-day, per-model), labeled as reported / estimated / unknown. Plus a manual **Re-check now**, per account or for all: providers sometimes reset early or lift a limit for everyone, and the router shouldn't sit on a stale timestamp.
 - ⚡ **Performance as a stated goal** — under 5 ms added p99 on the passthrough path and zero added time-to-first-token. Streams are never buffered, passthrough bodies are never parsed, and nothing touches Postgres on the critical path: accounts and pools are read from a warm catalog, keys from a bounded cache, usage is written off-path. `bin/bench` checks both claims against a stub upstream and exits non-zero when either breaks; CI runs it and reports the delta against a committed baseline on every PR, but the job is `continue-on-error` — a shared runner's noise isn't a regression signal worth blocking a merge over, so it doesn't fail the build (yet).
 - 🖥️ **SolidJS operator console** — overview, accounts, pools, keys, usage and settings all render live data: key reveal with no shown-once flow, destructive actions that name exactly what they break, reset shown as absolute time *and* countdown labelled by how far it can be trusted, a red banner for any account out of credits, a live request feed that names the failing request by id, account and error class, and a settings screen with live price overrides, retention knobs, scheduled-task health, and the audit feed.
-- 🐳 **`docker compose up -d`** — the router plus PostgreSQL 16, a healthcheck gating startup, one OIDC client (or one `bin/admin set-password` run) and one encryption key in `.env`.
+- 🐳 **`docker compose up -d`** — the router plus PostgreSQL 18, a healthcheck gating startup, one OIDC client (or one `bin/admin set-password` run) and one encryption key in `.env`.
 
 ---
 
@@ -128,7 +128,7 @@ Not for you if you want a semantic model picker, an agent framework, multi-tenan
 
 ## 🚀 Quick start
 
-Configure one OIDC client (or set one local password) and one encryption key, then start the stack. The bundled [`docker-compose.yml`](docker-compose.yml) brings up two services — the router and PostgreSQL 16 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you; it reads its secrets from `.env`, which is gitignored:
+Configure one OIDC client (or set one local password) and one encryption key, then start the stack. The bundled [`docker-compose.yml`](docker-compose.yml) brings up two services — the router and PostgreSQL 18 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you; it reads its secrets from `.env`, which is gitignored:
 
 ```bash
 cp .env.example .env
@@ -227,7 +227,8 @@ bin/check     # before committing: lint, typecheck, test, build — the CI job l
 ```
 
 `bin/check` needs a database and refuses to start without one, because CI's test job uses real
-PostgreSQL 18 (16.15 for local Compose). The migration, advisory-lock, retention
+PostgreSQL 18.6, and the bundled and development Compose files both pin PostgreSQL 18.4. The
+migration, advisory-lock, retention
 and readiness-probe suites gate themselves on
 `DATABASE_URL`. Without it they skip, `bun test` folds the skips into the same green summary as a
 pass, and the gate goes green having proved less than the PR will. `bin/setup` writes the dev

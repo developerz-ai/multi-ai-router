@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Claude Agent SDK updater now records the selected version as an **exact** dependency instead of a caret range. `bin/claude-trace update-sdk` passed `@anthropic-ai/claude-agent-sdk@^<version>` to the installer, which wrote a range into `apps/api/package.json` and `bun.lock` — a manifest that no longer matched the exact pin the repo has always shipped (`"0.3.301"`) and a lockfile whose resolution could drift past the calibrated SDK. The install spec now names the exact version, with no range operator. Regression coverage drives the updater's update path with a selected version (no network, no live npm) and asserts the recorded dependency is exact, and the same suite asserts the manifest declares `@anthropic-ai/claude-agent-sdk` as an exact pin. The selected SDK version (`0.3.301`) and the fast-mode calibration (CLI `2.1.301`) are unchanged; no version bump and no new release heading.
 
+### Documentation
+
+- `docs/idea/09-deployment.md`, `docs/RELEASING.md` and `README.md` now describe the shipped PostgreSQL 18.4 image pin, the `postgres-data-18` / `dev-postgres-data-18` volume names and the `/var/lib/postgresql` mount point, instead of the superseded PostgreSQL 16.15 pin and its `postgres-data` volume. Documentation only: no compose, schema or runtime change, no version bump.
+
 ## [2.42.2] — 2026-11-02
 
 ### Fixed
