@@ -3,11 +3,13 @@ import { type ModelTable, rates } from "../rates"
 /**
  * Cerebras's published per-Mtok prices.
  *
- * Provenance: cerebras.ai/pricing and inference-docs.cerebras.ai/models/overview, verified on the
- * date `PRICE_TABLE_AS_OF` names. Blast radius: the metered total for `cerebras` accounts.
+ * Provenance: cerebras.ai/pricing (the Developer Tier price table) and
+ * inference-docs.cerebras.ai/models/overview, read 2026-11-03. Blast radius: the metered total for
+ * `cerebras` accounts.
  *
- * Three public models, and per-token prices that do **not** vary by tier — the tiers differ on rate
- * limits only, which is why the "Developer Tier" heading on the price table changes nothing here.
+ * Two public models on the price table, and per-token prices that do **not** vary by tier — the
+ * tiers differ on rate limits only, which is why the "Developer Tier" heading on the price table
+ * changes nothing here.
  *
  * No cached-input discount is published, so cached tokens bill at the ordinary input rate: that is
  * what a vendor stating no discount costs, and assuming one would under-report every cached
@@ -16,6 +18,5 @@ import { type ModelTable, rates } from "../rates"
  */
 export const CEREBRAS_MODELS: ModelTable = {
   "gpt-oss-120b": rates(0.35, 0.75),
-  "zai-glm-4.7": rates(2.25, 2.75),
-  "gemma-4-31b": rates(0.99, 1.49),
+  "qwen-3.8-27b": rates(0.99, 1.49),
 }

@@ -1419,14 +1419,14 @@ describe("usage accounting", () => {
     await (await app.request("/v1/messages", post(asking("gpt-5.6-sol"), bearer()))).text()
     await settle()
 
-    // $10/Mtok, not $5: a 1M-token prompt is past this family's 272k long-context threshold, and a
+    // $8/Mtok, not $4: a 1M-token prompt is past this family's 272k long-context threshold, and a
     // tier replaces the standard card for the whole request rather than charging only the excess.
     // Before this table shipped every OpenAI request in this deployment recorded `null` /
     // `unknown`, whatever it actually cost.
     expect(usage.rows[0]).toMatchObject({
       provider: "openai-api",
       upstreamModel: "gpt-5.6-sol",
-      costEstimate: "10.000000",
+      costEstimate: "8.000000",
       costBasis: "metered",
     })
   })

@@ -8,6 +8,14 @@
  * The table was restored byte-for-byte afterwards and the unmutated cost suite is green: 90 pass,
  * 0 fail across 5 files.
  *
+ * **Re-verified 2026-11-03.** The pricing page was read again on that date
+ * (developers.openai.com/api/docs/pricing) and every pinned card below is what it states:
+ * gpt-6-luna 0.1 / 0.5 / 0.01 / 0.125 standard and 0.2 / 0.75 / 0.02 / 0.25 long, gpt-6-sol
+ * 2 / 10 / 0.2 / 2.5 and 4 / 15 / 0.4 / 5, gpt-6.1-sol 2 / 10 / 0.1 / 2.5 and 4 / 15 / 0.2 / 5,
+ * gpt-6-astra 10 / 50 / 1 / 12.5 and 20 / 75 / 2 / 25 — all at the shared 272,000-token long-context
+ * threshold. **No pinned value moved**, so the mutation record below still describes the file
+ * exactly: every mutation listed is still caught by the case named beside it.
+ *
  * "rates card" is this file's test for that model, on both the `openai-api` and the `openai-oauth`
  * surface; "estimate" is a case in `estimate.test.ts`.
  *

@@ -100,45 +100,47 @@ request fact; it never invents an upstream account or a token charge.
 
 ## Cost estimation
 
-| | |
+The rules below are the contract. The **numbers** live in the code, not in this document: a
+document that restates a price is wrong the day the vendor moves it, and a wrong price in a spec
+reads as a promise. Every rule names the module that owns it.
+
+| Rule | Where it lives |
 |---|---|
-| Source | A static price table shipped with the image: one file per vendor under `services/cost/tables/`, assembled by `services/cost/prices.ts` and keyed by `provider + model`. Four numbers per model, per million tokens — input, output, cache read, cache write. Every file records where its numbers came from and what a stale row costs |
-| Dated | `PRICE_TABLE_AS_OF` dates the inherited shipped snapshot; it is not a claim that every vendor was reverified. Settings exposes per-source `snapshotAsOf`, `verifiedAt`, currency and provenance URL. A NULL verification date means inherited evidence. Newly checked Kimi coding references carry their own verification date. |
-| Coverage | Twelve vendor tables answer for fourteen providers. `anthropic-api` and `anthropic-oauth` share the Anthropic table; `openai-api` and `openai-oauth` share the OpenAI one; `gemini`, `zai`, `kimi`, `minimax`, `groq`, `deepseek`, `xai`, `mistral`, `together` and `cerebras` each have their own. **Four providers ship no price on purpose** — [below](#the-four-providers-that-ship-no-price) |
-| Override | Operator rates are scoped to an Account or apply to a provider globally. Account exact/family overrides precede provider exact/family overrides, then eligible shipped rates. Account-scoped rows cascade on deletion and never become global. The warm book refresh after a successful settings edit includes a post-commit snapshot before returning. Settings shows unpriced configured upstream models and unknown model catalogs. |
-| Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot (`…-20251001`, `…-2025-04-14`) prices as its family, which is how the provider prices the pin. A snapshot the vendor prices apart from its family is named in full in its table, and the exact name is tried first |
-| Long-context tiers | A tiered model carries a second card that **replaces** the standard card for the *whole request*, not just tokens beyond the threshold. The router selects it at total prompt **>=272_000** for the tiered OpenAI rows, and at total prompt >=200_000 for Google and xAI. Total prompt is `tokensIn + cacheReadTokens + cacheWriteTokens`, including both cache reads and writes, not just cache misses. This inclusive threshold and whole-request replacement describe the router's implementation convention, not a verbatim vendor-page rule. An **override is deliberately flat**: one written for a tiered model replaces both tiers, which is the operator saying "this is the rate, whatever the prompt" |
+| Shipped set | The shipped table is the **twelve wired vendor tables** under `services/cost/tables/`, assembled by `services/cost/prices.ts` and keyed by `provider + model`. A table file no provider maps to is not shipped: an unreachable table is a second answer nobody reads. Four numbers per model, per million tokens — input, output, cache read, cache write |
+| A verification date is a read | `verifiedAt` is the date the vendor's published page was actually read. A source that could not be re-read keeps `verifiedAt: null` and its inherited `snapshotAsOf`: inherited evidence is not new verification, and a date recorded for a page nobody opened is a fabrication. Every shipped row carries a `sourceId`, and every shipped table has one `PRICE_SOURCES` entry naming its vendor page, its currency, its snapshot date and its verification date |
+| The as-of date is the oldest source | `PRICE_TABLE_AS_OF` is derived from the oldest source snapshot, so it stays conservative when some sources are newer than others. It is not a claim that every vendor was reverified |
+| A row exists only for a published model id | The router prices by the model id the vendor publishes. A vendor-priced offering with **no published model id** has no row and prices as unknown; it is recorded in `PRICED_OFFERINGS_WITHOUT_PUBLISHED_ID` (`services/cost/offerings.ts`), which names the offering, the published price and the reason no model id exists. An operator override is the way to price it |
+| A variant is priced by the vendor's own figure | A fast-mode or otherwise variant offering is priced by the row the vendor published **for that model id**, never by multiplying a base model's rate by a factor the router chose. A derived factor is an invented price. A variant the vendor publishes under **no model id of its own** — a mode rather than a model — has no row at all: its published figure is recorded in `PRICED_OFFERINGS_WITHOUT_PUBLISHED_ID` and a request naming it prices as unknown |
+| Every retained row is pinned | Each shipped row's expected card is written out in an independent test file, so a changed rate fails the suite rather than a report |
+| Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot prices as its family, which is how the provider prices the pin; a snapshot the vendor prices apart from its family is named in full in its table, and the exact name is tried first (`services/cost/rates.ts`, `modelLookupKeys`) |
+| Long-context tiers | A tiered model carries a second card that **replaces** the standard card for the *whole request*, not just tokens beyond the threshold. Total prompt is `tokensIn + cacheReadTokens + cacheWriteTokens`, including cache reads and writes. Each vendor table names its own threshold; the selection is the router's implementation convention, not a verbatim vendor-page rule. An **override is deliberately flat**: one written for a tiered model replaces both tiers, which is the operator saying "this is the rate, whatever the prompt" |
+| Override | Operator rates are scoped to an Account or apply to a provider globally. Account exact/family overrides precede provider exact/family overrides, then eligible shipped rates. Account-scoped rows cascade on deletion and never become global. The warm book refresh after a successful settings edit includes a post-commit snapshot before returning. Settings shows unpriced configured upstream models and unknown model catalogs |
 | Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. A family released after the image was built, or an older snapshot the vendor no longer lists, prices as unknown rather than as the nearest thing to it |
 | Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
-| Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's two are derived from its published multiples of input (1.25× write; 0.1× read, except where the pricing page footnotes a model — 0.025× on Fable 5.1, 0.05× on Opus 5.5) rather than restated per row; a response never says which cache TTL was written, so the 5-minute default is assumed and writes read low, never high |
+| Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's two are derived from the published multiples its pricing page states, rather than restated per row; a response never says which cache TTL was written, so the 5-minute default is assumed and writes read low, never high |
 | Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
 
-Kimi coding identities are explicit: `k3`, `k3-256k` and `kimi-for-coding-highspeed` have
-verified API-equivalent references for subscription attribution. They do not establish metered USD
-Extra Usage charges. K2.8 Preview, guessed date prefixes, metered coding identities and K3 cache
-writes without a known TTL remain unpriced unless the operator supplies an override. Pricing never
-changes the client model or the model sent upstream.
+The shipped set is the twelve wired vendor tables answering for fourteen providers:
+`anthropic-api` and `anthropic-oauth` share the Anthropic table, `openai-api` and `openai-oauth`
+share the OpenAI one, and `gemini`, `zai`, `kimi`, `minimax`, `groq`, `deepseek`, `xai`, `mistral`,
+`together` and `cerebras` each have their own. **Four providers ship no price on purpose** —
+[below](#the-four-providers-that-ship-no-price).
 
-MiniMax's `MiniMax-M3.1-Flash-Preview` is served but deliberately unpriced: the vendor's public
-price list (platform.minimax.io/docs/guides/pricing, read 2026-10-15) carries no row for the
-preview — it is served from the coding plan, and the per-token figures that circulate for it are
-resellers' and aggregators', not the vendor's price. The model is pinned in
-`services/cost/tables/minimax.ts` by `MINIMAX_UNPRICED`, a registry of deliberately unpriced
-models whose entries must keep looking up null, so the documentation cannot drift from the table.
-An operator override is the way to price it.
+Kimi coding identities are reference-only: they carry a verified API-equivalent reference for
+subscription attribution and do not establish metered USD Extra Usage charges, so a metered coding
+identity and a cache write without a known TTL stay unpriced unless the operator supplies an
+override. The identities and their reference rates live in `services/cost/tables/kimi-coding.ts`;
+the identity page they are read against is `KIMI_IDENTITY_SOURCE` in
+`services/cost/provenance.ts`. A model a vendor's price list does not carry prices as unknown until
+an operator overrides it — the table says so by its absence, and the shipped rows are the only
+place a price is stated. Pricing never changes the client model or the model sent upstream.
 
-The GPT-6 family (`gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`, `gpt-6-astra`) has one standard
-and one long-context card per model in `services/cost/tables/openai.ts`, shared by `openai-api`
-and `openai-oauth`. Recorded source evidence names the model pages under
-`https://developers.openai.com/api/docs/models/`, read 2026-10-10; this is not a fresh external
-verification. The shipped long cards use 2× input, cache-read and cache-write rates and 1.5× output.
-Separately, the router's implementation convention replaces the standard card for the **whole
-request** when total prompt (`tokensIn + cacheReadTokens + cacheWriteTokens`) is **>=272_000**,
-including reads and writes, as for the GPT-5.6 rows. This convention is not a claim of verbatim
-agreement with the recorded vendor pages. The older OpenAI rows in the same table were not re-read
-for this change and keep their inherited evidence: `PRICE_SOURCES` keeps `verifiedAt: null`.
-`gpt-reserve` and `codex-auto-review` stay unpriced —
-no published price was found for either.
+The GPT-6 family carries one standard and one long-context card per model in
+`services/cost/tables/openai.ts`, shared by `openai-api` and `openai-oauth`, with the threshold
+that selects the long card stated in that file. The table records where its numbers came from, and
+a source whose page was not re-read keeps `verifiedAt: null` with its inherited snapshot date
+rather than a verification nobody made. A model no published price was found for stays unpriced
+rather than approximated from a sibling model.
 
 ### The four providers that ship no price
 

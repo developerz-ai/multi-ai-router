@@ -5,6 +5,7 @@ import {
   listShippedRates,
   lookupRates,
   PRICE_TABLE_AS_OF,
+  PRICED_OFFERINGS_WITHOUT_PUBLISHED_ID,
   type RateLookup,
 } from "../../../src/services/cost"
 import type { TokenCounts } from "../../../src/services/usage"
@@ -45,6 +46,49 @@ describe("pricing a metered attempt", () => {
   test("a model with no row of its own is unknown — a sibling's price is never borrowed", () => {
     for (const model of ["claude-opus-5-6", "claude-sonnet-5-6", "claude-fable-5-2"]) {
       expect(lookupRates("anthropic-api", model)).toBeNull()
+    }
+  })
+
+  /**
+   * The failure this guards: a fast-mode variant priced by *multiplying* its base.
+   *
+   * Anthropic publishes fast mode as a request flag on the ordinary model id, at a rate the vendor
+   * states outright — $8 / $40 for Opus 5.5 and $10 / $50 for Opus 5 and Opus 4.8. A table that
+   * derived "fast" from the base rate would land on $8 / $40 for Opus 5.5 by luck (2x) and on
+   * $10 / $50 for Opus 5 (2x), but there is no rule: Opus 4.7 has no fast mode at all, and Opus 5.5
+   * is 2x while a naive 3x would say otherwise. So the check is that **no published id is priced as
+   * a fast variant**, and that the published fast figures live in the registry rather than in a
+   * row.
+   */
+  test("a fast-mode variant is priced by its own published figure, never by multiplying a base", () => {
+    // There is no published fast-mode model id, so none may be priced at all — a row here would
+    // be a rate for a name Anthropic does not serve.
+    for (const model of [
+      "claude-opus-5-5-fast",
+      "claude-opus-5-fast",
+      "claude-opus-4-8-fast",
+      "claude-opus-4-7-fast",
+    ]) {
+      expect(lookupRates("anthropic-api", model), `${model} has no published id`).toBeNull()
+      expect(
+        estimateCost({
+          provider: "anthropic-api",
+          model,
+          tokens: tokens({ tokensIn: 1_000_000 }),
+        }),
+      ).toEqual({ costEstimate: null, costBasis: "unknown" })
+    }
+
+    // The published fast figures are recorded, so the number is readable without a row that
+    // invents an id.
+    const fast = PRICED_OFFERINGS_WITHOUT_PUBLISHED_ID.filter((offering) =>
+      offering.offering.includes("fast mode"),
+    )
+    expect(fast.length).toBeGreaterThan(0)
+    for (const offering of fast) {
+      expect(offering.publishedPrice.length, offering.offering).toBeGreaterThan(0)
+      // A published price, not a multiplier of some base rate.
+      expect(offering.publishedPrice).toContain("$")
     }
   })
 
@@ -137,8 +181,8 @@ describe("pricing the nine providers that used to report nothing", () => {
     ["openai-oauth", "gpt-5.6-sol"],
     ["gemini", "gemini-2.5-flash"],
     ["zai", "glm-4.7"],
-    ["minimax", "minimax-m2.7"],
-    ["groq", "llama-3.3-70b-versatile"],
+    ["minimax", "minimax-m3"],
+    ["groq", "qwen/qwen3.8-27b"],
     ["deepseek", "deepseek-v4-pro"],
     ["xai", "grok-4.5"],
     ["mistral", "mistral-large-latest"],
@@ -213,7 +257,7 @@ describe("which basis a priced attempt reports under", () => {
     // shared one answer and a coding plan was indistinguishable from a metered key.
     const pairs = [
       ["zai", "glm-4.7"],
-      ["minimax", "minimax-m2.7"],
+      ["minimax", "minimax-m3"],
       ["openai-api", "gpt-5.6-sol"],
     ] as const
 
@@ -244,14 +288,14 @@ describe("a long-context tier replaces the standard card, it does not top it up"
   // Every vendor publishing one of these bills the *whole* request at the higher rate once the
   // prompt crosses the line. Charging only the excess would understate a long request by about half.
   test("a prompt one token under the threshold bills at the standard rate", () => {
-    // Standard card: $5/Mtok input.
+    // Standard card: $4/Mtok input (gpt-5.6-sol's published standard rate).
     expect(
       estimateCost({
         provider: "openai-api",
         model: "gpt-5.6-sol",
         tokens: tokens({ tokensIn: 271_999 }),
       }).costEstimate,
-    ).toBe(((271_999 * 5) / 1_000_000).toFixed(6))
+    ).toBe(((271_999 * 4) / 1_000_000).toFixed(6))
   })
 
   test("a prompt at the threshold bills the entire request at the long-context rate", () => {
@@ -260,8 +304,8 @@ describe("a long-context tier replaces the standard card, it does not top it up"
       model: "gpt-5.6-sol",
       tokens: tokens({ tokensIn: 272_000 }),
     })
-    // $10/Mtok across all 272k, not $5 on the first 272k plus $10 on nothing.
-    expect(long.costEstimate).toBe((272_000 * (10 / 1_000_000)).toFixed(6))
+    // $8/Mtok across all 272k, not $4 on the first 272k plus $8 on nothing.
+    expect(long.costEstimate).toBe((272_000 * (8 / 1_000_000)).toFixed(6))
   })
 
   test("the threshold is measured against the whole prompt, cached tokens included", () => {
@@ -272,8 +316,8 @@ describe("a long-context tier replaces the standard card, it does not top it up"
       model: "gpt-5.6-sol",
       tokens: tokens({ tokensIn: 100_000, cacheReadTokens: 172_000 }),
     })
-    // Long-context card: $10 input, $1 cached read.
-    expect(split.costEstimate).toBe(((100_000 * 10 + 172_000 * 1) / 1_000_000).toFixed(6))
+    // Long-context card: $8 input, $0.80 cached read.
+    expect(split.costEstimate).toBe(((100_000 * 8 + 172_000 * 0.8) / 1_000_000).toFixed(6))
   })
 
   test("a model with no published tier is one price whatever the prompt", () => {
