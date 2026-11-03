@@ -51,6 +51,8 @@ export interface TranslatedRequestBody {
      * a body carrying one account's sealed reasoning is never handed to another.
      */
     reasoningSeal?: AccountReasoningSeal,
+    /** The target reads `cache_control` on a written body. Keyed into the conversion like the ceiling. */
+    cacheControl?: boolean,
   ): Uint8Array
   /** Whether the client asked for a stream — read from the cached parse; false before one. */
   clientStreams(): boolean
@@ -63,7 +65,12 @@ export interface TranslatedRequestBody {
 
 export interface PromptCacheKeying {
   readonly fallback: string | undefined
+  /** The surface also reads a body `session_id` as its sticky key; it gets the same key. */
+  readonly sessionId?: boolean | undefined
 }
+
+/** OpenRouter's stated ceiling on `session_id`; a longer caller key is left to `prompt_cache_key`. */
+const SESSION_ID_MAX_LENGTH = 256
 
 /**
  * Told once per conversion, with everything the translator dropped by name — one report per target
@@ -127,9 +134,18 @@ export function createTranslatedRequestBody(
       )
     },
     promptCacheKey: callerCacheKey,
-    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress, keying, sealed) {
+    bodyFor(
+      pair,
+      upstreamModel,
+      chatCeiling,
+      defaultMaxTokens,
+      responsesEgress,
+      keying,
+      sealed,
+      cacheControl = false,
+    ) {
       const effectiveDefault = defaultMaxTokens ?? context.defaultMaxTokens
-      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}|${sealed?.accountId ?? ""}`
+      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}|${sealed?.accountId ?? ""}|${cacheControl}`
       let translated = converted.get(shape)
       if (translated === undefined) {
         // A translator emits an object; anything else would mean a pair returning a body no
@@ -142,6 +158,7 @@ export function createTranslatedRequestBody(
             {
               ...context,
               chatCeiling,
+              cacheControl,
               defaultMaxTokens: effectiveDefault,
               responsesEgress,
               onDrop: (drop) => void drops.push(drop),
@@ -168,6 +185,13 @@ export function createTranslatedRequestBody(
         const caller = effectiveCacheKey(withModel.prompt_cache_key, callerCacheKey())
         const cacheKey = effectiveCacheKey(caller, keying.fallback)
         if (cacheKey !== undefined) withModel.prompt_cache_key = cacheKey
+        if (
+          keying.sessionId === true &&
+          cacheKey !== undefined &&
+          cacheKey.length <= SESSION_ID_MAX_LENGTH
+        ) {
+          withModel.session_id = cacheKey
+        }
       }
       // The one vendor dial decided by the *upstream* model (post-alias, the billed name) rather
       // than the conversion shape, so it is applied here and not baked into the cached body: a

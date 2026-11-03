@@ -31,8 +31,16 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
           )
         : undefined,
       servable.responsesEgress,
-      keysPromptCache(servable) ? { fallback: routerCacheKey(ctx, servable) } : undefined,
+      keysPromptCache(servable)
+        ? {
+            fallback: routerCacheKey(ctx, servable),
+            sessionId:
+              servable.kind === "http" &&
+              servable.driver.keysSessionByBody?.(servable.account.driver) === true,
+          }
+        : undefined,
       reasoningSealFor(ctx, servable),
+      servable.cacheControl,
     )
   }
   if (ctx.bodyBytes.length === 0) return null

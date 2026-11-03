@@ -1,5 +1,6 @@
 import { DEFAULT_OPENAI_CHAT_CEILING, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import { z } from "zod"
+import { type CacheControl, cacheControlSchema } from "./cache-control-schema"
 
 /**
  * The OpenAI Chat Completions request, in the two shapes translation needs — same split as
@@ -22,12 +23,21 @@ export const UNSUPPORTED_PART = "__unsupported__"
 
 const KNOWN_PART_TYPES: ReadonlySet<string> = new Set(["text", "image_url"])
 
-const textPart = z.object({ type: z.literal("text"), text: z.string() })
+/**
+ * `cache_control` is OpenRouter's extension, read so a client's breakpoint reaches an Anthropic
+ * upstream where it put it (`openai-chat-to-anthropic/request.ts`). No OpenAI dialect carries it.
+ */
+const textPart = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+  cache_control: cacheControlSchema,
+})
 
 /** `detail: "low" | "high"` is stripped: Anthropic has no per-image resolution hint. */
 const imagePart = z.object({
   type: z.literal("image_url"),
   image_url: z.looseObject({ url: z.string() }),
+  cache_control: cacheControlSchema,
 })
 
 /** Audio and file parts land here, and so does anything OpenAI adds after this was written. */
@@ -106,6 +116,8 @@ export const openAiChatRequestSchema = z.object({
   // The caller's name for a conversation's cache prefix. Both OpenAI dialects spell it identically,
   // so toward openai-responses it is carried; toward anthropic it has no counterpart and is dropped.
   prompt_cache_key: z.string().nullish(),
+  // OpenRouter's top-level automatic-caching marker; carried toward Anthropic only.
+  cache_control: cacheControlSchema,
 })
 
 export type ParsedOpenAiChatRequest = z.infer<typeof openAiChatRequestSchema>
@@ -115,14 +127,23 @@ export type ParsedOpenAiChatToolCall = z.infer<typeof toolCallSchema>
 export type ParsedOpenAiChatTool = z.infer<typeof openAiChatToolSchema>
 export type ParsedOpenAiChatToolChoice = z.infer<typeof openAiChatToolChoiceSchema>
 
+/**
+ * OpenRouter's extension of the dialect, not OpenAI's: an Anthropic-style prompt-cache breakpoint
+ * on a content part (or the request). Written only toward a surface that states it carries one
+ * (`ProviderSurface.cacheControl`); a strict upstream `400`s on it.
+ */
+export type OpenAiChatCacheControl = CacheControl
+
 export interface OpenAiChatTextPart {
   readonly type: "text"
   readonly text: string
+  readonly cache_control?: OpenAiChatCacheControl | undefined
 }
 
 export interface OpenAiChatImagePart {
   readonly type: "image_url"
   readonly image_url: { readonly url: string }
+  readonly cache_control?: OpenAiChatCacheControl | undefined
 }
 
 export type OpenAiChatPart = OpenAiChatTextPart | OpenAiChatImagePart
@@ -173,6 +194,8 @@ export interface OpenAiChatRequest {
   readonly parallel_tool_calls?: boolean | undefined
   /** The caller's own word, never one this router picked. See the schema above. */
   readonly reasoning_effort?: string | undefined
+  /** Automatic caching, toward a surface that carries it. See {@link OpenAiChatCacheControl}. */
+  readonly cache_control?: OpenAiChatCacheControl | undefined
 }
 
 /**

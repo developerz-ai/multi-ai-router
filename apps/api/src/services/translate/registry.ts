@@ -94,6 +94,11 @@ export interface TranslationContext {
    * id — writes the line. Absent, drops are silent.
    */
   readonly onDrop?: DropSink | undefined
+  /**
+   * Whether the **selected Account's** surface reads `cache_control` beyond its dialect's base
+   * (`ProviderSurface.cacheControl`) — per candidate like `chatCeiling`. Absent means it does not.
+   */
+  readonly cacheControl?: boolean | undefined
   /** The **selected Account's** seal, per candidate like `chatCeiling` (`sealed-reasoning.ts`). */
   readonly reasoningSeal?: import("../crypto/reasoning-seal").ReasoningSeal | undefined
 }
@@ -128,7 +133,11 @@ const ANTHROPIC_TO_OPENAI_CHAT: TranslationPair = {
   // request that reached here already carries the ceiling the client chose. Which of openai-chat's
   // two names it is emitted under is the target account's answer.
   request: (body, context) =>
-    anthropicToOpenAiChatRequest(body, { ceiling: context.chatCeiling, onDrop: context.onDrop }),
+    anthropicToOpenAiChatRequest(body, {
+      ceiling: context.chatCeiling,
+      onDrop: context.onDrop,
+      cacheControl: context.cacheControl,
+    }),
   response: (body, context) =>
     openAiChatToAnthropicResponse(body, {
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
@@ -149,6 +158,7 @@ const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
     openAiChatToAnthropicRequest(body, {
       defaultMaxTokens: context.defaultMaxTokens,
       onDrop: context.onDrop,
+      automaticCache: context.cacheControl,
     }),
   response: (body, context) =>
     anthropicToOpenAiChatResponse(body, {
@@ -201,6 +211,7 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
     openAiResponsesToAnthropicRequest(body, {
       defaultMaxTokens: context.defaultMaxTokens,
       onDrop: context.onDrop,
+      automaticCache: context.cacheControl,
     }),
   response: (body, context) =>
     anthropicToOpenAiResponsesResponse(body, {

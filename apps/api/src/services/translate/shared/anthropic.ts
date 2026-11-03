@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { type CacheControl, cacheControlSchema } from "./cache-control-schema"
 
 /**
  * The Anthropic Messages request, in the two shapes translation needs.
@@ -52,8 +53,18 @@ const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "tool_removal",
 ])
 
-/** `cache_control` is stripped here: no non-Anthropic target has an equivalent hint. */
-const textBlock = z.object({ type: z.literal("text"), text: z.string() })
+/**
+ * A prompt-cache breakpoint. Read so a target that carries the marker — OpenRouter's
+ * OpenAI-compatible surface, which maps it to each provider's own (`ProviderSurface.cacheControl`)
+ * — gets it where the client put it; every other target never sees it.
+ */
+const cacheControl = cacheControlSchema
+
+const textBlock = z.object({
+  type: z.literal("text"),
+  text: z.string(),
+  cache_control: cacheControl,
+})
 
 const imageSource = z.discriminatedUnion("type", [
   z.object({ type: z.literal("base64"), media_type: z.string(), data: z.string() }),
@@ -61,7 +72,11 @@ const imageSource = z.discriminatedUnion("type", [
   z.looseObject({ type: z.literal("file"), file_id: z.string().min(1) }),
 ])
 
-const imageBlock = z.object({ type: z.literal("image"), source: imageSource })
+const imageBlock = z.object({
+  type: z.literal("image"),
+  source: imageSource,
+  cache_control: cacheControl,
+})
 
 const toolUseBlock = z.object({
   type: z.literal("tool_use"),
@@ -89,6 +104,7 @@ const toolResultBlock = z.object({
   tool_use_id: z.string(),
   content: z.union([z.string(), z.array(toolResultContent)]).optional(),
   is_error: z.boolean().optional(),
+  cache_control: cacheControl,
 })
 
 const thinkingBlock = z.object({
@@ -119,6 +135,7 @@ const documentBlock = z.object({
     media_type: z.string().optional(),
     data: z.string().optional(),
   }),
+  cache_control: cacheControl,
 })
 
 /**
@@ -203,6 +220,8 @@ export const anthropicRequestSchema = z.object({
   // which they send as `output_config.format`. A client stating it here states the same contract,
   // so it is refused the same way — and named as the caller wrote it.
   output_format: z.unknown().nullish(),
+  // Automatic caching: one top-level marker the upstream moves forward as the conversation grows.
+  cache_control: cacheControl,
 })
 
 export type ParsedAnthropicRequest = z.infer<typeof anthropicRequestSchema>
@@ -213,16 +232,19 @@ export type ParsedAnthropicToolResult = z.infer<typeof toolResultBlock>
 export type ParsedAnthropicToolResultContent = z.infer<typeof toolResultContent>
 export type ParsedAnthropicDocument = z.infer<typeof documentBlock>
 export type ParsedAnthropicTool = z.infer<typeof anthropicToolSchema>
+export type ParsedAnthropicCacheControl = z.infer<typeof cacheControl>
 export type ParsedAnthropicToolChoice = z.infer<typeof anthropicToolChoiceSchema>
 
 export interface AnthropicTextBlock {
   readonly type: "text"
   readonly text: string
+  readonly cache_control?: CacheControl | undefined
 }
 
 export interface AnthropicImageBlock {
   readonly type: "image"
   readonly source: ParsedAnthropicImageSource
+  readonly cache_control?: CacheControl | undefined
 }
 
 export interface AnthropicToolUseBlock {
@@ -237,6 +259,7 @@ export interface AnthropicToolResultBlock {
   readonly type: "tool_result"
   readonly tool_use_id: string
   readonly content: string | readonly (AnthropicTextBlock | AnthropicImageBlock)[]
+  readonly cache_control?: CacheControl | undefined
 }
 
 /**
@@ -278,7 +301,8 @@ export interface AnthropicRequest {
   readonly model: string
   readonly messages: readonly AnthropicMessage[]
   readonly max_tokens: number
-  readonly system?: string | undefined
+  /** An array only when a block carries a cache breakpoint; otherwise the joined string. */
+  readonly system?: string | readonly AnthropicTextBlock[] | undefined
   readonly temperature?: number | undefined
   readonly top_p?: number | undefined
   readonly stop_sequences?: readonly string[] | undefined
@@ -287,4 +311,6 @@ export interface AnthropicRequest {
   readonly tool_choice?: AnthropicToolChoice | undefined
   readonly output_config?: { readonly effort: string } | undefined
   readonly thinking?: { readonly type: "disabled" } | undefined
+  /** Automatic caching: the client's own top-level marker, or the router's toward Anthropic. */
+  readonly cache_control?: CacheControl | undefined
 }

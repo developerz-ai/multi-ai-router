@@ -56,6 +56,27 @@ const KEY_LIMIT_RETEST_SECONDS = 60 * 60
 const BODY_CACHE_KEY = true
 
 /**
+ * Provenance: openrouter.ai/docs/features/prompt-caching (read 2026-11-03) — `cache_control` on
+ * content blocks is OpenRouter's own request field: honoured as explicit breakpoints for Anthropic
+ * (every Anthropic-compatible provider, Bedrock and Vertex included), Gemini (last breakpoint used)
+ * and Alibaba Qwen, translated to `prompt_cache_breakpoint` for OpenAI models that take one, and a
+ * top-level marker is Anthropic's automatic caching. Surface-wide rather than per model: OpenRouter
+ * maps the marker per provider, so a model-name allowlist here would only go stale. Blast radius:
+ * every Anthropic-wire request translated to an `openrouter` account; without it Claude through
+ * OpenRouter caches nothing and re-bills its whole prefix every turn.
+ */
+const CACHE_CONTROL = true
+
+/**
+ * Provenance: openrouter.ai/docs/features/prompt-caching (read 2026-11-03) — a body `session_id`
+ * (up to 256 characters) is the sticky-routing key, and "when `session_id` is set, sticky routing
+ * starts before any cache hit is observed"; without it `prompt_cache_key` is the fallback key. Blast
+ * radius: every translated request to an `openrouter` account carries its cache key here too; if
+ * OpenRouter drops the field, stickiness starts at the first cache hit as before.
+ */
+const BODY_SESSION_ID = true
+
+/**
  * Every OpenRouter id is `vendor/model` (`openrouter/auto` included), so a bare name is one it cannot
  * serve: it answers `400`, and that `400` used to reach the client in place of the quota error of the
  * account that does carry the name. Unknown still passes through on the namespaced side, because an
@@ -73,7 +94,15 @@ const MODEL_REFUSED = /is not a valid model id/i
 
 const driver = createHttpDriver({
   id: "openrouter",
-  surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL, bodyCacheKey: BODY_CACHE_KEY }],
+  surfaces: [
+    {
+      dialect: "openai-chat",
+      baseUrl: BASE_URL,
+      bodyCacheKey: BODY_CACHE_KEY,
+      cacheControl: CACHE_CONTROL,
+      bodySessionId: BODY_SESSION_ID,
+    },
+  ],
   rules: [
     withResetEstimate(
       messageRule("rate-limited", "openrouter:key-limit-window", KEY_LIMIT_WINDOW),

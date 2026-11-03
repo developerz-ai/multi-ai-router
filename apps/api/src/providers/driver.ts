@@ -80,6 +80,25 @@ export interface ProviderSurface {
    * field is never added — a vendor whose schema forbids extras would `400` on it.
    */
   readonly bodyCacheKey?: boolean
+  /**
+   * The endpoint reads `cache_control` beyond what its dialect's base schema names, for a body the
+   * router *writes* (cross-dialect). Absent means the router never adds it — a strict vendor `400`s
+   * on a field its schema does not name.
+   *
+   * - openai-chat: Anthropic-style breakpoints on content parts and at the top level, so a body
+   *   written from an Anthropic request keeps the client's breakpoints where it put them
+   *   (`translate/shared/cache-control.ts`).
+   * - anthropic: the top-level automatic marker, sent on a body written from an OpenAI request that
+   *   states no marker of its own (`openai-chat-to-anthropic/request.ts`). Block-level markers are
+   *   the dialect's own and are carried toward every anthropic surface regardless.
+   */
+  readonly cacheControl?: boolean
+  /**
+   * OpenAI-dialect surfaces only, beside `bodyCacheKey`: the upstream reads a body `session_id` as
+   * its sticky-routing key, so a written body carries the same key as its `prompt_cache_key`
+   * (`dataplane/translate-body.ts`). Absent means the field is never added.
+   */
+  readonly bodySessionId?: boolean
 }
 
 export interface HttpDriverConfig {
@@ -158,6 +177,8 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
       surfaceFor(account).responsesEgress ?? DEFAULT_RESPONSES_EGRESS,
     thinkingOnByDefault: (account) => surfaceFor(account).thinkingOnByDefault === true,
     keysPromptCacheByBody: (account) => surfaceFor(account).bodyCacheKey === true,
+    carriesCacheControl: (account) => surfaceFor(account).cacheControl === true,
+    keysSessionByBody: (account) => surfaceFor(account).bodySessionId === true,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)
       return surfaceHeaders(surfaceFor(account), credential)

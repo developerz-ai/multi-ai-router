@@ -64,6 +64,8 @@ interface ServablePlan {
   readonly chatCeiling: OpenAiChatCeiling
   /** What this account's Responses surface demands of a written body. Same kind of fact. */
   readonly responsesEgress: ResponsesEgressRules
+  /** Whether a written openai-chat body keeps the client's `cache_control`. Same kind of fact. */
+  readonly cacheControl: boolean
   /**
    * The conversion this attempt runs, or null when the client already speaks the dialect this
    * attempt answers in. On the passthrough path that null is load-bearing: there is deliberately no
@@ -170,6 +172,8 @@ export function planCandidates(
         egress.mode === "agent-sdk"
           ? DEFAULT_RESPONSES_EGRESS
           : egress.driver.resolveResponsesEgress(account.driver),
+      cacheControl:
+        egress.mode !== "agent-sdk" && egress.driver.carriesCacheControl?.(account.driver) === true,
       translation: egress.mode === "passthrough" ? null : egress.pair,
       egressMode: egress.mode,
     }
