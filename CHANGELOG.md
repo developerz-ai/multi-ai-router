@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Integration coverage for the fast-mode credential fence at the real request-services composition boundary (`apps/api/test/integration/claude-fast-response.test.ts`). The suite builds the production `createRequestServices` with `CLAUDE_FAST_MODE=true` and drives the captured `FastInvokerDeps.credential` closure, proving that fast-mode credential access is bound to the selected Account's own config directory and to that Account's metadata ownership scope: a directory that does not belong to the selected Account is refused with `UpstreamAdmissionRefused` before any credential read happens (the ownership and credential-reader spies record zero calls), and the authorized read is asserted to run with the selected Account as the active metadata owner both before and after the read. Every fixture is synthetic — per-run `mkdtemp` roots used as `CLAUDE_CONFIG_ROOT`, with synthetic `.credentials.json`/`.claude.json` written per Account — and no HOME directory, real Account directory, real credential or live provider is read. Test-only: no runtime behaviour change.
+## [2.42.2] — 2026-11-02
 
 ### Fixed
 
+- A bare model name no longer reaches an undeclared `openrouter` account. Every OpenRouter id is `vendor/model`, so its driver now declares that shape as its model family. With the only account carrying `k3` cooling down, a request for `k3` went to OpenRouter as the last candidate and the client read `400 k3 is not a valid model ID`; it now reads the `429` and `Retry-After` of the cooling account. An alias onto a namespaced id and an explicit `supportedModels` still admit the account. OpenRouter's `is not a valid model ID` refusal is classified `model-unsupported`, so the next account gets its turn.
 - Salvage numeric canonicalization preserves repeated decimal points: malformed MiniMax `base_resp.status_code:1008.0.0` is dropped instead of rewritten into a credit-exhaustion code. Complete zero exponents are normalized before capture budget checks, so equivalent escaped `usage:1e0`, `1E+0`, and `1e-00` repeats keep usage beside a 63-byte status at cap 64. Numeric state lives in a bounded streaming helper; scanner regressions pin malformed ceilings and parity with frozen 2.41.0 and `JSON.parse`.
 - Salvage canonicalization checks each output byte against the capture budget, including end-of-value output, rather than charging source bytes. Deferred fraction zeros stream directly to the budgeted sink and stop on rejection, avoiding unbounded temporary arrays; equivalent escaped `usage:1.0` still fits beside a 63-byte status at cap 64. Numeric tokens reset their own state, preserve interior fraction zeros, and handle exponent digits separately. Regression tests cover multi-number usage, million-zero fractions, sink rejection, and end-only output under required, escaped, optional, and ceiling-slot budgets.
+
+### Changed
+
+- Integration coverage for the fast-mode credential fence at the real request-services composition boundary (`apps/api/test/integration/claude-fast-response.test.ts`). The suite builds the production `createRequestServices` with `CLAUDE_FAST_MODE=true` and drives the captured `FastInvokerDeps.credential` closure, proving that fast-mode credential access is bound to the selected Account's own config directory and to that Account's metadata ownership scope: a directory that does not belong to the selected Account is refused with `UpstreamAdmissionRefused` before any credential read happens (the ownership and credential-reader spies record zero calls), and the authorized read is asserted to run with the selected Account as the active metadata owner both before and after the read. Every fixture is synthetic — per-run `mkdtemp` roots used as `CLAUDE_CONFIG_ROOT`, with synthetic `.credentials.json`/`.claude.json` written per Account — and no HOME directory, real Account directory, real credential or live provider is read. Test-only: no runtime behaviour change.
 
 ## [2.42.1] — 2026-11-02
 
@@ -1803,3 +1806,4 @@ your tooling config.
 [2.41.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.1
 [2.42.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.0
 [2.42.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.1
+[2.42.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.2
