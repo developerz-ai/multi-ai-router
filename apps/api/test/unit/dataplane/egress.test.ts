@@ -84,8 +84,20 @@ describe("counting tokens", () => {
     expect(decision.message).toContain("openai-chat")
     expect(egressRejectionError(decision)).toBeInstanceOf(NoHealthyAccountError)
   })
-  test("a Claude subscription says so by name — the Agent SDK exposes no token count", () => {
+  test("a Claude subscription cannot count, so the router's own estimate answers instead", () => {
+    // The Agent SDK exposes no token-count call, so there is nothing upstream to address. That is
+    // not a refusal: a scope holding only subscriptions has no provider to ask, so the router
+    // answers for itself — labelled, so the number can never be mistaken for a measurement.
     const decision = resolveEgress("anthropic", subscriptionAccount("sub"), "count-tokens")
+    expect(decision.mode).toBe("estimate")
+    if (decision.mode !== "estimate") return
+    expect(decision.driver.id).toBe("anthropic-oauth")
+  })
+  test("a subscription still serves ordinary inference — only counting is narrowed", () => {
+    expect(resolveEgress("anthropic", subscriptionAccount("sub")).mode).toBe("agent-sdk")
+  })
+  test("a subscription still cannot embed — the estimate is a counting answer only", () => {
+    const decision = resolveEgress("openai-chat", subscriptionAccount("sub"), "embeddings")
     expect(decision.mode).toBe("rejected")
     if (decision.mode !== "rejected") return
     expect(decision.reason).toBe("unsupported-operation")

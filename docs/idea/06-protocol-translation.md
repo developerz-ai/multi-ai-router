@@ -110,37 +110,73 @@ before a turn, to decide when to compact its context. A router that 404s it is a
 half-works against.
 
 It is an ordinary data-plane request: same router key, same scope intersection, same health
-snapshot, same failover chain, one `UsageRecord` per attempt. Two things about it are not ordinary.
+snapshot, same failover chain, one `UsageRecord` per attempt. Three things about it are not ordinary.
 
-**It is passthrough or nothing.** A count is a statement about *one provider's tokenizer* for *one
-prompt*, so the only honest answer is the number that provider returns. Neither alternative
-survives contact with what a client does with it:
+**It is passthrough wherever a provider can count.** A count is a statement about *one provider's
+tokenizer* for *one prompt*, so the honest answer is the number that provider returns, and it is
+relayed byte for byte. Neither alternative survives contact with what a client does with it:
 
 | Candidate | Answer | Why |
 |---|---|---|
 | Anthropic-dialect account (API key, or a compatible vendor's Anthropic surface) | **passthrough** to `{baseUrl}/v1/messages/count_tokens` | the provider's own number |
 | `openai-chat` / `openai-responses` account | **not planned** | neither dialect exposes a counting endpoint, and a different tokenizer's count is not an answer to the question asked |
-| Claude subscription (Agent SDK) | **not planned** | the SDK exposes no token-count call, and the router will never forge an `api.anthropic.com` request out of a subscription's credentials — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) |
+| Claude subscription (Agent SDK) | **not planned** — but see the estimate below | the SDK exposes no token-count call, and the router will never forge an `api.anthropic.com` request out of a subscription's credentials — [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) |
 
 The refusal is **per candidate**, so a pool holding one Anthropic API key and four Claude
-subscriptions still answers, off the one account that can. Only when *no* in-scope account can
-count does it surface, and then as a **`503`** — the body was a valid Anthropic request and there is
-no other ingress path to send it down, so what is missing is an Anthropic-dialect account, which
-only the operator can add. That is the same reasoning that makes an unimplemented provider a `503`
-rather than the `400` a missing *translator* gets. **The router never estimates.** A fabricated
-integer is indistinguishable from a measured one at the client, which is the objection that already
-forbids substituting a model. An Anthropic-compatible vendor that never implemented the endpoint
-answers its own `404`, and that `404` is relayed unchanged.
+subscriptions still answers, off the one account that can — and it counts off that account, never
+by estimate. An Anthropic-compatible vendor that never implemented the endpoint answers its own
+`404`, and that `404` is relayed unchanged.
 
-That `503` says *no account can count*, and it must only be said when that is true. **A health
-verdict on an account that could have counted outranks it** — see
-[05-routing-and-failover.md](05-routing-and-failover.md#when-the-chain-is-empty). A pool holding one
-Anthropic account that is cooling down and one OpenAI account that is fine has not run out of
-counters; it has one, and it is back at 14:32. Answering `503` there would tell the operator to add
-an account they already have, and hand the client a permanent-looking refusal for a condition a
-clock fixes — the `cooling_down` versus `exhausted` conflation non-negotiable 7 forbids, one layer
-above where it is usually made. So that request is a `429` with a `Retry-After` naming the cooling
-account, and the operation gap is reported only when nothing held back could have answered it.
+**One scope the router answers for itself.** A subscription cannot be asked: the Agent SDK states
+no token-count call, and forging an `api.anthropic.com` request out of a subscription's own
+credentials is the thing this router exists to refuse. But a subscription is not *declining* — there
+is simply **no provider in a subscription-only scope to ask**. So when the scope holds nothing but
+Claude subscriptions, the router answers with its own estimate, and **says so in the body**:
+
+    { "input_tokens": 1234, "estimated": true, "estimate_basis": "chars-per-token-v1" }
+
+`input_tokens` keeps Anthropic's own field name, so an unmodified client (Claude Code) reads it as
+the compaction threshold it expects. `estimated: true` is what makes the answer distinguishable
+from a measurement, and the three fields always travel together: an `input_tokens` alone would be
+a fabricated number wearing a provider's field name, which is the objection that already forbids
+substituting a model. **The estimate is the router's own and is labelled as such — never a number
+passed off as the provider's.**
+
+**The estimate's basis is an approximation, and it says which one.** This router ships no Claude
+tokenizer, so the number is derived from the size of the request rather than from the provider's
+own vocabulary: the body's textual content — JSON's own punctuation excluded, because braces and
+commas are structure, not prompt — divided by a **named constant**,
+`ESTIMATE_CHARS_PER_TOKEN` (4), and rounded **up**. Up is the safe direction for a compaction
+threshold: a client that compacts slightly early loses a little context, and a client that
+compacts late blows its window. `estimate_basis` names the method (`chars-per-token-v1`) so a
+reader knows which approximation it is looking at. The estimate is **pure** — no clock, no network,
+no store, no second body read (the body is already buffered) — so the same bytes always produce
+the same number.
+
+**The estimate never touches an account.** No upstream is addressed and no SDK subprocess is
+spawned, so no account is cooled down, marked unhealthy, or otherwise disturbed by serving it. The
+`UsageRecord` it writes carries **no account and no provider** (both null, as a preflight refusal
+does) and **no egress mode** — there was no egress path.
+
+**The precedence is three-way, and the order is the point.**
+
+1. **A health verdict on an account that could have counted wins.** `429` with a `Retry-After`
+   (cooling down, spent window, probe in flight) or `402` (exhausted). Never an estimate over a
+   clock-recoverable condition: the operator is one coffee away from a working account, and "no
+   account can do this" is a lie that outlives the coffee. A pool holding one Anthropic account
+   that is cooling down and one OpenAI account that is fine has not run out of counters; it has
+   one, and it is back at 14:32. Answering `503` there would tell the operator to add an account
+   they already have, and hand the client a permanent-looking refusal for a condition a clock fixes
+   — the `cooling_down` versus `exhausted` conflation non-negotiable 7 forbids, one layer above
+   where it is usually made. See
+   [05-routing-and-failover.md](05-routing-and-failover.md#when-the-chain-is-empty).
+2. **Then the labelled estimate**, for a scope holding nothing but Claude subscriptions with
+   nothing held back.
+3. **Then the named refusal** — a **`503`** — for every other scope that cannot count, such as an
+   OpenAI-only pool. The body was a valid Anthropic request and there is no other ingress path to
+   send it down, so what is missing is an Anthropic-dialect account, which only the operator can
+   add. That is the same reasoning that makes an unimplemented provider a `503` rather than the
+   `400` a missing *translator* gets.
 
 **Its `input_tokens` is never accounted, and it is never priced.** The response measures a prompt
 that was never run, so the relay observes bytes and no tokens on this path: the `UsageRecord`
@@ -150,7 +186,14 @@ number would price a question as though it were a completion; recording a *zero*
 better, because zeroed counts against a model the price table knows come back as
 `metered $0.000000`, which sums into a spend report as a completion that was free rather than as no
 completion at all. Whether the model happens to be in the table may not change the shape of the
-answer.
+answer. The estimate is held to the same rule — zero token columns, no cost — so a count reads the
+same in the spend report whichever path produced it.
+
+**The estimate's own row is a success, not a routing failure.** It is `outcome: "success"` — never
+`no_healthy_account`, never an error class. A count the router answered for itself is an answered
+request; recording it as a failure would put a `NoHealthyAccountError` row in the usage feed for a
+request that in fact succeeded, and would report the operator's pool as broken when nothing was
+tried. The failure the estimate replaces is gone from the usage rows entirely.
 
 ## Embeddings
 
