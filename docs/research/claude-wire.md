@@ -280,7 +280,10 @@ TLS/header-order parity or safe deployment of a reconstructed transport.
 
 Run `bin/claude-trace versions` to compare installed SDK with the npm registry;
 `bin/claude-trace update-sdk` updates its dependency/lockfile without silently recalibrating fast
-mode. Capture the new CLI version before extending the calibrated version table. Run
+mode. The updater records the selected SDK version as an **exact** dependency in
+`apps/api/package.json` (and `bun.lock`) — the version it selects, never a `^`/`~`/`>=` range — so
+the manifest keeps the same exact-pin contract a hand edit would leave behind. Capture the new CLI
+version before extending the calibrated version table. Run
 `bin/claude-trace transport --model <explicit-model>` for the isolated local TLS/header-order
 comparison; it uses fake credentials and a local HTTPS stub, with no provider inference.
 

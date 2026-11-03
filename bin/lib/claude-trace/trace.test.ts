@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test"
+import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { inspectIntegrity, versionSuffix } from "./integrity"
 import { parse, traceEnv } from "./options"
+import { sdkInstallCommand, sdkInstallSpec, sdkVersion } from "./sdk-version"
 import { summarizeFlow } from "./summary"
+
+const REPO_ROOT = resolve(import.meta.dir, "../../..")
+const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk"
 
 describe("Claude wire diagnostics (offline)", () => {
   test("collector redacts secrets, excludes token exchange, and forwards streaming chunks unchanged", async () => {
@@ -139,5 +144,53 @@ describe("captured CLI integrity projection", () => {
   })
   test("version suffix uses original user text, not inserted context", () => {
     expect(versionSuffix("Remember the marker ORCHID_42. Reply briefly.", "2.1.301")).toBe("e0b")
+  })
+})
+
+describe("SDK update pin", () => {
+  test("the install spec names the exact SDK version, never a range", () => {
+    const spec = sdkInstallSpec("0.3.301")
+    expect(spec).toBe(`${SDK_PACKAGE}@0.3.301`)
+    expect(spec).not.toMatch(/[\^~><*]/)
+    expect(spec).not.toContain(" ")
+  })
+
+  test("a range operator in the selected version is refused, not installed", () => {
+    for (const ranged of ["^0.3.301", "~0.3.301", ">=0.3.301", ">0.3.301", "<=0.3.301", "*"]) {
+      expect(() => sdkInstallSpec(ranged)).toThrow()
+    }
+  })
+
+  test("the installer records the dependency as exact, not as bun's default range", () => {
+    const command = sdkInstallCommand(sdkInstallSpec("0.3.301"))
+    expect(command).toContain("--exact")
+    expect(command.indexOf("--exact")).toBeGreaterThan(-1)
+    expect(command.at(-1)).toBe(`${SDK_PACKAGE}@0.3.301`)
+    // The flag must reach `bun add`, not the spec: `--exact` after the spec
+    // would be parsed as an argument to the package name.
+    expect(command.indexOf("--exact")).toBeLessThan(command.indexOf(`${SDK_PACKAGE}@0.3.301`))
+  })
+
+  test("the update path installs the exact selected version without touching the network", async () => {
+    const installed: string[] = []
+    await sdkVersion(true, {
+      installedVersion: async () => "0.3.300",
+      latestVersion: async () => "0.3.301",
+      install: async (spec) => {
+        installed.push(spec)
+      },
+    })
+    expect(installed).toEqual([`${SDK_PACKAGE}@0.3.301`])
+    expect(installed.at(0)).not.toMatch(/[\^~><*]/)
+  })
+
+  test("apps/api pins the SDK to an exact version, not a range", async () => {
+    const manifest = JSON.parse(
+      await readFile(resolve(REPO_ROOT, "apps/api/package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> }
+    const declared = manifest.dependencies?.[SDK_PACKAGE]
+    expect(declared).toBeDefined()
+    expect(declared).not.toMatch(/[\^~><*]/)
+    expect(declared).toMatch(/^\d+\.\d+\.\d+$/)
   })
 })
