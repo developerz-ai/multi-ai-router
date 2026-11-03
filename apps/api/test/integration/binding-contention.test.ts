@@ -3,6 +3,11 @@ import { runBindingContention } from "../../bench/binding-contention"
 
 const url = process.env.DATABASE_URL
 describe.skipIf(!url)("offline actual binding contention fixture", () => {
+  // The fixture drives 32 indexed/cache reads against a live Postgres, so its runtime
+  // tracks the machine rather than the code under test. `bun test`'s default 5 s
+  // per-test budget assumes an idle box; a loaded one (a full-suite run beside other
+  // work) stretches it past that and fails a fixture that is in fact green.
+  const DB_TEST_TIMEOUT_MS = 30_000
   test.each([0, 1])(
     "indexed/cache reads stay truthful after discarding %i warmup requests",
     async (warmup) => {
@@ -25,5 +30,6 @@ describe.skipIf(!url)("offline actual binding contention fixture", () => {
         expect(row.failures).toBe(0)
       }
     },
+    DB_TEST_TIMEOUT_MS,
   )
 })

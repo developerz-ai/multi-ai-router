@@ -6,12 +6,25 @@ import type { PoolSample } from "./pool-metrics"
 export type SessionAdvisoryLockResult<T> =
   | { acquired: true; value: T }
   | { acquired: false; reason: "busy" | "capacity" | "aborted" }
+/**
+ * One held advisory lock. A session lock lives on one reserved connection, so it must never
+ * outlive that connection: `release` is idempotent, and the lease also releases itself when the
+ * holder's signal aborts or the pool stops or loses its session.
+ */
+export interface SessionAdvisoryLease {
+  release(): Promise<void>
+}
 export interface SessionAdvisoryLock {
   tryRun<T>(
     key: number,
     signal: AbortSignal,
     work: (lockSignal: AbortSignal) => Promise<T>,
   ): Promise<SessionAdvisoryLockResult<T>>
+  /** Takes the lock without running work; the caller holds it until `lease.release()`. */
+  tryAcquire(
+    key: number,
+    signal: AbortSignal,
+  ): Promise<SessionAdvisoryLockResult<SessionAdvisoryLease>>
 }
 export interface SessionAdvisoryLockPoolOptions {
   readonly lockClass: number
@@ -120,11 +133,43 @@ export function createSessionAdvisoryLockPool(
     }
   }
 
-  async function run<T>(
+  /** Everything tryRun and tryAcquire share, from admission to a held, session-locked key. */
+  interface HeldLock {
+    readonly acquired: true
+    readonly key: number
+    readonly owner: Generation
+    readonly controller: AbortController
+    readonly reserved: postgres.ReservedSql
+    readonly finish: () => void
+  }
+
+  /** The cleanup tryRun's finally performs: unlock, hand the connection back, un-bookkeep. */
+  async function releaseHeld(
+    held: Pick<HeldLock, "key" | "owner" | "reserved" | "finish">,
+    acquired: boolean,
+  ): Promise<void> {
+    try {
+      if (acquired && !held.owner.retired) {
+        const rows = await query(
+          held.owner,
+          held.reserved<
+            { unlocked: boolean }[]
+          >`select pg_advisory_unlock(${options.lockClass}, ${held.key}) as unlocked`,
+        )
+        if (rows[0]?.unlocked !== true) await retire(held.owner)
+      }
+    } catch {
+      await retire(held.owner)
+    } finally {
+      held.reserved.release()
+      held.finish()
+    }
+  }
+
+  async function acquire(
     key: number,
     signal: AbortSignal,
-    work: (lockSignal: AbortSignal) => Promise<T>,
-  ): Promise<SessionAdvisoryLockResult<T>> {
+  ): Promise<HeldLock | { acquired: false; reason: "busy" | "capacity" | "aborted" }> {
     if (stopping || signal.aborted) return { acquired: false, reason: "aborted" }
     if (current?.retired) return { acquired: false, reason: "capacity" }
     const owner = generation()
@@ -156,6 +201,7 @@ export function createSessionAdvisoryLockPool(
     let reserved: postgres.ReservedSql | undefined
     let acquired = false
     let lateCleanup = false
+    let keep = false
     const timeout = setTimeout(
       () => controller.abort(new Error("session advisory reservation deadline")),
       connectTimeout * 1000,
@@ -207,35 +253,83 @@ export function createSessionAdvisoryLockPool(
       if (!acquired) return { acquired: false, reason: "busy" }
       if (controller.signal.aborted || owner.retired || stopping)
         return { acquired: false, reason: "aborted" }
-      return { acquired: true, value: await work(controller.signal) }
+      // Past this line the caller owns the cleanup; the finally below must not run it too.
+      keep = true
+      return { acquired: true, key, owner, controller, reserved, finish }
     } catch (error) {
       if (!acquired && controller.signal.aborted) return { acquired: false, reason: "aborted" }
       throw error
     } finally {
       clearTimeout(timeout)
-      if (reserved !== undefined) {
-        try {
-          if (acquired && !owner.retired) {
-            const rows = await query(
-              owner,
-              reserved<
-                { unlocked: boolean }[]
-              >`select pg_advisory_unlock(${options.lockClass}, ${key}) as unlocked`,
-            )
-            if (rows[0]?.unlocked !== true) await retire(owner)
-          }
-        } catch {
-          await retire(owner)
-        } finally {
-          reserved.release()
-          finish()
-        }
-      } else if (!lateCleanup) finish()
+      if (!keep) {
+        if (reserved !== undefined) await releaseHeld({ key, owner, reserved, finish }, acquired)
+        else if (!lateCleanup) finish()
+      }
     }
+  }
+
+  async function run<T>(
+    key: number,
+    signal: AbortSignal,
+    work: (lockSignal: AbortSignal) => Promise<T>,
+  ): Promise<SessionAdvisoryLockResult<T>> {
+    const held = await acquire(key, signal)
+    if (!held.acquired) return held
+    try {
+      if (held.controller.signal.aborted || held.owner.retired || stopping)
+        return { acquired: false, reason: "aborted" }
+      return { acquired: true, value: await work(held.controller.signal) }
+    } finally {
+      await releaseHeld(held, true)
+    }
+  }
+
+  async function acquireLease(
+    key: number,
+    signal: AbortSignal,
+  ): Promise<SessionAdvisoryLockResult<SessionAdvisoryLease>> {
+    const held = await acquire(key, signal)
+    if (!held.acquired) return held
+    const { controller } = held
+    let released = false
+    let resolveFinished: () => void = () => undefined
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve
+    })
+    // Tracked beside run() operations, so close() waits for a lease's release the same way.
+    active.add(finished)
+    let release: () => Promise<void>
+    const onAbort = (): void => {
+      void release().catch(() => undefined)
+    }
+    release = async (): Promise<void> => {
+      if (released) return
+      released = true
+      controller.signal.removeEventListener("abort", onAbort)
+      try {
+        await releaseHeld(held, true)
+      } finally {
+        resolveFinished()
+        active.delete(finished)
+      }
+    }
+    // acquire() checked the holder signal before handing over; cover the gap since.
+    controller.signal.addEventListener("abort", onAbort, { once: true })
+    if (controller.signal.aborted) void onAbort()
+    return { acquired: true, value: { release } }
   }
   return {
     tryRun: (id, signal, work) => {
       const operation = run(id, signal, work)
+      active.add(operation)
+      void operation.then(
+        () => active.delete(operation),
+        () => active.delete(operation),
+      )
+      return operation
+    },
+    tryAcquire: (id, signal) => {
+      const operation = acquireLease(id, signal)
       active.add(operation)
       void operation.then(
         () => active.delete(operation),

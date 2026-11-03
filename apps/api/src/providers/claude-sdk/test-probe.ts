@@ -171,7 +171,7 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         ceilingMessage: AT_CEILING,
       })
       if (!prepared.ok) return prepared.result
-      const { slot } = prepared
+      const { slot, releaseRefreshClaim } = prepared
 
       const controller = new AbortController()
       const onAbort = (): void => controller.abort(input.signal.reason)
@@ -253,7 +253,9 @@ export function createSdkTestProbe(options: SdkTestProbeOptions): SdkTestProbe {
         input.signal.removeEventListener("abort", onAbort)
         // The subprocess dies with the iterator, so the slot is free the moment this scope is:
         // holding it past the answer would shrink the ceiling by one for every probe ever run.
+        // The refresh-window claim goes back with it — same exit, same moment.
         slot.release()
+        releaseRefreshClaim()
       }
     },
   }

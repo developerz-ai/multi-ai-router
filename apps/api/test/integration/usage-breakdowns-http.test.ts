@@ -37,6 +37,16 @@ const HOUR = 3_600_000
 const DAY = 86_400_000
 const now = new Date()
 
+/**
+ * Every test below does live Postgres work — key creation, a usage batch insert, a
+ * breakdown query — so its runtime is a function of the machine, not of the code under
+ * test. `bun test`'s default 5 s per-test budget assumes an idle box; a loaded one
+ * (a full-suite run beside other work) stretches the seed past it and takes the rest
+ * of the suite down with it, because every other test reads the `app` the seed built.
+ * 30 s is the budget the other Postgres-backed integration suites in this repo declare.
+ */
+const DB_TEST_TIMEOUT_MS = 30_000
+
 interface Row {
   readonly id: string | null
   readonly label: string | null
@@ -146,238 +156,286 @@ const wireId = (bucket: string) => (bucket.startsWith("#") ? null : bucket)
 const wireNote = (bucket: string) => (bucket.startsWith("#") ? bucket.slice(1) : null)
 
 describe.skipIf(!historyUrl)("usage owner and tool breakdowns over HTTP and Postgres", () => {
-  test("seed", async () => {
-    const db = fixture.db()
-    const keys = createApiKeyRepository(db)
-    const tombstones = createApiKeyTombstoneRepository(db)
-    const keysService = createKeysService({
-      keys,
-      mutations: createAdminMutationRepository(db),
-      onCommitted: () => {},
-      cipher: { encrypt: (s) => `enc:${s}`, decrypt: (s) => s.replace(/^enc:/, "") },
-      audit: createAuditRecorder(createAuditRepository(db)),
-      now: () => new Date(),
-    })
-    const make = async (name: string, rest: Record<string, string>) => {
-      const created = await keysService.create({ name, ...rest } as never)
-      if (!created.ok) throw new Error("create failed")
-      return created.value.id
-    }
-    ids.aliceEditor = await make("alice-editor", {
-      owner: "alice",
-      ownerKind: "person",
-      tool: "editor",
-    })
-    ids.bobEditor = await make("bob-editor", { owner: "bob", ownerKind: "person", tool: "editor" })
-    ids.svcAlice = await make("svc-alice", { owner: "alice", ownerKind: "service", tool: "cli" })
-    ids.unassignedKey = await make("literal", {
-      owner: "unassigned",
-      ownerKind: "person",
-      tool: "unassigned",
-    })
-    ids.bare = await make("bare", {})
-    ids.carol = await make("carol", { owner: "carol" })
-    for (const slot of ["dave1", "dave2", "dave3"] as const)
-      ids[slot] = await make(slot, { owner: "dave", ownerKind: "person", tool: "dx" })
-    ids.ghost = crypto.randomUUID()
-    ids.none = ""
-    expect((await keysService.remove(ids.bobEditor)).ok).toBe(true)
-
-    const attempts = sources.flatMap((s) =>
-      attemptsOf(s).map((age) =>
-        historyAttempt({
-          apiKeyId: s.slot === "none" ? null : ids[s.slot],
-          model: "m1",
-          latencyMs: s.latency,
-          costBasis: s.basis,
-          costEstimate: "0.100000",
-          tokensIn: 10,
-          tokensOut: 5,
-          createdAt: new Date(now.getTime() - age),
-        }),
-      ),
-    )
-    await fixture.usage().insertBatch({
-      attempts,
-      terminals: attempts.map((a) =>
-        historyTerminal(a, {
-          outcome: a.outcome,
-          settledAt: new Date((a.createdAt as Date).getTime() + 1_000),
-        }),
-      ),
-    })
-    const build = (breakdownMaxRows: number) => {
-      const service = createUsageService({
-        exportMaxRows: 50_000,
-        history: fixture.history(),
-        recent: createUsageRecentRepository(db),
-        labels: catalogLabels({
-          keys,
-          tombstones,
-          catalog: { accounts: () => [], pools: () => [] },
-        }),
+  test(
+    "seed",
+    async () => {
+      const db = fixture.db()
+      const keys = createApiKeyRepository(db)
+      const tombstones = createApiKeyTombstoneRepository(db)
+      const keysService = createKeysService({
+        keys,
+        mutations: createAdminMutationRepository(db),
+        onCommitted: () => {},
+        cipher: { encrypt: (s) => `enc:${s}`, decrypt: (s) => s.replace(/^enc:/, "") },
+        audit: createAuditRecorder(createAuditRepository(db)),
         now: () => new Date(),
-        breakdownMaxRows,
       })
-      const hono = new Hono<AdminAuthEnv>()
-      hono.route(
-        ADMIN_USAGE_BASE_PATH,
-        adminUsageRoutes({
-          service,
-          guard: async (_c, next) => next(),
-          reports: unreachableUsageReports(),
-          delivery: unreachableReportDelivery(),
-        }),
+      const make = async (name: string, rest: Record<string, string>) => {
+        const created = await keysService.create({ name, ...rest } as never)
+        if (!created.ok) throw new Error("create failed")
+        return created.value.id
+      }
+      ids.aliceEditor = await make("alice-editor", {
+        owner: "alice",
+        ownerKind: "person",
+        tool: "editor",
+      })
+      ids.bobEditor = await make("bob-editor", {
+        owner: "bob",
+        ownerKind: "person",
+        tool: "editor",
+      })
+      ids.svcAlice = await make("svc-alice", { owner: "alice", ownerKind: "service", tool: "cli" })
+      ids.unassignedKey = await make("literal", {
+        owner: "unassigned",
+        ownerKind: "person",
+        tool: "unassigned",
+      })
+      ids.bare = await make("bare", {})
+      ids.carol = await make("carol", { owner: "carol" })
+      for (const slot of ["dave1", "dave2", "dave3"] as const)
+        ids[slot] = await make(slot, { owner: "dave", ownerKind: "person", tool: "dx" })
+      ids.ghost = crypto.randomUUID()
+      ids.none = ""
+      expect((await keysService.remove(ids.bobEditor)).ok).toBe(true)
+
+      const attempts = sources.flatMap((s) =>
+        attemptsOf(s).map((age) =>
+          historyAttempt({
+            apiKeyId: s.slot === "none" ? null : ids[s.slot],
+            model: "m1",
+            latencyMs: s.latency,
+            costBasis: s.basis,
+            costEstimate: "0.100000",
+            tokensIn: 10,
+            tokensOut: 5,
+            createdAt: new Date(now.getTime() - age),
+          }),
+        ),
       )
-      return hono
-    }
-    app = build(100)
-    tinyApp = build(2)
-  })
+      await fixture.usage().insertBatch({
+        attempts,
+        terminals: attempts.map((a) =>
+          historyTerminal(a, {
+            outcome: a.outcome,
+            settledAt: new Date((a.createdAt as Date).getTime() + 1_000),
+          }),
+        ),
+      })
+      const build = (breakdownMaxRows: number) => {
+        const service = createUsageService({
+          exportMaxRows: 50_000,
+          history: fixture.history(),
+          recent: createUsageRecentRepository(db),
+          labels: catalogLabels({
+            keys,
+            tombstones,
+            catalog: { accounts: () => [], pools: () => [] },
+          }),
+          now: () => new Date(),
+          breakdownMaxRows,
+        })
+        const hono = new Hono<AdminAuthEnv>()
+        hono.route(
+          ADMIN_USAGE_BASE_PATH,
+          adminUsageRoutes({
+            service,
+            guard: async (_c, next) => next(),
+            reports: unreachableUsageReports(),
+            delivery: unreachableReportDelivery(),
+          }),
+        )
+        return hono
+      }
+      app = build(100)
+      tinyApp = build(2)
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
   for (const [wname, wquery, inWindow] of WINDOWS) {
-    test(`${wname}: byOwner and byTool rows equal the hand sums, one row per bucket`, async () => {
-      const { status, body } = await get(app, wquery)
-      expect(status).toBe(200)
-      for (const [rows, pick] of [
-        [body.byOwner, (s: Source) => s.owner],
-        [body.byTool, (s: Source) => s.tool],
-      ] as const) {
-        const expected = want(pick, inWindow)
-        expect(rows.length).toBe(expected.size)
-        for (const [bucket, attempts] of expected) {
-          const row = byId(rows, wireId(bucket), wireNote(bucket))
-          expect(row?.totals.attempts).toBe(attempts)
-          expect(row?.totals.requests).toBe(attempts)
-          expect(row?.totals.tokensIn).toBe(attempts * 10)
-          expect(row?.series.reduce((n, v) => n + v, 0)).toBe(attempts)
+    test(
+      `${wname}: byOwner and byTool rows equal the hand sums, one row per bucket`,
+      async () => {
+        const { status, body } = await get(app, wquery)
+        expect(status).toBe(200)
+        for (const [rows, pick] of [
+          [body.byOwner, (s: Source) => s.owner],
+          [body.byTool, (s: Source) => s.tool],
+        ] as const) {
+          const expected = want(pick, inWindow)
+          expect(rows.length).toBe(expected.size)
+          for (const [bucket, attempts] of expected) {
+            const row = byId(rows, wireId(bucket), wireNote(bucket))
+            expect(row?.totals.attempts).toBe(attempts)
+            expect(row?.totals.requests).toBe(attempts)
+            expect(row?.totals.tokensIn).toBe(attempts * 10)
+            expect(row?.series.reduce((n, v) => n + v, 0)).toBe(attempts)
+          }
+          expect(rows.reduce((n, r) => n + r.totals.attempts, 0)).toBe(body.totals.attempts)
         }
-        expect(rows.reduce((n, r) => n + r.totals.attempts, 0)).toBe(body.totals.attempts)
-      }
-    })
+      },
+      DB_TEST_TIMEOUT_MS,
+    )
   }
 
-  test("each non-owner bucket is its own row with a null id, a null label and its own note", async () => {
-    const { body } = await get(app, "window=7d")
-    for (const rows of [body.byOwner, body.byTool]) {
-      for (const note of ["unassigned", "deleted", "none"]) {
-        const found = rows.filter((r) => r.id === null && r.note === note)
-        expect(found.length).toBe(1)
-        expect(found[0]?.label).toBeNull()
-        // Only owner rows carry the field; on them it is null, never merely absent.
-        if (rows === body.byOwner) expect(found[0]?.ownerKind).toBeNull()
-      }
-    }
-  })
-
-  test("latency and series follow the bucket, not the null id", async () => {
-    const { body } = await get(app, "window=7d")
-    const latencyOf = (slot: Slot) => sources.find((s) => s.slot === slot)?.latency
-    for (const note of ["deleted", "none"] as const) {
-      const slot = note === "deleted" ? "ghost" : "none"
+  test(
+    "each non-owner bucket is its own row with a null id, a null label and its own note",
+    async () => {
+      const { body } = await get(app, "window=7d")
       for (const rows of [body.byOwner, body.byTool]) {
-        const row = byId(rows, null, note)
-        expect(row?.latencyP50Ms).toBe(latencyOf(slot))
-        expect(row?.latencyP95Ms).toBe(latencyOf(slot))
+        for (const note of ["unassigned", "deleted", "none"]) {
+          const found = rows.filter((r) => r.id === null && r.note === note)
+          expect(found.length).toBe(1)
+          expect(found[0]?.label).toBeNull()
+          // Only owner rows carry the field; on them it is null, never merely absent.
+          if (rows === body.byOwner) expect(found[0]?.ownerKind).toBeNull()
+        }
       }
-    }
-    expect(byId(body.byOwner, null, "unassigned")?.latencyP50Ms).toBe(latencyOf("bare"))
-    expect(byId(body.byOwner, "person/alice")?.latencyP95Ms).toBe(latencyOf("aliceEditor"))
-    expect(byId(body.byTool, "cli")?.latencyP95Ms).toBe(latencyOf("svcAlice"))
-  })
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
-  test("an owner and a tool literally named unassigned are their own rows", async () => {
-    const { body } = await get(app, "window=7d")
-    const owner = byId(body.byOwner, "person/unassigned")
-    expect(owner?.label).toBe("unassigned")
-    expect(owner?.note).toBeNull()
-    expect(owner?.totals.attempts).toBe(2)
-    expect(byId(body.byTool, "unassigned")?.totals.attempts).toBe(2)
-    expect(byId(body.byOwner, null, "unassigned")?.totals.attempts).toBe(1)
-    expect(byId(body.byTool, null, "unassigned")?.totals.attempts).toBe(3)
-  })
+  test(
+    "latency and series follow the bucket, not the null id",
+    async () => {
+      const { body } = await get(app, "window=7d")
+      const latencyOf = (slot: Slot) => sources.find((s) => s.slot === slot)?.latency
+      for (const note of ["deleted", "none"] as const) {
+        const slot = note === "deleted" ? "ghost" : "none"
+        for (const rows of [body.byOwner, body.byTool]) {
+          const row = byId(rows, null, note)
+          expect(row?.latencyP50Ms).toBe(latencyOf(slot))
+          expect(row?.latencyP95Ms).toBe(latencyOf(slot))
+        }
+      }
+      expect(byId(body.byOwner, null, "unassigned")?.latencyP50Ms).toBe(latencyOf("bare"))
+      expect(byId(body.byOwner, "person/alice")?.latencyP95Ms).toBe(latencyOf("aliceEditor"))
+      expect(byId(body.byTool, "cli")?.latencyP95Ms).toBe(latencyOf("svcAlice"))
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
-  test("a person and a service sharing a slug are two byOwner rows; no kind is null", async () => {
-    const { body } = await get(app, "window=7d")
-    const person = byId(body.byOwner, "person/alice")
-    const service = byId(body.byOwner, "service/alice")
-    expect(person?.ownerKind).toBe("person")
-    expect(service?.ownerKind).toBe("service")
-    expect(person?.label).toBe("alice")
-    expect(service?.label).toBe("alice")
-    expect(person?.totals.attempts).toBe(4)
-    expect(service?.totals.attempts).toBe(3)
-    const carol = byId(body.byOwner, "unknown/carol")
-    expect(carol?.ownerKind).toBeNull()
-    expect(carol?.label).toBe("carol")
-    expect(byId(body.byTool, "editor")?.label).toBe("editor")
-  })
+  test(
+    "an owner and a tool literally named unassigned are their own rows",
+    async () => {
+      const { body } = await get(app, "window=7d")
+      const owner = byId(body.byOwner, "person/unassigned")
+      expect(owner?.label).toBe("unassigned")
+      expect(owner?.note).toBeNull()
+      expect(owner?.totals.attempts).toBe(2)
+      expect(byId(body.byTool, "unassigned")?.totals.attempts).toBe(2)
+      expect(byId(body.byOwner, null, "unassigned")?.totals.attempts).toBe(1)
+      expect(byId(body.byTool, null, "unassigned")?.totals.attempts).toBe(3)
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
-  test("retired is true only for a key that exists only as a tombstone", async () => {
-    const { body } = await get(app, "window=7d")
-    expect(byId(body.byKey, ids.bobEditor)?.retired).toBe(true)
-    expect(byId(body.byKey, ids.aliceEditor)?.retired).toBe(false)
-    const ghost = byId(body.byKey, ids.ghost)
-    expect(ghost?.note).toBe("deleted")
-    expect(ghost?.retired).toBe(false)
-    const none = byId(body.byKey, null, "none")
-    expect(none?.retired).toBe(false)
-    expect(byId(body.byKey, ids.bobEditor)?.note).toBeNull()
-  })
+  test(
+    "a person and a service sharing a slug are two byOwner rows; no kind is null",
+    async () => {
+      const { body } = await get(app, "window=7d")
+      const person = byId(body.byOwner, "person/alice")
+      const service = byId(body.byOwner, "service/alice")
+      expect(person?.ownerKind).toBe("person")
+      expect(service?.ownerKind).toBe("service")
+      expect(person?.label).toBe("alice")
+      expect(service?.label).toBe("alice")
+      expect(person?.totals.attempts).toBe(4)
+      expect(service?.totals.attempts).toBe(3)
+      const carol = byId(body.byOwner, "unknown/carol")
+      expect(carol?.ownerKind).toBeNull()
+      expect(carol?.label).toBe("carol")
+      expect(byId(body.byTool, "editor")?.label).toBe("editor")
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
-  test("many keys fold into one owner row before the cap", async () => {
-    const { body } = await get(tinyApp, "window=7d&owner=dave")
-    expect(body.byKey.length).toBe(2)
-    expect(body.coverage.breakdown.truncated).toContain("apiKeyId")
-    expect(body.coverage.breakdown.truncated).not.toContain("owner")
-    expect(body.byOwner.length).toBe(1)
-    expect(body.byOwner[0]?.totals.attempts).toBe(6)
-    expect(body.byTool.length).toBe(1)
-    expect(body.byTool[0]?.totals.attempts).toBe(6)
-  })
+  test(
+    "retired is true only for a key that exists only as a tombstone",
+    async () => {
+      const { body } = await get(app, "window=7d")
+      expect(byId(body.byKey, ids.bobEditor)?.retired).toBe(true)
+      expect(byId(body.byKey, ids.aliceEditor)?.retired).toBe(false)
+      const ghost = byId(body.byKey, ids.ghost)
+      expect(ghost?.note).toBe("deleted")
+      expect(ghost?.retired).toBe(false)
+      const none = byId(body.byKey, null, "none")
+      expect(none?.retired).toBe(false)
+      expect(byId(body.byKey, ids.bobEditor)?.note).toBeNull()
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
-  test("coverage.breakdown.truncated names owner and tool when capped", async () => {
-    const { body } = await get(tinyApp, "window=7d")
-    expect(body.coverage.breakdown.truncated).toContain("owner")
-    expect(body.coverage.breakdown.truncated).toContain("tool")
-    expect(body.byOwner.length).toBe(2)
-  })
+  test(
+    "many keys fold into one owner row before the cap",
+    async () => {
+      const { body } = await get(tinyApp, "window=7d&owner=dave")
+      expect(body.byKey.length).toBe(2)
+      expect(body.coverage.breakdown.truncated).toContain("apiKeyId")
+      expect(body.coverage.breakdown.truncated).not.toContain("owner")
+      expect(body.byOwner.length).toBe(1)
+      expect(body.byOwner[0]?.totals.attempts).toBe(6)
+      expect(body.byTool.length).toBe(1)
+      expect(body.byTool[0]?.totals.attempts).toBe(6)
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
-  test("metered and notional are never summed", async () => {
-    const { body } = await get(app, "window=7d")
-    const bob = byId(body.byOwner, "person/bob") as unknown as {
-      totals: { attempts: number; costMetered: string; costNotional: string }
-    }
-    expect(bob.totals.attempts).toBe(2)
-    expect(Number(bob.totals.costMetered)).toBe(0)
-    expect(Number(bob.totals.costNotional)).toBeCloseTo(0.2, 6)
-  })
+  test(
+    "coverage.breakdown.truncated names owner and tool when capped",
+    async () => {
+      const { body } = await get(tinyApp, "window=7d")
+      expect(body.coverage.breakdown.truncated).toContain("owner")
+      expect(body.coverage.breakdown.truncated).toContain("tool")
+      expect(body.byOwner.length).toBe(2)
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 
-  test("a window served from usage_daily groups the same way", async () => {
-    const sql = fixture.get().sql
-    await sql.unsafe("alter table usage_daily disable trigger usage_history_baseline_seal")
-    const account = crypto.randomUUID()
-    await fixture.db().insert(usageDaily).values({
-      day: "1984-03-01",
-      apiKeyId: ids.aliceEditor,
-      accountId: account,
-      model: "m1",
-      requests: 6,
-      attempts: 6,
-    })
-    await fixture.db().insert(usageDaily).values({
-      day: "1984-03-02",
-      apiKeyId: ids.ghost,
-      accountId: account,
-      model: "m1",
-      requests: 2,
-      attempts: 2,
-    })
-    await sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
-    const { body } = await get(app, "from=1984-02-28T00:00:00.000Z&to=1984-03-05T00:00:00.000Z")
-    expect(byId(body.byOwner, "person/alice")?.totals.attempts).toBe(6)
-    expect(byId(body.byOwner, null, "deleted")?.totals.attempts).toBe(2)
-    expect(byId(body.byTool, "editor")?.totals.attempts).toBe(6)
-    expect(body.byOwner.length).toBe(2)
-  })
+  test(
+    "metered and notional are never summed",
+    async () => {
+      const { body } = await get(app, "window=7d")
+      const bob = byId(body.byOwner, "person/bob") as unknown as {
+        totals: { attempts: number; costMetered: string; costNotional: string }
+      }
+      expect(bob.totals.attempts).toBe(2)
+      expect(Number(bob.totals.costMetered)).toBe(0)
+      expect(Number(bob.totals.costNotional)).toBeCloseTo(0.2, 6)
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
+
+  test(
+    "a window served from usage_daily groups the same way",
+    async () => {
+      const sql = fixture.get().sql
+      await sql.unsafe("alter table usage_daily disable trigger usage_history_baseline_seal")
+      const account = crypto.randomUUID()
+      await fixture.db().insert(usageDaily).values({
+        day: "1984-03-01",
+        apiKeyId: ids.aliceEditor,
+        accountId: account,
+        model: "m1",
+        requests: 6,
+        attempts: 6,
+      })
+      await fixture.db().insert(usageDaily).values({
+        day: "1984-03-02",
+        apiKeyId: ids.ghost,
+        accountId: account,
+        model: "m1",
+        requests: 2,
+        attempts: 2,
+      })
+      await sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
+      const { body } = await get(app, "from=1984-02-28T00:00:00.000Z&to=1984-03-05T00:00:00.000Z")
+      expect(byId(body.byOwner, "person/alice")?.totals.attempts).toBe(6)
+      expect(byId(body.byOwner, null, "deleted")?.totals.attempts).toBe(2)
+      expect(byId(body.byTool, "editor")?.totals.attempts).toBe(6)
+      expect(body.byOwner.length).toBe(2)
+    },
+    DB_TEST_TIMEOUT_MS,
+  )
 })

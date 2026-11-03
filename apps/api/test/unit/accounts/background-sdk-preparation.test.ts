@@ -75,6 +75,7 @@ function fixture(mode: Mode) {
       wouldRefresh: async () => false,
       ensureFresh: async () => {
         if (mode === "freshness") throw new Error("offline freshness unavailable")
+        return { release: () => {} }
       },
     },
     ownerLaunch: () => {

@@ -3,7 +3,11 @@ import { query } from "@anthropic-ai/claude-agent-sdk"
 import { UpstreamAdmissionRefused } from "../upstream-admission"
 import { createCliProbe } from "./cli-probe"
 import type { SdkConcurrency, SdkSlot } from "./concurrency"
-import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
+import {
+  ALWAYS_FRESH,
+  type CredentialFreshness,
+  type CredentialRefreshClaim,
+} from "./credential-freshness"
 import { classifySdkFailure } from "./errors"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
@@ -30,8 +34,10 @@ import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
  *    body" and the exception is only affordable once.
  * 2. **Resolve the binary** (`resolve-cli.ts`) before anything is spawned, so a deployment with no
  *    usable `claude` fails as a router misconfiguration rather than as a mysterious subprocess death.
- * 3. **Take a slot** (`concurrency.ts`) — per-Account first, global second. A caller aborted while
- *    queued throws the signal's own reason, so a deadline stays a deadline.
+ * 3. **Take a slot** (`concurrency.ts`) — per-Account first, global second, both freshness claims
+ *    taken around it: before the queue and again on grant, so a caller that crossed the expiry
+ *    boundary while queued re-enters the window instead of spawning an uncoordinated refresher.
+ *    A caller aborted while queued throws the signal's own reason, so a deadline stays a deadline.
  * 4. **Register the client's tools** (`tools/`) — only if it sent any, and registering widens
  *    nothing: `allowlist.ts` still decides what may execute, which is nothing (§7).
  * 5. **Launch** (`options.ts`) — isolation flags, the abort bridge, and the lineage plan verbatim.
@@ -86,8 +92,9 @@ export interface SdkInvokerDeps {
   readonly concurrency: SdkConcurrency
   /**
    * Lets one subprocess cross this Account's token-refresh moment alone (`credential-freshness.ts`).
-   * Taken **before** the slot, the one order every spawn site uses. Optional so a deployment that
-   * wires none behaves exactly as it did before the gate existed.
+   * Taken **before** the slot, the one order every spawn site uses, and re-asked once the slot is
+   * granted; both claims are released wherever the slot is handed back. Optional so a deployment
+   * that wires none behaves exactly as it did before the gate existed.
    */
   readonly freshness?: CredentialFreshness
   /** `CLAUDE_CLI_PATH`, validated at the env boundary. Null leaves the resolution ladder to decide. */
@@ -142,12 +149,34 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     const cli = usableCli()
     const prompt = buildSdkPrompt({ messages: request.messages, plan: invocation.session })
 
-    // Held before the subprocess exists and released when its output stream ends. Aborting while
-    // queued throws the signal's own reason, which `runSdkAttempt` reads as the deadline it was.
-    // `let`, because a busy-session retry ends the first attempt's slot and takes its own.
-    // Freshness before the slot: waiting on another's refresh while holding a slot wastes it.
-    await freshness.ensureFresh(invocation.accountId, invocation.signal)
-    let slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
+    // Held before the subprocess exists and released with the slot. Aborting while queued throws
+    // the signal's own reason, which `runSdkAttempt` reads as the deadline it was. `let`, because
+    // a busy-session retry ends the first attempt's slot and takes its own. Freshness before the
+    // slot: waiting on another's refresh while holding a slot wastes it.
+    let claim = await freshness.ensureFresh(invocation.accountId, invocation.signal)
+    let slot: SdkSlot
+    try {
+      slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
+    } catch (error) {
+      claim.release()
+      throw error
+    }
+    // Asked again with the slot in hand: the queue wait is unbounded, and a token that was warm at
+    // admission can cross the CLI's refresh lead while queued — the window must re-admit this
+    // caller rather than wave through an uncoordinated refresher (`idle-query.ts` asks the same
+    // way). Both claims are idempotent, so releasing beside the slot's own hand-back is safe.
+    let rechecked: CredentialRefreshClaim
+    try {
+      rechecked = await freshness.ensureFresh(invocation.accountId, invocation.signal)
+    } catch (error) {
+      slot.release()
+      claim.release()
+      throw error
+    }
+    const releaseClaims = (): void => {
+      rechecked.release()
+      claim.release()
+    }
 
     /** One `query()` turn. Releases nothing on failure — the caller below owns the slot's end. */
     const attempt = async (busySessionFork: boolean, ownSlot: SdkSlot): Promise<Response> => {
@@ -196,6 +225,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
           onEnd: () => {
             started.detach()
             ownSlot.release()
+            releaseClaims()
           },
         })
         const filtered = passthrough === null ? turn : passthrough.filter(turn)
@@ -279,18 +309,34 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         classifySdkFailure(error).classification.kind === "busy-session"
       ) {
         // The first attempt's stream is over, so its slot is already handed back (or is, here).
-        // The retry takes its own, queueing honestly behind whatever arrived in between.
+        // The retry takes its own claims and slot, queueing honestly behind whatever arrived in
+        // between; each acquire failure releases what that step already took.
         slot.release()
-        await freshness.ensureFresh(invocation.accountId, invocation.signal)
-        slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
+        releaseClaims()
+        claim = await freshness.ensureFresh(invocation.accountId, invocation.signal)
+        try {
+          slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
+        } catch (queued) {
+          claim.release()
+          throw queued
+        }
+        try {
+          rechecked = await freshness.ensureFresh(invocation.accountId, invocation.signal)
+        } catch (queued) {
+          slot.release()
+          claim.release()
+          throw queued
+        }
         try {
           return await attempt(true, slot)
         } catch (retried) {
           slot.release()
+          releaseClaims()
           throw retried
         }
       }
       slot.release()
+      releaseClaims()
       throw error
     }
   }

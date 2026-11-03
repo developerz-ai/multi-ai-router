@@ -311,16 +311,63 @@ Residual gap, accepted: with the default single scheduler lock connection
 probe), so on rare ticks a token can lapse for a minute or two — the next tick finds it expired,
 which is still *due*, and refreshes it.
 
-**What 2.11.0's gate still does.** `ensureFresh` serializes *real turns* across the refresh window
-(`CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS`): the first caller is not delayed and refreshes as
-part of whatever it came to do; the rest wait until the credential file shows the new token,
-capped by `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` and then let through. It closes a real hazard
-the CLI's own directory lock would otherwise turn into a five-retry `lock_busy` — but it was never
-what killed these six, and turn-free spawns no longer enter the window at all: they are refused at
-its edge. It sits **beside** `concurrency.ts` rather than inside it, because that gate is a memory
-bound that only the `query()` paths hold; every spawn site takes freshness first and a slot second
-— one fixed order, so the two cannot deadlock. `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` is
-untouched: it is throughput the pool is sized on.
+**What the 2.11.0 gate became: claims.** The serialization it shipped stays — `ensureFresh` still
+admits one *real turn* at a time across the window (`CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS`),
+the first caller not delayed and refreshing inside its spawn exactly as always, the rest waiting
+until the credential file shows the new token, capped by `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` —
+and it still closes the real hazard of the CLI's own directory lock turning into a five-retry
+`lock_busy`, though it was never what killed these six: turn-free spawns are still refused at the
+window's edge and do not enter it at all. What changes is that admission now carries an **exit**:
+it resolves to a claim (`CredentialRefreshClaim`) whose idempotent, synchronous `release()` the
+spawning turn calls when it ends, so ownership lives exactly as long as the process that holds
+it. Three races the older form carried are proven in code and closed. *Admission before the slot
+wait*: a caller was admitted, queued for a `query()` slot, and spawned on grant without asking
+again — a token that crossed the CLI's refresh lead while queued refreshed uncoordinated; the
+window is now re-asked after the slot is granted, and a queued caller re-enters it rather than
+spawning past it. *Timeout erasure*: a waiter that exhausted the cap deleted the holder entry on
+its way out, clearing the path for a second refresher while the first could still be mid-refresh;
+it now proceeds fail-open with a no-op claim, entry left intact, `warn` logged. *Interrupted
+owners*: nothing released the entry a winner set, so an interrupted turn left a holder only the
+staleness clock could clear. Takeover is now restricted to released or older-than-cap entries, and
+the displaced holder is *not* erased by the takeover: it leaves the record only when its own
+`release()` runs, so an owner that was taken over from and never released stays on the record beside
+the newcomer. One unreleased entry admits exactly one owner *while the cross-replica lease can be
+won* — a lease somebody else holds (`busy`) means the newcomer waits like everyone else, and so does
+a lease the pool could not hand out (`capacity`) while an unreleased holder is still recorded. The
+fail-open paths are the honest exception: a `capacity` lease with no unreleased holder on the
+record admits the newcomer on its local entry alone, `warn` logged — and so do the two paths that
+never reach that check at all, a lock that throws and a deployment that wires no lock, which admit
+a second local owner even while an unreleased entry stands. The cross-replica lease narrows who may
+own a window; it is not the only thing that holds it.
+
+That lease is the gate's first coordination across replicas, and it rides the pool that already
+existed: the per-account credential-refresh advisory lock
+(`packages/db/src/credential-refresh-lock.ts`, namespace `0x7265_6672`) that the OAuth refresher
+has held around its own token exchange all along
+(`services/accounts/refresh/refresher.ts:194`), so an SDK turn on one replica and a refresher on
+another cannot hold one credential's window at once. Window closed — the overwhelmingly common
+case — the claim is a no-op and the cost stays one ~500-byte metadata read; window open, the
+winner holds the lease until `release()`, and the lock pool self-releases it on abort, pool stop,
+or connection loss. Every path out of the gate has an exit, and none is silent: lease capacity or
+lock errors degrade **fail-open** with a `warn` — the caller proceeds on its local entry alone, and
+only a `capacity` lease with an unreleased holder still on the record makes it wait behind that
+holder instead — and only `CredentialMetadataOwnershipUnavailable` refuses a spawn before one
+starts — and a capped waiter still proceeds, but contention the gate cannot prevent stays a
+retryable `claude-sdk:credential-refresh-contended` (`503`), a dead credential stays
+`credential-expired` (auth), and neither unverified thing becomes verified by this rewrite: what
+actually triggered the 2026-09-06/07 deauthentications, and what presenting a stale token does
+downstream, have no production evidence — the races are proven in code, not attributed to the
+incident. The gate
+still sits **beside** `concurrency.ts` rather than inside it, because that gate is a memory bound
+that only the `query()` paths hold; freshness is still taken first and the slot second. The
+re-ask is the same **bounded wait**, taken with the slot in hand — not a free recheck: it
+re-enters the wait loop and can park the caller for up to `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS`
+(default 20 000 ms) while holding the per-Account and global slot, so sizing concurrency must
+count contended window time as slot time too. The fixed order still cannot deadlock, because
+every wait in it is bounded and every holder releases: a freshness waiter exits at the cap with
+a no-op claim, and a slot holder always finishes its turn and hands both permits back — no two
+callers can end up each holding what the other waits for.
+`CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` is untouched: it is throughput the pool is sized on.
 
 Recovery from a blanked file is an interactive re-login per Account. Nothing the router can do
 reverses it, which is why this is prevented rather than detected.

@@ -131,7 +131,10 @@ describe("the idle usage probe", () => {
     const probe = createSdkUsageGaugeProbe({
       gauge,
       concurrency,
-      freshness: { ensureFresh: async () => {}, wouldRefresh: async () => true },
+      freshness: {
+        ensureFresh: async () => ({ release: () => {} }),
+        wouldRefresh: async () => true,
+      },
       cliPathOverride: null,
       timeoutMs: 1_000,
       resolveCli: () => CLI,

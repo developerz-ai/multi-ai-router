@@ -257,7 +257,7 @@ describe("an idle Agent SDK query", () => {
     const failure = new CredentialMetadataOwnershipUnavailable()
     let checks = 0
     const freshness: CredentialFreshness = {
-      ensureFresh: async () => {},
+      ensureFresh: async () => ({ release: () => {} }),
       wouldRefresh: async () => {
         checks++
         if (checks === 2) throw failure

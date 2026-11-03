@@ -64,9 +64,12 @@ describe.skipIf(!url)("dedicated credential refresh advisory sessions", () => {
   for (const sql of ["pg_try_advisory_lock", "pg_advisory_unlock"] as const) {
     test(`${sql} stalled response retires session before reuse`, async () => {
       const proxy = await stalledProxy(url, sql)
+      // connectTimeout is both the reserve deadline and the stall cut: it must leave the proxy
+      // handshake room to win the race, or the stall never lands and the test hangs on
+      // proxy.stalled. Only its FIRING is pinned, never its value.
       const lock = createCredentialRefreshLockPool({
         url: proxy.url,
-        connectTimeoutSeconds: 0.25,
+        connectTimeoutSeconds: 1,
         closeTimeoutSeconds: 0.25,
       })
       handles.push(lock)
@@ -142,6 +145,60 @@ describe.skipIf(!url)("dedicated credential refresh advisory sessions", () => {
       acquired: true,
       value: "next",
     })
+  })
+
+  test("tryAcquire holds one account across pools until release, and release is idempotent", async () => {
+    const a = pool()
+    const b = pool()
+    const accountId = crypto.randomUUID()
+    const first = await a.tryAcquire(accountId, new AbortController().signal)
+    expect(first.acquired).toBe(true)
+    if (!first.acquired) return
+    expect(await a.tryAcquire(accountId, new AbortController().signal)).toEqual({
+      acquired: false,
+      reason: "busy",
+    })
+    expect(await b.tryAcquire(accountId, new AbortController().signal)).toEqual({
+      acquired: false,
+      reason: "busy",
+    })
+    await first.lease.release()
+    // A second release must not throw, double-unlock, or hand the connection back twice.
+    await first.lease.release()
+    expect(a.poolStats().inUse).toBe(0)
+    const second = await b.tryAcquire(accountId, new AbortController().signal)
+    expect(second.acquired).toBe(true)
+    if (second.acquired) await second.lease.release()
+  })
+
+  test("an aborted holder signal self-releases the lease and re-opens the key", async () => {
+    const lock = pool()
+    const controller = new AbortController()
+    const accountId = crypto.randomUUID()
+    const first = await lock.tryAcquire(accountId, controller.signal)
+    expect(first.acquired).toBe(true)
+    if (!first.acquired) return
+    controller.abort()
+    // The self-release runs off the abort; poll for the key to free rather than sleeping a guess.
+    let next = await lock.tryAcquire(accountId, new AbortController().signal)
+    for (let retry = 0; !next.acquired && retry < 100; retry++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+      next = await lock.tryAcquire(accountId, new AbortController().signal)
+    }
+    expect(next.acquired).toBe(true)
+    if (next.acquired) await next.lease.release()
+    expect(lock.poolStats().inUse).toBe(0)
+  })
+
+  test("a pre-aborted caller never reserves or takes a lease", async () => {
+    const lock = pool()
+    const controller = new AbortController()
+    controller.abort()
+    expect(await lock.tryAcquire(crypto.randomUUID(), controller.signal)).toEqual({
+      acquired: false,
+      reason: "aborted",
+    })
+    expect(lock.poolStats().inUse).toBe(0)
   })
   test("shutdown aborts mandatory work signal and refuses later admission", async () => {
     const lock = pool()

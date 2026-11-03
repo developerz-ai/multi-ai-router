@@ -17,7 +17,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const now = (): Date => new Date()
   const repositories = createRuntimeRepositories(deps)
   const warm = createWarmState(deps, repositories, now)
-  const cli = createCliResources(deps, now)
+  const cli = createCliResources(deps, now, repositories.refreshLock)
   const telemetry = createRuntimeTelemetry(deps, repositories, warm, cli, now)
   const request = createRequestServices(deps, repositories, warm, cli, telemetry, cipher, now)
   const {

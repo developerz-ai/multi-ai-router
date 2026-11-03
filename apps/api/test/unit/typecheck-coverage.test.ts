@@ -7,6 +7,13 @@ const root = resolve(import.meta.dir, "../../../..")
 const api = join(root, "apps/api")
 const testConfig = join(api, "tsconfig.tests.json")
 
+// The compiler builds a real program over the test project and snapshots it, so the
+// cost is a function of the machine rather than of the code under test. `bun test`'s
+// default 5 s per-test budget assumes an idle box; a loaded one (a full-suite run
+// beside other work) stretches this past it and kills the compiler mid-snapshot, which
+// surfaces as a panic inside typescript-go rather than as a real diagnostic.
+const COMPILER_TEST_TIMEOUT_MS = 60_000
+
 function discover(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name)
@@ -62,55 +69,59 @@ describe("required API test and smoke typecheck", () => {
     }
   })
 
-  test("reports assignment, null, index and unused errors in all four source areas", async () => {
-    const files = new Map<string, string>()
-    const compiler = new API({
-      cwd: root,
-      fs: {
-        readFile: (path) => files.get(path),
-        fileExists: (path) => (files.has(path) ? true : undefined),
-      },
-    })
-    try {
-      const parsed = await compiler.parseConfigFile(testConfig)
-      const fixtures: string[] = []
-      for (const directory of ["smoke", "test/unit", "test/integration", "test/support"]) {
-        const path = parsed.fileNames.find((file) => file.startsWith(`${join(api, directory)}/`))
-        if (!path) throw new Error(`No included source in ${directory}`)
-        fixtures.push(path)
-        // Replace only virtual roots; never load the real test or its imports, or write the checkout.
-        files.set(
-          path,
-          `export const assignment: string = 123
+  test(
+    "reports assignment, null, index and unused errors in all four source areas",
+    async () => {
+      const files = new Map<string, string>()
+      const compiler = new API({
+        cwd: root,
+        fs: {
+          readFile: (path) => files.get(path),
+          fileExists: (path) => (files.has(path) ? true : undefined),
+        },
+      })
+      try {
+        const parsed = await compiler.parseConfigFile(testConfig)
+        const fixtures: string[] = []
+        for (const directory of ["smoke", "test/unit", "test/integration", "test/support"]) {
+          const path = parsed.fileNames.find((file) => file.startsWith(`${join(api, directory)}/`))
+          if (!path) throw new Error(`No included source in ${directory}`)
+          fixtures.push(path)
+          // Replace only virtual roots; never load the real test or its imports, or write the checkout.
+          files.set(
+            path,
+            `export const assignment: string = 123
 export const nullable: string = undefined
 export function indexed(values: string[]): string { return values[0] }
 export function unused(parameter: string) { const local = 1; return 0 }
 `,
+          )
+        }
+        const virtualConfig = join(api, "tsconfig.coverage.virtual.json")
+        files.set(
+          virtualConfig,
+          JSON.stringify({ extends: testConfig, files: fixtures, include: [] }),
         )
-      }
-      const virtualConfig = join(api, "tsconfig.coverage.virtual.json")
-      files.set(
-        virtualConfig,
-        JSON.stringify({ extends: testConfig, files: fixtures, include: [] }),
-      )
-      const snapshot = await compiler.updateSnapshot({ openProjects: [virtualConfig] })
-      try {
-        const project = snapshot.getProject(virtualConfig)
-        if (!project) throw new Error("Missing virtual coverage project")
-        expect(await project.program.getConfigFileParsingDiagnostics()).toEqual([])
-        expect(await project.program.getProgramDiagnostics()).toEqual([])
-        for (const path of fixtures) {
-          const diagnostics = await project.program.getSemanticDiagnostics(path)
-          expect(diagnostics.filter((diagnostic) => diagnostic.code === 2322)).toHaveLength(3)
-          expect(diagnostics.filter((diagnostic) => diagnostic.code === 6133)).toHaveLength(2)
+        const snapshot = await compiler.updateSnapshot({ openProjects: [virtualConfig] })
+        try {
+          const project = snapshot.getProject(virtualConfig)
+          if (!project) throw new Error("Missing virtual coverage project")
+          expect(await project.program.getConfigFileParsingDiagnostics()).toEqual([])
+          expect(await project.program.getProgramDiagnostics()).toEqual([])
+          for (const path of fixtures) {
+            const diagnostics = await project.program.getSemanticDiagnostics(path)
+            expect(diagnostics.filter((diagnostic) => diagnostic.code === 2322)).toHaveLength(3)
+            expect(diagnostics.filter((diagnostic) => diagnostic.code === 6133)).toHaveLength(2)
+          }
+        } finally {
+          await snapshot.dispose()
         }
       } finally {
-        await snapshot.dispose()
+        await compiler.close()
       }
-    } finally {
-      await compiler.close()
-    }
-  })
+    },
+    COMPILER_TEST_TIMEOUT_MS,
+  )
 
   test("bin/check requires bin/lint and the solution build followed by the no-emit project", () => {
     const manifest: { scripts: { typecheck: string } } = JSON.parse(

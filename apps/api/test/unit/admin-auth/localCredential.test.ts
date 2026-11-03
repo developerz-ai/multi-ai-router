@@ -17,6 +17,18 @@ import {
 
 const PASSWORD = "correct horse battery staple"
 
+/**
+ * Every test in this file runs the real argon2id (Bun's 64 MiB default), and a
+ * hash or a verify is one full pass. Two or three passes land near half a
+ * second on an idle box — and past bun's 5 s default once the whole suite is
+ * running in parallel beside it. The budget below is therefore explicit on
+ * every test that spends argon2 work, exactly as the integration suite's
+ * throttle tests do: the guarantee under test is the credential's behaviour,
+ * not how fast this runner hashes. Nothing here is weakened; a genuine hang
+ * still fails, with more room than the default gave it.
+ */
+const ARGON2_TIMEOUT_MS = 30_000
+
 function memoryStore(initial: string | null = null): AdminCredentialRepository & {
   stored: () => string | null
 } {
@@ -48,38 +60,50 @@ function memoryStore(initial: string | null = null): AdminCredentialRepository &
 }
 
 describe("set + verify", () => {
-  test("a set password verifies; the store only ever holds the argon2id hash", async () => {
-    const store = memoryStore()
-    const credentials = createLocalAdminCredentials({ repository: store })
+  test(
+    "a set password verifies; the store only ever holds the argon2id hash",
+    async () => {
+      const store = memoryStore()
+      const credentials = createLocalAdminCredentials({ repository: store })
 
-    await credentials.set(PASSWORD)
+      await credentials.set(PASSWORD)
 
-    expect(store.stored()).toStartWith("$argon2id$")
-    expect(store.stored()).not.toContain(PASSWORD)
-    expect(await credentials.isConfigured()).toBe(true)
-    expect(await credentials.verify(PASSWORD)).toBe(true)
-  })
+      expect(store.stored()).toStartWith("$argon2id$")
+      expect(store.stored()).not.toContain(PASSWORD)
+      expect(await credentials.isConfigured()).toBe(true)
+      expect(await credentials.verify(PASSWORD)).toBe(true)
+    },
+    ARGON2_TIMEOUT_MS,
+  )
 
-  test("a wrong password is false, however long or short", async () => {
-    const store = memoryStore()
-    const credentials = createLocalAdminCredentials({ repository: store })
-    await credentials.set(PASSWORD)
+  test(
+    "a wrong password is false, however long or short",
+    async () => {
+      const store = memoryStore()
+      const credentials = createLocalAdminCredentials({ repository: store })
+      await credentials.set(PASSWORD)
 
-    expect(await credentials.verify("definitely not it")).toBe(false)
-    expect(await credentials.verify("x")).toBe(false)
-    expect(await credentials.verify(`${PASSWORD} `)).toBe(false)
-  })
+      expect(await credentials.verify("definitely not it")).toBe(false)
+      expect(await credentials.verify("x")).toBe(false)
+      expect(await credentials.verify(`${PASSWORD} `)).toBe(false)
+    },
+    ARGON2_TIMEOUT_MS,
+  )
 
-  test("set again replaces — the recovery path is idempotent", async () => {
-    const store = memoryStore()
-    const credentials = createLocalAdminCredentials({ repository: store })
+  test(
+    "set again replaces — the recovery path is idempotent",
+    async () => {
+      const store = memoryStore()
+      const credentials = createLocalAdminCredentials({ repository: store })
 
-    await credentials.set(PASSWORD)
-    await credentials.set("a completely different password")
+      await credentials.set(PASSWORD)
+      await credentials.set("a completely different password")
 
-    expect(await credentials.verify(PASSWORD)).toBe(false)
-    expect(await credentials.verify("a completely different password")).toBe(true)
-  })
+      expect(await credentials.verify(PASSWORD)).toBe(false)
+      expect(await credentials.verify("a completely different password")).toBe(true)
+    },
+    ARGON2_TIMEOUT_MS,
+  )
 
   test("a short password is refused before any hash is computed", async () => {
     const store = memoryStore()
@@ -94,59 +118,75 @@ describe("set + verify", () => {
 })
 
 describe("an unconfigured door", () => {
-  test("is not configured, rejects everything, and remove reports nothing to do", async () => {
-    const store = memoryStore()
-    const credentials = createLocalAdminCredentials({ repository: store })
+  test(
+    "is not configured, rejects everything, and remove reports nothing to do",
+    async () => {
+      const store = memoryStore()
+      const credentials = createLocalAdminCredentials({ repository: store })
 
-    expect(await credentials.isConfigured()).toBe(false)
-    expect(await credentials.verify(PASSWORD)).toBe(false)
-    expect(await credentials.remove()).toBe(false)
-  })
+      expect(await credentials.isConfigured()).toBe(false)
+      expect(await credentials.verify(PASSWORD)).toBe(false)
+      expect(await credentials.remove()).toBe(false)
+    },
+    ARGON2_TIMEOUT_MS,
+  )
 
-  test("a guess against no row costs a real argon2 pass, like a wrong password", async () => {
-    // Not a wall-clock assertion — those flake. The guarantee is structural:
-    // the no-row path must still pay argon2, so "is a credential set" is not
-    // a timing side-channel. If the dummy-verify ever disappears, this test's
-    // duration collapses to ~nothing and the mock below goes red.
-    const store = memoryStore()
-    const credentials = createLocalAdminCredentials({ repository: store })
+  test(
+    "a guess against no row costs a real argon2 pass, like a wrong password",
+    async () => {
+      // Not a wall-clock assertion — those flake. The guarantee is structural:
+      // the no-row path must still pay argon2, so "is a credential set" is not
+      // a timing side-channel. If the dummy-verify ever disappears, this test's
+      // duration collapses to ~nothing and the mock below goes red.
+      const store = memoryStore()
+      const credentials = createLocalAdminCredentials({ repository: store })
 
-    const started = performance.now()
-    await credentials.verify("guessed password")
-    const absentMs = performance.now() - started
+      const started = performance.now()
+      await credentials.verify("guessed password")
+      const absentMs = performance.now() - started
 
-    await credentials.set(PASSWORD)
-    const startedWrong = performance.now()
-    await credentials.verify("guessed password")
-    const wrongMs = performance.now() - startedWrong
+      await credentials.set(PASSWORD)
+      const startedWrong = performance.now()
+      await credentials.verify("guessed password")
+      const wrongMs = performance.now() - startedWrong
 
-    // Both are a full argon2id pass; allow generous slack for a loaded runner.
-    expect(absentMs).toBeGreaterThan(wrongMs / 4)
-  })
+      // Both are a full argon2id pass; allow generous slack for a loaded runner.
+      expect(absentMs).toBeGreaterThan(wrongMs / 4)
+    },
+    ARGON2_TIMEOUT_MS,
+  )
 })
 
 describe("remove", () => {
-  test("closes the door: verifies nothing afterwards", async () => {
-    const store = memoryStore()
-    const credentials = createLocalAdminCredentials({ repository: store })
+  test(
+    "closes the door: verifies nothing afterwards",
+    async () => {
+      const store = memoryStore()
+      const credentials = createLocalAdminCredentials({ repository: store })
 
-    await credentials.set(PASSWORD)
-    expect(await credentials.remove()).toBe(true)
+      await credentials.set(PASSWORD)
+      expect(await credentials.remove()).toBe(true)
 
-    expect(await credentials.isConfigured()).toBe(false)
-    expect(await credentials.verify(PASSWORD)).toBe(false)
-  })
+      expect(await credentials.isConfigured()).toBe(false)
+      expect(await credentials.verify(PASSWORD)).toBe(false)
+    },
+    ARGON2_TIMEOUT_MS,
+  )
 })
 
 describe("hashLocalPassword", () => {
-  test("two hashes of the same password differ (salted) and both verify", async () => {
-    const one = await hashLocalPassword(PASSWORD)
-    const two = await hashLocalPassword(PASSWORD)
+  test(
+    "two hashes of the same password differ (salted) and both verify",
+    async () => {
+      const one = await hashLocalPassword(PASSWORD)
+      const two = await hashLocalPassword(PASSWORD)
 
-    expect(one).toStartWith("$argon2id$")
-    expect(two).toStartWith("$argon2id$")
-    expect(one).not.toBe(two)
-    expect(await Bun.password.verify(PASSWORD, one)).toBe(true)
-    expect(await Bun.password.verify(PASSWORD, two)).toBe(true)
-  })
+      expect(one).toStartWith("$argon2id$")
+      expect(two).toStartWith("$argon2id$")
+      expect(one).not.toBe(two)
+      expect(await Bun.password.verify(PASSWORD, one)).toBe(true)
+      expect(await Bun.password.verify(PASSWORD, two)).toBe(true)
+    },
+    ARGON2_TIMEOUT_MS,
+  )
 })
