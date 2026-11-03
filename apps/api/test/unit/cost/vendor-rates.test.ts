@@ -19,10 +19,13 @@
  *
  * **Mutation record.** Every value in this file was changed one at a time in the corresponding
  * table file and this suite was re-run, so each pin is known to fail when the shipped number
- * moves. The table files were restored byte-for-byte afterwards.
+ * moves — the long-context cards and their thresholds included, under every alias that carries
+ * another model's card. The table files were restored byte-for-byte afterwards.
  *
  * "card" is this file's word for one model's rate row: input, output, cached read and cached
- * write, per million tokens, in US dollars.
+ * write, per million tokens, in US dollars. A model that publishes a long-context tier has two of
+ * them — the standard one, and the one that replaces it above a prompt size — and both are pinned
+ * here, together with the threshold that selects between them.
  */
 
 import { describe, expect, test } from "bun:test"
@@ -30,48 +33,6 @@ import { lookupRates, PRICED_OFFERINGS_WITHOUT_PUBLISHED_ID } from "../../../src
 
 /** One rate row: input, output, cached read, cached write — per million tokens, in USD. */
 type Card = readonly [number, number, number, number]
-
-/**
- * The card a model is expected to price at, on the surface named.
- *
- * The expected value is a literal, never computed from the shipped table.
- *
- * A model with a long-context tier publishes two cards, so the tier is checked separately: call
- * once with no threshold for the standard card, then again with the threshold for the tier.
- */
-function expectCard(
-  provider: Parameters<typeof lookupRates>[0],
-  model: string,
-  expected: Card,
-  fromPromptTokens?: number,
-): void {
-  const looked = lookupRates(provider, model, billingFor(provider))
-  expect(looked, `${provider}/${model} has no row`).not.toBeNull()
-  if (looked === null) return
-  if (fromPromptTokens === undefined) {
-    const standard: Card = [
-      looked.inputPerMtok,
-      looked.outputPerMtok,
-      looked.cacheReadPerMtok,
-      looked.cacheWritePerMtok,
-    ]
-    expect(standard, `${provider}/${model} standard card`).toEqual(expected)
-    return
-  }
-  expect(looked.longContext?.fromPromptTokens, `${provider}/${model} tier threshold`).toBe(
-    fromPromptTokens,
-  )
-  const tier = looked.longContext
-  expect(tier, `${provider}/${model} long-context tier`).toBeDefined()
-  if (tier === undefined) return
-  const actual: Card = [
-    tier.inputPerMtok,
-    tier.outputPerMtok,
-    tier.cacheReadPerMtok,
-    tier.cacheWritePerMtok,
-  ]
-  expect(actual, `${provider}/${model} long-context card`).toEqual(expected)
-}
 
 /**
  * The billing context a lookup needs.
@@ -84,12 +45,87 @@ function billingFor(provider: Parameters<typeof lookupRates>[0]) {
   return provider === "kimi" ? { billing: "subscription" as const } : undefined
 }
 
-/** A model the vendor publishes with no long-context tier at all. */
+/**
+ * A model the vendor publishes with no long-context tier at all — one price, whatever the prompt.
+ *
+ * This is the assertion every single-price pin carries, and the one the vendor-fact tests below
+ * name explicitly. A row that grows a tier has to be pinned with that tier's own card, so the
+ * change surfaces here rather than pricing a long prompt at the short rate.
+ */
 function expectNoTier(provider: Parameters<typeof lookupRates>[0], model: string): void {
   expect(
     lookupRates(provider, model, billingFor(provider))?.longContext,
     `${provider}/${model} long tier`,
   ).toBeUndefined()
+}
+
+/**
+ * The card a model with **one price** is expected to price at, on the surface named.
+ *
+ * The expected value is a literal, never computed from the shipped table.
+ *
+ * A model that publishes a long-context tier has two cards, and this helper is not for it: it also
+ * asserts the row carries no tier, so a tiered row cannot be pinned by its standard card alone.
+ * {@link expectTieredCard} pins both cards and the threshold together.
+ */
+function expectCard(
+  provider: Parameters<typeof lookupRates>[0],
+  model: string,
+  expected: Card,
+): void {
+  const looked = lookupRates(provider, model, billingFor(provider))
+  expect(looked, `${provider}/${model} has no row`).not.toBeNull()
+  if (looked === null) return
+  const standard: Card = [
+    looked.inputPerMtok,
+    looked.outputPerMtok,
+    looked.cacheReadPerMtok,
+    looked.cacheWritePerMtok,
+  ]
+  expect(standard, `${provider}/${model} standard card`).toEqual(expected)
+  expectNoTier(provider, model)
+}
+
+/**
+ * The cards a **tiered** model is expected to price at, on the surface named: the standard card,
+ * the prompt size its long card takes over at, and the long card itself.
+ *
+ * Every expected value is a literal, never computed from the shipped table.
+ *
+ * The long card is pinned here rather than left to the standard-card assertion, because an alias
+ * carries the card of the model it points at: `gpt-5.6` prices as `gpt-5.6-sol` does,
+ * `grok-build-latest` as `grok-4.5` does, and the `grok-code-fast*` spellings as `grok-build-0.1`
+ * does. A wrong long card under any of them prices every long prompt at the short rate, and a pin
+ * that stops at the standard card cannot see it.
+ */
+function expectTieredCard(
+  provider: Parameters<typeof lookupRates>[0],
+  model: string,
+  standard: Card,
+  fromPromptTokens: number,
+  long: Card,
+): void {
+  const looked = lookupRates(provider, model, billingFor(provider))
+  expect(looked, `${provider}/${model} has no row`).not.toBeNull()
+  if (looked === null) return
+  const actualStandard: Card = [
+    looked.inputPerMtok,
+    looked.outputPerMtok,
+    looked.cacheReadPerMtok,
+    looked.cacheWritePerMtok,
+  ]
+  expect(actualStandard, `${provider}/${model} standard card`).toEqual(standard)
+  const tier = looked.longContext
+  expect(tier, `${provider}/${model} long-context tier`).toBeDefined()
+  if (tier === undefined) return
+  expect(tier.fromPromptTokens, `${provider}/${model} tier threshold`).toBe(fromPromptTokens)
+  const actualLong: Card = [
+    tier.inputPerMtok,
+    tier.outputPerMtok,
+    tier.cacheReadPerMtok,
+    tier.cacheWritePerMtok,
+  ]
+  expect(actualLong, `${provider}/${model} long-context card`).toEqual(long)
 }
 
 describe("anthropic — platform.claude.com pricing, read 2026-11-03", () => {
@@ -162,32 +198,37 @@ describe("anthropic — platform.claude.com pricing, read 2026-11-03", () => {
 
 describe("openai — developers.openai.com pricing, read 2026-11-03", () => {
   test("the GPT-5.6 family", () => {
-    expectCard("openai-api", "gpt-5.6-sol", [4, 20, 0.4, 5])
-    expectCard("openai-api", "gpt-5.6-sol", [8, 30, 0.8, 10], 272_000)
-    expectCard("openai-api", "gpt-5.6", [4, 20, 0.4, 5])
-    expectCard("openai-api", "gpt-5.6-terra", [2, 12, 0.2, 2.5])
-    expectCard("openai-api", "gpt-5.6-terra", [4, 18, 0.4, 5], 272_000)
-    expectCard("openai-api", "gpt-5.6-luna", [0.2, 1.2, 0.02, 0.25])
-    expectCard("openai-api", "gpt-5.6-luna", [0.4, 1.8, 0.04, 0.5], 272_000)
+    expectTieredCard("openai-api", "gpt-5.6-sol", [4, 20, 0.4, 5], 272_000, [8, 30, 0.8, 10])
+    // `gpt-5.6` is the published alias of `gpt-5.6-sol`, so it carries that model's card under
+    // its own name — both of them, not only the standard one.
+    expectTieredCard("openai-api", "gpt-5.6", [4, 20, 0.4, 5], 272_000, [8, 30, 0.8, 10])
+    expectTieredCard("openai-api", "gpt-5.6-terra", [2, 12, 0.2, 2.5], 272_000, [4, 18, 0.4, 5])
+    expectTieredCard(
+      "openai-api",
+      "gpt-5.6-luna",
+      [0.2, 1.2, 0.02, 0.25],
+      272_000,
+      [0.4, 1.8, 0.04, 0.5],
+    )
   })
 
   test("the GPT-6 family", () => {
-    expectCard("openai-api", "gpt-6-luna", [0.1, 0.5, 0.01, 0.125])
-    expectCard("openai-api", "gpt-6-luna", [0.2, 0.75, 0.02, 0.25], 272_000)
-    expectCard("openai-api", "gpt-6-sol", [2, 10, 0.2, 2.5])
-    expectCard("openai-api", "gpt-6-sol", [4, 15, 0.4, 5], 272_000)
-    expectCard("openai-api", "gpt-6.1-sol", [2, 10, 0.1, 2.5])
-    expectCard("openai-api", "gpt-6.1-sol", [4, 15, 0.2, 5], 272_000)
-    expectCard("openai-api", "gpt-6-astra", [10, 50, 1, 12.5])
-    expectCard("openai-api", "gpt-6-astra", [20, 75, 2, 25], 272_000)
+    expectTieredCard(
+      "openai-api",
+      "gpt-6-luna",
+      [0.1, 0.5, 0.01, 0.125],
+      272_000,
+      [0.2, 0.75, 0.02, 0.25],
+    )
+    expectTieredCard("openai-api", "gpt-6-sol", [2, 10, 0.2, 2.5], 272_000, [4, 15, 0.4, 5])
+    expectTieredCard("openai-api", "gpt-6.1-sol", [2, 10, 0.1, 2.5], 272_000, [4, 15, 0.2, 5])
+    expectTieredCard("openai-api", "gpt-6-astra", [10, 50, 1, 12.5], 272_000, [20, 75, 2, 25])
   })
 
   test("the GPT-5 family", () => {
-    expectCard("openai-api", "gpt-5.5", [5, 30, 0.5, 0])
-    expectCard("openai-api", "gpt-5.5", [10, 45, 1, 0], 272_000)
+    expectTieredCard("openai-api", "gpt-5.5", [5, 30, 0.5, 0], 272_000, [10, 45, 1, 0])
     expectCard("openai-api", "gpt-5.5-pro", [30, 180, 30, 0])
-    expectCard("openai-api", "gpt-5.4", [2.5, 15, 0.25, 0])
-    expectCard("openai-api", "gpt-5.4", [5, 22.5, 0.5, 0], 272_000)
+    expectTieredCard("openai-api", "gpt-5.4", [2.5, 15, 0.25, 0], 272_000, [5, 22.5, 0.5, 0])
     expectCard("openai-api", "gpt-5.4-pro", [30, 180, 30, 0])
     expectCard("openai-api", "gpt-5.4-mini", [0.75, 4.5, 0.075, 0])
     expectCard("openai-api", "gpt-5.4-nano", [0.2, 1.25, 0.02, 0])
@@ -225,17 +266,15 @@ describe("openai — developers.openai.com pricing, read 2026-11-03", () => {
   })
 
   test("the subscription surface prices identically to the metered one", () => {
-    expectCard("openai-oauth", "gpt-5.6-sol", [4, 20, 0.4, 5])
-    expectCard("openai-oauth", "gpt-6-sol", [2, 10, 0.2, 2.5])
+    expectTieredCard("openai-oauth", "gpt-5.6-sol", [4, 20, 0.4, 5], 272_000, [8, 30, 0.8, 10])
+    expectTieredCard("openai-oauth", "gpt-6-sol", [2, 10, 0.2, 2.5], 272_000, [4, 15, 0.4, 5])
   })
 })
 
 describe("google — ai.google.dev pricing, read 2026-11-03", () => {
   test("the Pro line is the only tiered one", () => {
-    expectCard("gemini", "gemini-3.1-pro-preview", [2, 12, 0.2, 0])
-    expectCard("gemini", "gemini-3.1-pro-preview", [4, 18, 0.4, 0], 200_000)
-    expectCard("gemini", "gemini-2.5-pro", [1.25, 10, 0.125, 0])
-    expectCard("gemini", "gemini-2.5-pro", [2.5, 15, 0.25, 0], 200_000)
+    expectTieredCard("gemini", "gemini-3.1-pro-preview", [2, 12, 0.2, 0], 200_000, [4, 18, 0.4, 0])
+    expectTieredCard("gemini", "gemini-2.5-pro", [1.25, 10, 0.125, 0], 200_000, [2.5, 15, 0.25, 0])
   })
 
   test("the Flash line is one price whatever the prompt", () => {
@@ -284,8 +323,7 @@ describe("zai — docs.z.ai pricing, read 2026-11-03", () => {
 
 describe("minimax — platform.minimax.io pricing, read 2026-11-03", () => {
   test("M3 keeps its two input-length bands", () => {
-    expectCard("minimax", "minimax-m3", [0.3, 1.2, 0.06, 0])
-    expectCard("minimax", "minimax-m3", [0.6, 2.4, 0.12, 0], 512_000)
+    expectTieredCard("minimax", "minimax-m3", [0.3, 1.2, 0.06, 0], 512_000, [0.6, 2.4, 0.12, 0])
   })
 
   test("M3.1 Flash is one price whatever the prompt", () => {
@@ -404,31 +442,44 @@ describe("together — docs.together.ai serverless prices, read 2026-11-03", () 
 
 describe("xai — docs.x.ai pricing, read 2026-11-03", () => {
   test("the current lineup, with its 200k long-context bands", () => {
-    expectCard("xai", "grok-4.7", [2, 6, 0.5, 0])
-    expectCard("xai", "grok-4.7", [4, 12, 1, 0], 200_000)
-    expectCard("xai", "grok-4.6", [2, 6, 0.5, 0])
-    expectCard("xai", "grok-4.6", [4, 12, 1, 0], 200_000)
-    expectCard("xai", "grok-4.5", [2, 6, 0.3, 0])
-    expectCard("xai", "grok-4.5", [4, 12, 0.6, 0], 200_000)
-    expectCard("xai", "grok-4.5-latest", [2, 6, 0.3, 0])
-    expectCard("xai", "grok-build-latest", [2, 6, 0.3, 0])
-    expectCard("xai", "grok-4.3", [1.25, 2.5, 0.2, 0])
-    expectCard("xai", "grok-4.3", [2.5, 5, 0.4, 0], 200_000)
+    expectTieredCard("xai", "grok-4.7", [2, 6, 0.5, 0], 200_000, [4, 12, 1, 0])
+    expectTieredCard("xai", "grok-4.6", [2, 6, 0.5, 0], 200_000, [4, 12, 1, 0])
+    expectTieredCard("xai", "grok-4.5", [2, 6, 0.3, 0], 200_000, [4, 12, 0.6, 0])
+    // The two names that point at the 4.5 card carry it whole, long card included.
+    expectTieredCard("xai", "grok-4.5-latest", [2, 6, 0.3, 0], 200_000, [4, 12, 0.6, 0])
+    expectTieredCard("xai", "grok-build-latest", [2, 6, 0.3, 0], 200_000, [4, 12, 0.6, 0])
+    expectTieredCard("xai", "grok-4.3", [1.25, 2.5, 0.2, 0], 200_000, [2.5, 5, 0.4, 0])
   })
 
   test("the 4.20 line bills at the 4.3 rate", () => {
-    expectCard("xai", "grok-4.20-0309-reasoning", [1.25, 2.5, 0.2, 0])
-    expectCard("xai", "grok-4.20-0309-reasoning", [2.5, 5, 0.4, 0], 200_000)
-    expectCard("xai", "grok-4.20-0309-non-reasoning", [1.25, 2.5, 0.2, 0])
-    expectCard("xai", "grok-4.20-multi-agent-0309", [1.25, 2.5, 0.2, 0])
+    expectTieredCard(
+      "xai",
+      "grok-4.20-0309-reasoning",
+      [1.25, 2.5, 0.2, 0],
+      200_000,
+      [2.5, 5, 0.4, 0],
+    )
+    expectTieredCard(
+      "xai",
+      "grok-4.20-0309-non-reasoning",
+      [1.25, 2.5, 0.2, 0],
+      200_000,
+      [2.5, 5, 0.4, 0],
+    )
+    expectTieredCard(
+      "xai",
+      "grok-4.20-multi-agent-0309",
+      [1.25, 2.5, 0.2, 0],
+      200_000,
+      [2.5, 5, 0.4, 0],
+    )
   })
 
   test("the coding model, under the three published aliases that point at it", () => {
-    expectCard("xai", "grok-build-0.1", [1, 2, 0.2, 0])
-    expectCard("xai", "grok-build-0.1", [2, 4, 0.4, 0], 200_000)
-    expectCard("xai", "grok-code-fast", [1, 2, 0.2, 0])
-    expectCard("xai", "grok-code-fast-1", [1, 2, 0.2, 0])
-    expectCard("xai", "grok-code-fast-1-0825", [1, 2, 0.2, 0])
+    expectTieredCard("xai", "grok-build-0.1", [1, 2, 0.2, 0], 200_000, [2, 4, 0.4, 0])
+    expectTieredCard("xai", "grok-code-fast", [1, 2, 0.2, 0], 200_000, [2, 4, 0.4, 0])
+    expectTieredCard("xai", "grok-code-fast-1", [1, 2, 0.2, 0], 200_000, [2, 4, 0.4, 0])
+    expectTieredCard("xai", "grok-code-fast-1-0825", [1, 2, 0.2, 0], 200_000, [2, 4, 0.4, 0])
   })
 
   test("the retired slugs are not priced", () => {
