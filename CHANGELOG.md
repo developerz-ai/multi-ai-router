@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The committed-migration drift guard now sweeps columns as well as enum values. Every table the schema barrel exports is compared against the same table in the latest committed migration snapshot, and a schema column the snapshot does not carry fails the suite naming the table and the column; a table the snapshot never created is reported with all of its columns missing. The tables are discovered from the schema barrel, and a fixture proves the comparison reports a missing column rather than passing quietly. Test-only: no runtime behaviour change.
+
 ### Fixed
 
 - Anthropic prompt-cache breakpoints now reach OpenRouter. The `anthropic` → `openai-chat` translation stripped every `cache_control`, on the premise that no non-Anthropic target has an equivalent — false for OpenRouter, whose OpenAI-compatible API takes `cache_control` on content parts and at the top level and maps it to each provider's own marker. Claude Code through the router to `anthropic/*` on OpenRouter carried zero breakpoints and re-billed its whole prefix every turn. A surface now states `cacheControl` (only `openrouter` does); toward it each marker lands on the part its block became — a marked system array stays one part per block, a marked `tool_result` carries the rolling breakpoint on its tool message — and the top-level marker is carried. Every other openai-chat vendor still gets none. The conversion cache keys on the flag, so a chain mixing OpenRouter and a strict vendor converts once per shape. Regression: `test/unit/translate/cache-control-carry.test.ts`, `test/integration/openrouter-cache-control.test.ts`.
