@@ -18,6 +18,10 @@ export function PriceCoverage(props: {
         Preview models and cache-write usage without a known TTL remain unpriced unless you add an
         explicit override.
       </p>
+      <p>
+        A source with no verification date means its rows were not re-checked against the published
+        page; their evidence is the inherited snapshot, dated per source below.
+      </p>
       <For each={props.prices.sources ?? []}>
         {(source) => (
           <p>
@@ -31,6 +35,11 @@ export function PriceCoverage(props: {
           </p>
         )}
       </For>
+      <p>
+        This router prices by published model id. A vendor-priced offering with no published model
+        id is not priced here, so a request naming it costs unknown; an operator override is the way
+        to price it.
+      </p>
       <Show when={(props.prices.unpriced?.length ?? 0) > 0}>
         <p>
           These configured models have unknown cost. Add your contract’s USD rate; subscription

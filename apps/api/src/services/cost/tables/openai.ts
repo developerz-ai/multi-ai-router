@@ -3,11 +3,10 @@ import { type ModelTable, rates, tiered } from "../rates"
 /**
  * OpenAI's published per-Mtok prices, **standard service tier**.
  *
- * Provenance: older rows inherit platform.openai.com/docs/pricing, the "Standard" column,
- * without a recorded verification date. GPT-6 model-page evidence is recorded below;
- * `PRICE_TABLE_AS_OF` is not blanket verification of this table. Blast radius: the metered total
- * for `openai-api` accounts and the notional total for ChatGPT/Codex subscriptions, which are
- * valued against this same table.
+ * Provenance: developers.openai.com/api/docs/pricing (the "Text API" tables) plus the per-model
+ * pages for the long-context rule, all read 2026-11-03. Blast radius: the metered total for
+ * `openai-api` accounts and the notional total for ChatGPT/Codex subscriptions, which are valued
+ * against this same table.
  *
  * Three deliberate omissions, each because the published number is not the one a `UsageRecord` can
  * be priced against:
@@ -17,12 +16,18 @@ import { type ModelTable, rates, tiered } from "../rates"
  * - **The regional-processing uplift** (+10% on data-residency endpoints for models released from
  *   2026-03-05) — a property of the account's endpoint rather than of the model. An operator on one
  *   of those endpoints corrects it with a price override, which is exactly what overrides are for.
- * - **Models the page prices as "—"** (`gpt-5.4-cyber`, and the deep-research / computer-use pair,
- *   whose standard-tier figures the page does not render) — absent here, so they price as unknown.
+ * - **Models the page prices as "—"** (`gpt-5.6-cyber` at the long-context tier, the
+ *   deep-research / computer-use pair, whose standard-tier figures the page does not render) —
+ *   absent here, so they price as unknown.
  *
  * Models with no published cached-input price do not offer prompt caching at all: the `pro` line,
  * `o1-pro`, `o3-pro`. `rates()` bills their cached tokens at the full input rate, which costs
  * nothing in practice because the count behind it is always zero.
+ *
+ * The **fast** and **ultrafast** tiers are omitted for the same reason the batch tier is: they are
+ * a per-request choice (`service_tier`) the client makes and nothing in a response repeats. OpenAI
+ * renamed priority processing to fast mode on 2026-07-30; the standard tier is what the router's
+ * requests actually bill at.
  */
 
 /** The prompt size at which the current flagship families switch to their long-context rate. */
@@ -31,36 +36,36 @@ const LONG_CONTEXT_FROM = 272_000
 /**
  * GPT-5.6 Sol — the current default flagship, and the first family to publish a **cache write**
  * price of its own rather than folding writes into ordinary input. `gpt-5.6` is its alias.
+ *
+ * $4 / $20 standard, which the pricing page states is promotional "at least through November 21,
+ * 2026"; the long-context card doubles the input and 1.5x's the output, per the model page.
  */
 const GPT_5_6_SOL = tiered(
-  rates(5, 30, { read: 0.5, write: 6.25 }),
+  rates(4, 20, { read: 0.4, write: 5 }),
   LONG_CONTEXT_FROM,
-  rates(10, 45, { read: 1, write: 12.5 }),
+  rates(8, 30, { read: 0.8, write: 10 }),
 )
 
-/** The two `pro` models of the 5.4/5.5 generation, which share one price. */
-const GPT_5_PRO_TIER = tiered(rates(30, 180), LONG_CONTEXT_FROM, rates(60, 270))
+/** The two `pro` models of the 5.4/5.5 generation, which share one price and publish no long tier. */
+const GPT_5_PRO_TIER = rates(30, 180)
 
 export const OPENAI_MODELS: ModelTable = {
   "gpt-5.6-sol": GPT_5_6_SOL,
   "gpt-5.6": GPT_5_6_SOL,
   "gpt-5.6-terra": tiered(
-    rates(2.5, 15, { read: 0.25, write: 3.125 }),
+    rates(2, 12, { read: 0.2, write: 2.5 }),
     LONG_CONTEXT_FROM,
-    rates(5, 22.5, { read: 0.5, write: 6.25 }),
+    rates(4, 18, { read: 0.4, write: 5 }),
   ),
   "gpt-5.6-luna": tiered(
-    rates(1, 6, { read: 0.1, write: 1.25 }),
+    rates(0.2, 1.2, { read: 0.02, write: 0.25 }),
     LONG_CONTEXT_FROM,
-    rates(2, 9, { read: 0.2, write: 2.5 }),
+    rates(0.4, 1.8, { read: 0.04, write: 0.5 }),
   ),
 
   /**
-   * GPT-6 family — model-page evidence recorded 2026-10-10 (not reverified here):
-   * https://developers.openai.com/api/docs/models/gpt-6-luna
-   * https://developers.openai.com/api/docs/models/gpt-6-sol
-   * https://developers.openai.com/api/docs/models/gpt-6.1-sol
-   * https://developers.openai.com/api/docs/models/gpt-6-astra
+   * GPT-6 family — read 2026-11-03 from the pricing page's Text API tables:
+   * https://developers.openai.com/api/docs/pricing
    * Recorded rates below are USD per 1M input / output / cached-read / cache-write tokens.
    * Router semantics, not a verbatim source quotation: total prompt tokens = tokensIn +
    * cacheReadTokens + cacheWriteTokens; at >=272_000, the long-context card replaces the

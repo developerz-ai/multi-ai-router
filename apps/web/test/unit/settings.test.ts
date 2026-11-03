@@ -9,10 +9,12 @@ import {
   mergePriceRows,
   type PriceOverride,
   type PriceRate,
+  type PriceTable,
   type SettingsView,
   withRates,
 } from "../../src/lib/api/settings"
 import { filterPriceRows } from "../../src/lib/price-filter"
+import { PriceCoverage } from "../../src/routes/settings/PriceCoverage"
 import { PriceOverridesSection } from "../../src/routes/settings/PriceOverridesSection"
 import { priceScopeLabel, removalConsequences } from "../../src/routes/settings/price-editing"
 
@@ -321,5 +323,93 @@ test("Reset removes an explicit metered Kimi override rather than submitting its
     node.remove()
     client.clear()
     globalThis.fetch = prior
+  }
+})
+
+/**
+ * The coverage panel is where an operator reads how much of the shipped table is evidence and how
+ * much is inherited. That sentence is the whole point of the panel: a source nobody re-read is
+ * not a source that was confirmed, and a panel that quietly dropped the distinction would read as
+ * "all our prices are verified".
+ */
+
+const coverageTable = (sources: readonly PriceTable["sources"]): PriceTable => ({
+  shippedAsOf: "2026-10-01",
+  sources,
+  shipped: [],
+  overrides: [],
+})
+
+const renderCoverage = (prices: PriceTable): { text: string; dispose: () => void } => {
+  const node = document.createElement("div")
+  document.body.append(node)
+  const dispose = render(
+    () =>
+      createComponent(PriceCoverage, {
+        prices,
+        onPrice: () => {},
+      }),
+    node,
+  )
+  const text = node.textContent ?? ""
+  return {
+    text,
+    dispose: () => {
+      dispose()
+      node.remove()
+    },
+  }
+}
+
+test("a source with no verification date says its rows were not re-checked", () => {
+  const view = renderCoverage(
+    coverageTable([
+      {
+        id: "anthropic",
+        url: "https://example.test/pricing",
+        snapshotAsOf: "2026-10-01",
+        verifiedAt: null,
+      },
+    ]),
+  )
+  try {
+    expect(view.text).toContain("were not re-checked against the")
+    expect(view.text).toContain("published page")
+    expect(view.text).toContain("their evidence is the inherited snapshot")
+    // The per-source line still says which state this source is in.
+    expect(view.text).toContain("verification unknown; snapshot 2026-10-01")
+    expect(view.text).not.toContain("verified 2026-10-01")
+  } finally {
+    view.dispose()
+  }
+})
+
+test("a source with a verification date states the date the page was read", () => {
+  const view = renderCoverage(
+    coverageTable([
+      {
+        id: "zai",
+        url: "https://example.test/zai",
+        snapshotAsOf: "2026-10-15",
+        verifiedAt: "2026-10-15",
+      },
+    ]),
+  )
+  try {
+    expect(view.text).toContain("verified 2026-10-15")
+    expect(view.text).not.toContain("verification unknown")
+  } finally {
+    view.dispose()
+  }
+})
+
+test("a vendor-priced offering with no published model id is not priced here", () => {
+  const view = renderCoverage(coverageTable([]))
+  try {
+    expect(view.text).toContain("prices by published model id")
+    expect(view.text).toContain("no published model")
+    expect(view.text).toContain("an operator override is the way to price it")
+  } finally {
+    view.dispose()
   }
 })

@@ -3,8 +3,8 @@ import { type ModelTable, rates } from "../rates"
 /**
  * z.ai's published per-Mtok GLM prices, international platform.
  *
- * Provenance: docs.z.ai/guides/overview/pricing, which states its figures are USD; verified on the
- * date `PRICE_TABLE_AS_OF` names. Blast radius: the metered total for `zai` accounts.
+ * Provenance: docs.z.ai/guides/overview/pricing, which states its figures are USD; read
+ * 2026-11-03. Blast radius: the metered total for `zai` accounts.
  *
  * The mainland platform (bigmodel.cn) is a **different deployment with its own CNY price list**,
  * and it is not this table: an account pointed at it through a base-URL override prices wrong here
@@ -14,25 +14,28 @@ import { type ModelTable, rates } from "../rates"
  * precisely why the subscription question is answered on the **Account** (`AccountBilling`) rather
  * than by a model name or a provider id. An account on that plan reports these numbers as
  * `notional`, not as spend.
+ *
+ * The page publishes no cache-write price: its "Cached Input Storage" column is a limited-time
+ * freebie, not a write rate, so every row below leaves the write at zero.
  */
 export const ZAI_MODELS: ModelTable = {
   /**
    * The current flagship, and what the coding plan runs on. Listed on the vendor's pricing page
-   * (docs.z.ai/guides/overview/pricing, read 2026-10-15) at the same figures as its 5.2/5.1
-   * siblings, with no cache-write price published (the cache-storage column is a limited-time
-   * freebie, not a write rate).
+   * (docs.z.ai/guides/overview/pricing, read 2026-11-03) at the same figures as its 5.2/5.1
+   * siblings.
    */
   "glm-5.3": rates(1.4, 4.4, { read: 0.26 }),
   "glm-5.2": rates(1.4, 4.4, { read: 0.26 }),
   "glm-5.1": rates(1.4, 4.4, { read: 0.26 }),
   "glm-5": rates(1, 3.2, { read: 0.2 }),
-  "glm-5-turbo": rates(1.2, 4, { read: 0.24 }),
   /**
    * Listed at docs.z.ai/guides/overview/pricing on 2026-10-15 at the figures OpenRouter already
    * charged (input 0.15, output 0.50, cached read 0.03 USD per Mtok), so the row's numbers stand
    * and only its source moved from the reseller to the vendor.
    */
   "glm-5.3-flash": rates(0.15, 0.5, { read: 0.03 }),
+  /** The FlashX line, published on the same page at its own figures. */
+  "glm-5.3-flashx": rates(0.37, 1.25, { read: 0.075 }),
   "glm-4.7": rates(0.6, 2.2, { read: 0.11 }),
   "glm-4.7-flashx": rates(0.07, 0.4, { read: 0.01 }),
   "glm-4.6": rates(0.6, 2.2, { read: 0.11 }),

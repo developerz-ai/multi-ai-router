@@ -8,7 +8,6 @@ import {
 } from "../../../src/services/cost"
 import { priceLookupForRows } from "../../../src/services/cost/book"
 import { unpricedModels } from "../../../src/services/cost/coverage"
-import { MINIMAX_UNPRICED } from "../../../src/services/cost/tables/minimax"
 
 const accountId = "11111111-1111-4111-8111-111111111111"
 const tokens = { tokensIn: 100, tokensOut: 10, cacheReadTokens: 0, cacheWriteTokens: 0 }
@@ -104,9 +103,9 @@ test("coverage uses account scope and retains unknown model catalog evidence", (
     { accountId: "uncatalogued", provider: "kimi", model: null, reason: "unknown_model_catalog" },
   ])
   expect(PRICE_SOURCES.find((source) => source.id === "kimi-coding-reference")?.verifiedAt).toBe(
-    "2026-10-03",
+    "2026-11-03",
   )
-  expect(PRICE_SOURCES.find((source) => source.id === "openai")?.verifiedAt).toBeNull()
+  expect(PRICE_SOURCES.find((source) => source.id === "openai")?.verifiedAt).toBe("2026-11-03")
 })
 
 test("displayed inherited snapshot is derived from the oldest source snapshot", () => {
@@ -142,43 +141,91 @@ test("glm-5.3 on zai carries the vendor's published rates (#253)", () => {
   expect(unpricedModels(zaiAccounts, lookupRates)).toEqual([])
 })
 
-test("the zai price source records the 2026-10-15 vendor-page verification (#258)", () => {
-  // #256 read docs.z.ai/guides/overview/pricing on 2026-10-15: glm-5.3 was priced from that read
-  // and glm-5.3-flash's figures were confirmed on it (only the source moved, not the numbers).
-  // The entry must not keep claiming the inherited 2026-10-01 snapshot with verifiedAt: null —
-  // an inherited snapshot is not a new verification, and this one had been re-verified.
+test("the zai price source records the vendor-page verification", () => {
+  // #256 read docs.z.ai/guides/overview/pricing on 2026-10-15 and priced glm-5.3 from that read;
+  // the page was read again on 2026-11-03, which is the date the entry now carries. The entry must
+  // not claim the inherited 2026-10-01 snapshot with verifiedAt: null — an inherited snapshot is
+  // not a new verification, and this one has been re-verified.
   const zai = PRICE_SOURCES.find((source) => source.id === "zai")
   expect(zai?.url).toBe("https://docs.z.ai/guides/overview/pricing")
-  expect(zai?.snapshotAsOf).toBe("2026-10-15")
-  expect(zai?.verifiedAt).toBe("2026-10-15")
+  expect(zai?.snapshotAsOf).toBe("2026-11-03")
+  expect(zai?.verifiedAt).toBe("2026-11-03")
 })
 
-test("MiniMax-M3.1-Flash-Preview has no vendor price, so it stays unknown (#254)", () => {
-  // platform.minimax.io's public price list (docs/guides/pricing, read 2026-10-15) carries no row
-  // for the preview: MiniMax serves it from the coding plan, and only resellers quote per-token
-  // numbers. A reseller's figure is not the vendor's price, so the tokens price as unknown.
-  expect(
-    lookupRates("minimax", "MiniMax-M3.1-Flash-Preview", { billing: "subscription" }),
-  ).toBeNull()
-  expect(lookupRates("minimax", "MiniMax-M3.1-Flash-Preview", { billing: "metered" })).toBeNull()
-  // A date pin must not fall back to a family row that does not price it either.
-  expect(
-    lookupRates("minimax", "MiniMax-M3.1-Flash-Preview-20261001", { billing: "subscription" }),
-  ).toBeNull()
+/**
+ * The rule this pins: a source's verification date is the date its page was **actually read**.
+ *
+ * A source whose page was not re-read keeps `verifiedAt: null` and its inherited snapshot date —
+ * and the two together are the statement "nobody looked". A source that claims a verification for
+ * a page nobody opened is the one failure this whole mechanism exists to prevent: the console
+ * would tell an operator their prices were checked on a date they were not.
+ */
+test("a source with no verification date means its rows were not re-checked", () => {
+  for (const source of PRICE_SOURCES) {
+    if (source.verifiedAt === null) {
+      // Nothing was read, so the snapshot is the inherited one and says so.
+      expect(source.snapshotAsOf, source.id).toBe("2026-10-01")
+      continue
+    }
+    // A page was read: the snapshot and the verification share the date, and it is a real date.
+    expect(source.snapshotAsOf, source.id).toBe(source.verifiedAt)
+    expect(source.verifiedAt, source.id).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  }
+})
+
+test("every shipped table has a price source, and every source names a page", () => {
+  // One source per shipped table: a table with no source is a table nobody can date, and a source
+  // with no table is a date that promises nothing.
+  expect(PRICE_SOURCES.length).toBe(12)
+  for (const source of PRICE_SOURCES) {
+    expect(source.id.length, source.id).toBeGreaterThan(0)
+    expect(source.url.startsWith("https://"), source.id).toBe(true)
+    expect(source.currency).toBe("USD")
+  }
+  // The wired tables and the sources agree, one for one.
+  const ids = PRICE_SOURCES.map((source) => source.id).sort()
+  expect(ids).toEqual([
+    "anthropic",
+    "cerebras",
+    "deepseek",
+    "google",
+    "groq",
+    "kimi-coding-reference",
+    "minimax",
+    "mistral",
+    "openai",
+    "together",
+    "xai",
+    "zai",
+  ])
+})
+
+test("MiniMax-M3.1-Flash is now published, so it prices rather than staying unknown", () => {
+  // platform.minimax.io's public price list (docs/pricing/overview, read 2026-11-03) carries a row
+  // for MiniMax-M3.1-Flash: input $0.15, output $0.60, cached read $0.015 per Mtok. The preview
+  // had no vendor price when #254 was written — only resellers quoted per-token numbers — so it
+  // was left unpriced. The vendor has since published it, so it is priced now.
+  expect(lookupRates("minimax", "MiniMax-M3.1-Flash", { billing: "metered" })).toEqual({
+    inputPerMtok: 0.15,
+    outputPerMtok: 0.6,
+    cacheReadPerMtok: 0.015,
+    cacheWritePerMtok: 0,
+  })
   expect(
     estimateCost({
       provider: "minimax",
-      model: "MiniMax-M3.1-Flash-Preview",
+      model: "MiniMax-M3.1-Flash",
       tokens,
-      billing: "subscription",
+      billing: "metered",
     }),
-  ).toEqual({ costBasis: "unknown", costEstimate: null })
-  // The registry is the documentation, so it cannot drift from the table: every entry names a
-  // reason and still looks up null.
-  expect(Object.keys(MINIMAX_UNPRICED)).toContain("minimax-m3.1-flash-preview")
-  for (const [model, reason] of Object.entries(MINIMAX_UNPRICED)) {
-    expect(reason.length).toBeGreaterThan(0)
-    expect(lookupRates("minimax", model)).toBeNull()
+  ).toEqual({ costBasis: "metered", costEstimate: "0.000021" })
+})
+
+test("the MiniMax M2 line left the price list, so it prices as unknown", () => {
+  // The public price list (read 2026-11-03) carries MiniMax-M3 and MiniMax-M3.1-Flash only. A
+  // retired id priced at its last known rate is a guess about a bill nobody is issuing.
+  for (const model of ["minimax-m2.7", "minimax-m2.7-highspeed", "minimax-m2.5", "minimax-m2.1"]) {
+    expect(lookupRates("minimax", model, { billing: "metered" }), model).toBeNull()
   }
 })
 
