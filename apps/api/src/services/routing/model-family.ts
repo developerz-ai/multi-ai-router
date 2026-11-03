@@ -5,8 +5,9 @@
  * Without it, "declares nothing" meant "serves everything" for every provider, and a key scoped to
  * a Claude subscription and a ChatGPT subscription routed `gpt-5.5` to Claude and `glm-5.3` to
  * ChatGPT — an upstream rejection where the right account sat in scope. A subscription serves one
- * vendor's names and nothing else, so its driver says which names those are; a generic endpoint
- * (OpenRouter, an OpenAI-compatible base URL) declares no family and keeps passthrough.
+ * vendor's names and nothing else, so its driver says which names those are; OpenRouter's driver
+ * states the shape of its ids; a generic endpoint (an OpenAI-compatible base URL) declares no family
+ * and keeps passthrough.
  *
  * It only ever **narrows** the candidate set. It never renames a model and never picks one
  * (non-negotiable 4), and an account's explicit `supportedModels` always replaces it.

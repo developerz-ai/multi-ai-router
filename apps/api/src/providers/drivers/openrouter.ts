@@ -1,5 +1,6 @@
 import { createHttpDriver } from "../driver"
 import { codeRule, messageRule, onStatus, withResetEstimate } from "../failure/classify"
+import type { ProviderDriver } from "../types"
 
 /**
  * `openrouter` — an aggregator, and a prepaid balance. Model ids are namespaced (`vendor/model`),
@@ -54,7 +55,23 @@ const KEY_LIMIT_RETEST_SECONDS = 60 * 60
  */
 const BODY_CACHE_KEY = true
 
-export const openRouterDriver = createHttpDriver({
+/**
+ * Every OpenRouter id is `vendor/model` (`openrouter/auto` included), so a bare name is one it cannot
+ * serve: it answers `400`, and that `400` used to reach the client in place of the quota error of the
+ * account that does carry the name. Unknown still passes through on the namespaced side, because an
+ * aggregator's catalog moves daily. Provenance: docs/idea/03-providers.md registry table, and this
+ * router's production log, 2026-11-02 (`k3`). Blast radius: a bare name on an undeclared `openrouter`
+ * account, which an alias or an explicit `supportedModels` still admits.
+ */
+const NAMESPACED_MODEL_ID = /^[^/\s]+\/[^/\s]\S*$/
+
+/**
+ * The refusal itself, for a namespaced id it does not carry. About the name, so the next account gets
+ * its turn. Provenance: same log line. Blast radius: without it the chain stops at this account.
+ */
+const MODEL_REFUSED = /is not a valid model id/i
+
+const driver = createHttpDriver({
   id: "openrouter",
   surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL, bodyCacheKey: BODY_CACHE_KEY }],
   rules: [
@@ -71,6 +88,10 @@ export const openRouterDriver = createHttpDriver({
         /moderation|flagged.*content|content.*flagged/i,
       ),
     ),
+    onStatus(
+      [400, 404],
+      messageRule("model-unsupported", "openrouter:model-unsupported", MODEL_REFUSED),
+    ),
     {
       kind: "server-error",
       signal: "openrouter:http-408",
@@ -82,3 +103,8 @@ export const openRouterDriver = createHttpDriver({
     codeRule("auth", "openrouter:code-401", ["401"]),
   ],
 })
+
+export const openRouterDriver: ProviderDriver = {
+  ...driver,
+  modelFamily: { patterns: [NAMESPACED_MODEL_ID] },
+}

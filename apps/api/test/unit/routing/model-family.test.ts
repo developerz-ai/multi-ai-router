@@ -92,9 +92,81 @@ describe("the Claude subscription family", () => {
   })
 
   test("providers that may serve anything declare no family", () => {
-    for (const id of ["zai", "openrouter", "openai-compatible", "anthropic-api"] as const) {
+    for (const id of ["zai", "openai-compatible", "anthropic-api"] as const) {
       expect(providerModelFamily(id)).toBeUndefined()
     }
+  })
+})
+
+/**
+ * Prod, 2026-11-02: `k3` was listed by a Kimi account. With Kimi cooling after its `429`, the
+ * undeclared OpenRouter account was the only candidate left, so the next request for `k3` went there
+ * and the client read `400 k3 is not a valid model ID` instead of Kimi's quota error.
+ */
+describe("OpenRouter carries namespaced ids only", () => {
+  const declared = providerModelFamily("openrouter")
+  // Spread, not a `?? { patterns: [] }` default: an empty family refuses everything, which would
+  // pass the refusal test below without the driver declaring anything.
+  const familyField = declared === undefined ? {} : { modelFamily: declared }
+  const family: ModelFamily = declared ?? { patterns: [] }
+  const openrouter = account("openrouter", { provider: "openrouter", ...familyField })
+  const resetsAt = new Date(at(0).getTime() + 900_000)
+  const kimiCooling = account("kimi", {
+    provider: "kimi",
+    status: "cooling_down",
+    health: {
+      consecutiveFailures: 1,
+      inFlight: 0,
+      recentTokens: 0,
+      cooldownUntil: resetsAt,
+      cooldownSource: "estimated",
+    },
+  })
+
+  for (const name of ["moonshotai/kimi-k3", "openrouter/auto", "vendor/model:free"]) {
+    test(`admits ${name}`, () => expect(inModelFamily(family, name)).toBe(true))
+  }
+  for (const name of ["k3", "gpt-5.5", "glm-5.2", "/k3", "k3/", "a b/c"]) {
+    test(`refuses ${name}`, () => expect(inModelFamily(family, name)).toBe(false))
+  }
+
+  test("a bare id never selects it, even as the only account not cooling", () => {
+    const result = selectFor("k3", [kimiCooling, openrouter])
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.status).toBe(429)
+    expect(result.error.message).toContain("kimi")
+    expect(result.error.message).toContain(resetsAt.toISOString())
+    expect(result.error.message).toContain("does not serve this model")
+  })
+
+  // Known behaviour, pinned rather than endorsed: `all` has no notion of metered, so a key with that
+  // scope reaches a prepaid account the moment the others are out. Opting in is a key-scope decision.
+  test("a key scoped `all` reaches it for a namespaced id with no opt-in", () => {
+    const result = selectAccounts(snapshot([kimiCooling, openrouter]), {
+      sessionKey: "metered",
+      model: "moonshotai/kimi-k3",
+      keyScope: { kind: "all" },
+    })
+    expect(result.ok && ids(result.candidates)).toEqual(["openrouter"])
+  })
+
+  test("an alias onto a namespaced id still selects it", () => {
+    const aliased = account("openrouter", {
+      provider: "openrouter",
+      ...familyField,
+      modelAliases: { k3: "moonshotai/kimi-k3" },
+    })
+    expect(chosen(selectFor("k3", [kimiCooling, aliased]))).toEqual(["openrouter"])
+  })
+
+  test("an operator's explicit list still wins over the family", () => {
+    const listed = account("openrouter", {
+      provider: "openrouter",
+      ...familyField,
+      supportedModels: ["k3"],
+    })
+    expect(chosen(selectFor("k3", [listed]))).toEqual(["openrouter"])
   })
 })
 
