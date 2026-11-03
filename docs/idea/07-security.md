@@ -271,6 +271,78 @@ Consume **then** check: the `state` is redeemed before the binding is judged, so
 it rather than leaving it available for another try. Claude subscriptions do the same with their
 pending login ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §3.1).
 
+## Dependency advisories
+
+The router ships a resolved dependency tree, and a tree is a supply chain: every package in it runs
+inside the API process, with `ENCRYPTION_KEY` and the Postgres credentials in reach. `bin/advisory`
+asks the live advisory database — OSV.dev, `https://api.osv.dev` — about the resolved packages in
+`bun.lock` (npm ecosystem). Workspace entries are excluded: `…@workspace:packages/core` is this
+repository, not a published dependency, and querying it would be asking about ourselves.
+
+**The assessment is live.** No committed report stands in for it: the answer comes from the
+database at the moment the check runs, so an advisory published today is visible to the next run
+without anything in this repository changing.
+
+Three outcomes, three exit codes, never conflated:
+
+| Outcome | Exit | Meaning |
+|---|---|---|
+| `clean` | 0 | The assessment completed and found no advisory |
+| `finding` | 1 | The assessment completed and found at least one advisory — **any** advisory fails, whatever its severity and whatever fix is available |
+| `unavailable` | 2 | The assessment did not complete: a network error, a non-2xx after the retries, an unparsable body, a query/result count mismatch, or an unparsable lockfile |
+
+**An unavailable assessment is red, and it is never a clean pass.** Exit 2 is not exit 0 with a
+warning attached: a gate that could not reach the database has proved nothing about the
+dependencies, and reporting it as clean would let a broken network read as a safe tree. A red
+"unknown" beats a green "clean". The three outcomes stay apart in the exit code, in the report's
+`status` field and in the printed summary.
+
+The report file is written on **every** outcome — clean, finding and unavailable alike — so each
+run leaves evidence of what was assessed and of what was found. CI uploads it as the
+`advisory-report` artifact, and the job summary names the assessment status.
+
+**The check needs the network, and is deliberately not part of `bin/check`.** `bin/check` is the
+local gate — lint, typecheck, tests, build — and none of it needs an outbound call, so it keeps
+working on a machine with no internet. The advisory assessment is a CI job of its own
+(`advisory` in `.github/workflows/ci.yml`) instead, where a network failure is a red job and not a
+developer's afternoon.
+
+The three outcomes are covered by tests against a local fixture server, using a synthetic package
+name and a synthetic advisory id. No real vulnerable dependency was added to `bun.lock` or to any
+manifest, and no test reaches the real OSV service.
+
+**The `overrides` block in the root `package.json` is the remediation half of this gate.** It holds
+nine transitive packages on versions the advisory database records as clean — at or above each
+advisory's recorded fix version — where the versions their consumers' own declared ranges resolve
+below are flagged. Probed against `api.osv.dev` on 2026-11-03, the same day `bin/advisory`
+assessed the whole resolved set (444 packages) `clean`:
+
+| Pinned | Advisory that holds below it |
+|---|---|
+| `body-parser` `2.4.0` | GHSA-27r3-jxmh-p828 — DoS via trailing bytes after a compressed request; fixed in 2.4.0 |
+| `fast-uri` `3.1.9` | GHSA-xhq7-xmqj-769h — improper path equivalence in relative-reference normalization; fixed in 3.1.9. One of twelve advisories that hold below it |
+| `glob` `14.0.2` | GHSA-3g3m-2fjr-6pw4 — AbortSignal cancellation bypass allows post-timeout filesystem traversal; fixed in 14.0.2 |
+| `happy-dom` `21.0.4` | GHSA-834v-8h66-3h79 — an unsanitized import alias executes host code; fixed in 21.0.4 |
+| `ip-address` `10.7.4` | GHSA-rxp7-6hxx-x8q5 — quadratic-time match on a zone identifier; fixed in 10.7.4. One of several advisories that hold below it |
+| `minimatch` `11.0.1` | GHSA-g3hv-75wg-m249 — DoS via glob-parts amplification; fixed in 11.0.1 |
+| `qs` `6.16.1` | GHSA-x5fp-wj9c-mxmx — array-limit bypass via bracket-key comma parsing; fixed in 6.16.0, with one further advisory cleared only at 6.16.1 |
+| `seroval` `1.6.11` | GHSA-f86p-h4j2-7qgj — code injection through a typed array's own constructor property; fixed in 1.6.11 |
+| `@esbuild-kit/core-utils>esbuild` `0.25.12` | GHSA-67mh-4wv8-2f99 — any website can send requests to the dev server and read the responses; fixed in 0.25.0. The `esbuild` `drizzle-kit`'s toolchain resolves |
+
+`glob` is the case to understand: GHSA-3g3m-2fjr-6pw4 holds across **every** version the `^13.0.6`
+its consumer declares allows, so no in-range resolution of it is clean — the fix lies outside the
+range, and the pin jumps the major on purpose. Reverting such a pin back "into range" re-opens the
+advisory, and this gate is what catches that.
+
+Two rules keep the block honest:
+
+- **A pin is never silent.** It arrives with a row above, or a CHANGELOG entry naming its advisory.
+  An override can hold a version outside the range its consumer declares, and a reader who "fixes"
+  that without knowing re-opens what the pin closed.
+- **A pin leaves when the range clears.** When a consumer's own declared range resolves only clean
+  versions again, the pin goes and ordinary resolution takes over. `bin/advisory` after any manifest
+  change is what proves the tree stayed clean either way.
+
 ## Blast radius
 
 | If this leaks | Then |
