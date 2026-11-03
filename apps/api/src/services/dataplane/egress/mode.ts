@@ -11,10 +11,11 @@ import type { RoutableAccount, UpstreamOperation } from "../types"
 /**
  * Which egress mode a (ingress dialect, selected Account) pair takes.
  *
- * There are three modes and the router takes the leftmost one that applies
+ * There are three **transports** and the router takes the leftmost one that applies
  * (docs/idea/06-protocol-translation.md): **passthrough** when the dialects match,
  * **translate** when they differ and a conversion pair exists, **Agent-SDK re-synthesis** for
- * Claude subscriptions.
+ * Claude subscriptions. A fourth decision, **estimate**, is not a transport at all: it is what a
+ * subscription answers when the route asks for something the SDK does not expose.
  *
  * **Passthrough is always preferred**, because it has zero translation loss: a new upstream
  * feature, a content block type nobody here has heard of, a beta flag — all survive a passthrough
@@ -34,10 +35,20 @@ import type { RoutableAccount, UpstreamOperation } from "../types"
  *
  * The `operation` then **narrows** that answer rather than forking it. A route that asks for
  * something other than a completion — a token count, an embedding — is passthrough or nothing: its
- * body has no faithful representation on an account whose provider states no such endpoint, and the
- * two ways to paper over that (estimate the count, embed with a different model) both hand the
- * client a fabricated number it cannot tell from a measured one. So the candidate is dropped by
- * name here, and a pool where none can answer surfaces the reason instead.
+ * body has no faithful representation on an account whose provider states no such endpoint, and
+ * embedding with a different model hands the client a vector it cannot tell from the one it asked
+ * for. So the candidate is dropped by name here, and a pool where none can answer surfaces the
+ * reason instead.
+ *
+ * **A token count is the one place the router answers for itself**, and only under two conditions
+ * that are stated together, never separately: the scope holds **only Claude subscriptions**, and
+ * the answer is **labelled**. A subscription cannot be asked — the Agent SDK states no token-count
+ * call, and forging an `api.anthropic.com` request out of a subscription's credentials is
+ * forbidden (docs/idea/11-anthropic-agent-sdk.md) — so a scope with nothing but subscriptions has
+ * no provider to ask and would otherwise answer `503`. It answers with the router's own estimate
+ * instead, carrying `estimated: true` so the number can never be mistaken for a measurement
+ * (`count-estimate.ts`). An account that states a counting endpoint is still preferred by a wide
+ * margin: the provider's own number is relayed byte for byte and the estimate is never reached.
  */
 
 export interface PassthroughEgress {
@@ -77,6 +88,21 @@ export interface AgentSdkEgress {
   readonly pair: TranslationPair | null
 }
 
+/**
+ * A Claude subscription asked to count tokens: it cannot, and the router can.
+ *
+ * A distinct decision rather than a rejection, because it is not a refusal. The Agent SDK states
+ * no token-count call, so there is nothing upstream to address — but the request itself is
+ * answerable, by the router's own estimate, and only when the scope holds nothing else.
+ *
+ * It carries no URL and no config directory: **no upstream is addressed on this path**, and no
+ * subprocess is spawned. Nothing here touches an account, so nothing here can cool one down.
+ */
+export interface EstimateEgress {
+  readonly mode: "estimate"
+  readonly driver: ClaudeSdkDriver
+}
+
 export type EgressRejectionReason =
   /** Dialects differ and this build has no conversion pair for them. */
   | "no-translator"
@@ -91,7 +117,25 @@ export interface EgressRejection {
   readonly message: string
 }
 
-export type EgressDecision = PassthroughEgress | TranslateEgress | AgentSdkEgress | EgressRejection
+export type EgressDecision =
+  | PassthroughEgress
+  | TranslateEgress
+  | AgentSdkEgress
+  | EstimateEgress
+  | EgressRejection
+
+/**
+ * What a transport decision looks like before an operation narrows it.
+ *
+ * The estimate is **not** in here: it is only ever produced by narrowing a transport decision for
+ * `count-tokens`, so the operation gates below see exactly the variants they can act on and the
+ * compiler proves the estimate never reaches the embedding gate.
+ */
+export type TransportDecision =
+  | PassthroughEgress
+  | TranslateEgress
+  | AgentSdkEgress
+  | EgressRejection
 
 export function resolveEgress(
   ingress: Dialect,
@@ -104,7 +148,7 @@ export function resolveEgress(
   return decision
 }
 
-function resolveTransport(ingress: Dialect, account: RoutableAccount): EgressDecision {
+function resolveTransport(ingress: Dialect, account: RoutableAccount): TransportDecision {
   const support = PROVIDER_REGISTRY[account.driver.provider]
 
   if (support.transport === "agent-sdk") {
@@ -146,44 +190,58 @@ function noTranslator(ingress: Dialect, egress: Dialect): EgressRejection {
   }
 }
 
+/**
+ * Why an account whose provider states no counting endpoint is refused rather than estimated for.
+ *
+ * The estimate exists, and it is labelled — but it is a *fallback for a scope with no provider at
+ * all*, not a substitute for one. Over an account whose provider states a counting endpoint, an
+ * estimate would be budgeted against as though a provider had stated it, and the client could not
+ * tell the two apart at the number.
+ */
 const NEVER_ESTIMATED =
-  "and this router answers a token count with the provider's own number or with nothing at all — an estimate of ours would be budgeted against as though a provider had stated it"
+  "and this router answers a token count with the provider's own number — an estimate of ours would be budgeted against as though a provider had stated it"
 
 /**
- * Counting tokens is **passthrough or nothing**.
+ * Counting tokens is **passthrough, or the router's own labelled estimate**.
  *
  * `POST /v1/messages/count_tokens` asks a specific tokenizer what a specific prompt costs *on that
- * provider*, so the only honest answer is the one the account itself returns. Neither alternative
- * survives contact with what the number is used for — a client compacting its context at a
- * threshold:
+ * provider*, so the honest answer is the one the account itself returns. Wherever an account states
+ * such an endpoint, that is what the client gets — relayed byte for byte, never re-derived.
+ *
+ * Two alternatives are not available at all:
  *
  *  - **Translating** it is meaningless. Two providers tokenize differently, so an OpenAI account's
  *    count is not an answer to the question the caller asked, and neither OpenAI dialect exposes a
- *    counting endpoint to ask in the first place.
- *  - **Estimating** it is worse than failing. A fabricated integer is indistinguishable from a
- *    measured one at the client, which is the same objection that makes substituting a model
- *    forbidden (docs/idea/06-protocol-translation.md#counting-tokens).
+ *    counting endpoint to ask in the first place. Such a candidate is refused by name.
+ *  - **Estimating** it over a provider that *can* count is worse than failing. A fabricated
+ *    integer is indistinguishable from a measured one at the client, which is the same objection
+ *    that makes substituting a model forbidden (docs/idea/06-protocol-translation.md#counting-tokens).
  *
- * A Claude subscription lands here too: the Agent SDK exposes no token-count call, and the one
- * thing this router will never do to get one is forge an `api.anthropic.com` request out of a
- * subscription's credentials (docs/idea/11-anthropic-agent-sdk.md).
+ * A Claude subscription is the exception, and it is a narrow one. The Agent SDK exposes no
+ * token-count call, and the one thing this router will never do to get one is forge an
+ * `api.anthropic.com` request out of a subscription's credentials
+ * (docs/idea/11-anthropic-agent-sdk.md). So a subscription **cannot** count — but unlike an
+ * OpenAI account it is not *refusing*: there is simply no provider in a subscription-only scope to
+ * ask. That scope is answered by the router's own estimate, and the answer says so:
+ * `estimated: true`, always, beside the number (`count-estimate.ts`).
  *
- * The refusal is per candidate, so a mixed pool still serves the request off whichever account
- * *can* count. Only when none can does it surface — as a `503`, because the caller's request is
- * fine and it is the operator who would fix this by adding an Anthropic-dialect account.
+ * The refusal for the OpenAI family stays per candidate, so a mixed pool still serves the request
+ * off whichever account *can* count — and a scope holding one Anthropic-dialect account beside
+ * four subscriptions still counts off that account, never by estimate.
  */
-function countable(decision: EgressDecision): EgressDecision {
+function countable(decision: TransportDecision): EgressDecision {
   if (decision.mode === "passthrough" || decision.mode === "rejected") return decision
 
-  const what =
-    decision.mode === "agent-sdk"
-      ? "is a Claude subscription served through the Claude Agent SDK, which exposes no token-count call"
-      : `speaks ${decision.to}, which states no token-count endpoint`
+  if (decision.mode === "agent-sdk") {
+    // A Claude subscription: no token-count call exists upstream, and none will be forged. The
+    // router answers for itself, labelled — so this is a decision, not a refusal.
+    return { mode: "estimate", driver: decision.driver }
+  }
 
   return {
     mode: "rejected",
     reason: "unsupported-operation",
-    message: `this account cannot count tokens: it ${what}, ${NEVER_ESTIMATED}`,
+    message: `this account cannot count tokens: it speaks ${decision.to}, which states no token-count endpoint, ${NEVER_ESTIMATED}`,
   }
 }
 
@@ -215,7 +273,7 @@ const NEVER_SUBSTITUTED =
  * Per candidate, like the token count, so a pool holding one OpenAI key and four Claude
  * subscriptions still embeds — off the one account that can.
  */
-function embeddable(decision: EgressDecision): EgressDecision {
+function embeddable(decision: TransportDecision): EgressDecision {
   if (decision.mode === "rejected") return decision
 
   const dialect = decision.mode === "passthrough" ? decision.dialect : decision.to

@@ -38,6 +38,12 @@ import type { RoutableAccount, RoutingCatalog, UpstreamOperation } from "./types
  * Anthropic account and four Claude subscriptions still counts, and one holding a single OpenAI key
  * beside them still embeds, off the one account that can.
  *
+ * A Claude subscription asked to count is the one candidate that is dropped **and remembered**: it
+ * cannot be asked upstream, so there is no URL and no subprocess to spend — but the request is
+ * still answerable, by the router's own labelled estimate. The plan records that as
+ * {@link CandidatePlan.estimable} and leaves the chain empty, so the refusal path can decide
+ * between the estimate and the named `503` without asking this module a second question.
+ *
  * It is also free to mix **transports**. `kind` is the seam: an HTTP candidate carries the URL it is
  * addressed at, a Claude subscription carries the `CLAUDE_CONFIG_DIR` its subprocess runs against,
  * and nothing else in the chain has to ask which is which. Resolving both here means the same class
@@ -107,6 +113,20 @@ export interface CandidatePlan {
   readonly rejection: EgressRejection | null
   /** A candidate whose own endpoint failed to resolve — an operator misconfiguration. */
   readonly endpointError: RouterError | null
+  /**
+   * The scope holds nothing but Claude subscriptions, so the request can be answered by the
+   * router's own labelled estimate.
+   *
+   * True only when **every** candidate was a subscription asked to count and **none** of them
+   * could be reached by a provider that states a counting endpoint. A scope holding one
+   * Anthropic-dialect account beside four subscriptions counts off that account instead, and a
+   * scope holding an OpenAI account beside them is refused by name — neither is estimable, and
+   * neither sets this flag.
+   *
+   * Optional, and absent means "not estimable": a plan assembled elsewhere — a fixture, a test —
+   * says nothing about the estimate, and the safe answer to an unsaid thing is no.
+   */
+  readonly estimable?: boolean
 }
 
 /**
@@ -143,14 +163,30 @@ export function planCandidates(
   const servable: ServableCandidate[] = []
   let rejection: EgressRejection | null = null
   let endpointError: RouterError | null = null
+  // How many candidates were asked to count, and how many of them could only be answered by an
+  // estimate. The scope is estimable only when the two are the same number — a scope holding one
+  // OpenAI account beside four subscriptions is not a subscription-only scope, and is refused by
+  // name rather than answered with an estimate.
+  const counting = operation === "count-tokens"
+  let asked = 0
+  let estimated = 0
 
   for (const candidate of candidates) {
     const account = accounts.get(candidate.account.id)
     if (account === undefined) continue
+    if (counting) asked += 1
 
     const egress = resolveEgress(ingress, account, operation)
     if (egress.mode === "rejected") {
       rejection ??= egress
+      continue
+    }
+
+    // A Claude subscription asked to count: nothing upstream can answer it, so there is no URL to
+    // address and no subprocess to spawn. It is dropped from the chain like any other unservable
+    // candidate, and remembered so the scope can be answered by the router's own estimate.
+    if (egress.mode === "estimate") {
+      if (counting) estimated += 1
       continue
     }
 
@@ -205,7 +241,12 @@ export function planCandidates(
     }
   }
 
-  return { servable, rejection, endpointError }
+  return {
+    servable,
+    rejection,
+    endpointError,
+    estimable: counting && estimated > 0 && estimated === asked,
+  }
 }
 
 /**

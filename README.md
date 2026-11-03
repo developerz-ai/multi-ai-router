@@ -185,7 +185,7 @@ one) is named explicitly rather than silently approximated.
 | Admin API: accounts, pools (incl. overflow account), keys, provider registry | ✅ |
 | Router keys: minted, named, encrypted, **retrievable** (`POST /api/admin/keys/:id/reveal`), revocable | ✅ |
 | Data plane, **same-dialect passthrough**: `/v1/messages`, `/v1/chat/completions`, `/v1/responses`, `/v1/models` | ✅ |
-| `POST /v1/messages/count_tokens` — routed, scoped and failed over like any request | ✅ passthrough to an Anthropic-dialect account, or a `503` naming why none can count; never an estimate |
+| `POST /v1/messages/count_tokens` — routed, scoped and failed over like any request | ✅ passthrough to an Anthropic-dialect account, or a `503` naming why none can count; a **subscription-only** scope is answered with a **labelled local estimate** (`estimated: true`), never an unlabelled one |
 | `POST /v1/embeddings` — routed, scoped and failed over like any request | ✅ passthrough to an OpenAI-dialect account (either surface), or a `503` naming why none can embed; never another model's vectors |
 | Routing: scope intersection, the six policies, overflow, bounded failover, circuit breaker | ✅ |
 | Warm routing catalog + off-path batched `UsageRecord` writer | ✅ |

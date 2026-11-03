@@ -7,7 +7,7 @@ import {
   TranslationError,
 } from "@multi-ai-router/core"
 import type { CandidatePlan } from "../../../src/services/dataplane"
-import { unservableError } from "../../../src/services/dataplane"
+import { unservableError, unservableOutcome } from "../../../src/services/dataplane"
 import type {
   FilterReason,
   RejectedCandidate,
@@ -230,5 +230,95 @@ describe("a held-back capable account outranks a resolvable endpoint failure too
 
     expect(error.status).toBe(429)
     expect(quotaError(error).retryAfterSeconds).toBe(90)
+  })
+})
+
+/**
+ * The three-way decision, pinned as a decision.
+ *
+ * `unservableError` answers with a refusal and nothing else, so it cannot say which of the three
+ * answers a chain that could not be planned gets. {@link unservableOutcome} can, and the order it
+ * decides in is load-bearing: a health verdict on an account that could have served the request
+ * outranks the router's own estimate, because a condition a clock fixes must never be reported as
+ * a permanent gap — nor softened into a number the client would compact against.
+ */
+describe("the three-way decision for a chain that could not be planned", () => {
+  /** The plan a subscription-only scope produces: nothing to attempt, and the estimate available. */
+  const ESTIMABLE: CandidatePlan = {
+    servable: [],
+    rejection: null,
+    endpointError: null,
+    estimable: true,
+  }
+
+  test("answers with the estimate when no capable account was held back", () => {
+    const outcome = unservableOutcome({
+      plan: ESTIMABLE,
+      decision: decision([]),
+      capable,
+      now: NOW,
+    })
+
+    expect(outcome.kind).toBe("estimate")
+  })
+
+  test("answers with the health verdict when a capable account was held back", () => {
+    // The same estimable plan, and the same order of questions — but an account that could have
+    // counted is cooling down. The estimate sits *below* the health verdict, never beside it.
+    const outcome = unservableOutcome({
+      plan: ESTIMABLE,
+      decision: decision([reject("anthropic", "cooling-down", RESET)]),
+      capable,
+      now: NOW,
+    })
+
+    expect(outcome.kind).toBe("refusal")
+    if (outcome.kind !== "refusal") throw new Error("expected a refusal")
+    expect(outcome.error).toBeInstanceOf(QuotaExhaustedError)
+    expect(outcome.error.status).toBe(429)
+    expect(quotaError(outcome.error).retryAfterSeconds).toBe(90)
+  })
+
+  test("still answers with the estimate when the held-back account could not have counted", () => {
+    // An account that could never have served this operation says nothing about it: its health is
+    // not a verdict on the request. So the estimate stands, and the held-back account is not
+    // counted against it.
+    const outcome = unservableOutcome({
+      plan: ESTIMABLE,
+      decision: decision([reject("openai", "cooling-down", RESET)]),
+      capable,
+      now: NOW,
+    })
+
+    expect(outcome.kind).toBe("estimate")
+  })
+
+  test("refuses a plan that is not estimable, even with nothing held back", () => {
+    const outcome = unservableOutcome({
+      plan: CANNOT_COUNT,
+      decision: decision([]),
+      capable,
+      now: NOW,
+    })
+
+    expect(outcome.kind).toBe("refusal")
+    if (outcome.kind !== "refusal") throw new Error("expected a refusal")
+    expect(outcome.error.status).toBe(503)
+    expect(outcome.error.message).toContain("cannot count tokens")
+  })
+
+  test("a plan that says nothing about the estimate is not estimable", () => {
+    // The flag is optional, and an absent flag means "not estimable": the safe answer to an
+    // unsaid thing is no. A plan assembled elsewhere says nothing about the estimate.
+    const outcome = unservableOutcome({
+      plan: { servable: [], rejection: null, endpointError: null },
+      decision: decision([]),
+      capable,
+      now: NOW,
+    })
+
+    expect(outcome.kind).toBe("refusal")
+    if (outcome.kind !== "refusal") throw new Error("expected a refusal")
+    expect(outcome.error.status).toBe(503)
   })
 })

@@ -1,10 +1,13 @@
-import type { RouterError } from "@multi-ai-router/core"
+import type { Dialect, RouterError } from "@multi-ai-router/core"
+import { PROVIDER_REGISTRY } from "../../providers"
+import type { Candidate } from "../routing"
 import { type FailoverOptions, selectAccounts } from "../routing"
 import { createRequestIdentity, type UsageRequestIdentity } from "../usage/request-identity"
 import { admitRoutingModel, refuseEncodedBody } from "./body/preflight"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { readTrackedRequestBody } from "./body-progress"
 import { runChain } from "./chain"
+import { countTokensEstimateResponse } from "./count-estimate"
 import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-config"
 import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "./dispatcher-config"
 import { resolveEgress } from "./egress/mode"
@@ -22,8 +25,8 @@ import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
 import { buildSnapshot } from "./snapshot"
 import { createTranslatedRequestBody } from "./translate-body"
-import { SYSTEM_CLOCK } from "./types"
-import { unservableError } from "./unservable"
+import { type RoutableAccount, SYSTEM_CLOCK, type UpstreamOperation } from "./types"
+import { unservableOutcome } from "./unservable"
 
 /**
  * The request lifecycle, steps 3-12 of `docs/idea/01-architecture.md`:
@@ -34,10 +37,78 @@ import { unservableError } from "./unservable"
  * Preflight reads the body once, resolves the session binding (indexed lookup when cold), and
  * selects from a warm snapshot. Every authenticated refusal is accounted for; unknown facts stay
  * null and no account is charged for preparation.
+ *
+ * One chain can end without an upstream: a scope holding nothing but Claude subscriptions cannot be
+ * asked for a token count — the Agent SDK states no such call — so the router answers with its own
+ * labelled estimate instead of a refusal (`count-estimate.ts`).
  */
 
 /** Dropped fields one log line spells out; bounds one field, not an operator knob. */
 const MAX_REPORTED_DROPS = 20
+
+/**
+ * Whether an account **could have served** this request's operation, health aside.
+ *
+ * This is the question the empty chain asks about an account selection held back: its verdict is
+ * the answer only if the account would have served the request had it been healthy. An OpenAI
+ * account asked to count tokens never could — it states no counting endpoint — so its cooldown
+ * says nothing about this request, and the shape gap is the truth.
+ *
+ * A Claude subscription is the harder case, because **the estimate is not a serving capability**:
+ * the Agent SDK states no token-count call, so a subscription can never be asked for a count, awake
+ * or cooling. Yet its health still decides the answer when the scope holds nothing but
+ * subscriptions — there the estimate *is* this scope's answer, and the subscription's cooldown is
+ * what stands between the client and it, so the honest reply is the `429` a clock recovers.
+ *
+ * Beside any account that states a counting endpoint of its own, the estimate is not the answer at
+ * all: the scope has a provider-shaped gap, the request is refused by name, and a subscription's
+ * cooldown is not the reason.
+ */
+function couldHaveServed(input: {
+  readonly account: RoutableAccount
+  readonly operation: UpstreamOperation
+  readonly ingress: Dialect
+  /** Whether the router's own estimate is this scope's answer. */
+  readonly estimateIsTheAnswer: boolean
+}): boolean {
+  const mode = resolveEgress(input.ingress, input.account, input.operation).mode
+  // A subscription is never addressed upstream for a count: the Agent SDK states no such call, and
+  // the router will not forge one. Its health is a verdict on the account, not on the operation.
+  if (mode === "estimate") return input.estimateIsTheAnswer
+  // Every other account is judged by the egress gate: one that states the endpoint could have
+  // served it, and one that does not never could, awake or cooling.
+  return mode !== "rejected"
+}
+
+/**
+ * Whether an account is a Claude subscription — served by the Agent SDK, not over HTTP.
+ *
+ * Asked of the provider registry rather than of a provider id: "is this account a subscription" is
+ * the transport seam, and a comparison on the id would spread a fact the registry already owns.
+ */
+function isSubscription(account: RoutableAccount): boolean {
+  return PROVIDER_REGISTRY[account.driver.provider].transport === "agent-sdk"
+}
+
+/**
+ * Whether every account the router could have picked for this request is a Claude subscription.
+ *
+ * The candidates, not the whole scope: an account the operator switched off is not in the running,
+ * and the same question the plan asks of them (`plan.estimable`) is asked of the accounts that
+ * survived selection. A scope whose live members are all subscriptions has no provider to ask, so
+ * the router's own estimate is its answer; a scope holding one OpenAI account beside them has a
+ * provider-shaped gap, the estimate is not its answer, and a subscription's cooldown is not the
+ * reason the request fails.
+ */
+function everyCandidateIsASubscription(
+  candidates: readonly Candidate[],
+  accounts: ReadonlyMap<string, RoutableAccount>,
+): boolean {
+  return candidates.every((candidate) => {
+    const account = accounts.get(candidate.account.id)
+    return account !== undefined && isSubscription(account)
+  })
+}
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
@@ -206,18 +277,28 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       if (plan.servable.length === 0) {
         // Off the served path: this second catalog read happens only once the chain is empty.
         const accounts = new Map(deps.catalog.accounts().map((one) => [one.id, one]))
-        return fail(
-          unservableError({
-            plan,
-            decision: selection.decision,
-            capable: (accountId) => {
-              const account = accounts.get(accountId)
-              if (account === undefined) return false
-              return resolveEgress(input.ingress, account, operation).mode !== "rejected"
-            },
-            now: clock.now(),
-          }),
-        )
+        // Whether the router's own estimate is this scope's answer, decided once per empty chain.
+        const estimateIsTheAnswer = everyCandidateIsASubscription(selection.candidates, accounts)
+        const outcome = unservableOutcome({
+          plan,
+          decision: selection.decision,
+          capable: (accountId) => {
+            const account = accounts.get(accountId)
+            if (account === undefined) return false
+            return couldHaveServed({
+              account,
+              operation,
+              ingress: input.ingress,
+              estimateIsTheAnswer,
+            })
+          },
+          now: clock.now(),
+        })
+        // A scope holding nothing but Claude subscriptions has no provider to ask for a count: the
+        // Agent SDK states no such call. The router answers for itself, and says so in the body.
+        if (outcome.kind === "estimate")
+          return countTokensEstimateResponse(body.bytes, runtime, startedAt, requestStarted)
+        return fail(outcome.error)
       }
 
       // Kept: the transcript follows the turn to whichever subscription serves it
