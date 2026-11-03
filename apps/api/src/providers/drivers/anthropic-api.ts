@@ -20,11 +20,20 @@ const BASE_URL = "https://api.anthropic.com"
  * without this rule that response classifies as `invalid-request`, the account keeps being
  * selected, and every request fails identically until a human notices.
  */
+/**
+ * Provenance: Anthropic's prompt-caching docs — a top-level `cache_control: {type: "ephemeral"}` on
+ * a Messages request is automatic caching, GA with no beta header, counted toward the cap of four
+ * breakpoints. Blast radius: every OpenAI-wire request translated to an `anthropic-api` account that
+ * states no marker of its own; without it that request caches nothing and an agent loop re-bills its
+ * whole prefix every turn (a 1.25x write on turn 1, repaid from turn 2).
+ */
+const AUTOMATIC_CACHE = true
+
 const CREDIT_BALANCE_TOO_LOW = /credit balance is too low/i
 
 export const anthropicApiDriver = createHttpDriver({
   id: "anthropic-api",
-  surfaces: [{ dialect: "anthropic", baseUrl: BASE_URL }],
+  surfaces: [{ dialect: "anthropic", baseUrl: BASE_URL, cacheControl: AUTOMATIC_CACHE }],
   rules: [
     messageRule("credits-exhausted", "anthropic:credit-balance-too-low", CREDIT_BALANCE_TOO_LOW),
     typeRule("credits-exhausted", "anthropic:billing_error", ["billing_error"]),

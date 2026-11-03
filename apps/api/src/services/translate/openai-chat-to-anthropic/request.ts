@@ -1,4 +1,9 @@
-import type { AnthropicBlock, AnthropicRequest, AnthropicToolChoice } from "../shared/anthropic"
+import type {
+  AnthropicBlock,
+  AnthropicRequest,
+  AnthropicTextBlock,
+  AnthropicToolChoice,
+} from "../shared/anthropic"
 import { DEFAULT_MAX_TOKENS } from "../shared/anthropic"
 import type { AnthropicTurn } from "../shared/anthropic-turns"
 import {
@@ -8,6 +13,7 @@ import {
   mergeTurns,
   pushTurn,
 } from "../shared/anthropic-turns"
+import { AUTOMATIC_CACHE, lastMarker, marked } from "../shared/cache-control-schema"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   ParsedOpenAiChatContent,
@@ -47,6 +53,14 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  * **`response_format` is carried as a forced tool call** (`shared/structured-output-anthropic.ts`),
  * with thinking disabled; beside the caller's own `tools` it is refused.
  *
+ * **Cache breakpoints are kept where the client put them.** OpenRouter's `cache_control` on a part
+ * lands on the block that part became — a marked system message keeps its own system block, a marked
+ * tool message marks its `tool_result` — and, toward a target that takes it, a top-level marker
+ * stays top-level. A request with no
+ * marker at all gets Anthropic's automatic one when `options.automaticCache` says the target takes
+ * it: Anthropic caches only at a breakpoint, so without one an agent loop re-bills its whole prefix
+ * every turn. Never beside a client's own marker — both count toward Anthropic's cap of four.
+ *
  * Refused: `logprobs`, `top_logprobs`, `n > 1`, a `response_format` beside `tools`, audio and file parts, and a `tool_call_id` matching no call earlier in the transcript. Dropped, as
  * documented: `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `user`,
  * `strict`, and image `detail`.
@@ -56,6 +70,8 @@ export interface OpenAiChatToAnthropicOptions {
   readonly defaultMaxTokens?: number | undefined
   /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
   readonly onDrop?: DropSink | undefined
+  /** The target takes Anthropic's top-level automatic `cache_control`. Absent means it does not. */
+  readonly automaticCache?: boolean | undefined
 }
 
 /** @throws TranslationError (400) naming the field that has no anthropic representation. */
@@ -68,7 +84,7 @@ export function openAiChatToAnthropicRequest(
   assertNoReservedTool(request.tools)
   const structured = structuredOutputToAnthropic(request.response_format, request.tools)
 
-  const system: string[] = []
+  const system: AnthropicTextBlock[] = []
   const turns: AnthropicTurn[] = []
   // Ids seen on an assistant turn, so a result naming a call that never happened is refused rather
   // than handed upstream to fail there with a message about a body we wrote.
@@ -81,7 +97,8 @@ export function openAiChatToAnthropicRequest(
       case "developer": {
         // Anthropic has one top-level system prompt, wherever OpenAI put its system turns.
         const text = contentText(message.content, at, "system prompt")
-        if (text.length > 0) system.push(text)
+        if (text.length > 0)
+          system.push({ type: "text", text, ...marked(lastMarker(message.content)) })
         break
       }
       case "user":
@@ -106,6 +123,7 @@ export function openAiChatToAnthropicRequest(
             type: "tool_result",
             tool_use_id: message.tool_call_id,
             content: contentText(message.content, at, "tool result"),
+            ...marked(lastMarker(message.content)),
           },
         ])
         break
@@ -126,7 +144,7 @@ export function openAiChatToAnthropicRequest(
       request.max_tokens ??
       options.defaultMaxTokens ??
       DEFAULT_MAX_TOKENS,
-    system: system.length === 0 ? undefined : system.join(BLOCK_JOIN),
+    system: systemPrompt(system),
     temperature: request.temperature ?? undefined,
     top_p: request.top_p ?? undefined,
     stop_sequences: stopSequences(request.stop),
@@ -142,7 +160,24 @@ export function openAiChatToAnthropicRequest(
     ),
     // Last, so it wins over `reasoning_effort`: a forced tool call and thinking cannot share a request.
     ...(forcesToolUse(tool_choice) ? { thinking: { type: "disabled" as const } } : {}),
+    // Top-level only toward a surface that states it takes the field: a compatible vendor's clone of
+    // the Messages API may predate automatic caching and refuse it. Block-level markers are the
+    // dialect's own and go everywhere.
+    ...(options.automaticCache === true
+      ? marked(request.cache_control ?? (hasMarker(request) ? undefined : AUTOMATIC_CACHE))
+      : {}),
   }
+}
+
+/** Joined, as before — unless a block carries a breakpoint, whose position only blocks can hold. */
+function systemPrompt(blocks: readonly AnthropicTextBlock[]): AnthropicRequest["system"] {
+  if (blocks.length === 0) return undefined
+  if (blocks.some((block) => block.cache_control !== undefined)) return blocks
+  return blocks.map((block) => block.text).join(BLOCK_JOIN)
+}
+
+function hasMarker(request: ParsedOpenAiChatRequest): boolean {
+  return request.messages.some((message) => lastMarker(message.content) !== undefined)
 }
 
 function clientToolChoice(request: ParsedOpenAiChatRequest): AnthropicToolChoice | undefined {
@@ -196,10 +231,14 @@ function contentBlocks(content: ParsedOpenAiChatContent | undefined, at: string)
     const field = `${at}.content[${index}]`
     switch (part.type) {
       case "text":
-        if (part.text.length > 0) blocks.push({ type: "text", text: part.text })
+        if (part.text.length > 0)
+          blocks.push({ type: "text", text: part.text, ...marked(part.cache_control) })
         break
       case "image_url":
-        blocks.push(imageBlockFromUrl(part.image_url.url, `${field}.image_url.url`))
+        blocks.push({
+          ...imageBlockFromUrl(part.image_url.url, `${field}.image_url.url`),
+          ...marked(part.cache_control),
+        })
         break
       default:
         rejectField(`${field}.type`, `\`${part.actual}\` has no anthropic counterpart`)

@@ -8,6 +8,7 @@ import {
   mergeTurns,
   pushTurn,
 } from "../shared/anthropic-turns"
+import { AUTOMATIC_CACHE } from "../shared/cache-control-schema"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type { ParsedOpenAiResponsesContent } from "../shared/openai-responses"
 import { openAiResponsesRequestSchema, UNSUPPORTED } from "../shared/openai-responses"
@@ -67,6 +68,12 @@ export interface OpenAiResponsesToAnthropicOptions {
   readonly defaultMaxTokens?: number | undefined
   /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
   readonly onDrop?: DropSink | undefined
+  /**
+   * The target takes Anthropic's top-level automatic `cache_control`. Responses states no marker of
+   * its own, so toward such a target every request carries it: Anthropic caches only at a
+   * breakpoint, and without one an agent loop re-bills its whole prefix every turn.
+   */
+  readonly automaticCache?: boolean | undefined
 }
 
 /** @throws TranslationError (400) naming the field that has no anthropic representation. */
@@ -180,6 +187,7 @@ export function openAiResponsesToAnthropicRequest(
             disable_parallel_tool_use: !request.parallel_tool_calls,
           },
     ...anthropicReasoningFromEffort(request.reasoning?.effort, "reasoning.effort", onDrop),
+    ...(options.automaticCache === true ? { cache_control: AUTOMATIC_CACHE } : {}),
   }
 }
 

@@ -68,6 +68,15 @@ const BODY_CACHE_KEY = true
 const CACHE_CONTROL = true
 
 /**
+ * Provenance: openrouter.ai/docs/features/prompt-caching (read 2026-11-03) — a body `session_id`
+ * (up to 256 characters) is the sticky-routing key, and "when `session_id` is set, sticky routing
+ * starts before any cache hit is observed"; without it `prompt_cache_key` is the fallback key. Blast
+ * radius: every translated request to an `openrouter` account carries its cache key here too; if
+ * OpenRouter drops the field, stickiness starts at the first cache hit as before.
+ */
+const BODY_SESSION_ID = true
+
+/**
  * Every OpenRouter id is `vendor/model` (`openrouter/auto` included), so a bare name is one it cannot
  * serve: it answers `400`, and that `400` used to reach the client in place of the quota error of the
  * account that does carry the name. Unknown still passes through on the namespaced side, because an
@@ -91,6 +100,7 @@ const driver = createHttpDriver({
       baseUrl: BASE_URL,
       bodyCacheKey: BODY_CACHE_KEY,
       cacheControl: CACHE_CONTROL,
+      bodySessionId: BODY_SESSION_ID,
     },
   ],
   rules: [

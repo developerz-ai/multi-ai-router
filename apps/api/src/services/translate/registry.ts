@@ -95,7 +95,7 @@ export interface TranslationContext {
    */
   readonly onDrop?: DropSink | undefined
   /**
-   * Whether the **selected Account's** openai-chat surface reads Anthropic-style `cache_control`
+   * Whether the **selected Account's** surface reads `cache_control` beyond its dialect's base
    * (`ProviderSurface.cacheControl`) — per candidate like `chatCeiling`. Absent means it does not.
    */
   readonly cacheControl?: boolean | undefined
@@ -158,6 +158,7 @@ const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
     openAiChatToAnthropicRequest(body, {
       defaultMaxTokens: context.defaultMaxTokens,
       onDrop: context.onDrop,
+      automaticCache: context.cacheControl,
     }),
   response: (body, context) =>
     anthropicToOpenAiChatResponse(body, {
@@ -210,6 +211,7 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
     openAiResponsesToAnthropicRequest(body, {
       defaultMaxTokens: context.defaultMaxTokens,
       onDrop: context.onDrop,
+      automaticCache: context.cacheControl,
     }),
   response: (body, context) =>
     anthropicToOpenAiResponsesResponse(body, {

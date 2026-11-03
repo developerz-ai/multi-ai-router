@@ -3,6 +3,7 @@ import type {
   ParsedAnthropicRequest,
   ParsedAnthropicToolResult,
 } from "./anthropic"
+import { lastMarker, marked } from "./cache-control-schema"
 import type { OpenAiChatCacheControl, OpenAiChatTextPart } from "./openai-chat"
 
 /**
@@ -22,7 +23,7 @@ export type CacheMark = (control: ParsedAnthropicCacheControl) => {
 }
 
 const NO_MARK: CacheMark = () => ({})
-const CARRY_MARK: CacheMark = (control) => (control === undefined ? {} : { cache_control: control })
+const CARRY_MARK: CacheMark = marked
 
 /** The strip every other target gets — a strict upstream `400`s on a field it does not know. */
 export function cacheMark(carry: boolean | undefined): CacheMark {
@@ -33,14 +34,7 @@ export function cacheMark(carry: boolean | undefined): CacheMark {
 export function toolResultCacheControl(
   block: ParsedAnthropicToolResult,
 ): ParsedAnthropicCacheControl {
-  if (block.cache_control !== undefined || typeof block.content !== "object") {
-    return block.cache_control
-  }
-  for (const nested of block.content.toReversed()) {
-    const control = "cache_control" in nested ? nested.cache_control : undefined
-    if (control !== undefined) return control
-  }
-  return undefined
+  return block.cache_control ?? lastMarker(block.content)
 }
 
 /**

@@ -65,7 +65,12 @@ export interface TranslatedRequestBody {
 
 export interface PromptCacheKeying {
   readonly fallback: string | undefined
+  /** The surface also reads a body `session_id` as its sticky key; it gets the same key. */
+  readonly sessionId?: boolean | undefined
 }
+
+/** OpenRouter's stated ceiling on `session_id`; a longer caller key is left to `prompt_cache_key`. */
+const SESSION_ID_MAX_LENGTH = 256
 
 /**
  * Told once per conversion, with everything the translator dropped by name — one report per target
@@ -180,6 +185,13 @@ export function createTranslatedRequestBody(
         const caller = effectiveCacheKey(withModel.prompt_cache_key, callerCacheKey())
         const cacheKey = effectiveCacheKey(caller, keying.fallback)
         if (cacheKey !== undefined) withModel.prompt_cache_key = cacheKey
+        if (
+          keying.sessionId === true &&
+          cacheKey !== undefined &&
+          cacheKey.length <= SESSION_ID_MAX_LENGTH
+        ) {
+          withModel.session_id = cacheKey
+        }
       }
       // The one vendor dial decided by the *upstream* model (post-alias, the billed name) rather
       // than the conversion shape, so it is applied here and not baked into the cached body: a

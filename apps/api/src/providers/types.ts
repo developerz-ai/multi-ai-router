@@ -309,10 +309,16 @@ export interface ProviderDriver {
   keysPromptCacheByBody?(account: DriverAccount): boolean
 
   /**
-   * Whether this Account's surface reads Anthropic-style `cache_control` on a written openai-chat
-   * body (`ProviderSurface.cacheControl`). Absent means no, and the markers are stripped.
+   * Whether this Account's surface reads `cache_control` beyond its dialect's base on a written body
+   * (`ProviderSurface.cacheControl`). Absent means no.
    */
   carriesCacheControl?(account: DriverAccount): boolean
+
+  /**
+   * Whether this Account's surface reads a body `session_id` as its sticky-routing key
+   * (`ProviderSurface.bodySessionId`), so a translated body is sent one. Absent means no.
+   */
+  keysSessionByBody?(account: DriverAccount): boolean
 
   /**
    * Auth plus every provider-mandated header. Never mutates the Account, never logs.

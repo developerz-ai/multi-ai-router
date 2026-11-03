@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { type CacheControl, cacheControlSchema } from "./cache-control-schema"
 
 /**
  * The Anthropic Messages request, in the two shapes translation needs.
@@ -55,13 +56,9 @@ const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set([
 /**
  * A prompt-cache breakpoint. Read so a target that carries the marker — OpenRouter's
  * OpenAI-compatible surface, which maps it to each provider's own (`ProviderSurface.cacheControl`)
- * — gets it where the client put it; every other target never sees it. Lenient: before it was read
- * it was stripped, so a marker this build does not recognize is absent, never a `400`.
+ * — gets it where the client put it; every other target never sees it.
  */
-const cacheControl = z
-  .object({ type: z.literal("ephemeral"), ttl: z.string().optional() })
-  .optional()
-  .catch(undefined)
+const cacheControl = cacheControlSchema
 
 const textBlock = z.object({
   type: z.literal("text"),
@@ -241,11 +238,13 @@ export type ParsedAnthropicToolChoice = z.infer<typeof anthropicToolChoiceSchema
 export interface AnthropicTextBlock {
   readonly type: "text"
   readonly text: string
+  readonly cache_control?: CacheControl | undefined
 }
 
 export interface AnthropicImageBlock {
   readonly type: "image"
   readonly source: ParsedAnthropicImageSource
+  readonly cache_control?: CacheControl | undefined
 }
 
 export interface AnthropicToolUseBlock {
@@ -260,6 +259,7 @@ export interface AnthropicToolResultBlock {
   readonly type: "tool_result"
   readonly tool_use_id: string
   readonly content: string | readonly (AnthropicTextBlock | AnthropicImageBlock)[]
+  readonly cache_control?: CacheControl | undefined
 }
 
 /**
@@ -301,7 +301,8 @@ export interface AnthropicRequest {
   readonly model: string
   readonly messages: readonly AnthropicMessage[]
   readonly max_tokens: number
-  readonly system?: string | undefined
+  /** An array only when a block carries a cache breakpoint; otherwise the joined string. */
+  readonly system?: string | readonly AnthropicTextBlock[] | undefined
   readonly temperature?: number | undefined
   readonly top_p?: number | undefined
   readonly stop_sequences?: readonly string[] | undefined
@@ -310,4 +311,6 @@ export interface AnthropicRequest {
   readonly tool_choice?: AnthropicToolChoice | undefined
   readonly output_config?: { readonly effort: string } | undefined
   readonly thinking?: { readonly type: "disabled" } | undefined
+  /** Automatic caching: the client's own top-level marker, or the router's toward Anthropic. */
+  readonly cache_control?: CacheControl | undefined
 }
