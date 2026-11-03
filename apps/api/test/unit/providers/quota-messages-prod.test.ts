@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { httpDriver } from "../../../src/providers"
+import { answeredFailure, foldChainFailure } from "../../../src/services/dataplane/chain-error"
 import { response } from "./fixtures"
 
 /**
@@ -72,6 +73,47 @@ describe("openrouter key limit, 403", () => {
     )
 
     expect(result?.kind).toBe("auth")
+  })
+})
+
+describe("openrouter refusing a model name, 400", () => {
+  const body = { error: { message: "k3 is not a valid model ID", code: 400 } }
+
+  test("is about the name, so the next account gets its turn", () => {
+    const result = openrouter?.classifyFailure(response(400, { body }))
+    expect(result?.kind).toBe("model-unsupported")
+    expect(result?.retryable).toBe(true)
+    expect(result?.signal).toBe("openrouter:model-unsupported")
+  })
+
+  test("any other 400 stays a bad request", () => {
+    const other = { error: { message: "messages: field required", code: 400 } }
+    expect(openrouter?.classifyFailure(response(400, { body: other }))?.kind).toBe(
+      "invalid-request",
+    )
+  })
+
+  test("never outranks an earlier account's quota verdict", () => {
+    const now = new Date("2026-11-02T12:00:00Z")
+    const kimiBody = {
+      error: { type: "rate_limit_reached_error", message: "slow down" },
+    }
+    const kimiVerdict = kimi?.classifyFailure(response(429, { body: kimiBody })) ?? null
+    const refusal = openrouter?.classifyFailure(response(400, { body })) ?? null
+    const context = { rateLimit: null, now, clientMessage: "attempt failed" }
+    const upstream = {
+      status: 400,
+      headers: new Headers(),
+      bodyText: JSON.stringify(body),
+      contentType: "application/json",
+    }
+    const held = foldChainFailure(
+      answeredFailure(kimiVerdict, null, null, context),
+      answeredFailure(refusal, upstream, null, context),
+    )
+    expect(held?.kind).toBe("router")
+    if (held?.kind !== "router") return
+    expect(held.error.status).toBe(429)
   })
 })
 
