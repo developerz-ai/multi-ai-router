@@ -80,6 +80,13 @@ export interface ProviderSurface {
    * field is never added — a vendor whose schema forbids extras would `400` on it.
    */
   readonly bodyCacheKey?: boolean
+  /**
+   * openai-chat surfaces only: the endpoint reads Anthropic-style `cache_control` breakpoints on
+   * content parts and at the top level, so a body the router *writes* from an Anthropic request
+   * keeps the client's breakpoints where it put them (`translate/shared/cache-control.ts`). Absent
+   * means they are stripped — a strict vendor `400`s on a field its schema does not name.
+   */
+  readonly cacheControl?: boolean
 }
 
 export interface HttpDriverConfig {
@@ -158,6 +165,7 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
       surfaceFor(account).responsesEgress ?? DEFAULT_RESPONSES_EGRESS,
     thinkingOnByDefault: (account) => surfaceFor(account).thinkingOnByDefault === true,
     keysPromptCacheByBody: (account) => surfaceFor(account).bodyCacheKey === true,
+    carriesCacheControl: (account) => surfaceFor(account).cacheControl === true,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)
       return surfaceHeaders(surfaceFor(account), credential)

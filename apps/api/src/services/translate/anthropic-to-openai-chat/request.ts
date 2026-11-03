@@ -10,6 +10,12 @@ import {
   toolResultParts,
 } from "../shared/anthropic-blocks"
 import { isClearedSystemTurn, systemTurnText } from "../shared/anthropic-system-turns"
+import {
+  type CacheMark,
+  cacheMark,
+  markedSystemParts,
+  toolResultCacheControl,
+} from "../shared/cache-control"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   OpenAiChatMessage,
@@ -40,6 +46,10 @@ import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
  * lands in an effort bucket (`shared/reasoning-effort.ts`) — unless the `tool_choice` forces a tool,
  * which `thinking` yields to, dropped and reported.
  *
+ * `cache_control` is carried onto the part its block became — and at the top level — only when
+ * `options.cacheControl` says the target reads it (`shared/cache-control.ts`); otherwise it is
+ * dropped silently with the rest.
+ *
  * Dropped silently, as documented: `top_k`, `cache_control`, `thinking` / `redacted_thinking`
  * blocks (including the router-signed ones `shared/router-thinking.ts` describes), `metadata`, the
  * rest of `output_config`, `context_management`, and any `anthropic-beta` opt-in (a header, handled by the transport). Dropped and **reported** through
@@ -63,6 +73,8 @@ export interface AnthropicToOpenAiChatOptions {
   readonly ceiling?: OpenAiChatCeiling | undefined
   /** Where a dropped field is reported. Absent, drops are silent (`shared/drops.ts`). */
   readonly onDrop?: DropSink | undefined
+  /** The target reads Anthropic-style `cache_control` on content parts. Absent means it does not. */
+  readonly cacheControl?: boolean | undefined
 }
 
 interface Draft {
@@ -83,16 +95,20 @@ export function anthropicToOpenAiChatRequest(
   // by name, before any work — `shared/reject.ts` owns the rule for all three spellings.
   assertNoAnthropicStructuredOutput(request)
   const onDrop = options.onDrop ?? IGNORE_DROPS
+  const mark = cacheMark(options.cacheControl)
   const drafts: Draft[] = []
 
+  const markedSystem = markedSystemParts(request.system, mark)
   const system = systemText(request.system)
-  if (system.length > 0) {
+  if (markedSystem !== null) {
+    drafts.push({ role: "system", parts: markedSystem, toolCalls: [] })
+  } else if (system.length > 0) {
     drafts.push({ role: "system", parts: [{ type: "text", text: system }], toolCalls: [] })
   }
 
   for (const [index, message] of request.messages.entries()) {
     const at = `messages[${index}]`
-    if (message.role !== "system") appendMessage(drafts, message, at, onDrop)
+    if (message.role !== "system") appendMessage(drafts, message, at, onDrop, mark)
     else if (!isClearedSystemTurn(request.messages, index)) {
       // In place, as `system` — not `developer`, which several OpenAI-compatible chat vendors
       // (Qwen, Kimi, MiniMax, GLM) refuse while every one of them accepts a mid-list `system`.
@@ -128,6 +144,7 @@ export function anthropicToOpenAiChatRequest(
         : !request.tool_choice.disable_parallel_tool_use,
     tool_choice: toolChoice,
     reasoning_effort: openAiEffortFromAnthropic(reasoning),
+    ...mark(request.cache_control),
   }
 }
 
@@ -136,6 +153,7 @@ function appendMessage(
   message: ParsedAnthropicMessage,
   at: string,
   onDrop: DropSink,
+  mark: CacheMark,
 ): void {
   const blocks: readonly ParsedAnthropicBlock[] =
     typeof message.content === "string"
@@ -149,12 +167,17 @@ function appendMessage(
     const field = `${at}.content[${index}]`
     switch (block.type) {
       case "text":
-        if (block.text.length > 0) parts.push({ type: "text", text: block.text })
+        if (block.text.length > 0)
+          parts.push({ type: "text", text: block.text, ...mark(block.cache_control) })
         break
       case "image": {
         const source = readImageSource(block.source, field, onDrop)
         if (source !== null)
-          parts.push({ type: "image_url", image_url: { url: imageUrlFromSource(source) } })
+          parts.push({
+            type: "image_url",
+            image_url: { url: imageUrlFromSource(source) },
+            ...mark(block.cache_control),
+          })
         break
       }
       case "tool_use":
@@ -169,7 +192,7 @@ function appendMessage(
         drafts.push({
           role: "tool",
           toolCallId: block.tool_use_id,
-          parts: [{ type: "text", text: result.text }],
+          parts: [{ type: "text", text: result.text, ...mark(toolResultCacheControl(block)) }],
           toolCalls: [],
         })
         parts.push(
@@ -182,7 +205,8 @@ function appendMessage(
       }
       case "document": {
         const text = documentText(block, field, onDrop)
-        if (text !== null && text.length > 0) parts.push({ type: "text", text })
+        if (text !== null && text.length > 0)
+          parts.push({ type: "text", text, ...mark(block.cache_control) })
         break
       }
       case "thinking":
@@ -248,12 +272,21 @@ function finalize(draft: Draft): OpenAiChatMessage {
   }
 }
 
-/** A lone text part is emitted as a plain string — the shape every compatible upstream accepts. */
+/**
+ * A lone text part is emitted as a plain string — the shape every compatible upstream accepts —
+ * unless it carries a cache breakpoint, which only a part can hold.
+ */
 function collapse(
   parts: readonly OpenAiChatPart[],
 ): string | readonly OpenAiChatPart[] | undefined {
   if (parts.length === 0) return undefined
   const only = parts[0]
-  if (parts.length === 1 && only !== undefined && only.type === "text") return only.text
+  if (
+    parts.length === 1 &&
+    only !== undefined &&
+    only.type === "text" &&
+    only.cache_control === undefined
+  )
+    return only.text
   return parts
 }

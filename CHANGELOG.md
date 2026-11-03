@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic prompt-cache breakpoints now reach OpenRouter. The `anthropic` → `openai-chat` translation stripped every `cache_control`, on the premise that no non-Anthropic target has an equivalent — false for OpenRouter, whose OpenAI-compatible API takes `cache_control` on content parts and at the top level and maps it to each provider's own marker. Claude Code through the router to `anthropic/*` on OpenRouter carried zero breakpoints and re-billed its whole prefix every turn. A surface now states `cacheControl` (only `openrouter` does); toward it each marker lands on the part its block became — a marked system array stays one part per block, a marked `tool_result` carries the rolling breakpoint on its tool message — and the top-level marker is carried. Every other openai-chat vendor still gets none. The conversion cache keys on the flag, so a chain mixing OpenRouter and a strict vendor converts once per shape. Regression: `test/unit/translate/cache-control-carry.test.ts`, `test/integration/openrouter-cache-control.test.ts`.
+
 ### Changed
 
 - The Claude Agent SDK updater now records the selected version as an **exact** dependency instead of a caret range. `bin/claude-trace update-sdk` passed `@anthropic-ai/claude-agent-sdk@^<version>` to the installer, which wrote a range into `apps/api/package.json` and `bun.lock` — a manifest that no longer matched the exact pin the repo has always shipped (`"0.3.301"`) and a lockfile whose resolution could drift past the calibrated SDK. The install spec now names the exact version, with no range operator. Regression coverage drives the updater's update path with a selected version (no network, no live npm) and asserts the recorded dependency is exact, and the same suite asserts the manifest declares `@anthropic-ai/claude-agent-sdk` as an exact pin. The selected SDK version (`0.3.301`) and the fast-mode calibration (CLI `2.1.301`) are unchanged; no version bump and no new release heading.

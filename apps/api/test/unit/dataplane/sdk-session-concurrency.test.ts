@@ -52,6 +52,7 @@ const SDK_PLAN: SdkServableCandidate = {
   // The SDK is asked nothing about either; it carries the planner's defaults.
   chatCeiling: DEFAULT_OPENAI_CHAT_CEILING,
   responsesEgress: DEFAULT_RESPONSES_EGRESS,
+  cacheControl: false,
   translation: null,
   egressMode: "agent-sdk",
 }

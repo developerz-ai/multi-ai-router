@@ -309,6 +309,12 @@ export interface ProviderDriver {
   keysPromptCacheByBody?(account: DriverAccount): boolean
 
   /**
+   * Whether this Account's surface reads Anthropic-style `cache_control` on a written openai-chat
+   * body (`ProviderSurface.cacheControl`). Absent means no, and the markers are stripped.
+   */
+  carriesCacheControl?(account: DriverAccount): boolean
+
+  /**
    * Auth plus every provider-mandated header. Never mutates the Account, never logs.
    *
    * `null` is an Account of a provider whose `authKind` is `none` holding no credential — a local

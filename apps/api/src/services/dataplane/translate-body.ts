@@ -51,6 +51,8 @@ export interface TranslatedRequestBody {
      * a body carrying one account's sealed reasoning is never handed to another.
      */
     reasoningSeal?: AccountReasoningSeal,
+    /** The target reads `cache_control` on a written body. Keyed into the conversion like the ceiling. */
+    cacheControl?: boolean,
   ): Uint8Array
   /** Whether the client asked for a stream — read from the cached parse; false before one. */
   clientStreams(): boolean
@@ -127,9 +129,18 @@ export function createTranslatedRequestBody(
       )
     },
     promptCacheKey: callerCacheKey,
-    bodyFor(pair, upstreamModel, chatCeiling, defaultMaxTokens, responsesEgress, keying, sealed) {
+    bodyFor(
+      pair,
+      upstreamModel,
+      chatCeiling,
+      defaultMaxTokens,
+      responsesEgress,
+      keying,
+      sealed,
+      cacheControl = false,
+    ) {
       const effectiveDefault = defaultMaxTokens ?? context.defaultMaxTokens
-      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}|${sealed?.accountId ?? ""}`
+      const shape = `${pair.egress}|${chatCeiling}|${effectiveDefault ?? "fallback"}|${egressKey(responsesEgress)}|${sealed?.accountId ?? ""}|${cacheControl}`
       let translated = converted.get(shape)
       if (translated === undefined) {
         // A translator emits an object; anything else would mean a pair returning a body no
@@ -142,6 +153,7 @@ export function createTranslatedRequestBody(
             {
               ...context,
               chatCeiling,
+              cacheControl,
               defaultMaxTokens: effectiveDefault,
               responsesEgress,
               onDrop: (drop) => void drops.push(drop),

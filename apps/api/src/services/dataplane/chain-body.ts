@@ -33,6 +33,7 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
       servable.responsesEgress,
       keysPromptCache(servable) ? { fallback: routerCacheKey(ctx, servable) } : undefined,
       reasoningSealFor(ctx, servable),
+      servable.cacheControl,
     )
   }
   if (ctx.bodyBytes.length === 0) return null

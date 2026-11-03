@@ -312,7 +312,7 @@ their boundaries. Completion events do not replay already emitted text.
 | | |
 |---|---|
 | Clean | Anthropic `system` (string or text-block array) ⇄ OpenAI leading `role: "system"` / `"developer"` message. |
-| Lossy | `cache_control` on a system block is dropped when the target has no equivalent. Multiple system blocks are concatenated with newlines in one direction and cannot be split back. |
+| Lossy | `cache_control` on a system block is dropped when the target has no equivalent. Multiple system blocks are concatenated with newlines in one direction and cannot be split back — except toward a surface that carries `cache_control` (`ProviderSurface.cacheControl`, `openrouter`): a system array with a marker on any block stays one text part per block, each marker on its own part, so the cached prefix ends where the client put it. |
 | Rejected | Nothing. A system prompt always has a target representation. |
 
 ### Message roles and content blocks
@@ -714,7 +714,8 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | Feature | Direction | What happens |
 |---|---|---|
 | Anthropic `thinking` / `redacted_thinking` blocks | → `openai-chat` | dropped from the response; not re-sent on the next turn |
-| `cache_control` hints | → any non-Anthropic | dropped; the upstream simply does not cache. Prompt caching is per-account, which is why routing is sticky |
+| `cache_control` hints | `anthropic` → `openai-chat` on a surface stating `cacheControl` (`openrouter`) | **carried** on the content part the marked block became (text, image, text document, and a `tool_result` — its own marker, else the last nested one — on its tool message's single text part), and a top-level marker at the top level. A marked lone text part is not collapsed to a string. `ephemeral` with an optional `ttl` only; any other marker is absent, never a `400`. A marker on a `tool_use`, a thinking block or a mid-conversation `system` turn has no part to sit on and is dropped. OpenRouter maps the marker per provider (Anthropic, Gemini, Qwen, OpenAI `prompt_cache_breakpoint`; openrouter.ai/docs/features/prompt-caching, read 2026-11-03). Prod 2026-11-03: Claude through router → OpenRouter carried zero breakpoints |
+| `cache_control` hints | → any other non-Anthropic | dropped; a strict vendor `400`s on the field. The upstream caches automatically or not at all. Prompt caching is per-account, which is why routing is sticky |
 | OpenAI `logprobs` / `top_logprobs` | → `anthropic` | no counterpart; rejected with `400` rather than silently ignored |
 | OpenAI `n > 1` | → `anthropic` | no counterpart; rejected with `400` |
 | `seed`, `frequency_penalty`, `presence_penalty`, `logit_bias` | → `anthropic` | dropped (documented, not rejected — they are hints, not contracts) |

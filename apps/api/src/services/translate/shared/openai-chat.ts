@@ -115,14 +115,26 @@ export type ParsedOpenAiChatToolCall = z.infer<typeof toolCallSchema>
 export type ParsedOpenAiChatTool = z.infer<typeof openAiChatToolSchema>
 export type ParsedOpenAiChatToolChoice = z.infer<typeof openAiChatToolChoiceSchema>
 
+/**
+ * OpenRouter's extension of the dialect, not OpenAI's: an Anthropic-style prompt-cache breakpoint
+ * on a content part (or the request). Written only toward a surface that states it carries one
+ * (`ProviderSurface.cacheControl`); a strict upstream `400`s on it.
+ */
+export interface OpenAiChatCacheControl {
+  readonly type: "ephemeral"
+  readonly ttl?: string | undefined
+}
+
 export interface OpenAiChatTextPart {
   readonly type: "text"
   readonly text: string
+  readonly cache_control?: OpenAiChatCacheControl | undefined
 }
 
 export interface OpenAiChatImagePart {
   readonly type: "image_url"
   readonly image_url: { readonly url: string }
+  readonly cache_control?: OpenAiChatCacheControl | undefined
 }
 
 export type OpenAiChatPart = OpenAiChatTextPart | OpenAiChatImagePart
@@ -173,6 +185,8 @@ export interface OpenAiChatRequest {
   readonly parallel_tool_calls?: boolean | undefined
   /** The caller's own word, never one this router picked. See the schema above. */
   readonly reasoning_effort?: string | undefined
+  /** Automatic caching, toward a surface that carries it. See {@link OpenAiChatCacheControl}. */
+  readonly cache_control?: OpenAiChatCacheControl | undefined
 }
 
 /**
