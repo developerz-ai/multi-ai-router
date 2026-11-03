@@ -285,6 +285,33 @@ describe("a scope of nothing but Claude subscriptions", () => {
     expect(bigger.input_tokens).toBeGreaterThan(fewer.input_tokens)
   })
 
+  test("the estimate tracks a tool-call history that grew by numbers, not only by text", async () => {
+    // The same fingerprint one layer up, for the growth a string-only walker cannot see: a
+    // `tool_use.input` array expanding from empty to 100,000 numbers is a conversation that
+    // grew — the tool input reaches the model as serialized JSON — and a client compacting on
+    // the estimate must see it.
+    const { options } = subscriptionPool()
+    const { app } = harness(options)
+
+    const body = (input: readonly number[]) =>
+      JSON.stringify({
+        model: "claude-opus-5",
+        messages: [{ role: "assistant", content: [{ type: "tool_use", name: "plot", input }] }],
+      })
+
+    const fewer = await estimateOf(
+      await app.request("/v1/messages/count_tokens", post(body([]), bearer())),
+    )
+    const bigger = await estimateOf(
+      await app.request(
+        "/v1/messages/count_tokens",
+        post(body(Array.from({ length: 100000 }, (_, i) => i)), bearer()),
+      ),
+    )
+
+    expect(bigger.input_tokens - fewer.input_tokens).toBeGreaterThanOrEqual(100000 / 4)
+  })
+
   test("still estimates when the pool holds several subscriptions", async () => {
     const { invoked, options } = subscriptionPool(["sub-a", "sub-b"])
     const { app } = harness(options)

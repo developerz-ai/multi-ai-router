@@ -82,27 +82,79 @@ function codePoints(text: string): number {
 }
 
 /**
- * Count the characters of the prompt content in a decoded JSON document.
+ * The request's **envelope**: top-level fields that configure the call rather than carry context.
  *
- * Every **string value** in the document is prompt — message text, system blocks, tool names and
- * descriptions — and the punctuation inside it is text the model reads, not structure. The
- * envelope is not prompt and contributes nothing: keys, JSON's punctuation and whitespace are
- * structure a tokenizer never sees, and numbers, booleans and null are not words.
+ * The model name, the sampling knobs, the stream flag, the response ceiling, the metadata — a
+ * tokenizer meets none of them; they are the shape of the request, not its content. The envelope
+ * is excluded whole, key and value alike, and the exclusion is a fact about the **top level
+ * only**: inside `messages`, `system` and `tools` every field is prompt.
+ */
+const ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
+  "model",
+  "max_tokens",
+  "metadata",
+  "stop_sequences",
+  "stream",
+  "temperature",
+  "thinking",
+  "tool_choice",
+  "top_k",
+  "top_p",
+  "service_tier",
+])
+
+/**
+ * Count the characters of the serialized prompt content in a decoded JSON document.
+ *
+ * The content counts as the text a tokenizer meets. Every **string value** is prompt — message
+ * text, system blocks, tool names and descriptions — and the punctuation inside it is text the
+ * model reads, not structure. But a conversation is made of more than strings: a `tool_use.input`
+ * object and a tool schema reach the model as **serialized JSON**, so within the content the
+ * object keys count, and so do the primitive leaves — a number, a boolean, a null — each as the
+ * text serializing it produces. History that grows by a hundred thousand numbers is a
+ * conversation that grew, and the estimate has to move when it does.
+ *
+ * Only the request envelope is excluded (`ENVELOPE_FIELDS`), at the top level only. A top-level
+ * field the set does not name is content, not envelope: an uncounted unknown is an
+ * under-estimate, and under is the one direction a compaction threshold cannot afford. JSON's
+ * own punctuation and whitespace between the counted pieces are the one structure a tokenizer
+ * never sees, and contribute nothing.
  *
  * The walk is iterative, not recursive: a request body is client-shaped, and an estimate that
  * overflowed the call stack on a deeply nested body would turn a pure count into a 500.
  */
 function contentCharacters(document: JsonValue): number {
   let total = 0
-  const pending: JsonValue[] = [document]
+  const pending: JsonValue[] = []
+
+  if (typeof document === "object" && document !== null && !Array.isArray(document)) {
+    // The body's top level: envelope fields are excluded whole, everything beside them is prompt.
+    for (const [key, value] of Object.entries(document)) {
+      if (ENVELOPE_FIELDS.has(key)) continue
+      total += codePoints(key)
+      pending.push(value)
+    }
+  } else {
+    // No envelope to strip — a body that is not an object is content whole.
+    pending.push(document)
+  }
+
   let current = pending.pop()
   while (current !== undefined) {
     if (typeof current === "string") {
       total += codePoints(current)
+    } else if (typeof current === "number" || typeof current === "boolean") {
+      // As serializing it writes the value, which is how the model meets it.
+      total += String(current).length
+    } else if (current === null) {
+      total += "null".length
     } else if (Array.isArray(current)) {
       for (const item of current) pending.push(item)
-    } else if (typeof current === "object" && current !== null) {
-      for (const value of Object.values(current)) pending.push(value)
+    } else {
+      for (const [key, value] of Object.entries(current)) {
+        total += codePoints(key)
+        pending.push(value)
+      }
     }
     current = pending.pop()
   }
@@ -112,8 +164,8 @@ function contentCharacters(document: JsonValue): number {
 /**
  * Characters of the prompt content in a request body.
  *
- * The body is parsed and its string values are counted **decoded**, so a quote that travelled as
- * `\"` counts once, and the punctuation inside a prompt counts, because a tokenizer reads it. A
+ * The body is parsed and counted **decoded**, so a quote that travelled as `\"` counts once, and
+ * the punctuation inside a prompt counts, because a tokenizer reads it. A
  * body the parser refuses (the validators should have rejected it long before an estimate) has no
  * content/envelope distinction left to make: the raw text counts whole, rather than the estimate
  * pretending it saw a prompt it did not.
