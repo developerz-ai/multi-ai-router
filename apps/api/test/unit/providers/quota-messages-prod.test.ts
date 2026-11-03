@@ -76,13 +76,19 @@ describe("openrouter key limit, 403", () => {
   })
 })
 
-describe("openrouter refusing a model name, 400", () => {
+describe("openrouter refusing a model name, 400 or 404", () => {
   const body = { error: { message: "k3 is not a valid model ID", code: 400 } }
 
   test("is about the name, so the next account gets its turn", () => {
     const result = openrouter?.classifyFailure(response(400, { body }))
     expect(result?.kind).toBe("model-unsupported")
     expect(result?.retryable).toBe(true)
+    expect(result?.signal).toBe("openrouter:model-unsupported")
+  })
+
+  test("the same refusal on a 404 is about the name too", () => {
+    const result = openrouter?.classifyFailure(response(404, { body }))
+    expect(result?.kind).toBe("model-unsupported")
     expect(result?.signal).toBe("openrouter:model-unsupported")
   })
 

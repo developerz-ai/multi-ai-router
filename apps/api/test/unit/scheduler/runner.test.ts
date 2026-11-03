@@ -299,12 +299,24 @@ describe("the first tick", () => {
       resolveSecond = resolve
     })
 
+    // The two delays have to be far apart for the assertions to tell them apart, and the room
+    // between them has to be far wider than the machine's slack. A 40 ms interval under a 30 ms
+    // bound left 25 ms of headroom for the event loop, and a loaded box spent it: the 5 ms startup
+    // timer came back 43 ms late, and the test failed on the clock instead of on the runner's
+    // choice. One second against a 5 ms startup delay keeps the same discrimination with two
+    // orders of magnitude to spare.
+    const intervalMs = 1_000
+    const startupDelayMs = 5
+    // Three quarters of the interval: a first tick armed with the interval fails this bound, and
+    // the gap to the second tick — which must be the interval — clears it.
+    const intervalBound = Math.floor((intervalMs * 3) / 4)
+
     const scheduler = createScheduler({
       // Real timers: the point is which delay the runner armed, which no stub can show.
       tasks: [
         task({
-          intervalMs: 40,
-          startupDelayMs: 5,
+          intervalMs,
+          startupDelayMs,
           run: async () => {
             calls.push(Date.now() - started)
             if (calls.length === 2) resolveSecond()
@@ -323,7 +335,7 @@ describe("the first tick", () => {
       await Promise.race([
         second,
         new Promise((_resolve, reject) => {
-          setTimeout(() => reject(new Error("the second tick never fired")), 2_000)
+          setTimeout(() => reject(new Error("the second tick never fired")), 5_000)
         }),
       ])
     } finally {
@@ -331,9 +343,9 @@ describe("the first tick", () => {
     }
 
     // First tick on the startup delay, not the interval.
-    expect(calls[0]).toBeLessThan(30)
+    expect(calls[0]).toBeLessThan(intervalBound)
     // Second on the interval: the startup delay describes the first gap and nothing after it.
-    expect((calls[1] ?? 0) - (calls[0] ?? 0)).toBeGreaterThanOrEqual(30)
+    expect((calls[1] ?? 0) - (calls[0] ?? 0)).toBeGreaterThanOrEqual(intervalBound)
   })
 })
 
@@ -381,7 +393,9 @@ describe("the first tick after a restart", () => {
     })
 
     scheduler.start()
-    await new Promise((resolve) => setTimeout(resolve, 80))
+    // A generous window on purpose: the tick is due the moment the process came back, and a busy
+    // box delays timers — the window has to outlast the machine, not measure it.
+    await new Promise((resolve) => setTimeout(resolve, 250))
     await scheduler.stop()
 
     // Due the moment the process came back, not five seconds later — and emphatically not never.
@@ -419,7 +433,9 @@ describe("the first tick after a restart", () => {
     })
 
     scheduler.start()
-    await new Promise((resolve) => setTimeout(resolve, 80))
+    // The remainder of the interval is nearly five seconds; this window only has to outlast the
+    // box's jitter to show the sweep did not come round early.
+    await new Promise((resolve) => setTimeout(resolve, 250))
     await scheduler.stop()
 
     // A restart loop must not turn into a sweep loop.
