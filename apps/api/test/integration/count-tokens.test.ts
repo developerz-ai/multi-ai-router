@@ -258,6 +258,33 @@ describe("a scope of nothing but Claude subscriptions", () => {
     expect(bigger.input_tokens).toBeGreaterThan(first.input_tokens)
   })
 
+  test("the estimate tracks punctuation the prompt grew by, not just its words", async () => {
+    // The reviewer's fingerprint, end to end: punctuation inside a prompt string is prompt. An
+    // estimate that filtered JSON punctuation characters out of the raw body also filtered them
+    // out of prompt strings, so this content could grow by 100,000 colons and move no number —
+    // and a client compacting on the estimate would compact too late.
+    const { options } = subscriptionPool()
+    const { app } = harness(options)
+
+    const before = JSON.stringify({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: "hi" }],
+    })
+    const after = JSON.stringify({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: `hi${":".repeat(100000)}` }],
+    })
+
+    const fewer = await estimateOf(
+      await app.request("/v1/messages/count_tokens", post(before, bearer())),
+    )
+    const bigger = await estimateOf(
+      await app.request("/v1/messages/count_tokens", post(after, bearer())),
+    )
+
+    expect(bigger.input_tokens).toBeGreaterThan(fewer.input_tokens)
+  })
+
   test("still estimates when the pool holds several subscriptions", async () => {
     const { invoked, options } = subscriptionPool(["sub-a", "sub-b"])
     const { app } = harness(options)

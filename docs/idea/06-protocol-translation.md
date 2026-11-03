@@ -143,10 +143,12 @@ substituting a model. **The estimate is the router's own and is labelled as such
 passed off as the provider's.**
 
 **The estimate's basis is an approximation, and it says which one.** This router ships no Claude
-tokenizer, so the number is derived from the size of the request rather than from the provider's
-own vocabulary: the body's textual content — JSON's own punctuation excluded, because braces and
-commas are structure, not prompt — divided by a **named constant**,
-`ESTIMATE_CHARS_PER_TOKEN` (4), and rounded **up**. Up is the safe direction for a compaction
+tokenizer, so the number is derived from the decoded prompt content rather than from the
+provider's own vocabulary: every string value of the parsed body — message text, system blocks,
+tool names and descriptions, **punctuation included**, because inside a prompt a colon is text —
+counted as code points and divided by a **named constant**, `ESTIMATE_CHARS_PER_TOKEN` (4), and
+rounded **up**. The envelope contributes nothing: keys, JSON's own punctuation and whitespace are
+structure, not prompt, and a tokenizer never sees them. Up is the safe direction for a compaction
 threshold: a client that compacts slightly early loses a little context, and a client that
 compacts late blows its window. `estimate_basis` names the method (`chars-per-token-v1`) so a
 reader knows which approximation it is looking at. The estimate is **pure** — no clock, no network,

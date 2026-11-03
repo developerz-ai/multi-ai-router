@@ -20,7 +20,7 @@
  * be.
  *
  * The number itself is a **documented approximation**: this router ships no Claude tokenizer, so
- * the count is derived from the size of the request rather than from the provider's own
+ * the count is derived from the body's decoded prompt content rather than from the provider's own
  * vocabulary. It is rounded **up**, because the direction of the error matters — a client that
  * compacts slightly early loses a little context, and a client that compacts late blows its
  * window.
@@ -68,28 +68,62 @@ export interface CountEstimate {
   readonly basis: string
 }
 
-/** JSON's own punctuation, which carries no prompt. */
-const STRUCTURAL: ReadonlySet<string> = new Set(["{", "}", "[", "]", ",", ":", '"'])
+/** A decoded JSON document, as `JSON.parse` produces it and as this module walks it. */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
-/**
- * Count the characters of the body that a tokenizer would actually see.
- *
- * The body is JSON, and JSON's own punctuation is not prompt: the braces, the brackets, the
- * commas, the colons, and the quotes around every key and string are structure, not content. They
- * are excluded here, so the estimate tracks the text a model would read rather than the envelope
- * around it.
- *
- * Decoded as UTF-8 because the body is text in a JSON envelope; a byte that is not valid UTF-8
- * decodes to the replacement character and is counted as one character, which is the honest
- * outcome for a body that was never a prompt.
- */
-function textualCharacters(text: string): number {
+/** Characters of a string, counted the way a tokenizer meets them: one code point each. */
+function codePoints(text: string): number {
   let count = 0
-  for (const character of text) {
-    if (STRUCTURAL.has(character)) continue
+  const characters = text[Symbol.iterator]()
+  for (let step = characters.next(); !step.done; step = characters.next()) {
     count += 1
   }
   return count
+}
+
+/**
+ * Count the characters of the prompt content in a decoded JSON document.
+ *
+ * Every **string value** in the document is prompt — message text, system blocks, tool names and
+ * descriptions — and the punctuation inside it is text the model reads, not structure. The
+ * envelope is not prompt and contributes nothing: keys, JSON's punctuation and whitespace are
+ * structure a tokenizer never sees, and numbers, booleans and null are not words.
+ *
+ * The walk is iterative, not recursive: a request body is client-shaped, and an estimate that
+ * overflowed the call stack on a deeply nested body would turn a pure count into a 500.
+ */
+function contentCharacters(document: JsonValue): number {
+  let total = 0
+  const pending: JsonValue[] = [document]
+  let current = pending.pop()
+  while (current !== undefined) {
+    if (typeof current === "string") {
+      total += codePoints(current)
+    } else if (Array.isArray(current)) {
+      for (const item of current) pending.push(item)
+    } else if (typeof current === "object" && current !== null) {
+      for (const value of Object.values(current)) pending.push(value)
+    }
+    current = pending.pop()
+  }
+  return total
+}
+
+/**
+ * Characters of the prompt content in a request body.
+ *
+ * The body is parsed and its string values are counted **decoded**, so a quote that travelled as
+ * `\"` counts once, and the punctuation inside a prompt counts, because a tokenizer reads it. A
+ * body the parser refuses (the validators should have rejected it long before an estimate) has no
+ * content/envelope distinction left to make: the raw text counts whole, rather than the estimate
+ * pretending it saw a prompt it did not.
+ */
+function promptCharacters(text: string): number {
+  try {
+    return contentCharacters(JSON.parse(text) as JsonValue)
+  } catch {
+    return codePoints(text)
+  }
 }
 
 /**
@@ -101,7 +135,7 @@ function textualCharacters(text: string): number {
  */
 export function estimateTokenCount(body: Uint8Array): CountEstimate {
   const text = new TextDecoder().decode(body)
-  const characters = textualCharacters(text)
+  const characters = promptCharacters(text)
   const tokens = Math.ceil(characters / ESTIMATE_CHARS_PER_TOKEN)
   return { inputTokens: tokens, basis: ESTIMATE_BASIS }
 }
