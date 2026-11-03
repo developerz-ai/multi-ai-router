@@ -150,10 +150,12 @@ Artifact upload and download move together: keep `archive: true` on digest uploa
 `digest-mismatch: error` on downloads so the manifest merge receives the same named files.
 
 The Dockerfile frontend and PostgreSQL images also carry version and index digest pins.
-CI uses PostgreSQL 18.6; bundled and development Compose use PostgreSQL 16.15, preserving
-existing volumes on that major. Validate the migration/repository suites against both
+CI uses PostgreSQL 18.6; the bundled and development Compose files both pin PostgreSQL 18.4,
+on a fresh per-major volume (`postgres-data-18` / `dev-postgres-data-18`) mounted at
+`/var/lib/postgresql`. Validate the migration/repository suites against both
 before moving database pins. A Compose database major bump requires a separate data
-migration, including the newer image's data-directory layout.
+migration, including the newer image's data-directory layout — the 16 → 18 move is
+`bin/pg-upgrade-16-to-18`, which dumps the 16 volume and restores it into the 18 one.
 
 Validate updated build actions and the frontend with native amd64 and arm64 builds.
 Keep release publishing restricted to `v*` tags, with provenance and SBOM attestations;

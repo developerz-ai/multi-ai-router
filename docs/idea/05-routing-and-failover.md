@@ -118,9 +118,12 @@ An account with **no** declared model set falls back to its **provider's model f
 (`routing/model-family.ts`): anchored name patterns the driver declares as `modelFamily`. Only a
 single-vendor upstream declares one — today a Claude subscription (`claude-*`, the CLI's aliases
 `opus` `sonnet` `haiku` `fable` `best` `default` `opusplan`, each with an optional `[1m]`-style tag)
-and a ChatGPT/Codex subscription (`gpt-*`, `codex-*`, `o<digit>…`, per codex-rs's model slugs). A
-provider that declares no family — OpenRouter, an OpenAI-compatible base URL, z.ai, every API-key
-driver — keeps the old rule: unknown means passthrough, not exclusion. An explicit
+and a ChatGPT/Codex subscription (`gpt-*`, `codex-*`, `o<digit>…`, per codex-rs's model slugs). One
+aggregator declares a shape instead of a vendor: OpenRouter's ids are all `vendor/model`, so a bare
+name never selects it. Without that, `k3` with its Kimi account cooling went to OpenRouter as the
+only candidate left, and the client read `400 k3 is not a valid model ID` rather than Kimi's `429`
+(prod, 2026-11-02). A provider that declares no family — an OpenAI-compatible base URL, z.ai, every
+other API-key driver — keeps the old rule: unknown means passthrough, not exclusion. An explicit
 `supportedModels` always replaces the family, in both directions. The family only narrows the
 candidate set; it never renames a model or picks one (non-negotiable 4). Why it exists: one key
 scoped to Claude subscriptions, a ChatGPT subscription and Chinese-model accounts, all
