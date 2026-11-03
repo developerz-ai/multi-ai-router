@@ -10,7 +10,7 @@ they sweep against.
 
 **`docker compose up -d` after one sign-in method and one secret file edit.** No database to provision — and no IdP required either, if a local admin password suits the machine.
 
-`docker compose up -d` brings up **two services**: the router and a PostgreSQL 16 container, with a
+`docker compose up -d` brings up **two services**: the router and a PostgreSQL 18 container, with a
 named volume for the Postgres data directory and a health check gating the router's start. The
 compose file supplies `DATABASE_URL` itself. The operator fills `ENCRYPTION_KEY` in `.env` and picks
 a sign-in method: the `ADMIN_OIDC_*` relying-party settings, or one
@@ -34,15 +34,15 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16.15@sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54
+    image: postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
     environment: { POSTGRES_USER: router, POSTGRES_PASSWORD: router, POSTGRES_DB: router }
-    volumes: [postgres-data:/var/lib/postgresql/data]
+    volumes: [postgres-data-18:/var/lib/postgresql]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U router -d router"]
     restart: unless-stopped
 
 volumes:
-  postgres-data:
+  postgres-data-18:
   claude-config:
 ```
 
@@ -58,10 +58,11 @@ else, which is why the in-file credentials are acceptable. Publish it and you mu
 The repo ships a working [`docker-compose.yml`](../../docker-compose.yml) and
 [`.env.example`](../../.env.example) matching the table below exactly.
 
-The bundled and development Compose files pin PostgreSQL 16.15 by version and index digest,
-so a pull preserves the existing 16 data directory. CI runs PostgreSQL 18.6 to cover managed
-instances on that major; the schema supports PostgreSQL 16+. A database major upgrade requires
-an explicit migration of its data, and is separate from updating the router or these image pins.
+The bundled and development Compose files pin PostgreSQL 18.4 by version and index digest on a
+fresh major-specific `postgres-data-18` volume, so a pull preserves the existing 18 data directory.
+CI runs PostgreSQL 18.6 to cover managed instances on that major; the schema still supports
+PostgreSQL 16+. A database major upgrade requires an explicit migration of its data, and is
+separate from updating the router or these image pins.
 
 ### Using an existing or managed Postgres
 
@@ -72,7 +73,7 @@ connection string:
 DATABASE_URL: postgres://user:pass@db.internal:5432/router?sslmode=require
 ```
 
-…then delete the bundled `postgres` service, the `depends_on` block, and the `postgres-data` volume.
+…then delete the bundled `postgres` service, the `depends_on` block, and the `postgres-data-18` volume.
 Nothing else in the deployment changes: the router needs a reachable PostgreSQL 16+ and a role that
 may create and alter tables in its schema (migrations run at boot). The `claude-config` volume stays
 either way — it is unrelated to the database.
@@ -398,7 +399,7 @@ and only until HTTPS is put in front — see the env reference above and
 
 | Volume | Holds | Protected by |
 |---|---|---|
-| `postgres-data` → `/var/lib/postgresql/data` | Accounts, encrypted credentials, pools, keys, usage, audit | `ENCRYPTION_KEY` — credentials and key values are AES-256-GCM ciphertext inside the rows |
+| `postgres-data-18` → `/var/lib/postgresql` | Accounts, encrypted credentials, pools, keys, usage, audit | `ENCRYPTION_KEY` — credentials and key values are AES-256-GCM ciphertext inside the rows |
 | `claude-config` → `/data/claude` | One `CLAUDE_CONFIG_DIR` per Claude subscription Account, written and refreshed by the `claude` CLI | **Nothing.** These are live credentials in cleartext, owned by the CLI, not by us |
 
 ### Database
@@ -413,7 +414,7 @@ docker compose exec -T postgres pg_restore -U router -d router --clean --if-exis
   < router-2026-01-01.dump
 ```
 
-`pg_dump` is the backup; the `postgres-data` volume is the live copy, not a backup — snapshotting it
+`pg_dump` is the backup; the `postgres-data-18` volume is the live copy, not a backup — snapshotting it
 while Postgres is running produces a torn, possibly unrestorable directory. If you snapshot the
 volume anyway (host-level backups often do), stop the service first, or use it only as a supplement
 to a dump.
@@ -560,7 +561,8 @@ needed, and neither breaks it).
 | Restart | `docker compose up -d` |
 | Migrations | Run automatically at boot, before the listener opens. Idempotent. A failed migration exits non-zero and does not serve traffic. |
 | Roll back | Pin the previous tag and `docker compose up -d`. Take a `pg_dump` first — a rolled-back binary may not understand a migrated schema, and migrations are forward-only. |
-| Postgres major version | Pinned to `postgres:16.15` and an immutable multi-architecture digest. A major bump is a deliberate `pg_dump` / `pg_restore` cycle, never something a `docker compose pull` should do to you — the data directory format changes between majors and the new container will refuse to start on the old one. |
+| Postgres major version | Pinned to `postgres:18.4` and an immutable multi-architecture digest, on the `postgres-data-18` volume mounted at `/var/lib/postgresql` — the parent directory, because PostgreSQL 18 keeps its data under `18/docker` inside it. Updating the router image does not touch this pin. |
+| Postgres major upgrade | **Not a `docker compose pull`.** PostgreSQL cannot start a new major on an older data directory, so each major gets its own volume — the compose file mounts a **fresh** `postgres-data-18`, and the 18 container never sees the old 16 directory (it boots cleanly on the empty one). That is exactly the trap: pulling the new stack onto a deployment still holding 16 data starts a healthy Postgres on an **empty database**, and the old data stays behind in the legacy `postgres-data` volume, unmerged and easy to miss. Migrate the data first, then upgrade: stop the stack and run `bin/pg-upgrade-16-to-18` — it dumps the legacy `postgres-data` volume with a throwaway `postgres:16` container and restores it into `postgres-data-18` (the legacy volume is left untouched; delete it by hand only after you have verified the deployment). It needs the same `ENCRYPTION_KEY` the rows were written under, since restored rows are ciphertext only that key decrypts. A fresh deployment has no legacy volume and needs no migration. |
 
 ## Image tags
 
