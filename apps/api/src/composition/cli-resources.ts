@@ -1,4 +1,5 @@
 import { resolve } from "node:path"
+import type { CredentialRefreshLock } from "@multi-ai-router/db"
 import {
   createCredentialFreshness,
   createCredentialMetadataReader,
@@ -11,7 +12,13 @@ import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
 
 import type { RuntimeDeps } from "./runtime-types"
-export function createCliResources(deps: RuntimeDeps, now: () => Date) {
+export function createCliResources(
+  deps: RuntimeDeps,
+  now: () => Date,
+  // The cross-replica half of the refresh-window gate, from the pool the OAuth refresher already
+  // holds; the same reason it is a parameter and not a second pool here.
+  refreshLock: Pick<CredentialRefreshLock, "tryAcquire">,
+) {
   const { env, logger } = deps
   // The replica's shared `claude` subprocess ceiling, constructed here
   // rather than beside the invoker because it is shared: the dispatch path and the console's "Test
@@ -89,6 +96,7 @@ export function createCliResources(deps: RuntimeDeps, now: () => Date) {
     maxWaitMs: env.claudeSdkCredentialRefreshWaitMs,
     pollMs: env.claudeSdkCredentialRefreshPollMs,
     now,
+    refreshLock,
     logger,
   })
 

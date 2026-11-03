@@ -52,7 +52,7 @@ test("composition fences fast credentials by selected Account directory and meta
       () => repositories.schedulerLock.close(),
     )
     const warm = createWarmState(deps, repositories, now)
-    const cli = createCliResources(deps, now)
+    const cli = createCliResources(deps, now, repositories.refreshLock)
     cleanup.push(() => cli.ownership.stop())
     const telemetry = createRuntimeTelemetry(deps, repositories, warm, cli, now)
     const fixtures = [

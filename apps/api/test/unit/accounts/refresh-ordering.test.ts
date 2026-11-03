@@ -108,7 +108,7 @@ describe("refresh observations and rotated grants", () => {
 
   test("two refreshers share rotating issuer and contention is neutral", async () => {
     let held = false
-    const lock: CredentialRefreshLock = {
+    const lock: Pick<CredentialRefreshLock, "tryRun"> = {
       tryRun: async (_id, signal, work) => {
         if (held) return { acquired: false, reason: "busy" }
         held = true

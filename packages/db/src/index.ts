@@ -20,6 +20,8 @@ export type {
 // --- connection -------------------------------------------------------------
 export { createDatabase, DATABASE_POOL_DEFAULTS } from "./client"
 export type {
+  CredentialRefreshLease,
+  CredentialRefreshLeaseResult,
   CredentialRefreshLock,
   CredentialRefreshLockPoolHandle,
   CredentialRefreshLockPoolOptions,

@@ -157,7 +157,7 @@ describe("listing a subscription's models through the Agent SDK", () => {
   test("a cold credential is reported as cold, and nothing is spawned for it", async () => {
     const { lister, spy, reasons, concurrency } = listerWith({
       freshness: {
-        ensureFresh: async () => {},
+        ensureFresh: async () => ({ release: () => {} }),
         wouldRefresh: async () => true,
       },
     })
