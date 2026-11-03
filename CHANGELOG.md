@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The committed-migration drift guard now sweeps columns as well as enum values. Every table the schema barrel exports is compared against the same table in the latest committed migration snapshot, and a schema column the snapshot does not carry fails the suite naming the table and the column; a table the snapshot never created is reported with all of its columns missing. The tables are discovered from the schema barrel, and a fixture proves the comparison reports a missing column rather than passing quietly. Test-only: no runtime behaviour change.
+
 ## [2.43.0] — 2026-11-02
 
 ### Added
