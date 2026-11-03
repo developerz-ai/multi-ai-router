@@ -25,6 +25,14 @@
  * compacts slightly early loses a little context, and a client that compacts late blows its
  * window.
  *
+ * **Two regions of a body are not prose, and are counted as what they are: serialized JSON.** A
+ * tool call's `input` and a tool's `input_schema` reach the model as JSON — the subscription path
+ * renders a tool call as `[the assistant called plot with {"…"}]` — so every brace, comma and
+ * quote of them is text the model reads, and they count whole. An estimate that counted only
+ * their keys and leaves missed the structure, and the structure is where a growth hides: a tool
+ * input holding a hundred thousand empty objects is three hundred kilobytes of prompt, and it
+ * measured the same as an empty one — so a client compacting on that number never compacted.
+ *
  * The estimate itself is pure: no clock, no I/O, no network, no store. The same bytes always
  * produce the same number.
  */
@@ -71,6 +79,12 @@ export interface CountEstimate {
 /** A decoded JSON document, as `JSON.parse` produces it and as this module walks it. */
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
+/** One value on the walk, and whether the model reads it as serialized JSON. */
+interface WalkItem {
+  readonly value: JsonValue
+  readonly serialized: boolean
+}
+
 /** Characters of a string, counted the way a tokenizer meets them: one code point each. */
 function codePoints(text: string): number {
   let count = 0
@@ -108,57 +122,152 @@ const ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
  *
  * The content counts as the text a tokenizer meets. Every **string value** is prompt — message
  * text, system blocks, tool names and descriptions — and the punctuation inside it is text the
- * model reads, not structure. But a conversation is made of more than strings: a `tool_use.input`
- * object and a tool schema reach the model as **serialized JSON**, so within the content the
- * object keys count, and so do the primitive leaves — a number, a boolean, a null — each as the
- * text serializing it produces. History that grows by a hundred thousand numbers is a
- * conversation that grew, and the estimate has to move when it does.
+ * model reads, not structure. But a conversation is made of more than strings: within the
+ * content the object keys count, and so do the primitive leaves — a number, a boolean, a null —
+ * each as the text serializing it produces. History that grows by a hundred thousand numbers is
+ * a conversation that grew, and the estimate has to move when it does.
+ *
+ * **The two JSON regions count whole, delimiters included.** A tool call's `input` and a tool's
+ * `input_schema` are not prose: they reach the model as serialized JSON, so their braces,
+ * commas, colons and quotes are text the model reads, and they are counted as the serialized form
+ * they are. Counting their keys and leaves alone dropped the structure — and the structure is
+ * where a growth hides: a tool input holding a hundred thousand empty objects is three hundred
+ * kilobytes of prompt, and it measured the same as an empty one.
  *
  * Only the request envelope is excluded (`ENVELOPE_FIELDS`), at the top level only. A top-level
  * field the set does not name is content, not envelope: an uncounted unknown is an
- * under-estimate, and under is the one direction a compaction threshold cannot afford. JSON's
- * own punctuation and whitespace between the counted pieces are the one structure a tokenizer
- * never sees, and contribute nothing.
+ * under-estimate, and under is the one direction a compaction threshold cannot afford. Outside
+ * those two regions, the punctuation around the counted pieces is the one structure a tokenizer
+ * never sees, and contributes nothing.
  *
  * The walk is iterative, not recursive: a request body is client-shaped, and an estimate that
  * overflowed the call stack on a deeply nested body would turn a pure count into a 500.
  */
 function contentCharacters(document: JsonValue): number {
   let total = 0
-  const pending: JsonValue[] = []
+  const pending: WalkItem[] = []
 
   if (typeof document === "object" && document !== null && !Array.isArray(document)) {
     // The body's top level: envelope fields are excluded whole, everything beside them is prompt.
     for (const [key, value] of Object.entries(document)) {
       if (ENVELOPE_FIELDS.has(key)) continue
       total += codePoints(key)
-      pending.push(value)
+      pending.push({ value, serialized: isSerializedRegion(key, false) })
     }
   } else {
     // No envelope to strip — a body that is not an object is content whole.
-    pending.push(document)
+    pending.push({ value: document, serialized: false })
   }
 
   let current = pending.pop()
   while (current !== undefined) {
-    if (typeof current === "string") {
-      total += codePoints(current)
-    } else if (typeof current === "number" || typeof current === "boolean") {
+    const { value, serialized } = current
+    if (serialized) {
+      // A region the model reads as JSON: it counts whole, delimiters included.
+      total += serializedLength(value)
+    } else if (typeof value === "string") {
+      total += codePoints(value)
+    } else if (typeof value === "number" || typeof value === "boolean") {
       // As serializing it writes the value, which is how the model meets it.
-      total += String(current).length
-    } else if (current === null) {
+      total += String(value).length
+    } else if (value === null) {
       total += "null".length
-    } else if (Array.isArray(current)) {
-      for (const item of current) pending.push(item)
+    } else if (Array.isArray(value)) {
+      for (const item of value) pending.push({ value: item, serialized: false })
     } else {
-      for (const [key, value] of Object.entries(current)) {
+      const members = Object.entries(value)
+      const toolCall = members.some(([key, member]) => key === "type" && member === "tool_use")
+      for (const [key, member] of members) {
         total += codePoints(key)
-        pending.push(value)
+        pending.push({ value: member, serialized: isSerializedRegion(key, toolCall) })
       }
     }
     current = pending.pop()
   }
   return total
+}
+
+/**
+ * Whether the member holds JSON that reaches the model as JSON.
+ *
+ * Two members, and the wire names both: a tool's `input_schema` is the schema the model is
+ * offered, and a tool call's `input` is the arguments the model wrote. The subscription path
+ * renders the second one into the prompt verbatim — `[the assistant called plot with {"…"}]`
+ * (`providers/claude-sdk/prompt-text.ts`) — so its delimiters are text the model reads.
+ *
+ * @param key the member's name. @param toolCall whether the object holding it is a `tool_use`
+ * block, which is what makes an `input` a tool call's arguments rather than anything else.
+ */
+function isSerializedRegion(key: string, toolCall: boolean): boolean {
+  if (key === "input_schema") return true
+  return toolCall && key === "input"
+}
+
+/**
+ * The length of a JSON value **as serialized** — the form `JSON.stringify` writes for it.
+ *
+ * Counted in code points, like the rest of this module, and computed by walking rather than by
+ * calling `JSON.stringify`: that call recurses, and a client-shaped input nested fifty thousand
+ * deep would overflow the stack and turn a count into a 500.
+ */
+function serializedLength(value: JsonValue): number {
+  let total = 0
+  const pending: JsonValue[] = [value]
+
+  let current = pending.pop()
+  while (current !== undefined) {
+    if (typeof current === "string") {
+      total += jsonStringLength(current)
+    } else if (typeof current === "number") {
+      total += String(current).length
+    } else if (typeof current === "boolean") {
+      total += current ? "true".length : "false".length
+    } else if (current === null) {
+      total += "null".length
+    } else if (Array.isArray(current)) {
+      // The brackets, and the comma between each pair of elements.
+      total += 2 + Math.max(0, current.length - 1)
+      for (const item of current) pending.push(item)
+    } else {
+      const members = Object.entries(current)
+      // The braces, and the comma between each pair of members.
+      total += 2 + Math.max(0, members.length - 1)
+      for (const [key, member] of members) {
+        // The quoted key, and the colon that follows it.
+        total += jsonStringLength(key) + 1
+        pending.push(member)
+      }
+    }
+    current = pending.pop()
+  }
+  return total
+}
+
+/** The control characters JSON writes as a two-character escape rather than as a `\\uXXXX`. */
+const SHORT_ESCAPES = new Set(["\b", "\f", "\n", "\r", "\t"])
+
+/**
+ * The length of a JSON string **as serialized**: the quotes around it, and the escapes inside.
+ *
+ * `JSON.stringify` escapes the quote, the backslash, the control characters and a lone surrogate;
+ * every other character — including every non-ASCII one — is written as it stands.
+ */
+function jsonStringLength(text: string): number {
+  let length = 2 // the quotes
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0
+    if (character === '"' || character === "\\") {
+      length += 2
+    } else if (code < 0x20) {
+      length += SHORT_ESCAPES.has(character) ? 2 : 6
+    } else if (code >= 0xd800 && code <= 0xdfff) {
+      // A lone surrogate, which JSON writes as `\\uXXXX`.
+      length += 6
+    } else {
+      length += 1
+    }
+  }
+  return length
 }
 
 /**

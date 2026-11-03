@@ -14,6 +14,8 @@ import {
  *    inside the content the object keys and the primitive leaves (numbers, booleans, null) that
  *    a tool input or a tool schema is made of, because a tokenizer meets them serialized into
  *    the conversation;
+ *  - a **tool call's input and a tool's schema count whole**, delimiters included: they reach
+ *    the model as serialized JSON, so their structure is text the model reads;
  *  - only the request envelope is excluded — the top-level fields that configure the call
  *    (`model`, `max_tokens`, `stream`, …), key and value alike;
  *  - JSON-escaped content is counted decoded, not as its escaped wire bytes;
@@ -69,11 +71,15 @@ describe("content sensitivity", () => {
     )
   })
 
-  test("counts keys and primitive leaves of the content, not only strings", () => {
+  test("a tool input counts whole: its keys, its leaves and its delimiters", () => {
     // `n: 123`, `ok: true` and `note: null` are serialized into the conversation like the strings
-    // around them. Counted — keys: "messages" (8), "role" (4), "content" (7), "type" (4), "name"
-    // (4), "input" (5), "n" (1), "ok" (2), "note" (4) = 39; values: "user" (4), "tool_use" (8),
-    // "plot" (4), "123" (3), "true" (4), "null" (4) = 27. "model" is envelope.
+    // around them, and the tool input that holds them reaches the model as JSON — so the whole
+    // of it counts, delimiters included.
+    //
+    // Counted — keys: "messages" (8), "role" (4), "content" (7), "type" (4), "name" (4), "input"
+    // (5) = 32; values: "user" (4), "tool_use" (8), "plot" (4) = 16; and the input itself as the
+    // serialized JSON the model reads: `{"n":123,"ok":true,"note":null}` = 31. "model" is
+    // envelope.
     const estimate = estimateTokenCount(
       encode(
         JSON.stringify({
@@ -89,7 +95,7 @@ describe("content sensitivity", () => {
         }),
       ),
     )
-    expect(estimate.inputTokens).toBe(Math.ceil((39 + 27) / ESTIMATE_CHARS_PER_TOKEN))
+    expect(estimate.inputTokens).toBe(Math.ceil((32 + 16 + 31) / ESTIMATE_CHARS_PER_TOKEN))
   })
 
   test("counts every character of the prompt strings, punctuation included", () => {
@@ -122,13 +128,43 @@ describe("content sensitivity", () => {
     )
 
     // Keys: "system" (6), "messages" (8), "role" (4), "content" (7), "type" (4), "text" (4),
-    // "type" (4), "name" (4), "input" (5), "pattern" (7) = 53. Values: "be brief" (8), "user"
-    // (4), "text" (4), "hello" (5), "tool_use" (8), "grep" (4), "a.b" (3) = 36.
-    expect(estimate.inputTokens).toBe(Math.ceil(89 / ESTIMATE_CHARS_PER_TOKEN))
+    // "type" (4), "name" (4), "input" (5) = 46. Values: "be brief" (8), "user" (4), "text" (4),
+    // "hello" (5), "tool_use" (8), "grep" (4) = 33. And the tool input whole, as the serialized
+    // JSON the model reads: `{"pattern":"a.b"}` = 17.
+    expect(estimate.inputTokens).toBe(Math.ceil((46 + 33 + 17) / ESTIMATE_CHARS_PER_TOKEN))
   })
 
-  test("a tool schema counts whole: its keys and primitives included", () => {
-    // A schema reaches the model as serialized JSON, so it is prompt all the way down.
+  test("a tool input growing by 100,000 empty objects moves the count", () => {
+    // The third regression, and the one a key-and-leaf walker cannot see: a tool input reaches
+    // the model as serialized JSON, so a hundred thousand empty objects inside it are three
+    // hundred kilobytes of prompt. An estimate that counted the input's keys and leaves saw
+    // none of it — the number did not move at all — and the client compacting on it never
+    // compacted.
+    const body = (items: readonly unknown[]) =>
+      encode(
+        JSON.stringify({
+          model: "claude-opus-5",
+          messages: [
+            { role: "assistant", content: [{ type: "tool_use", name: "plot", input: { items } }] },
+          ],
+        }),
+      )
+
+    const before = estimateTokenCount(body([]))
+    const after = estimateTokenCount(body(Array.from({ length: 100000 }, () => ({}))))
+
+    expect(after.inputTokens).toBeGreaterThan(before.inputTokens)
+    // `{}` for every one of them, plus the comma between each pair: ~300 KB of serialized JSON.
+    // The bound is a shade under it because each count is rounded up on its own, so the
+    // difference of two counts can sit a token below the difference of the two character counts.
+    expect(after.inputTokens - before.inputTokens).toBeGreaterThanOrEqual(
+      299000 / ESTIMATE_CHARS_PER_TOKEN,
+    )
+  })
+
+  test("a tool schema counts whole: its delimiters included", () => {
+    // A schema reaches the model as serialized JSON, so it is prompt all the way down — and the
+    // structure of it is part of what the model reads, braces and commas included.
     const estimate = estimateTokenCount(
       encode(
         JSON.stringify({
@@ -148,10 +184,11 @@ describe("content sensitivity", () => {
       ),
     )
 
-    // Keys: "tools" (5), "name" (4), "description" (11), "input_schema" (12), "type" (4),
-    // "properties" (10), "pattern" (7), "type" (4), "required" (8) = 65. Values: "grep" (4),
-    // "search files" (12), "object" (6), "string" (6), "pattern" (7) = 35.
-    expect(estimate.inputTokens).toBe(Math.ceil(100 / ESTIMATE_CHARS_PER_TOKEN))
+    // Keys: "tools" (5), "name" (4), "description" (11), "input_schema" (12) = 32. Values:
+    // "grep" (4), "search files" (12) = 16. And the schema whole, as the serialized JSON the
+    // model reads: `{"type":"object","properties":{"pattern":{"type":"string"}},"required":
+    // ["pattern"]}` = 83.
+    expect(estimate.inputTokens).toBe(Math.ceil((32 + 16 + 83) / ESTIMATE_CHARS_PER_TOKEN))
   })
 
   test("counts JSON-escaped content decoded, not as its escaped wire bytes", () => {

@@ -146,21 +146,30 @@ passed off as the provider's.**
 tokenizer, so the number is derived from the serialized prompt content rather than from the
 provider's own vocabulary: every string value of the parsed body — message text, system blocks,
 tool names and descriptions, **punctuation included**, because inside a prompt a colon is text —
-plus, within the content, the object keys and the primitive leaves (numbers, booleans, null),
-because a `tool_use.input` object and a tool schema reach the model as serialized JSON: history
-that grows by a hundred thousand numbers is a conversation that grew, and the estimate has to
-move when it does. All of it is counted as code points and divided by a **named constant**,
+plus, within the content, the object keys and the primitive leaves (numbers, booleans, null):
+history that grows by a hundred thousand numbers is a conversation that grew, and the estimate has
+to move when it does.
+
+**A tool call's input and a tool's schema count whole, delimiters included.** They are not
+prose: they reach the model as serialized JSON — the subscription path renders a tool call as
+`[the assistant called plot with {"…"}]` (`providers/claude-sdk/prompt-text.ts`) — so every brace,
+comma, colon and quote of them is text the model reads. Counting their keys and leaves alone
+dropped the structure, and the structure is where a growth hides: a tool input holding a hundred
+thousand empty objects is three hundred kilobytes of prompt, and it measured the same as an empty
+one, so a client compacting on that number never compacted.
+
+All of it is counted as code points and divided by a **named constant**,
 `ESTIMATE_CHARS_PER_TOKEN` (4), and rounded **up**. Only the request envelope contributes
 nothing — the top-level fields that configure the call rather than carry context (`model`,
 `max_tokens`, `stream`, …), key and value alike — and a top-level field that set does not name
 counts as content, because an uncounted unknown is an under-estimate, and under is the one
-direction a compaction threshold cannot afford. JSON's own punctuation and whitespace between
-the counted pieces are the one structure a tokenizer never sees. Up is the safe direction for a
-compaction threshold: a client that compacts slightly early loses a little context, and a client
-that compacts late blows its window. `estimate_basis` names the method (`chars-per-token-v1`) so
-a reader knows which approximation it is looking at. The estimate is **pure** — no clock, no
-network, no store, no second body read (the body is already buffered) — so the same bytes always
-produce the same number.
+direction a compaction threshold cannot afford. Outside those two JSON regions, the punctuation
+around the counted pieces is the one structure a tokenizer never sees, and contributes nothing.
+Up is the safe direction for a compaction threshold: a client that compacts slightly early loses a
+little context, and a client that compacts late blows its window. `estimate_basis` names the
+method (`chars-per-token-v1`) so a reader knows which approximation it is looking at. The
+estimate is **pure** — no clock, no network, no store, no second body read (the body is already
+buffered) — so the same bytes always produce the same number.
 
 **The estimate never touches an account.** No upstream is addressed and no SDK subprocess is
 spawned, so no account is cooled down, marked unhealthy, or otherwise disturbed by serving it. The

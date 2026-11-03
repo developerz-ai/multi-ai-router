@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { ESTIMATE_CHARS_PER_TOKEN } from "../../src/services/dataplane/count-estimate"
 import { account, jsonResponse, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, KEY, MESSAGE, post, settle } from "./harness"
 
@@ -309,7 +310,41 @@ describe("a scope of nothing but Claude subscriptions", () => {
       ),
     )
 
-    expect(bigger.input_tokens - fewer.input_tokens).toBeGreaterThanOrEqual(100000 / 4)
+    expect(bigger.input_tokens - fewer.input_tokens).toBeGreaterThanOrEqual(
+      100000 / ESTIMATE_CHARS_PER_TOKEN,
+    )
+  })
+
+  test("the estimate tracks a tool input that grew by empty objects, not only by text", async () => {
+    // The same fingerprint one layer up, for a growth that is pure structure: a `tool_use.input`
+    // holding a hundred thousand empty objects is three hundred kilobytes of prompt JSON — the
+    // model reads it as JSON — and an estimate that counted only the input's keys and leaves saw
+    // none of it, so the client compacting on the estimate never compacted.
+    const { options } = subscriptionPool()
+    const { app } = harness(options)
+
+    const body = (items: readonly unknown[]) =>
+      JSON.stringify({
+        model: "claude-opus-5",
+        messages: [
+          { role: "assistant", content: [{ type: "tool_use", name: "plot", input: { items } }] },
+        ],
+      })
+
+    const fewer = await estimateOf(
+      await app.request("/v1/messages/count_tokens", post(body([]), bearer())),
+    )
+    const bigger = await estimateOf(
+      await app.request(
+        "/v1/messages/count_tokens",
+        post(body(Array.from({ length: 100000 }, () => ({}))), bearer()),
+      ),
+    )
+
+    // `{}` for every one of them, plus the comma between each pair: ~300 KB of serialized JSON.
+    expect(bigger.input_tokens - fewer.input_tokens).toBeGreaterThanOrEqual(
+      299000 / ESTIMATE_CHARS_PER_TOKEN,
+    )
   })
 
   test("still estimates when the pool holds several subscriptions", async () => {
