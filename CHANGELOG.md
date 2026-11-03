@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Coverage for the Claude fast-mode credential ownership fence at the request-services composition boundary.** `apps/api/test/integration/claude-fast-response.test.ts` now drives the real `createRequestServices` wiring over a synthetic `CLAUDE_CONFIG_ROOT` and two synthetic Accounts, and pins the fence at `apps/api/src/composition/request-services.ts`: a config directory that is not the selected Account's is refused with `UpstreamAdmissionRefused` before the metadata-owner scope is entered and before any credential file is read, while the selected Account's credential is read inside `withMetadataOwner(<selected account id>)` and returns that Account's own token. Every fixture is synthetic — a temporary config root, generated Account UUIDs, generated `.credentials.json`/`.claude.json` — and no host or real Account credential is read. Test-only: no runtime behaviour change.
+
 ## [2.42.1] — 2026-11-02
 
 ### Fixed
