@@ -109,7 +109,11 @@ describe("POST /v1/messages/count_tokens?beta=true", () => {
     expect(upstream.calls[1]?.body).toBe(COUNT)
   })
 
-  test("is refused by name on a subscription-only pool, same as the bare path", async () => {
+  test("answers with the router's own labelled estimate on a subscription-only pool", async () => {
+    // A subscription cannot be asked for a count — the Agent SDK states no such call, and the
+    // router never forges an `api.anthropic.com` request out of a subscription's credentials to
+    // get one. With nothing but subscriptions in scope there is no provider to ask, so the router
+    // answers for itself, and says so: `estimated: true` beside the number.
     const invoked: string[] = []
     const { app, upstream } = harness({
       accounts: [subscriptionAccount("sub")],
@@ -121,12 +125,23 @@ describe("POST /v1/messages/count_tokens?beta=true", () => {
     })
 
     const res = await app.request("/v1/messages/count_tokens?beta=true", post(COUNT, bearer()))
-    const body = (await res.json()) as { error: { message: string; type: string } }
+    const body = (await res.json()) as {
+      input_tokens: number
+      estimated: boolean
+      estimate_basis: string
+    }
 
-    expect(res.status).toBe(503)
-    expect(body.error.type).toBe("overloaded_error")
-    expect(body.error.message).toContain("Claude Agent SDK")
-    // No count was invented: no subprocess, no forged request at the provider.
+    expect(res.status).toBe(200)
+    // The Anthropic field name, so an unmodified client reads it as a compaction threshold …
+    expect(body.input_tokens).toBeGreaterThan(0)
+    // … and the label, so nobody can mistake it for a measurement a provider made.
+    expect(body.estimated).toBe(true)
+    expect(typeof body.estimate_basis).toBe("string")
+    expect(body.estimate_basis.length).toBeGreaterThan(0)
+    // The three travel together, always: an estimate answering with `input_tokens` alone would be
+    // a fabricated measurement wearing a provider's field name.
+    expect(Object.keys(body).sort()).toEqual(["estimate_basis", "estimated", "input_tokens"])
+    // No count was invented upstream: no subprocess, no forged request at the provider.
     expect(invoked).toEqual([])
     expect(upstream.calls).toHaveLength(0)
   })

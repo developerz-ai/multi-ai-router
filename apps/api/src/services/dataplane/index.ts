@@ -9,6 +9,10 @@
  * translator and a provider with no implementation are refused there by name, before any upstream
  * call. Which transport an attempt takes is the `kind` on a `ServableCandidate`; both answer with
  * one `AttemptOutcome`, so everything downstream of `chain.ts` is written once.
+ *
+ * A token count is the one operation the router can answer **for itself**: a scope holding nothing
+ * but Claude subscriptions has no provider to ask, so it is answered with a labelled estimate
+ * (`count-estimate.ts`) rather than with a refusal.
  */
 
 export type { AttemptOutcome, AttemptPlan, UpstreamError } from "./attempt"
@@ -76,6 +80,15 @@ export {
   routerFailure,
 } from "./chain-error"
 export {
+  type CountEstimate,
+  type CountTokensEstimateBody,
+  countTokensEstimateBody,
+  countTokensEstimateResponse,
+  ESTIMATE_BASIS,
+  ESTIMATE_CHARS_PER_TOKEN,
+  estimateTokenCount,
+} from "./count-estimate"
+export {
   DEFAULT_LOG_REASON_MAX_CHARS,
   DEFAULT_UPSTREAM_TIMEOUT_MS,
   type Dispatcher,
@@ -98,10 +111,12 @@ export {
   type EgressDecision,
   type EgressRejection,
   type EgressRejectionReason,
+  type EstimateEgress,
   egressRejectionError,
   type PassthroughEgress,
   resolveEgress,
   type TranslateEgress,
+  type TransportDecision,
 } from "./egress/mode"
 export {
   type AccountHealthState,
@@ -182,4 +197,9 @@ export {
   SYSTEM_CLOCK,
   type UpstreamOperation,
 } from "./types"
-export { type UnservableInput, unservableError } from "./unservable"
+export {
+  type UnservableInput,
+  type UnservableOutcome,
+  unservableError,
+  unservableOutcome,
+} from "./unservable"

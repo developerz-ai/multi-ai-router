@@ -840,8 +840,20 @@ refusal for a condition a clock fixes in ninety seconds. That is non-negotiable 
 Only a verdict a clock or a human resolves takes precedence — `cooling_down`, a spent quota window,
 a probe in flight, `exhausted`. A capable account dropped as `disabled`, `needs_reauth`, or
 `model-unsupported` leaves the plan's own message standing, because that message is the more useful
-of the two. And when nothing capable was held back — a healthy OpenAI-only pool asked to count
-tokens — the shape gap is the whole truth and is reported as such.
+of the two.
+
+**An empty chain has three answers, and the order is the whole point.**
+
+| | Answer | When |
+|---|---|---|
+| 1 | The **health verdict** — `429` + `Retry-After`, or `402` | An account that could have served the request was held back. Never an estimate over a clock-recoverable condition: the operator is one coffee away from a working account, and "no account can do this" is a lie that outlives the coffee |
+| 2 | The router's own **labelled estimate** | The scope holds nothing but Claude subscriptions and nothing was held back. The Agent SDK states no token-count call, so there is no provider in such a scope to ask; the router answers with its own number and says so — `estimated: true` beside `input_tokens`, plus `estimate_basis` ([06-protocol-translation.md](06-protocol-translation.md#counting-tokens)). No upstream is addressed and no account is disturbed |
+| 3 | The **named refusal** — `503` | Every other scope that cannot count, such as a healthy OpenAI-only pool. The shape gap is the whole truth and is reported as such: what is missing is an Anthropic-dialect account, which only the operator can add |
+
+So the precedence over a shape gap now has a third answer, and **the health-verdict-outranks rule is
+unchanged by it**: the estimate sits *below* the health verdict, never beside it. A scope whose
+only subscription is cooling down is still a `429`, because a condition a clock fixes must never be
+reported as a permanent gap — nor softened into a number the client would compact against.
 
 ### Which failure the client hears
 
