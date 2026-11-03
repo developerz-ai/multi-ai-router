@@ -1,6 +1,6 @@
 {
   "name": "multi-ai-router",
-  "version": "2.42.2",
+  "version": "2.43.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -31,6 +31,14 @@
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "@esbuild-kit/core-utils>esbuild": "0.25.12"
+    "@esbuild-kit/core-utils>esbuild": "0.25.12",
+    "body-parser": "2.4.0",
+    "fast-uri": "3.1.9",
+    "glob": "14.0.2",
+    "happy-dom": "21.0.4",
+    "ip-address": "10.7.4",
+    "minimatch": "11.0.1",
+    "qs": "6.16.1",
+    "seroval": "1.6.11"
   }
 }

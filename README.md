@@ -247,6 +247,10 @@ stub upstream and reports what its own `router_overhead_seconds` histogram recor
 time-to-first-token measured separately. It exits non-zero when either half of the budget breaks —
 overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
+`bin/advisory` asks the live advisory database (OSV.dev) about the resolved dependency set in
+`bun.lock`. CI runs it as a gate: a finding turns the build red, and an assessment that could not
+complete is reported as `unavailable` rather than as a clean pass.
+
 ---
 
 ## 🔌 Pointing your client at it
