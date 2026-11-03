@@ -326,18 +326,27 @@ describe("claims — every admission carries an exit", () => {
   test("a refresh that lands while a caller is queued re-classifies it out of the window", async () => {
     const h = harness(credential(60_000))
     const { lock, state } = fakeLock()
-    const gate = createCredentialFreshness({ ...h.deps, refreshLock: lock })
+    const steps = stepSleep()
+    const gate = createCredentialFreshness({ ...h.deps, refreshLock: lock, sleep: steps.sleep })
 
     await gate.ensureFresh(ACCOUNT, never)
     const pending = gate.ensureFresh(ACCOUNT, never)
     await drain()
+    // The arrival re-classified, found the ACTIVE holder, and is parked in the wait — and the
+    // stepping sleep keeps it parked until the test moves it, so the exit below cannot be the
+    // patience cap reached inside a microtask drain.
     expect(state.acquires).toBe(1)
+    expect(steps.parked()).toBe(1)
 
-    // The holder's subprocess refreshes mid-wait — the file now reads fresh.
+    // The holder's subprocess refreshes mid-wait — the file reads fresh BEFORE the waiter's next
+    // poll is stepped, so its re-classification, not the cap, is what ends the wait.
     h.setMetadata(credential(8 * 3_600_000))
+    steps.step()
     const claim = await pending
     expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
+    // A no-op claim with no timeout warning: the re-classification let it through, never the cap.
+    expect(h.warnings()).toEqual([])
     // A window-closed claim owns nothing: its release is inert.
     claim.release()
     expect(state.releases).toBe(0)
