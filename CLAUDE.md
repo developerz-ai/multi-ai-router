@@ -69,6 +69,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Fresh clone → running stack | `bin/setup` |
 | The gate (lint + typecheck + test + build), before committing | `bin/check` — refuses to run without a `DATABASE_URL`, so it can never pass on fewer tests than CI |
 | Overhead budget: p50/p95/p99 + added TTFT vs a stub upstream | `bin/bench` |
+| Live dependency advisory gate: the resolved lockfile against OSV.dev | `bin/advisory` — exit 1 on a finding, exit 2 when the assessment could not complete; needs the network, so it is not part of `bin/check` |
 | Live check against a deployed router: text, tool call, round trip, stream, reasoning, plus informational legs on the other two dialects | `bin/smoke` — `bin/smoke --url URL --model ID --key-env NAME` |
 | Before cutting a tag: the tree agrees on one version, and the tag names it | `bin/verify-version` · `bin/verify-version v1.0.0` — `release.yml` runs the same check before it builds a layer |
 | Layout gate: real headless Chromium against the built SPA, `/accounts` + `/keys` at 1024/1280/1440px, fails on cost text/blocks painting outside their cell, through a credential badge (`/accounts`) or into a neighbouring cell (`/keys`) | `bin/ui-geometry` (fixture-mocked admin API, no router or DB needed; CI runs it) |

@@ -1081,6 +1081,25 @@ Run it locally, not in CI — the same "shared runner is noisy" reasoning that k
 non-blocking means a runner-generated baseline would just be next week's false regression. State
 *why* the numbers moved in the commit message; the diff itself only ever shows *that* they did.
 
+### CI: the advisory gate
+
+The `advisory` job in `.github/workflows/ci.yml` is the opposite deal from `bench`. It runs
+`bin/advisory` — the live OSV.dev assessment over the resolved packages in `bun.lock` — and it
+**fails the build**: there is no `continue-on-error` on that step, so an advisory affecting the
+dependency set turns the default branch red. The reasoning that keeps `bench` non-blocking does
+not apply here: a shared runner's jitter is noise about the measurement, while an advisory is a
+fact about the tree — and a fact that changes without a commit is exactly what a gate exists to
+catch.
+
+The job writes the report into the **job summary** — its `status` field, read with `jq`, so a
+reviewer sees `clean`, `finding` or `unavailable` without reading the log — and uploads the report
+file as the `advisory-report` **artifact** with `if: always()`, so every outcome leaves evidence
+behind: a clean run, a finding and an assessment that could not complete each write a report.
+
+The authoritative rules — the three outcomes and their exit codes, why an unavailable assessment
+is red rather than a clean pass, and why the check is a CI job rather than part of `bin/check` —
+live in [07-security.md](07-security.md#dependency-advisories).
+
 ## Structured logging
 
 JSON lines to stdout, one object per event. The container logs; shipping them is the operator's job.

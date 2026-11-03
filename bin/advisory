@@ -1,0 +1,27 @@
+#!/bin/sh
+# The dependency advisory gate: ask the live advisory database about the resolved packages in
+# bun.lock.
+#
+# A GATE, and the three outcomes are kept apart in the exit code:
+#   0  clean       — the assessment completed and found no advisory
+#   1  finding     — the assessment completed and found at least one advisory
+#   2  unavailable — the assessment did not complete (network error, non-2xx after the retries,
+#                    an unparsable body, a query/result count mismatch, an unparsable lockfile)
+#
+# Exit 2 is not exit 0 with a warning attached: a gate that could not reach the database has proved
+# nothing about the dependencies, and a red "unknown" beats a green "clean".
+#
+# It needs the network, which is why it is deliberately NOT part of bin/check: the local gate —
+# lint, typecheck, tests, build — keeps working on a machine with no internet. This is a CI job of
+# its own (`advisory` in .github/workflows/ci.yml).
+#
+#   bin/advisory                                 # assess bun.lock against OSV.dev
+#   bin/advisory --report advisory-report.json   # and leave the evidence behind
+#   bin/advisory --help                          # every option
+set -eu
+
+cd "$(dirname "$0")/.."
+
+bin/lib/require-bun
+
+exec bun apps/api/advisory/run.ts "$@"

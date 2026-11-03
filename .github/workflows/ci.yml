@@ -125,6 +125,51 @@ jobs:
           sudo apt-get install -y --no-install-recommends gcc libc6-dev
       - run: bin/test
 
+  advisory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    # A gate, not a report — the opposite deal from `bench` below, on purpose. The assessment is
+    # live: it asks OSV.dev about the resolved packages in bun.lock at the moment the job runs, so
+    # an advisory published today turns the default branch red without anything in this repository
+    # changing.
+    #
+    # There is no `continue-on-error` anywhere in this job, at job or step level. A finding fails
+    # the build, and so does an assessment that could not complete (exit 2): a gate that could not
+    # reach the database has proved nothing about the dependency set, and a red "unknown" beats a
+    # green "clean".
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      # The report is written on every outcome — clean, finding and unavailable alike — so every
+      # run leaves evidence and the upload below never has nothing to upload.
+      - run: bin/advisory --report advisory-report.json
+      - name: publish the assessment status to the job summary
+        if: always()
+        run: |
+          status="$(jq -r '.status // "unavailable"' advisory-report.json 2>/dev/null || echo unavailable)"
+          {
+            echo '### advisory — OSV.dev dependency assessment'
+            echo
+            echo "status: $status"
+            echo
+            echo '```json'
+            cat advisory-report.json 2>/dev/null || echo '{"status":"unavailable","error":"no report was written"}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          archive: true
+          name: advisory-report
+          path: advisory-report.json
+          if-no-files-found: error
+          retention-days: 30
+
   bench:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -218,10 +263,11 @@ jobs:
 #
 # Image builds happen only on a tagged release (.github/workflows/release.yml,
 # triggered by `v*` tags). CI is purely the quality gate: lint, typecheck, test,
-# build. An earlier revision also pushed a `<sha>` + `main` image on every push
-# to main; that was removed on purpose. Do not reinstate it — a registry that
-# accumulates an image per commit makes "which tag is real" ambiguous, and the
-# release tag is the only ref anything should deploy.
+# build, and the live dependency advisory assessment. An earlier revision also
+# pushed a `<sha>` + `main` image on every push to main; that was removed on
+# purpose. Do not reinstate it — a registry that accumulates an image per commit
+# makes "which tag is real" ambiguous, and the release tag is the only ref
+# anything should deploy.
 #
 # `build` above still runs on every push and PR, so a commit that cannot produce
 # the artifact fails here rather than at release time.
