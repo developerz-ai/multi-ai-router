@@ -6,7 +6,7 @@
 
 Read-only SSH-wrapped kubectl through `../infrastructure/scripts/lib/k8s/kubectl.ts`. SQL ran inside the primary Postgres pod with `default_transaction_read_only=on`, a 15-second statement timeout, explicit `BEGIN READ ONLY` and `ROLLBACK`. No table contents containing credentials, user prompts or personal account identifiers were exported.
 
-Initial production snapshot: 2026-10-02 23:58 UTC. Logs: current pod from 15:58:44 UTC to capture (~8h), not 24h despite requesting --since=24h. SQL: rolling 24h plus complete recent UTC dates for rollup comparisons. Subsequent captures in [evidence/](evidence/) include timestamps. The first and last partial calendar days of a rolling query are not comparable to whole-day rollups.
+Initial production snapshot: approximately 2026-10-02 23:58 UTC. The current-pod levels row below uses the saved log capture at 2026-10-02T23:59:14.078Z (UTC, `capturedAt` in [production-logs.json](evidence/production-logs.json)), not the approximate initial snapshot time. Saved logs span 2026-10-02T15:58:44.894146806Z (`first`) to 2026-10-02T23:59:10.647812442Z (`last`, the last log entry, not capture time; UTC, ~8h), not 24h despite requesting --since=24h. SQL: rolling 24h plus complete recent UTC dates for rollup comparisons. Subsequent captures in [evidence/](evidence/) include timestamps. The first and last partial calendar days of a rolling query are not comparable to whole-day rollups.
 
 | Surface | Observed |
 |---|---|
@@ -24,7 +24,7 @@ Initial production snapshot: 2026-10-02 23:58 UTC. Logs: current pod from 15:58:
 | Measure | Initial observation | Interpretation / owner |
 |---|---:|---|
 | Current-pod `/v1/messages` completions | 63 × 200; 57 × 400; 50 × 429 | Count `request completed` only: `request failed` is another log for the same failed request |
-| Current-pod levels | 1,517 info; 116 warn; 0 error (1,633 lines at 23:57:51) | Zero error-level lines does not mean successful requests |
+| Current-pod levels | 1,522 info; 116 warn; 0 error (1,638 total lines); capturedAt: 2026-10-02T23:59:14.078Z (UTC); last log entry: 2026-10-02T23:59:10.647812442Z (UTC) | Zero error-level lines does not mean successful requests |
 | 24h no-account quota rejections | 161 | account_id/provider/http_status NULL; 01 owns response/usage status semantics |
 | 24h Kimi success | 109, all upstream model `k3`, cost unknown | 08.1 |
 | 24h Kimi other attempts | 32 client errors; 6 quota 403; 3 timeout; 1 auth 403 | Window spans releases; do not re-file fixed 403 classification from old rows |
@@ -39,7 +39,7 @@ Initial production snapshot: 2026-10-02 23:58 UTC. Logs: current pod from 15:58:
 
 - [Production SQL results](evidence/production-db.txt) — aggregate counts, model cost coverage, scheduled-task outcomes, table estimates and connection states.
 - [Reproducible read-only queries](evidence/production.sql) — explicit transaction and bounded query deadline in [reader](evidence/cluster-read.ts).
-- [Current-pod log counts](evidence/production-logs.json) — timestamps, levels, messages and deduplicated completed-request statuses; no request bodies.
+- [Current-pod log counts](evidence/production-logs.json) — source of the current-pod levels row above: `capturedAt` = 2026-10-02T23:59:14.078Z (UTC), distinct from `last` = 2026-10-02T23:59:10.647812442Z (UTC). Reproduce the levels/total from `levels.info` = 1522 and `levels.warn` = 116; `levels.error` is absent (zero error-level lines), and 1522 + 116 = 1638 matches `count`. Includes timestamps, levels, messages and deduplicated completed-request statuses; no request bodies.
 - [Cluster and backup status](evidence/cluster-status.txt) — pod/image/resources, warning events, CNPG health and completed backup timestamps.
 - [Local reproductions](evidence/local-reproductions.txt) — actual observer, identity, axis, cache and stale-sweep results, with [source](evidence/local-reproductions.mjs).
 
