@@ -1,4 +1,17 @@
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { type Budgets, OVERHEAD_METRIC, render, verdict } from "../../bench/report"
 import { parseArgs } from "../../bench/run"
 import { type DriveOptions, runScenario, SCENARIOS } from "../../bench/scenarios"
@@ -241,6 +254,237 @@ describe("bin/bench arguments", () => {
   test("refuses an unknown option and a non-numeric one rather than benching the wrong thing", () => {
     expect(() => parseArgs(["--nope"])).toThrow("unknown option --nope")
     expect(() => parseArgs(["--requests", "lots"])).toThrow("--requests needs a number")
+  })
+})
+
+describe("the bin/bench runtime guard", () => {
+  /**
+   * A budget measured on a Bun the suite and the released image never ran on is not a budget for
+   * this code — it is a number for a different runtime. So `bin/bench` asks the repository's own
+   * runtime contract (`bin/lib/require-bun`) before the harness starts, and refuses on a mismatch.
+   *
+   * The guard is proved here by shadowing `bun` with a shim: `--version` answers with a fixture
+   * version, and any other argv is recorded to a marker file instead of running the harness. The
+   * marker is therefore the evidence of whether the benchmark started at all — without it, "exited
+   * non-zero" would be indistinguishable from "the harness ran and failed".
+   *
+   * The shim is PREPENDED to PATH, not substituted for it: `bin/bench` calls `dirname` externally
+   * while locating the repository root, so a PATH of only the fixture directory would break the
+   * wrapper before the guard was ever reached.
+   */
+  const ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
+  const PINNED_BUN = readFileSync(`${ROOT}.bun-version`, "utf8").trim()
+
+  /**
+   * The separator between two recorded arguments: ASCII unit separator, which cannot occur inside
+   * an argument and so cannot be mistaken for one.
+   */
+  const ARGUMENT_SEPARATOR = "\u001f"
+
+  /**
+   * The arguments `bin/bench` must hand to the harness untouched — deliberately awkward.
+   *
+   * A value carrying a space and an empty one are both arguments an unquoted `"$@"` loses: the
+   * space splits one argument into two and the empty one disappears. Recorded as a single string
+   * neither loss is visible — `"$*"` joins the arguments with a space, so a split value reads the
+   * same as a whole one and a dropped empty one leaves no gap. That is why each argument is
+   * recorded with its own separator and recovered as a vector.
+   *
+   * The values need not be valid bench options — the shim stands in for the harness, so nothing
+   * parses them. They only have to be awkward.
+   */
+  const PASSTHROUGH_ARGV = [
+    "--requests",
+    "7",
+    "--baseline",
+    "bench dir/baseline.json",
+    "--write-baseline",
+    "",
+  ]
+
+  /** The argv the harness is expected to receive: the harness path, then the arguments verbatim. */
+  const EXPECTED_ARGV = ["apps/api/bench/run.ts", ...PASSTHROUGH_ARGV]
+
+  /**
+   * A `bun` that reports the fixture version for `--version` and, for anything else, records each
+   * argument to the marker file and exits the fixture code without running the harness.
+   */
+  function fakeBun(dir: string): void {
+    writeFileSync(
+      join(dir, "bun"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--version" ]; then',
+        "  printf '%s\\n' \"$FIXTURE_BUN_VERSION\"",
+        "  exit 0",
+        "fi",
+        'for arg in "$@"; do',
+        '  printf \'%s\\037\' "$arg" >> "$FIXTURE_BUN_MARKER"',
+        "done",
+        'exit "$FIXTURE_BUN_EXIT"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    )
+  }
+
+  /**
+   * Recovers the arguments the shim recorded.
+   *
+   * The file holds one record per argument and each record ends in the separator, so the split
+   * leaves a trailing empty field that belongs to the separator — unless an argument WAS empty,
+   * which is exactly what the fixture includes.
+   */
+  function recordedArguments(marker: string): string[] {
+    if (!existsSync(marker)) {
+      return []
+    }
+    const recorded = readFileSync(marker, "utf8")
+    if (recorded.length === 0) {
+      return []
+    }
+    return recorded.split(ARGUMENT_SEPARATOR).slice(0, -1)
+  }
+
+  /**
+   * Runs the real `bin/bench` with the shim first on PATH.
+   *
+   * @returns the spawn result plus the argv the shim recorded — empty when the harness never ran,
+   *   which is the evidence that the guard rejected the run before any measurement.
+   */
+  function runBench(
+    version: string,
+    exitCode: number,
+    args: string[] = [],
+  ): { status: number | null; stderr: string; invoked: string[] } {
+    const dir = mkdtempSync(join(tmpdir(), "router-bench-guard-"))
+    try {
+      const marker = join(dir, "invoked.txt")
+      fakeBun(dir)
+      const result = spawnSync(`${ROOT}bin/bench`, args, {
+        cwd: ROOT,
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH ?? ""}`,
+          FIXTURE_BUN_VERSION: version,
+          FIXTURE_BUN_MARKER: marker,
+          FIXTURE_BUN_EXIT: String(exitCode),
+        },
+        encoding: "utf8",
+      })
+      expect(result.error).toBeUndefined()
+      return {
+        status: result.status,
+        stderr: result.stderr,
+        // Read before the fixture directory is swept — the marker is the whole evidence.
+        invoked: recordedArguments(marker),
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("refuses to measure on a Bun the repository does not pin, and the harness never starts", () => {
+    const wrong = "0.0.0"
+
+    const run = runBench(wrong, 0)
+
+    expect(run.status).toBe(1)
+    // The message names what is wanted and where it is pinned, so the reader can fix it.
+    expect(run.stderr).toContain(`Bun ${PINNED_BUN} is required`)
+    expect(run.stderr).toContain(".bun-version")
+    // The whole point: no measurement was taken on the rejected runtime.
+    expect(run.invoked).toEqual([])
+  })
+
+  test("runs the harness on the pinned Bun and passes every argument through unchanged", () => {
+    const run = runBench(PINNED_BUN, 0, PASSTHROUGH_ARGV)
+
+    // The harness path and the arguments reach it exactly as they were given: the value carrying
+    // a space is still one argument, and the empty one is still there.
+    expect(run.invoked).toEqual(EXPECTED_ARGV)
+    // And the run itself succeeded. A wrapper that ran the harness and then failed the run anyway
+    // would satisfy every assertion that only looks at what the harness received.
+    expect(run.status).toBe(0)
+  })
+
+  test("returns the harness's own exit code, so a budget breach still fails the run", () => {
+    // The shim stands in for the harness and fails the way a budget breach does. The code is a
+    // distinctive one, so a wrapper that answered 1 for every run cannot pass this by accident.
+    const run = runBench(PINNED_BUN, 37)
+
+    expect(run.invoked).toEqual(["apps/api/bench/run.ts"])
+    expect(run.status).toBe(37)
+  })
+
+  /**
+   * Runs the repository's own `bin/bench` against a tree where `bin/lib/require-bun` is replaced by
+   * a recorder, so the CALL is observable rather than merely its effect.
+   *
+   * The other assertions in this block cannot tell the shared contract apart from a copy of it: a
+   * `bin/bench` that compared `bun --version` to `.bun-version` itself would refuse the same run,
+   * print the same message and never start the harness — every one of those assertions would still
+   * pass. Only the call itself distinguishes them, and the criterion is about the call: the runtime
+   * contract is one script, reused, not re-derived per caller.
+   *
+   * The tree mirrors the layout `bin/bench` depends on — it `cd`s to its own parent and then calls
+   * `bin/lib/require-bun` relative to it — so the recorder is reached exactly as the real helper is.
+   */
+  function runAgainstRecorder(): {
+    recorderCalls: number
+    invoked: string[]
+    status: number | null
+  } {
+    const dir = mkdtempSync(join(tmpdir(), "router-bench-contract-"))
+    try {
+      const recorder = join(dir, "contract.txt")
+      const marker = join(dir, "invoked.txt")
+      // The real wrapper, verbatim — a hand-written copy of it could drift from the shipped one
+      // and quietly test a script nobody runs.
+      mkdirSync(join(dir, "bin", "lib"), { recursive: true })
+      copyFileSync(`${ROOT}bin/bench`, join(dir, "bin", "bench"))
+      copyFileSync(`${ROOT}.bun-version`, join(dir, ".bun-version"))
+      // The recorder stands in for the shared contract: it records that it was called and lets the
+      // run proceed, so the harness still starts and the run still measures something.
+      writeFileSync(
+        join(dir, "bin", "lib", "require-bun"),
+        ["#!/bin/sh", 'printf "called\\n" >> "$FIXTURE_CONTRACT_MARKER"', "exit 0", ""].join("\n"),
+        { mode: 0o755 },
+      )
+      fakeBun(dir)
+      const result = spawnSync(join(dir, "bin", "bench"), PASSTHROUGH_ARGV, {
+        cwd: dir,
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH ?? ""}`,
+          FIXTURE_BUN_VERSION: PINNED_BUN,
+          FIXTURE_BUN_MARKER: marker,
+          FIXTURE_BUN_EXIT: "0",
+          FIXTURE_CONTRACT_MARKER: recorder,
+        },
+        encoding: "utf8",
+      })
+      expect(result.error).toBeUndefined()
+      return {
+        recorderCalls: existsSync(recorder)
+          ? readFileSync(recorder, "utf8").trim().split("\n").length
+          : 0,
+        invoked: recordedArguments(marker),
+        status: result.status,
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test("asks the repository's runtime contract, rather than a copy of it inside the wrapper", () => {
+    const run = runAgainstRecorder()
+
+    // The shared contract was consulted — a bench-local version check never reaches it.
+    expect(run.recorderCalls).toBe(1)
+    // And the benchmark still ran, so the guard did not simply refuse everything.
+    expect(run.invoked).toEqual(EXPECTED_ARGV)
+    expect(run.status).toBe(0)
   })
 })
 

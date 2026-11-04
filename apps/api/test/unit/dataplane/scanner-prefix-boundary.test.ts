@@ -25,7 +25,7 @@ test("bounded opening capture still validates the suffix through explicit EOF", 
     bytes.subarray(start, start + DEFAULT_CONVERSATION_PREFIX_BYTES),
   )
   const ambiguous = createRoutingScanner()
-  ambiguous.push(encoder.encode(text.slice(0, -1) + ',"model":"other"}'))
+  ambiguous.push(encoder.encode(`${text.slice(0, -1)},"model":"other"}`))
   expect(ambiguous.finish().duplicateModel).toBe(true)
 })
 
