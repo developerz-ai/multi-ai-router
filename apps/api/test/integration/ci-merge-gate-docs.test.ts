@@ -3,16 +3,22 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 /**
- * The merge guidance must name the CI jobs it depends on.
+ * The merge guidance must name the CI jobs it depends on, and classify each one the way the
+ * workflow itself runs it.
  *
- * Two things drift here, and nothing else in the repository notices. The `ci` workflow's job list
- * changes while the documents a maintainer reads before merging keep naming an older one. And
+ * Three things drift here, and nothing else in the repository notices. The `ci` workflow's job
+ * list changes while the documents a maintainer reads before merging keep naming an older one.
  * `bench` — a report that never fails the build — is easy to call a gate, or a gate a report,
- * because both read naturally in a sentence. The workflow is the truth; the prose is what a human
+ * because both read naturally in a sentence. And the right words near the right job names are
+ * not a classification: "bench is a gate; advisory and ui-geometry are reports" coexists with
+ * every word a presence check looks for. The workflow is the truth; the prose is what a human
  * acts on, so the prose needs a guard of its own.
  *
- * The assertions are on job ids and on the workflow's own keys, never on a sentence: rewording the
- * guidance must not break this test, dropping a job from it must.
+ * The assertions are on job ids and on the workflow's own keys, except the classification check,
+ * which must read a sentence: binding "gate" or "report" to a job needs the sentence that says
+ * it. A reword survives as long as every classification sentence names its jobs next to exactly
+ * one of the two words; a fixture with the classifications reversed pins that the matcher reads
+ * the classification, not the coexistence.
  */
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
@@ -23,8 +29,29 @@ const WORKFLOW = read(".github/workflows/ci.yml")
 /** The job ids the `ci` workflow defines, in the order it defines them. */
 const JOB_IDS = jobIds(WORKFLOW)
 
+type Classification = "report" | "gate"
+
+/**
+ * How the workflow itself runs a job: `continue-on-error` at job level is a report that cannot
+ * fail the build; anything else is a gate a merge waits on.
+ */
+const runsAs = (id: string): Classification =>
+  /^ {4}continue-on-error: true$/m.test(withoutComments(jobBlock(WORKFLOW, id))) ? "report" : "gate"
+
 /** The documents a maintainer reads to decide whether a PR may merge. */
 const GUIDANCE = ["CONTRIBUTING.md", ".claude/commands/feature.md", "README.md"] as const
+
+/**
+ * The negative fixture: prose in the same shape as the guidance, with the classifications
+ * reversed — `bench` a gate, the gates reports. Every job and every word the matcher looks for
+ * is present; only the classification is wrong.
+ */
+const REVERSED = `
+Reversed merge guidance
+
+A merge waits for the bench gate to pass. A merge then reads the advisory, ui-geometry, lint,
+typecheck, test and build reports before it goes green.
+`
 
 describe("the ci workflow", () => {
   test("defines the jobs the merge guidance names", () => {
@@ -59,11 +86,8 @@ describe("the ci workflow", () => {
   })
 
   test("reports on bench and gates on everything else", () => {
-    const reports = JOB_IDS.filter((id) =>
-      withoutComments(jobBlock(WORKFLOW, id)).includes("continue-on-error"),
-    )
-
-    expect(reports).toEqual(["bench"])
+    // The classification the guidance is held to, read off the workflow's own keys.
+    expect(JOB_IDS.filter((id) => runsAs(id) === "report")).toEqual(["bench"])
   })
 })
 
@@ -81,17 +105,24 @@ describe("the merge guidance", () => {
       expect(missing).toEqual([])
     })
 
-    test(`${path} names bench a report and the rest gates`, () => {
-      const region = mergeRegion(read(path))
-
-      expect({
-        benchIsARepport: region.some(
-          (paragraph) => mentionsJob(paragraph, "bench") && /\breports?\b/i.test(paragraph),
-        ),
-        callsThemGates: region.some((paragraph) => /\bgates?\b/i.test(paragraph)),
-      }).toEqual({ benchIsARepport: true, callsThemGates: true })
+    test(`${path} classifies every job the way the workflow runs it`, () => {
+      // Per job: a document that called bench a gate and the gates reports carries every word
+      // this looks for, and still fails here.
+      expect(guidanceProblems(read(path))).toEqual([])
     })
   }
+
+  test("a fixture with the classifications reversed fails", () => {
+    expect(guidanceProblems(REVERSED)).toEqual([
+      "lint is called a report but the workflow gates on it",
+      "typecheck is called a report but the workflow gates on it",
+      "test is called a report but the workflow gates on it",
+      "advisory is called a report but the workflow gates on it",
+      "bench is called a gate but the workflow reports it",
+      "ui-geometry is called a report but the workflow gates on it",
+      "build is called a report but the workflow gates on it",
+    ])
+  })
 })
 
 /**
@@ -106,6 +137,52 @@ function mergeRegion(text: string): string[] {
 /** The document's paragraphs, blank-line separated. */
 function paragraphs(text: string): string[] {
   return text.split(/\n[ \t]*\n/).filter((paragraph) => paragraph.trim().length > 0)
+}
+
+/** The paragraph's sentences: terminal punctuation followed by whitespace ends one. */
+function sentences(text: string): string[] {
+  return text.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.trim().length > 0)
+}
+
+/**
+ * Every way the document's merge instruction classifies a job against how the workflow runs it:
+ * never classifying it, classifying it both ways, or calling a gate a report or the reverse. A
+ * sentence classifies the jobs it names when it carries exactly one of the two words — a sentence
+ * with both (or neither) asserts nothing, so hedged prose cannot classify.
+ */
+function guidanceProblems(text: string): string[] {
+  const classified = new Map<string, Set<Classification>>()
+  for (const paragraph of mergeRegion(text)) {
+    for (const sentence of sentences(paragraph)) {
+      const saysReport = /\breports?\b/i.test(sentence)
+      const saysGate = /\bgates?\b/i.test(sentence)
+      if (saysReport === saysGate) continue
+      const kind: Classification = saysReport ? "report" : "gate"
+      for (const id of JOB_IDS) {
+        if (!mentionsJob(sentence, id)) continue
+        const kinds = classified.get(id) ?? new Set<Classification>()
+        kinds.add(kind)
+        classified.set(id, kinds)
+      }
+    }
+  }
+
+  const problems: string[] = []
+  for (const id of JOB_IDS) {
+    const kinds = classified.get(id)
+    if (kinds === undefined || kinds.size === 0) {
+      problems.push(`${id} is never classified`)
+    } else if (kinds.size > 1) {
+      problems.push(`${id} is called both a report and a gate`)
+    } else if (!kinds.has(runsAs(id))) {
+      problems.push(
+        runsAs(id) === "report"
+          ? `${id} is called a gate but the workflow reports it`
+          : `${id} is called a report but the workflow gates on it`,
+      )
+    }
+  }
+  return problems
 }
 
 /**

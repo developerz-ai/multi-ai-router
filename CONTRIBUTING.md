@@ -71,7 +71,7 @@ Other commands you'll use often:
 - A merge needs **every applicable gate** green: the `ci` workflow's required
   checks read at merge time — lint, typecheck, test, advisory, ui-geometry and
   build — the required review approval, and branch protection on `main`. The
-  `bench` job reports and never fails the build, but a regression in
+  `bench` job reports and never fails CI, but a regression in
   `router_overhead_seconds` is still a bug, so run `bin/bench`. `bin/check`
   runs the offline subset locally (lint, typecheck, test, build): the advisory
   gate needs the network and the ui-geometry layout gate needs a browser, so
