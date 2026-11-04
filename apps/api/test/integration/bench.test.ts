@@ -276,8 +276,38 @@ describe("the bin/bench runtime guard", () => {
   const PINNED_BUN = readFileSync(`${ROOT}.bun-version`, "utf8").trim()
 
   /**
-   * A `bun` that reports the fixture version for `--version` and, for anything else, records its
-   * argv to the marker file and exits the fixture code without running the harness.
+   * The separator between two recorded arguments: ASCII unit separator, which cannot occur inside
+   * an argument and so cannot be mistaken for one.
+   */
+  const ARGUMENT_SEPARATOR = "\u001f"
+
+  /**
+   * The arguments `bin/bench` must hand to the harness untouched — deliberately awkward.
+   *
+   * A value carrying a space and an empty one are both arguments an unquoted `"$@"` loses: the
+   * space splits one argument into two and the empty one disappears. Recorded as a single string
+   * neither loss is visible — `"$*"` joins the arguments with a space, so a split value reads the
+   * same as a whole one and a dropped empty one leaves no gap. That is why each argument is
+   * recorded with its own separator and recovered as a vector.
+   *
+   * The values need not be valid bench options — the shim stands in for the harness, so nothing
+   * parses them. They only have to be awkward.
+   */
+  const PASSTHROUGH_ARGV = [
+    "--requests",
+    "7",
+    "--baseline",
+    "bench dir/baseline.json",
+    "--write-baseline",
+    "",
+  ]
+
+  /** The argv the harness is expected to receive: the harness path, then the arguments verbatim. */
+  const EXPECTED_ARGV = ["apps/api/bench/run.ts", ...PASSTHROUGH_ARGV]
+
+  /**
+   * A `bun` that reports the fixture version for `--version` and, for anything else, records each
+   * argument to the marker file and exits the fixture code without running the harness.
    */
   function fakeBun(dir: string): void {
     writeFileSync(
@@ -288,12 +318,32 @@ describe("the bin/bench runtime guard", () => {
         "  printf '%s\\n' \"$FIXTURE_BUN_VERSION\"",
         "  exit 0",
         "fi",
-        'printf "%s\\n" "$*" >> "$FIXTURE_BUN_MARKER"',
+        'for arg in "$@"; do',
+        '  printf \'%s\\037\' "$arg" >> "$FIXTURE_BUN_MARKER"',
+        "done",
         'exit "$FIXTURE_BUN_EXIT"',
         "",
       ].join("\n"),
       { mode: 0o755 },
     )
+  }
+
+  /**
+   * Recovers the arguments the shim recorded.
+   *
+   * The file holds one record per argument and each record ends in the separator, so the split
+   * leaves a trailing empty field that belongs to the separator — unless an argument WAS empty,
+   * which is exactly what the fixture includes.
+   */
+  function recordedArguments(marker: string): string[] {
+    if (!existsSync(marker)) {
+      return []
+    }
+    const recorded = readFileSync(marker, "utf8")
+    if (recorded.length === 0) {
+      return []
+    }
+    return recorded.split(ARGUMENT_SEPARATOR).slice(0, -1)
   }
 
   /**
@@ -306,7 +356,7 @@ describe("the bin/bench runtime guard", () => {
     version: string,
     exitCode: number,
     args: string[] = [],
-  ): { status: number | null; stderr: string; invoked: string } {
+  ): { status: number | null; stderr: string; invoked: string[] } {
     const dir = mkdtempSync(join(tmpdir(), "router-bench-guard-"))
     try {
       const marker = join(dir, "invoked.txt")
@@ -327,7 +377,7 @@ describe("the bin/bench runtime guard", () => {
         status: result.status,
         stderr: result.stderr,
         // Read before the fixture directory is swept — the marker is the whole evidence.
-        invoked: existsSync(marker) ? readFileSync(marker, "utf8").trim() : "",
+        invoked: recordedArguments(marker),
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -344,22 +394,27 @@ describe("the bin/bench runtime guard", () => {
     expect(run.stderr).toContain(`Bun ${PINNED_BUN} is required`)
     expect(run.stderr).toContain(".bun-version")
     // The whole point: no measurement was taken on the rejected runtime.
-    expect(run.invoked).toBe("")
+    expect(run.invoked).toEqual([])
   })
 
   test("runs the harness on the pinned Bun and passes every argument through unchanged", () => {
-    const run = runBench(PINNED_BUN, 0, ["--requests", "7", "--json"])
+    const run = runBench(PINNED_BUN, 0, PASSTHROUGH_ARGV)
 
-    // The harness path and the arguments reach it exactly as they were given.
-    expect(run.invoked).toBe("apps/api/bench/run.ts --requests 7 --json")
+    // The harness path and the arguments reach it exactly as they were given: the value carrying
+    // a space is still one argument, and the empty one is still there.
+    expect(run.invoked).toEqual(EXPECTED_ARGV)
+    // And the run itself succeeded. A wrapper that ran the harness and then failed the run anyway
+    // would satisfy every assertion that only looks at what the harness received.
+    expect(run.status).toBe(0)
   })
 
   test("returns the harness's own exit code, so a budget breach still fails the run", () => {
-    // The shim stands in for the harness and fails the way a budget breach does.
-    const run = runBench(PINNED_BUN, 1)
+    // The shim stands in for the harness and fails the way a budget breach does. The code is a
+    // distinctive one, so a wrapper that answered 1 for every run cannot pass this by accident.
+    const run = runBench(PINNED_BUN, 37)
 
-    expect(run.invoked).toBe("apps/api/bench/run.ts")
-    expect(run.status).toBe(1)
+    expect(run.invoked).toEqual(["apps/api/bench/run.ts"])
+    expect(run.status).toBe(37)
   })
 
   /**
@@ -375,7 +430,11 @@ describe("the bin/bench runtime guard", () => {
    * The tree mirrors the layout `bin/bench` depends on — it `cd`s to its own parent and then calls
    * `bin/lib/require-bun` relative to it — so the recorder is reached exactly as the real helper is.
    */
-  function runAgainstRecorder(): { recorderCalls: number; invoked: string } {
+  function runAgainstRecorder(): {
+    recorderCalls: number
+    invoked: string[]
+    status: number | null
+  } {
     const dir = mkdtempSync(join(tmpdir(), "router-bench-contract-"))
     try {
       const recorder = join(dir, "contract.txt")
@@ -393,7 +452,7 @@ describe("the bin/bench runtime guard", () => {
         { mode: 0o755 },
       )
       fakeBun(dir)
-      const result = spawnSync(join(dir, "bin", "bench"), ["--requests", "7", "--json"], {
+      const result = spawnSync(join(dir, "bin", "bench"), PASSTHROUGH_ARGV, {
         cwd: dir,
         env: {
           ...process.env,
@@ -410,7 +469,8 @@ describe("the bin/bench runtime guard", () => {
         recorderCalls: existsSync(recorder)
           ? readFileSync(recorder, "utf8").trim().split("\n").length
           : 0,
-        invoked: existsSync(marker) ? readFileSync(marker, "utf8").trim() : "",
+        invoked: recordedArguments(marker),
+        status: result.status,
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -423,7 +483,8 @@ describe("the bin/bench runtime guard", () => {
     // The shared contract was consulted — a bench-local version check never reaches it.
     expect(run.recorderCalls).toBe(1)
     // And the benchmark still ran, so the guard did not simply refuse everything.
-    expect(run.invoked).toBe("apps/api/bench/run.ts --requests 7 --json")
+    expect(run.invoked).toEqual(EXPECTED_ARGV)
+    expect(run.status).toBe(0)
   })
 })
 
