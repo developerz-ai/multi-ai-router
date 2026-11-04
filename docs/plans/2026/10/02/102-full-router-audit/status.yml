@@ -106,6 +106,7 @@ evidence:
 - 'Dependency wave: Bun 1.4.2 bin/check with disposable PostgreSQL 18.6: 4425 tests passed, zero failed; lint/typecheck/build passed. PostgreSQL 16 integration
   regressions: 88 repository and 497 API tests passed. Latest supported dependency tree has zero reported advisories; frozen install preserves lockfile;
   Drizzle generate/check unchanged. Local amd64 image builds, Bun 1.4.2 and Claude CLI 2.1.288 verified; native arm64 release validation pending.'
+- 'Dependency advisory evidence reconciled 2026-11-04: the advisory report from this wave was never captured — evidence/dependency-audit.json was committed as {} and now records the historical assessment as unavailable (an empty object is not an audited zero). The zero-reported-advisories statement above is a claim recorded at the time, not retained evidence; the advisory findings retained in this repository are the nine remediation pins shipped in 2.43.0, each listed with source, package and disposition in the reconciled record. The 2026-11-03 clean assessment (444 packages) is current-era and is not proof of that claim.'
 - '102-full-router-audit/evidence/dependency-bench.json: 8000 requests, zero failures/buffered streams; maximum p99 1.25 ms, no budget violations.'
 - '102-full-router-audit/evidence/wave2-bench.json: 8000 requests, zero failures/buffered streams; max p99 0.69 ms; no budget violations.'
 - 'Wave 2: pinned Bun 1.4.2 bin/check with disposable PostgreSQL: 4417 tests passed, zero failed; lint, typecheck and build passed. Transaction rollback,
@@ -118,7 +119,7 @@ notes: 'W1–W6 merged and locally validated; eleven PRs. W6 historical accounti
   The prior7.333ms failure remains recorded; cold/session latency is still open;
   no release/deployment or cold latency closure is claimed. W7A PR153 review-corrected gate passed5212 tests; previoushead allfive CI passed, newhead checks pending.
   #87 operational rotation/session revocation, O12 monitoring, translation/console/DX/prompt work and release/deployment remain open.'
-last_updated: 2026-10-04
+last_updated: 2026-11-04
 resolved_findings:
 - '10.3'
 - '10.2'

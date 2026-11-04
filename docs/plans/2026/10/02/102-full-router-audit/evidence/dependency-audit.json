@@ -1,1 +1,120 @@
-{}
+{
+  "subject": "Dependency advisory evidence for the 2026-10-02 audit wave (plans 101-deep-bug-sweep and 102-full-router-audit)",
+  "recordVersion": 1,
+  "reconciledAt": "2026-11-04",
+  "note": "This file was committed as {} — a one-line empty JSON object. An empty object is absence of evidence, not an audited zero: no advisory scan output was captured for this wave, and nothing in the repository references one. This record states the gap instead of leaving it implied, and it does not retroactively turn the empty object into a pass.",
+  "shape": "A reconciliation record, deliberately NOT shaped as a bin/advisory report (apps/api/advisory/report.ts scan fields — version, source, findings, error — are absent here on purpose). It borrows only the advisory tool's outcome vocabulary for status, with the tool's meanings: \"clean\" — the assessment completed and found no advisory; \"finding\" — the assessment completed and found at least one advisory; \"unavailable\" — the assessment did not complete, so the dependency set is unproven.",
+  "historical_assessment": {
+    "status": "unavailable",
+    "why": "No wave-era advisory report was captured. This file was the wave's advisory evidence path and was committed as {}; the live assessment tool (bin/advisory) shipped only in 2.43.0 (2026-11-02), after this wave, so no scan in that report's shape could have been recorded. The absence is the fact — nothing here infers that a scan ran and its result was lost.",
+    "claim_recorded_at_the_time": "The wave recorded zero-advisory statements in prose — enumerated under recorded_claims below — none backed by retained scan output.",
+    "claim_status": "unverifiable from retained artifacts"
+  },
+  "recorded_claims": [
+    {
+      "claim": "Dependency advisories drop from 22 to 0.",
+      "location": "CHANGELOG.md, section [2.16.0] — 2026-10-04, the Agent SDK 0.3.288 update bullet",
+      "kind": "release-note claim",
+      "retained_evidence": "none. Neither the 22-finding baseline nor the zeroed result was captured as scan output; only the sentence was kept."
+    },
+    {
+      "claim": "Latest supported dependency tree has zero reported advisories",
+      "location": "docs/plans/2026/10/02/101-deep-bug-sweep/status.yml, the Dependency wave bullet",
+      "kind": "plan-status claim",
+      "retained_evidence": "none. Recorded at the time in prose; no advisory report artifact backs it."
+    },
+    {
+      "claim": "Latest supported dependency tree has zero reported advisories",
+      "location": "docs/plans/2026/10/02/102-full-router-audit/status.yml, the Dependency wave bullet",
+      "kind": "plan-status claim",
+      "retained_evidence": "none. Recorded at the time in prose; no advisory report artifact backs it."
+    }
+  ],
+  "recovered_findings": {
+    "what_this_is": "The advisory picture the wave's own remediation encodes, reconstructed from artifacts that shipped — not from any wave-era scan output. The nine entries below are the overrides that landed in the root package.json and the advisory each pin closes, matching docs/idea/07-security.md (the overrides section). The pre-remediation advisory inventory behind the 22 of the 2.16.0 claim is not retained anywhere; the advisory flags below the declared range floors were observed against the live database when the gate shipped (CHANGELOG [2.43.0]), not during this wave.",
+    "shipped_in": "2.43.0",
+    "disposition_rule": "Each pin holds its package at or above the advisory's recorded fix version through the package.json overrides block, and the lockfile resolves from there.",
+    "items": [
+      {
+        "advisory_id": "GHSA-27r3-jxmh-p828",
+        "package": "body-parser",
+        "fixed_in": "2.4.0",
+        "pinned_to": "2.4.0",
+        "disposition": "package.json overrides pin shipped in 2.43.0",
+        "summary": "DoS via trailing bytes after a compressed request"
+      },
+      {
+        "advisory_id": "GHSA-xhq7-xmqj-769h",
+        "package": "fast-uri",
+        "fixed_in": "3.1.9",
+        "pinned_to": "3.1.9",
+        "disposition": "package.json overrides pin shipped in 2.43.0; one of twelve advisories that hold below the pin",
+        "summary": "Improper path equivalence in relative-reference normalization"
+      },
+      {
+        "advisory_id": "GHSA-3g3m-2fjr-6pw4",
+        "package": "glob",
+        "fixed_in": "14.0.2",
+        "pinned_to": "14.0.2",
+        "disposition": "package.json overrides pin shipped in 2.43.0; the fix lies outside the ^13 range the consumer declares, so no in-range version is clean and the pin jumps the major on purpose — reverting it into range re-opens the advisory",
+        "summary": "AbortSignal cancellation bypass allows post-timeout filesystem traversal"
+      },
+      {
+        "advisory_id": "GHSA-834v-8h66-3h79",
+        "package": "happy-dom",
+        "fixed_in": "21.0.4",
+        "pinned_to": "21.0.4",
+        "disposition": "package.json overrides pin shipped in 2.43.0",
+        "summary": "An unsanitized import alias executes host code"
+      },
+      {
+        "advisory_id": "GHSA-rxp7-6hxx-x8q5",
+        "package": "ip-address",
+        "fixed_in": "10.7.4",
+        "pinned_to": "10.7.4",
+        "disposition": "package.json overrides pin shipped in 2.43.0; one of several advisories that hold below the pin",
+        "summary": "Quadratic-time match on a zone identifier"
+      },
+      {
+        "advisory_id": "GHSA-g3hv-75wg-m249",
+        "package": "minimatch",
+        "fixed_in": "11.0.1",
+        "pinned_to": "11.0.1",
+        "disposition": "package.json overrides pin shipped in 2.43.0",
+        "summary": "DoS via glob-parts amplification"
+      },
+      {
+        "advisory_id": "GHSA-x5fp-wj9c-mxmx",
+        "package": "qs",
+        "fixed_in": "6.16.0",
+        "pinned_to": "6.16.1",
+        "disposition": "package.json overrides pin shipped in 2.43.0; pinned one patch above this advisory's fix because a further qs advisory clears only at 6.16.1",
+        "summary": "Array-limit bypass via bracket-key comma parsing"
+      },
+      {
+        "advisory_id": "GHSA-f86p-h4j2-7qgj",
+        "package": "seroval",
+        "fixed_in": "1.6.11",
+        "pinned_to": "1.6.11",
+        "disposition": "package.json overrides pin shipped in 2.43.0",
+        "summary": "Code injection through a typed array's own constructor property"
+      },
+      {
+        "advisory_id": "GHSA-67mh-4wv8-2f99",
+        "package": "@esbuild-kit/core-utils>esbuild",
+        "fixed_in": "0.25.0",
+        "pinned_to": "0.25.12",
+        "disposition": "package.json overrides pin of the transitive esbuild under @esbuild-kit/core-utils, shipped in 2.43.0",
+        "summary": "Any website can send requests to the dev server and read the responses"
+      }
+    ]
+  },
+  "current_assessment": {
+    "status": "clean",
+    "assessedAt": "2026-11-03",
+    "packagesAssessed": 444,
+    "tool": "bin/advisory — the live OSV.dev (https://api.osv.dev) assessment of the resolved bun.lock set, run as its own CI gate job",
+    "retained_evidence": "The outcome is recorded in docs/idea/07-security.md (the overrides section): probed the same day, the nine pins held and the whole resolved set (444 packages) assessed clean. The run's report file was a CI artifact and is not committed to this repository; this field records the outcome, it does not stand in for the artifact.",
+    "era_note": "Current-era, not wave-era, and NOT proof of the wave-era claims. A clean tree on 2026-11-03 postdates the wave's remediation and much else besides; with no wave-era baseline retained, it cannot verify the 'Dependency advisories drop from 22 to 0.' claim of [2.16.0] or either 'Latest supported dependency tree has zero reported advisories' bullet."
+  }
+}
