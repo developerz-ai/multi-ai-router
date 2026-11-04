@@ -171,7 +171,7 @@ identically — there is no second source of truth to drift.
 |---|---|
 | Fresh clone → running stack | `bin/setup` |
 | Each session | `bin/dev` |
-| Before committing | `bin/check` (lint → typecheck → test, the CI job list in order) |
+| Before committing | `bin/check` (the offline CI jobs: lint → typecheck → test → build). The `advisory` and `ui-geometry` gates need the network or a browser, so they run in CI only |
 | One suite | `bun test apps/api` · one pattern: `bun test <pattern>` |
 | Dev database | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 

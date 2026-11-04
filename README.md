@@ -223,7 +223,7 @@ the full gate. Keep that override until the loader's upstream dependency is patc
 ```bash
 bin/setup     # fresh clone: prereqs, install, .env with a generated ENCRYPTION_KEY + DATABASE_URL, dev Postgres, migrate
 bin/dev       # each session: API + web, watch mode
-bin/check     # before committing: lint, typecheck, test, build — the CI job list, in order
+bin/check     # before committing: lint, typecheck, test, build — the offline half of the CI gate
 ```
 
 `bin/check` needs a database and refuses to start without one, because CI's test job uses real
@@ -250,6 +250,16 @@ overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 `bin/advisory` asks the live advisory database (OSV.dev) about the resolved dependency set in
 `bun.lock`. CI runs it as a gate: a finding turns the build red, and an assessment that could not
 complete is reported as `unavailable` rather than as a clean pass.
+
+The `ci` workflow runs lint, typecheck, test, advisory, ui-geometry, build and bench. All of them
+but `bench` turn the run red when they fail — lint, typecheck, test, advisory, ui-geometry and
+build. The `bench` job is a report — job-level `continue-on-error: true`, so it never fails the
+build — but a regression in `router_overhead_seconds` is still a bug, so run `bin/bench`.
+Which of those a merge waits for is branch protection's call, not this file's: read the required
+checks at merge time, and merge only when every applicable gate is green — the `ci` workflow's
+required checks, the required review approval, and branch protection on `main`.
+`bin/check` covers the offline subset only (lint, typecheck, test, build): the advisory gate
+needs the network and the ui-geometry layout gate needs a browser.
 
 ---
 

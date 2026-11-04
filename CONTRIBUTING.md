@@ -68,8 +68,15 @@ Other commands you'll use often:
   --oneline` is the style guide.
 - PR description explains *why*, not just *what* — the diff already shows
   what changed.
-- CI (lint, typecheck, test, build) must be green before merge. `bin/check` runs
-  the same gate locally in the same order, so there should be no surprises.
+- A merge needs **every applicable gate** green: the `ci` workflow's required
+  checks read at merge time — lint, typecheck, test, advisory, ui-geometry and
+  build — the required review approval, and branch protection on `main`. The
+  `bench` job reports and never fails the build, but a regression in
+  `router_overhead_seconds` is still a bug, so run `bin/bench`. `bin/check`
+  runs the offline subset locally (lint, typecheck, test, build): the advisory
+  gate needs the network and the ui-geometry layout gate needs a browser, so
+  neither belongs in a local gate. Read the required checks at merge time
+  rather than trusting a remembered job list.
 
 ## Version bumps
 

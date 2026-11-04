@@ -11,7 +11,7 @@ helper — most of the small things you are about to write are already here.
 | Persistence, for any consumer | `packages/db/src/**` | `packages/db/src/repositories/` |
 | Within one app only | that app's `src/lib/` | `apps/web/src/lib/cx.ts` |
 | Within one app, but a layer not a helper | that layer's directory | `apps/api/src/logging/`, `apps/api/src/middleware/` |
-| Across shell scripts | `bin/` | `bin/check` runs lint, typecheck, then `bin/test` — the CI job list, in order |
+| Across shell scripts | `bin/` | `bin/check` runs the offline CI jobs in order — lint, typecheck, test, build. The `advisory` and `ui-geometry` gates are CI-only: one needs the network, the other a browser |
 | Shared *by* shell scripts, not run by hand | `bin/lib/` | `bin/lib/database-url` prints the `DATABASE_URL` a `bun test` run will see; `bin/check` and `bin/test` both ask it rather than each spelling Bun's dotenv rules out |
 
 Timing, from the org standard (`gold-standards-in-ai/docs/architecture/solid-srp.md` — "Reusable
