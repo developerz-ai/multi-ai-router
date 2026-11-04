@@ -29,6 +29,16 @@ data/
 # disk, just untracked) and fails only on a fresh checkout.
 !packages/db/migrations/**/*.sql
 
+# ...and so is one audit artifact: the read-only production queries the 102
+# router-audit plan links from 13-production.md ("Reproducible read-only
+# queries"). The link is the artifact's index; a linked-but-untrackable path
+# makes the plan's evidence unverifiable from a fresh checkout.
+#
+# The path is named EXACTLY, never `!docs/**/*.sql`: a blanket negation would
+# re-admit every pg_dump under docs/, which is the thing `*.sql` above exists
+# to keep out of the repository (dumps carry encrypted credential columns).
+!docs/plans/2026/10/02/102-full-router-audit/evidence/production.sql
+
 # Per-Account CLAUDE_CONFIG_DIR trees. These hold live Claude subscription
 # credentials in cleartext — the single most dangerous thing that could land in
 # a commit. See docs/idea/07-security.md.
@@ -50,6 +60,16 @@ tmp/
 logs/
 npm-debug.log*
 bun-debug.log*
+
+# ...and so is one audit artifact: the captured baseline unit-test run the 102
+# router-audit plan links from 04-providers.md, 05-claude-sdk.md and
+# 06-translation.md. A test-run log is noise to `*.log` and evidence to the
+# plan, which cites it as the "before" baseline the later runs are compared to.
+#
+# The path is named EXACTLY, never `!docs/**/*.log`: a blanket negation would
+# re-admit every runtime log under docs/ — application output, which may carry
+# request ids and upstream error text — and `*.log` above exists to keep it out.
+!docs/plans/2026/10/02/102-full-router-audit/04-06-unit-tests.log
 
 # Caches
 .cache/
