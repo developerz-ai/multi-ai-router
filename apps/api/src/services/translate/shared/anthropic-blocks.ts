@@ -25,12 +25,24 @@ import type { DropSink } from "./drops"
  */
 const TOOL_ERROR_PREFIX = "Error: "
 
-/** Multiple system blocks concatenate; the split cannot be reconstructed and is not claimed to be. */
+/**
+ * Claude Code opens `system` with a block of its own billing attribution whose `cch=` checksum
+ * changes every request. Translated toward an OpenAI dialect it would sit at the very start of
+ * `instructions` / the system message and break every prefix-keyed upstream cache. Anthropic
+ * itself ignores it for caching; the OpenAI dialects cannot, and it means nothing to them.
+ */
+export const BILLING_HEADER_PREFIX = "x-anthropic-billing-header:"
+
+/**
+ * Multiple system blocks concatenate; the split cannot be reconstructed and is not claimed to be.
+ * A block that begins with the billing header is dropped; no other block is touched.
+ */
 export function systemText(system: ParsedAnthropicRequest["system"]): string {
   if (system === undefined) return ""
   if (typeof system === "string") return system
   return system
     .map((block) => block.text)
+    .filter((text) => !text.startsWith(BILLING_HEADER_PREFIX))
     .filter((text) => text.length > 0)
     .join(BLOCK_JOIN)
 }

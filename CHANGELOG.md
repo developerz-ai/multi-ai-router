@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.45.6] — 2026-11-04
+
+### Fixed
+
+- **Claude Code's billing-attribution system block no longer reaches an OpenAI-dialect upstream, so its per-request `cch=` checksum stops busting prefix caches.** A Claude Code request opens `system` with `x-anthropic-billing-header: cc_version=…; cch=<checksum>;`, and the checksum changes every request. Translated toward openai-chat or openai-responses it became the first bytes of the system message / `instructions`, so no two requests shared a prefix and the upstream cache (OpenAI, Codex, relayed vendors) never hit. A `system` block whose text starts with that prefix is now dropped in `systemText` and `markedSystemParts` (`apps/api/src/services/translate/shared/`); a request without it, and the same text anywhere else, is untouched. **Same-dialect Anthropic passthrough is deliberately unchanged**: it is byte-passthrough and never parses the body, Anthropic's own cache tolerates the header, and `claude-fast` already pins `cch=00000`. Regression: `apps/api/test/unit/translate/billing-header.test.ts`. Documentation: `docs/idea/06-protocol-translation.md` § System prompts.
+
 ## [2.45.5] — 2026-11-04
 
 ### Added
@@ -1882,3 +1888,4 @@ your tooling config.
 [2.43.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.43.0
 [2.44.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.44.0
 [2.45.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.5
+[2.45.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.6

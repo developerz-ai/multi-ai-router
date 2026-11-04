@@ -3,6 +3,7 @@ import type {
   ParsedAnthropicRequest,
   ParsedAnthropicToolResult,
 } from "./anthropic"
+import { BILLING_HEADER_PREFIX } from "./anthropic-blocks"
 import { lastMarker, marked } from "./cache-control-schema"
 import type { OpenAiChatCacheControl, OpenAiChatTextPart } from "./openai-chat"
 
@@ -47,7 +48,7 @@ export function markedSystemParts(
 ): OpenAiChatTextPart[] | null {
   if (!Array.isArray(system)) return null
   const parts = system
-    .filter((block) => block.text.length > 0)
+    .filter((block) => block.text.length > 0 && !block.text.startsWith(BILLING_HEADER_PREFIX))
     .map((block) => ({ type: "text" as const, text: block.text, ...mark(block.cache_control) }))
   return parts.some((part) => part.cache_control !== undefined) ? parts : null
 }
