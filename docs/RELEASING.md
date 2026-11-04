@@ -212,7 +212,7 @@ A bad tag is not un-published — `docker pull` will always find it again — bu
 2. **Pin deployments to the explicit last-good version** while the fix lands:
    `image: ghcr.io/developerz-ai/multi-ai-router:X.Y.(Z-1)` in
    `docker-compose.yml`, not `:latest` — every operator following
-   [`docs/idea/09-deployment.md`](docs/idea/09-deployment.md) is already
+   [`docs/idea/09-deployment.md`](idea/09-deployment.md) is already
    pinning a version tag for exactly this reason.
 3. **Do not roll back a database migration to un-release a version.**
    Migrations run at boot and are additive/idempotent by convention; a
