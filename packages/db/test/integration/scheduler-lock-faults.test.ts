@@ -36,7 +36,13 @@ describe.skipIf(!url)("scheduler auxiliary session failures", () => {
         await lock.close()
         await proxy.close()
       }
-    })
+      // Budget, not a guard: promptness is enforced by the pool's own deadlines
+      // (0.25s connect/reservation, 0.1s close, <500ms asserted in the
+      // close-bounds tests). bun's 5000ms default can clip this test's
+      // legitimate worst case under full-suite parallelism — its retry loop
+      // alone admits 100 x (10ms + a fresh session's connect/reserve/query). A
+      // leaked exclusion still hangs past any budget, so the assertions stand.
+    }, 30_000)
   }
   for (const packet of ["__startup__", "pg_try_advisory_lock"] as const) {
     test(`close bounds ${packet} stall without running late task`, async () => {

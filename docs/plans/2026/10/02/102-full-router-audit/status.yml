@@ -4,8 +4,8 @@ status: in_progress
 created_by: sebi
 worked_by: Codex team
 owner: sebi
-percent: 67
-current_focus: W1-W7B merged; thirteen PRs. PR154 (W7B translation terminal contracts) merged13c60a3 on2026-10-04 after five required checks passed at ae6ec03 and all review threads were resolved. Release v2.16.0 (PRs141-154) is cut by the release PR; production deployment is the ../infrastructure pin bump. L16 cold/session latency, infrastructure monitoring, operational rotation (#87) and UI/developer workflow follow-ups remain open.
+percent: 80
+current_focus: 'W1-W7B merged; thirteen PRs #141-#154 shipped in v2.16.0 released2026-10-04 (PR154 merged13c60a3 after five required checks passed at ae6ec03 and all review threads resolved). Production deployment is only the ../infrastructure pin bump; none is claimed. L16 cold/session latency, O12 monitoring, #87 rotation and slices 12-web/13-production remain open.'
 
 slices:
 - file: 01-transport.md
@@ -29,8 +29,8 @@ slices:
   percent: 100
   findings: 3
 - file: 06-translation.md
-  status: in_progress
-  percent: 0
+  status: complete
+  percent: 100
   findings: 2
 - file: 07-usage.md
   status: in_progress
@@ -114,11 +114,7 @@ evidence:
   no actionable comments. Release/deployment pending.'
 - 'Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed.'
 - '102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms.'
-notes: 'W1–W6 merged and locally validated; eleven PRs. W6 historical accounting/pricing passed bin/check5061 tests,
-  PG16/18 targeted regressions and hardened amd64 packaging. The current large warm benchmark failed the strict5ms budget at6ms; the owner accepted this excess on2026-10-04.
-  The prior7.333ms failure remains recorded; cold/session latency is still open;
-  no release/deployment or cold latency closure is claimed. W7A PR153 review-corrected gate passed5212 tests; previoushead allfive CI passed, newhead checks pending.
-  #87 operational rotation/session revocation, O12 monitoring, translation/console/DX/prompt work and release/deployment remain open.'
+notes: 'W1–W7B merged and locally validated; thirteen PRs #141–#154 shipped in v2.16.0 released2026-10-04. W6 historical accounting/pricing passed bin/check5061 tests, PG16/18 targeted regressions and hardened amd64 packaging. The current large warm benchmark failed the strict5ms budget at6ms; the owner accepted this excess on2026-10-04. The prior7.333ms failure remains recorded; L16 cold/session latency is still open; no deployment or cold-latency closure is claimed. W7A PR153 review-corrected gate passed5212 tests and merged; W7B PR154 merged13c60a3 with all five new-head checks passed at ae6ec03. Production deployment is only the ../infrastructure pin bump. #87 operational rotation/session revocation, O12 monitoring and slices 12-web/13-production remain open.'
 last_updated: 2026-11-04
 resolved_findings:
 - '10.3'
@@ -162,23 +158,5 @@ resolved_findings:
 - '07.2'
 - '07.3'
 - '10.4'
-implemented_merged_release_pending:
-- '09.2'
-- '03.2'
-- '03.5'
-- '03.6'
-implemented_merged_release_pending_wave4:
-- '04.1'
-- '09.1'
-implemented_merged_release_pending_wave5:
-- '01.9'
-- '07.1'
-- '07.2'
-- '07.3'
-- '10.4'
-implemented_merged_release_pending_wave6:
-- '07.4'
-- '08.1'
-- '10.1'
-- '10.2'
-- '10.3'
+- '06.1'
+- '06.2'
