@@ -85,5 +85,34 @@ export const modelCatalog = pgTable(
   ],
 )
 
+/**
+ * Per-account refresh-attempt bookkeeping, beside the per-model rows of {@link modelCatalog}.
+ *
+ * "When was this account last asked for a catalog without one being written" is **one fact per
+ * account**, so it cannot live on the (account_id, model_id)-keyed catalog: a refresh that is
+ * asked and fails writes nothing there, and the catalog's own `refreshed_at` is per model, not
+ * per ask. A row exists only for an account the hourly sweep asked *in vain* — a failed or
+ * skipped refresh. The sweep's own successful ask clears the row, because `refreshed_at` then
+ * orders the account again and the attempt bookkeeping has nothing left to say. A catalog write
+ * from elsewhere — the login-completion hook refreshes the account it just logged in — leaves the
+ * stamp in place, harmless: ordering takes the later of `refreshed_at` and this column, so the
+ * fresh write already sorts the account as refreshed. An account never asked in vain simply has
+ * no row, so the sweep reads absence as "never attempted", not as a null date.
+ *
+ * The cascade takes the row with the account: bookkeeping about an account that no longer exists
+ * is not stale, it is noise.
+ */
+export const modelCatalogAttempts = pgTable("model_catalog_attempts", {
+  accountId: uuid("account_id")
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: "cascade" }),
+
+  /** The moment of the last ask that wrote nothing. The sweep orders its retry on this. */
+  lastAttemptedAt: timestamp("last_attempted_at", { withTimezone: true, mode: "date" }).notNull(),
+})
+
+export type ModelCatalogAttemptRow = typeof modelCatalogAttempts.$inferSelect
+export type NewModelCatalogAttemptRow = typeof modelCatalogAttempts.$inferInsert
+
 export type ModelCatalogRow = typeof modelCatalog.$inferSelect
 export type NewModelCatalogRow = typeof modelCatalog.$inferInsert

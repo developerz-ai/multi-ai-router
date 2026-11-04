@@ -83,6 +83,7 @@ export type {
 export { createCatalogSnapshotRepository } from "./repositories/catalog-snapshot-repository"
 export type {
   AccountCatalogAge,
+  AccountCatalogAttempt,
   ModelCatalogEntry,
   ModelCatalogRepository,
 } from "./repositories/model-catalog-repository"

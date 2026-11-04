@@ -25,8 +25,16 @@ import type { ScheduledTask } from "../types"
 
 export interface ModelCatalogRefreshDeps {
   readonly accounts: Pick<AccountRepository, "list">
-  /** Read only to order the batch by staleness — the writes go through {@link refresh}. */
-  readonly catalog: Pick<ModelCatalogRepository, "lastRefreshedAt">
+  /**
+   * Reads the staleness ordering — `refreshed_at` for the last write, `model_catalog_attempts`
+   * for the last ask in vain — and owns those attempt rows' bookkeeping: the sweep records one
+   * when it asks without a write and clears it when a write answers. The catalog writes
+   * themselves still go only through {@link refresh}.
+   */
+  readonly catalog: Pick<
+    ModelCatalogRepository,
+    "lastRefreshedAt" | "lastAttemptedAt" | "recordAttempt" | "clearAttempt"
+  >
   /**
    * One Account's refresh, handed in rather than rebuilt, so the sweep and the admin plane's
    * discover button ask an upstream through exactly one parser.
@@ -57,12 +65,6 @@ export interface ModelCatalogRefreshDeps {
 const STARTUP_DELAY_MS = 30_000
 
 export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): ScheduledTask {
-  // When each account was last asked *in vain*. `refreshed_at` only moves on a write, so without
-  // this an endpoint that never lists sorts first on every tick and, a batch's worth of them
-  // later, is all the sweep ever asks (`select.ts`). In memory and per replica on purpose: losing
-  // it on restart costs one extra ask per such account, which no column is worth.
-  const attempts = new Map<string, Date>()
-
   return {
     name: "model_catalog_refresh",
     intervalMs: deps.intervalMs,
@@ -71,18 +73,23 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
     startupDelayMs: Math.min(STARTUP_DELAY_MS, deps.intervalMs),
 
     run: async ({ now, logger, signal }) => {
-      const [accounts, ages] = await Promise.all([
+      const [accounts, ages, attempts] = await Promise.all([
         deps.accounts.list(),
         deps.catalog.lastRefreshedAt(),
+        deps.catalog.lastAttemptedAt(),
       ])
+      // When each account was last asked *in vain*. `refreshed_at` only moves on a write, so
+      // without this an endpoint that never lists sorts first on every tick and, a batch's worth
+      // of them later, is all the sweep ever asks (`select.ts`). The stamps live in Postgres —
+      // one row per account — because the advisory lock lets one replica run a tick, so the next
+      // tick usually runs in a different process and an in-memory map would forget on every
+      // hand-off.
+      const attemptsById = new Map(attempts.map((row) => [row.accountId, row.attemptedAt]))
       // Most stale first, capped at the batch, non-refreshable accounts already dropped. The
       // ordering is what makes the cap a rate limit rather than a horizon — see `select.ts`.
-      // Bounded by the fleet: an account that was deleted takes its entry with it.
-      const present = new Set(accounts.map((account) => account.id))
-      for (const id of attempts.keys()) {
-        if (!present.has(id)) attempts.delete(id)
-      }
-      const due = selectForRefresh(accounts, ages, deps.batchSize, attempts)
+      // Selection walks the accounts, so a stamp whose account has since been deleted is never
+      // consulted — and the row itself goes with the account, the FK cascade seeing to it.
+      const due = selectForRefresh(accounts, ages, deps.batchSize, attemptsById)
       const tally = { refreshed: 0, models: 0, skipped: 0, failed: 0 }
 
       for (const account of due) {
@@ -93,13 +100,16 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
 
         const outcome = await deps.refresh(account, now)
         if (outcome.kind === "refreshed") {
-          // The write moved `refreshed_at`, which now orders this account by itself.
-          attempts.delete(account.id)
+          // The write moved `refreshed_at`, which orders this account by itself again — the
+          // attempt row has answered its last question and is cleared rather than left to age.
+          await deps.catalog.clearAttempt(account.id)
           tally.refreshed += 1
           tally.models += outcome.models
           continue
         }
-        attempts.set(account.id, now)
+        // Asked without a write: stamp it durably, or the next tick — usually a different
+        // process — would sort this account first all over again.
+        await deps.catalog.recordAttempt(account.id, now)
         if (outcome.kind === "skipped") {
           tally.skipped += 1
           // Info, not warn: a skip is the refresh declining to ask — a subscription with no config

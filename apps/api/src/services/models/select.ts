@@ -2,13 +2,14 @@ import type { AccountCatalogAge, AccountRow } from "@multi-ai-router/db"
 import { isRefreshable } from "./refresh"
 
 /**
- * When each Account was last **asked without a write** — a failed or skipped refresh. Held in
- * memory by the sweep, keyed by account id.
+ * When each Account was last **asked without a write** — a failed or skipped refresh, keyed by
+ * account id.
  *
- * `refreshed_at` only moves when a listing is written, so on its own it cannot tell "not asked yet"
- * from "asked every tick and never answered". This is the missing half, and it is deliberately not
- * a column: losing it on restart costs one extra ask per such account, and each replica keeping its
- * own is enough to rotate.
+ * `refreshed_at` only moves when a listing is written, so on its own it cannot tell "not asked
+ * yet" from "asked every tick and never answered". This is the missing half, and it is read from
+ * the `model_catalog_attempts` table — one durable row per account — rather than held in memory:
+ * the advisory lock lets one replica run each tick, so the next tick usually runs in a different
+ * process, and a per-replica map would forget everything on every hand-off.
  */
 export type RefreshAttempts = ReadonlyMap<string, Date>
 
