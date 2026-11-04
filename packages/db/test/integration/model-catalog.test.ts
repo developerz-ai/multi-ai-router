@@ -25,6 +25,9 @@ import { accounts } from "../../src/schema/accounts"
  *   row that no longer exists is not stale, it is meaningless.
  * - **`lastRefreshedAt` aggregates.** The sweep orders its batch on this, and an ordering that
  *   silently returned nothing would starve every account after the first tick.
+ * - **The attempt bookkeeping is monotonic.** The sweep also rotates on `last_attempted_at` — the
+ *   per-account record of an ask that wrote nothing — and an out-of-order write that moved it
+ *   backwards would push an account to the front of a batch it was just asked in.
  *
  * It never talks to a provider, only to the database, and removes every row it wrote.
  */
@@ -53,7 +56,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  // No explicit `model_catalog` delete: the cascade is the point, and if it is broken the account
+  // No explicit `model_catalog` / `model_catalog_attempts` delete: the cascade is the point, and
+  // if it is broken the account
   // delete fails loudly here rather than leaving rows behind quietly.
   if (handle !== undefined && accountIds.length > 0) {
     await db.delete(accounts).where(inArray(accounts.id, accountIds))
@@ -253,5 +257,75 @@ describe.skipIf(!runnable)("the model catalog against a live database", () => {
     accountIds.splice(accountIds.indexOf(accountId), 1)
 
     expect(await catalog.listForAccounts([accountId])).toEqual([])
+  })
+
+  test("recordAttempt is reported by lastAttemptedAt, and an account never asked in vain is absent", async () => {
+    const asked = await seedAccount()
+    const untouched = await seedAccount()
+
+    await catalog.recordAttempt(asked, EARLIER)
+
+    const attempts = await catalog.lastAttemptedAt()
+    const at = (id: string) => attempts.find((attempt) => attempt.accountId === id)
+
+    expect(at(asked)?.attemptedAt).toEqual(EARLIER)
+    // Same shape as lastRefreshedAt: absence reads as "never attempted", not as a null date.
+    expect(at(untouched)).toBeUndefined()
+  })
+
+  test("a late-arriving older attempt never moves the timestamp backwards", async () => {
+    const accountId = await seedAccount()
+
+    // The sweep's ticks are independent, so the newer ask can be recorded first.
+    await catalog.recordAttempt(accountId, LATER)
+    await catalog.recordAttempt(accountId, EARLIER)
+
+    const attempts = await catalog.lastAttemptedAt()
+    expect(attempts.find((attempt) => attempt.accountId === accountId)?.attemptedAt).toEqual(LATER)
+  })
+
+  test("two concurrent recordAttempts leave one row at the later timestamp, never an error", async () => {
+    const accountId = await seedAccount()
+
+    // Two replicas racing one account through the same tick: both upserts must succeed.
+    await Promise.all([
+      catalog.recordAttempt(accountId, EARLIER),
+      catalog.recordAttempt(accountId, LATER),
+    ])
+
+    const attempts = await catalog.lastAttemptedAt()
+    // One row — the primary key holds under the race — and GREATEST makes the survivor
+    // deterministic whichever upsert committed first.
+    expect(attempts.filter((attempt) => attempt.accountId === accountId)).toHaveLength(1)
+    expect(attempts.find((attempt) => attempt.accountId === accountId)?.attemptedAt).toEqual(LATER)
+  })
+
+  test("clearAttempt removes the row, and clearing an account with none is a no-op", async () => {
+    const accountId = await seedAccount()
+
+    await catalog.recordAttempt(accountId, EARLIER)
+    await catalog.clearAttempt(accountId)
+    expect(
+      (await catalog.lastAttemptedAt()).find((attempt) => attempt.accountId === accountId),
+    ).toBeUndefined()
+
+    // The usual success clears nothing: rows exist only for accounts asked in vain.
+    await catalog.clearAttempt(accountId)
+    expect(
+      (await catalog.lastAttemptedAt()).find((attempt) => attempt.accountId === accountId),
+    ).toBeUndefined()
+  })
+
+  test("deleting an account takes its attempt row with it", async () => {
+    const accountId = await seedAccount()
+    await catalog.recordAttempt(accountId, EARLIER)
+
+    // Without ON DELETE CASCADE this throws a foreign-key violation instead.
+    await db.delete(accounts).where(inArray(accounts.id, [accountId]))
+    accountIds.splice(accountIds.indexOf(accountId), 1)
+
+    expect(
+      (await catalog.lastAttemptedAt()).find((attempt) => attempt.accountId === accountId),
+    ).toBeUndefined()
   })
 })

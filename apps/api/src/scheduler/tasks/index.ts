@@ -121,10 +121,15 @@ export interface ScheduledTaskDeps
    */
   readonly credentialCold?: (account: AccountRow) => Promise<boolean>
   /**
-   * The model catalog's staleness ordering. Read-only here — the writes go through
-   * {@link ScheduledTaskDeps.refreshCatalog}, which owns the transaction per account.
+   * The model catalog's staleness ordering, and the attempt ledger the sweep rotates on. The
+   * sweep reads `refreshed_at` and `model_catalog_attempts.last_attempted_at`, and records or
+   * clears an attempt row as it asks each account; the catalog writes themselves still go
+   * through {@link ScheduledTaskDeps.refreshCatalog}, which owns the transaction per account.
    */
-  readonly modelCatalog?: Pick<ModelCatalogRepository, "lastRefreshedAt">
+  readonly modelCatalog?: Pick<
+    ModelCatalogRepository,
+    "lastRefreshedAt" | "lastAttemptedAt" | "recordAttempt" | "clearAttempt"
+  >
   /**
    * One account's catalog refresh, handed in rather than rebuilt, so the hourly sweep and the admin
    * plane's discover button ask an upstream through exactly one parser. Absent means no sweep is

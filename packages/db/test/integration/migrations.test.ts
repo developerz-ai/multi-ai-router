@@ -3,6 +3,7 @@ import type { Database, DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
+import { createModelCatalogRepository } from "../../src/repositories/model-catalog-repository"
 import { createOauthStateRepository } from "../../src/repositories/oauth-state-repository"
 import { createPriceOverrideRepository } from "../../src/repositories/price-override-repository"
 import { createScheduledTaskRepository } from "../../src/repositories/scheduled-task-repository"
@@ -50,6 +51,7 @@ const EXPECTED_TABLES = [
   "scheduled_task_runs",
   "oauth_states",
   "price_overrides",
+  "model_catalog_attempts",
 ] as const
 
 describe.skipIf(!runnable)("migrations against a live database", () => {
@@ -274,6 +276,68 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
     // Idempotent: a second replica, a restart mid-upgrade, or a re-run must converge.
     await live.sql.unsafe(backfill)
     expect(await memberIds()).toEqual([member.id, outsider.id].sort())
+  })
+
+  /**
+   * 0039 adds the per-account catalog-refresh attempt bookkeeping — the timestamp the hourly
+   * sweep rotates on, moved out of a per-replica map so rotation survives a restart and is
+   * shared across replicas. The migration is additive-only, and the rollback it promises (pin
+   * the previous image tag; old binaries ignore the extra table) must leave every `model_catalog`
+   * row — and every recorded attempt — exactly where it was.
+   *
+   * The shipped SQL is executed here rather than restated, twice, over seeded catalog and attempt
+   * rows: the guards (`CREATE TABLE IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`) exist so a
+   * database that already carries the table converges instead of failing, and this is the re-run
+   * path they promise is a no-op.
+   */
+  test("0039 seeds cleanly beside catalog rows, and running it again discards nothing", async () => {
+    db = (handle as DatabaseHandle).db
+    const live = handle as DatabaseHandle
+    const migration = await Bun.file(
+      new URL("../../migrations/0039_catalog_refresh_attempts.sql", import.meta.url),
+    ).text()
+
+    const accountRepository = createAccountRepository(db)
+    const catalog = createModelCatalogRepository(db)
+    const account = await accountRepository.create({ label: "test-0039-acct", provider: "zai" })
+    accountIds.push(account.id)
+
+    const attemptedAt = new Date("2026-07-24T12:00:00.000Z")
+    await catalog.replaceForAccount(
+      account.id,
+      [
+        {
+          modelId: "test-0039-model",
+          contextTokens: 204_800,
+          maxOutputTokens: 131_072,
+          contextSource: "shipped",
+          listingSource: "upstream",
+          resolvedModel: null,
+        },
+      ],
+      attemptedAt,
+    )
+    await catalog.recordAttempt(account.id, attemptedAt)
+
+    const seeded = async () => {
+      const catalogRows = await live.sql<unknown[]>`
+        select account_id, model_id, refreshed_at from model_catalog
+        where account_id = ${account.id}::uuid
+      `
+      const attempts = await live.sql<unknown[]>`
+        select account_id, last_attempted_at from model_catalog_attempts
+        where account_id = ${account.id}::uuid
+      `
+      return { catalogRows, attempts }
+    }
+    const before = await seeded()
+
+    await live.sql.unsafe(migration)
+    expect(await seeded()).toEqual(before)
+
+    // Idempotent: a second replica, a restart mid-upgrade, or a re-run must converge.
+    await live.sql.unsafe(migration)
+    expect(await seeded()).toEqual(before)
   })
 
   test("usage history round-trips immutable attempts and logical terminals", async () => {

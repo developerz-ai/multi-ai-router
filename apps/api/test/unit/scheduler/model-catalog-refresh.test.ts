@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { AccountRow } from "@multi-ai-router/db"
+import type { AccountRow, ModelCatalogRepository } from "@multi-ai-router/db"
 import { createLogger } from "../../../src/logging/logger"
 import { createModelCatalogRefreshTask } from "../../../src/scheduler"
 import type { CatalogRefreshOutcome } from "../../../src/services/models"
@@ -10,7 +10,9 @@ import { accountRow as durableAccountRow } from "../../support/account-row"
  *
  * The refresh itself is handed in — its own tests live beside it — so what is left here is the
  * property a scheduled task is judged on: that a deployment with more accounts than one batch
- * actually reaches all of them, and that a shutdown never lands mid-account.
+ * actually reaches all of them, that a shutdown never lands mid-account, and that the
+ * ask-in-vain stamps survive the process that made them — the advisory lock hands the next tick
+ * to a different replica more often than not, so the per-replica Map this once was is gone.
  */
 
 const NOW = new Date("2026-07-28T12:00:00.000Z")
@@ -19,25 +21,101 @@ function account(id: string, overrides: Partial<AccountRow> = {}): AccountRow {
   return durableAccountRow({ id, label: id, provider: "zai", status: "active", ...overrides })
 }
 
+/**
+ * The `model_catalog_attempts` half of the repository, over a map the test owns — the contract
+ * the SQL must keep, mirrored here: an out-of-order `recordAttempt` never moves a stamp
+ * backwards (the upsert takes `GREATEST`), and clearing an absent row is a no-op.
+ */
+type AttemptLedger = Pick<
+  ModelCatalogRepository,
+  "lastAttemptedAt" | "recordAttempt" | "clearAttempt"
+>
+
+function attemptLedger(attempts: Map<string, Date>): AttemptLedger {
+  return {
+    lastAttemptedAt: async () =>
+      [...attempts]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([accountId, attemptedAt]) => ({ accountId, attemptedAt })),
+    recordAttempt: async (accountId, attemptedAt) => {
+      const previous = attempts.get(accountId)
+      if (previous === undefined || previous.getTime() < attemptedAt.getTime())
+        attempts.set(accountId, attemptedAt)
+    },
+    clearAttempt: async (accountId) => {
+      attempts.delete(accountId)
+    },
+  }
+}
+
+/** A bare run with no captured logs — the multi-instance tests judge the asks, not the lines. */
+function tick(task: ReturnType<typeof createModelCatalogRefreshTask>, at: Date) {
+  return task.run({
+    now: at,
+    signal: new AbortController().signal,
+    logger: createLogger({ level: "debug", write: () => undefined }),
+  })
+}
+
+const HOUR = 3_600_000
+
+/**
+ * A batchSize-1 task whose asks are recorded and whose outcome is chosen per account. Refreshed
+ * accounts write `refreshed_at` into `refreshedAt` when given, the way the real repository's
+ * `replaceForAccount` would, so ordering after a success mirrors production.
+ */
+function failingTask(options: {
+  readonly accounts: readonly AccountRow[]
+  readonly attempts: Map<string, Date>
+  readonly refreshedAt?: Map<string, Date>
+  readonly batchSize?: number
+  readonly outcome?: (account: AccountRow) => CatalogRefreshOutcome
+}) {
+  const asked: string[] = []
+  const ages = options.refreshedAt ?? new Map<string, Date>()
+  const task = createModelCatalogRefreshTask({
+    accounts: { list: async () => [...options.accounts] },
+    catalog: {
+      lastRefreshedAt: async () =>
+        [...ages].map(([accountId, refreshedAt]) => ({ accountId, refreshedAt })),
+      ...attemptLedger(options.attempts),
+    },
+    refresh: async (row, at) => {
+      asked.push(row.id)
+      const outcome = options.outcome?.(row) ?? { kind: "failed", reason: "discovery_failed" }
+      if (outcome.kind === "refreshed") ages.set(row.id, at)
+      return outcome
+    },
+    intervalMs: HOUR,
+    batchSize: options.batchSize ?? 1,
+  })
+  return { task, asked }
+}
+
 function harness(options: {
   readonly accounts: readonly AccountRow[]
   readonly ages?: readonly { accountId: string; refreshedAt: Date }[]
+  readonly attempts?: ReadonlyMap<string, Date>
   readonly outcome?: (account: AccountRow) => CatalogRefreshOutcome
   readonly batchSize?: number
   readonly aborted?: boolean
 }) {
+  const attempts = new Map(options.attempts ?? [])
   const refreshed: string[] = []
   const controller = new AbortController()
   if (options.aborted === true) controller.abort()
 
   const task = createModelCatalogRefreshTask({
     accounts: { list: async () => [...options.accounts] },
-    catalog: { lastRefreshedAt: async () => options.ages ?? [] },
+    catalog: {
+      lastRefreshedAt: async () => options.ages ?? [],
+      ...attemptLedger(attempts),
+    },
     refresh: async (account) => {
       refreshed.push(account.id)
       return options.outcome?.(account) ?? { kind: "refreshed", models: 3 }
     },
-    intervalMs: 3_600_000,
+    intervalMs: HOUR,
     batchSize: options.batchSize ?? 25,
   })
 
@@ -52,7 +130,7 @@ function harness(options: {
       }),
     })
 
-  return { run, refreshed, logs }
+  return { run, refreshed, logs, attempts }
 }
 
 describe("the hourly model-catalog sweep", () => {
@@ -102,7 +180,7 @@ describe("the hourly model-catalog sweep", () => {
   })
 
   test("a failure is partial, named, and does not stop the rest of the batch", async () => {
-    const { run, refreshed, logs } = harness({
+    const { run, refreshed, logs, attempts } = harness({
       accounts: [account("bad"), account("good")],
       outcome: (account) =>
         account.id === "bad"
@@ -115,6 +193,9 @@ describe("the hourly model-catalog sweep", () => {
     expect(refreshed).toEqual(["bad", "good"])
     expect(result).toMatchObject({ outcome: "partial", itemsProcessed: 1 })
     expect(logs.some((line) => line.reason === "discovery_failed")).toBe(true)
+    // The failure is stamped for the next tick; the success has no row to answer for.
+    expect(attempts.get("bad")?.getTime()).toBe(NOW.getTime())
+    expect(attempts.has("good")).toBe(false)
   })
 
   /**
@@ -124,41 +205,21 @@ describe("the hourly model-catalog sweep", () => {
    */
   test("an account whose listing always fails does not hold the head of the queue", async () => {
     const accounts = [account("a-dead"), account("b"), account("c")]
-    const stored = new Map<string, Date>()
-    const order: string[] = []
-    let clock = NOW
-    const task = createModelCatalogRefreshTask({
-      accounts: { list: async () => accounts },
-      catalog: {
-        lastRefreshedAt: async () =>
-          [...stored].map(([accountId, refreshedAt]) => ({ accountId, refreshedAt })),
-      },
-      refresh: async (row) => {
-        order.push(row.id)
-        if (row.id === "a-dead") return { kind: "failed", reason: "discovery_failed" }
-        stored.set(row.id, clock)
-        return { kind: "refreshed", models: 1 }
-      },
-      intervalMs: 3_600_000,
-      batchSize: 1,
-    })
-    const tick = async (at: Date) => {
-      clock = at
-      await task.run({
-        now: at,
-        signal: new AbortController().signal,
-        logger: createLogger({ level: "debug", write: () => undefined }),
-      })
-    }
+    const attempts = new Map<string, Date>()
+    const outcome = (row: AccountRow): CatalogRefreshOutcome =>
+      row.id === "a-dead"
+        ? { kind: "failed", reason: "discovery_failed" }
+        : { kind: "refreshed", models: 1 }
+    const { task, asked } = failingTask({ accounts, attempts, outcome })
 
-    await tick(NOW)
-    await tick(new Date(NOW.getTime() + 3_600_000))
-    await tick(new Date(NOW.getTime() + 7_200_000))
-    await tick(new Date(NOW.getTime() + 10_800_000))
+    await tick(task, NOW)
+    await tick(task, new Date(NOW.getTime() + HOUR))
+    await tick(task, new Date(NOW.getTime() + 2 * HOUR))
+    await tick(task, new Date(NOW.getTime() + 3 * HOUR))
 
     // One slot per tick: the dead account takes its turn, then waits behind the others — and
     // comes round again, because being asked in vain is not being dropped.
-    expect(order).toEqual(["a-dead", "b", "c", "a-dead"])
+    expect(asked).toEqual(["a-dead", "b", "c", "a-dead"])
   })
 
   test("an account skipped for having no listing rotates the same way", async () => {
@@ -172,7 +233,7 @@ describe("the hourly model-catalog sweep", () => {
     })
 
     await run(NOW)
-    await run(new Date(NOW.getTime() + 3_600_000))
+    await run(new Date(NOW.getTime() + HOUR))
 
     expect(refreshed).toEqual(["a-none", "b"])
   })
@@ -214,35 +275,22 @@ describe("the hourly model-catalog sweep", () => {
 
   test("an account that left the fleet takes its attempt record with it", async () => {
     const fleet = [account("a-dead"), account("b")]
-    const order: string[] = []
-    const task = createModelCatalogRefreshTask({
-      accounts: { list: async () => [...fleet] },
-      catalog: { lastRefreshedAt: async () => [] },
-      refresh: async (row) => {
-        order.push(row.id)
-        return { kind: "failed", reason: "discovery_failed" }
-      },
-      intervalMs: 3_600_000,
-      batchSize: 1,
-    })
-    const tick = (at: Date) =>
-      task.run({
-        now: at,
-        signal: new AbortController().signal,
-        logger: createLogger({ level: "debug", write: () => undefined }),
-      })
+    const attempts = new Map<string, Date>()
+    const { task, asked } = failingTask({ accounts: fleet, attempts })
 
-    await tick(NOW)
-    // Deleted and re-created under the same id: it is a new account, never asked, so it is first.
+    await tick(task, NOW)
+    // Postgres cascades the attempt row with the account (FK ON DELETE CASCADE) — the sweep no
+    // longer prunes anything itself, so the fake mirrors the cascade the database performs.
     fleet.shift()
-    await tick(new Date(NOW.getTime() + 3_600_000))
-    // `c` has never been asked either. A stale entry would rank the newcomer behind it; pruned,
-    // the two tie and the id decides.
+    attempts.delete("a-dead")
+    await tick(task, new Date(NOW.getTime() + HOUR))
+    // `c` has never been asked either. A surviving entry would rank the returned account behind
+    // it; cascaded, the two tie and the id decides.
     fleet.unshift(account("a-dead"))
     fleet.push(account("c"))
-    await tick(new Date(NOW.getTime() + 7_200_000))
+    await tick(task, new Date(NOW.getTime() + 2 * HOUR))
 
-    expect(order).toEqual(["a-dead", "b", "a-dead"])
+    expect(asked).toEqual(["a-dead", "b", "a-dead"])
   })
 
   test("a skip is not a failure, and says why at info", async () => {
@@ -296,10 +344,10 @@ describe("the hourly model-catalog sweep", () => {
    * writes, so a full interval of `data: []` after a fresh deploy reads as a broken endpoint.
    */
   test("asks for an early first tick, without changing its own cadence", () => {
-    const { task } = built({ intervalMs: 3_600_000 })
+    const { task } = built({ intervalMs: HOUR })
 
     expect(task.startupDelayMs).toBe(30_000)
-    expect(task.intervalMs).toBe(3_600_000)
+    expect(task.intervalMs).toBe(HOUR)
   })
 
   test("never delays the first tick past a cadence shorter than the delay itself", () => {
@@ -308,10 +356,83 @@ describe("the hourly model-catalog sweep", () => {
   })
 })
 
+describe("durable attempt stamps", () => {
+  /**
+   * Failure case first — the fingerprint of what the per-replica Map did. A task constructed
+   * fresh saw an empty Map, so the never-answering head of the queue was re-asked by every new
+   * process. Seeded from the store instead, a fresh instance must honour the stamp.
+   */
+  test("a fresh instance honours a failed attempt it did not record", async () => {
+    const { run, refreshed } = harness({
+      accounts: [account("a"), account("b"), account("c")],
+      attempts: new Map([["a", NOW]]),
+    })
+
+    await run()
+
+    // Another process already asked `a` in vain; the never-asked accounts outrank it.
+    expect(refreshed).toEqual(["b", "c", "a"])
+  })
+
+  /**
+   * What consecutive advisory-lock winners are: two task instances over one
+   * `model_catalog_attempts`, no in-memory state in common.
+   */
+  test("two instances over one store rotate instead of re-asking each other's failures", async () => {
+    const accounts = [account("a"), account("b"), account("c")]
+    const attempts = new Map<string, Date>()
+    const first = failingTask({ accounts, attempts })
+    const second = failingTask({ accounts, attempts })
+
+    await tick(first.task, NOW)
+    await tick(second.task, new Date(NOW.getTime() + HOUR))
+    await tick(first.task, new Date(NOW.getTime() + 2 * HOUR))
+
+    // Under the per-replica Map the second instance knew nothing of the first's stamp and asked
+    // the same failing head again; shared, the sweep rotates on.
+    expect(first.asked).toEqual(["a", "c"])
+    expect(second.asked).toEqual(["b"])
+    expect([...attempts.keys()]).toEqual(["a", "b", "c"])
+  })
+
+  test("rotation survives a restart, and a success clears the stamp it answers", async () => {
+    const accounts = [account("a"), account("b")]
+    const attempts = new Map<string, Date>()
+    let asksOfA = 0
+    // `a` fails once, then answers; `b` answers straight away.
+    const outcome = (row: AccountRow): CatalogRefreshOutcome => {
+      if (row.id !== "a") return { kind: "refreshed", models: 1 }
+      asksOfA += 1
+      return asksOfA === 1
+        ? { kind: "failed", reason: "discovery_failed" }
+        : { kind: "refreshed", models: 2 }
+    }
+
+    // The predecessor's process asked `a` in vain and exited.
+    const predecessor = failingTask({ accounts, attempts, outcome })
+    await tick(predecessor.task, NOW)
+    expect(attempts.get("a")?.getTime()).toBe(NOW.getTime())
+
+    // The restart: a task built from nothing inherits the stamp and asks `b`, not `a` again.
+    const restarted = failingTask({ accounts, attempts, outcome })
+    await tick(restarted.task, new Date(NOW.getTime() + HOUR))
+    expect(restarted.asked).toEqual(["b"])
+
+    // Back to `a` — its stamp is the older of the two — and this time the listing lands, so the
+    // row's job is done and the store is left empty rather than growing forever.
+    await tick(restarted.task, new Date(NOW.getTime() + 2 * HOUR))
+    expect(restarted.asked).toEqual(["b", "a"])
+    expect(attempts.size).toBe(0)
+  })
+})
+
 function built(options: { readonly intervalMs: number }) {
   const task = createModelCatalogRefreshTask({
     accounts: { list: async () => [] },
-    catalog: { lastRefreshedAt: async () => [] },
+    catalog: {
+      lastRefreshedAt: async () => [],
+      ...attemptLedger(new Map()),
+    },
     refresh: async () => ({ kind: "skipped", reason: "test" }),
     intervalMs: options.intervalMs,
     batchSize: 1,
