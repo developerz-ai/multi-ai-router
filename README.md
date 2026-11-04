@@ -213,10 +213,21 @@ container. Select it with your runtime manager or put that version's binary on `
 `bin/setup` and `bin/check` verify it before installing dependencies or checking the database;
 they report a missing or mismatched version without installing a runtime for you.
 
-Dependency updates track stable versions supported by their parents: Solid's compiler still requires
-Babel 7. The scoped esbuild override replaces Drizzle Kit's deprecated loader dependency with a
-patched version; its TypeScript transforms and migration generation/checks are verified alongside
-the full gate. Keep that override until the loader's upstream dependency is patched or replaced.
+Dependency updates track stable versions supported by their parents. The Solid JSX build compiles on
+two Babel majors, and the split is a recorded constraint rather than a choice: the **test-side**
+compile already runs **Babel 8** (`@babel/core@8.0.10` with `babel-preset-solid@1.9.16`), while the
+**shipped Vite build** still compiles JSX on **Babel 7** — `vite-plugin-solid@2.11.14` depends on
+`@babel/core@^7.23.3`, `babel-preset-solid@1.9.16` peers `@babel/core@^7.0.0`, and
+`babel-plugin-jsx-dom-expressions@0.40.11` peers `^7.20.12`. The shipped build is therefore
+**re-deferred**, and it moves only when upstream ships a `vite-plugin-solid` that takes
+`@babel/core@^8` and a `babel-preset-solid` whose peer range admits Babel 8: the stable lines are
+`vite-plugin-solid@2.11.14` and `babel-preset-solid@1.9.16`, and the next tags (`3.0.0-next.27`,
+`2.0.0-rc.2`) are prereleases. `apps/web/test/unit/solid-jsx-build.test.ts` is the guard on the
+side that works — it compiles JSX through the repository's own compile step, so the demonstrated
+combination cannot quietly slide back onto a Babel 7 core. The scoped esbuild override replaces
+Drizzle Kit's deprecated loader dependency with a patched version; its TypeScript transforms and
+migration generation/checks are verified alongside the full gate. Keep that override until the
+loader's upstream dependency is patched or replaced.
 
 `bin/` is the interface — three commands are the whole contract:
 
