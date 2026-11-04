@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.45.5] — 2026-11-04
+
 ### Added
 
 - **A registry of vendor-priced offerings that have no published model id.** Anthropic's fast mode is a request flag (`speed: "fast"`) on the ordinary model id, not a separate model, so there is no `claude-opus-5-5-fast` for a shipped row to key on — but the vendor does publish the rate the flag costs. `apps/api/src/services/cost/offerings.ts` now records such an offering as provider, the vendor's own name, its published figure and why no model id exists. It is a record, not a price card: no rate fields, no row, so a request naming one of these prices as unknown until an operator writes an override. Exported from the cost barrel as `PRICED_OFFERINGS_WITHOUT_PUBLISHED_ID` and `PricedOfferingWithoutPublishedId`. The registry carries the three fast-mode offerings (Opus 5.5, Opus 5, Opus 4.8) and **Claude Mythos 5.1**, whose published figure ($10 / $50, cached read 0.025x / $0.25) the pricing page states under no model id at all.
@@ -1879,3 +1881,4 @@ your tooling config.
 [2.42.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.2
 [2.43.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.43.0
 [2.44.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.44.0
+[2.45.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.5
