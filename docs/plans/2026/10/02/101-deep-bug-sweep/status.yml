@@ -4,8 +4,8 @@ status: in_progress
 created_by: sebi
 worked_by: Codex team
 owner: sebi
-percent: 44
-current_focus: W1-W7B merged (PR141-PR154; W7B translation PR154 merged13c60a3 on2026-10-04). Release v2.16.0 is cut by the release PR; production deployment is the ../infrastructure pin bump. Translation finding ledger, console, prod-observation slices and #87 rotation remain open.
+percent: 46
+current_focus: 'W1-W7B merged; thirteen PRs #141-#154 shipped in v2.16.0 released2026-10-04 (W7B PR154 merged13c60a3 after five required checks at ae6ec03). Production deployment is only the ../infrastructure pin bump; none is claimed. Translation remainder, console, prod-observation slices and #87 rotation remain open.'
 slices:
 - file: 01-edge-auth-security.md
   status: in_progress
@@ -21,7 +21,7 @@ slices:
   findings: 17
 - file: 04-translation.md
   status: in_progress
-  percent: 0
+  percent: 11
   findings: 19
 - file: 05-web-console.md
   status: in_progress
@@ -78,9 +78,7 @@ evidence:
   all five CI checks passed; CodeRabbit generated no actionable comments. Release/deployment pending.'
 - 'Pinned Bun 1.4.2; bin/check with disposable PostgreSQL: 4326 tests passed, zero failed; build passed.'
 - '102-full-router-audit/evidence/wave1-bench.json: 8000 requests, zero failures/buffered streams; max p99 1.28 ms.'
-notes: 'W1–W5 core merged and locally validated; W4C PR149 is merged97281e0. W5B L04/L16/L19 remains in progress; no blanket monitoring or large-body CPU
-  attribution closure. Scanner/session, translation, cost/rollup/history, console and DX/CI/prompt work remain in later waves. #87 operational rotation/session
-  revocation and release/deployment remain open.'
+notes: 'W1–W5 core merged and locally validated; W4C PR149 is merged97281e0. W5B L04/L16/L19 remains in progress; no blanket monitoring or large-body CPU attribution closure. Waves PR141–PR154 shipped in v2.16.0 released2026-10-04; production deployment is only the ../infrastructure pin bump, no deployment claimed. Scanner/session, translation remainder, cost/rollup/history, console and DX/CI/prompt work remain open. #87 operational rotation/session revocation remains open.'
 last_updated: 2026-11-04
 resolved_findings:
 - '01.2'
@@ -127,28 +125,5 @@ resolved_findings:
 - '01.21'
 - '03.5'
 - '02.17'
-implemented_merged_release_pending:
-- '02.10'
-- '02.1'
-- '02.3'
-- '02.4'
-- '02.8'
-- '02.15'
-implemented_merged_release_pending_wave4:
-- '01.22'
-- '02.14'
-- '02.16'
-- '03.4'
-- '03.8'
-- '03.12'
-implemented_locally_validation_passed_review_merge_pending_wave4c:
-- '02.11'
-- '03.13'
-- '03.14'
-implemented_merged_release_pending_wave5:
-- '01.6'
-- '01.7'
-- '01.16'
-- '01.21'
-- '03.5'
-- '02.17'
+- '04.1'
+- '04.5'
