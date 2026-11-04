@@ -1236,7 +1236,9 @@ ships Bun as the runtime, so `bun` is the decision; the point is that it is writ
 message with `is_error: true`, which the renderer raises as `SdkResultError` (`result-error.ts`)
 carrying the SDK's structured `api_error_status` and `terminal_reason` beside the sentence — so
 classification is substring matching on the message plus the subprocess stderr tail, with the
-structured status read **after** every phrase (`failure-rules.ts`). Classes worth naming as our own
+structured status read **after** every phrase (the table's rows live in `failure-rules-request.ts`,
+`failure-rules-quota.ts` and `failure-rules-account.ts`, their shared vocabulary in
+`failure-rules-vocabulary.ts`, and `failure-rules.ts` composes them). Classes worth naming as our own
 error types:
 
 | Class | Signal | Response |

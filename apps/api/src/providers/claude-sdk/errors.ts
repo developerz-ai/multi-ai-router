@@ -35,7 +35,11 @@ import {
  * - **The SDK's own words never reach a client.** Every class carries a router-authored sentence;
  *   the raw text rides `FailureClassification.message`, whose contract already says it is for logs.
  *
- * The table itself lives in `failure-rules.ts`. Classification is where this module stops: it never
+ * The table itself is split by responsibility across four siblings: the rows about the request in
+ * `failure-rules-request.ts`, the rows about quota in `failure-rules-quota.ts`, the rows about the
+ * account (plus the unclassified fallback) in `failure-rules-account.ts`, and the shared vocabulary
+ * in `failure-rules-vocabulary.ts` — with `failure-rules.ts` only the façade that composes them,
+ * so it is the wrong file to open for a rule. Classification is where this module stops: it never
  * refreshes a credential — the SDK owns the token and an expired one is `needs_reauth`, not a retry
  * (§3) — and it never performs the recovery it names: replaying a stale session and forking a busy
  * one are the transport's and the failover planner's, which is also why the classes are values in
