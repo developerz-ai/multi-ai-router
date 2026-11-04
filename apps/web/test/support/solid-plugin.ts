@@ -164,6 +164,37 @@ function patchTemplateInnerHtmlForTableFragments(): void {
 
 const WEB_ROOT = join(import.meta.dir, "..", "..")
 
+/**
+ * The repository's Solid JSX compile step, extracted so a test can drive it
+ * directly (`apps/web/test/unit/solid-jsx-build.test.ts`). The Bun plugin
+ * below calls this for every `.tsx` file — there is exactly one compile
+ * configuration in the tree, and the compatibility suite pins it.
+ */
+export function compileSolidJsx(source: string, filename: string): string {
+  const result = transformSync(source, {
+    filename,
+    cwd: WEB_ROOT,
+    // Babel 8's `@babel/preset-typescript` no longer turns JSX parsing on
+    // for a `.tsx` file — it dropped the `isTSX` option that used to make
+    // the TypeScript syntax plugin enable `jsx` too — and a parser without
+    // `jsx` beside `typescript` reads `<Foo />` as a type argument list:
+    // "Unexpected token, expected ','". The syntax plugin is asked for here.
+    //
+    // `@babel/core` has to be on the preset's major for a second reason:
+    // Babel 8 renamed the AST field that carries a call's type arguments,
+    // and its TypeScript transform clears only the new name. Left on
+    // Babel 7 it would emit `createSignal<T>(...)`, which Bun reads as a
+    // comparison rather than a call.
+    plugins: ["@babel/plugin-syntax-jsx"],
+    presets: [[solidPreset, { generate: "dom", hydratable: false }], "@babel/preset-typescript"],
+    sourceMaps: false,
+  })
+  if (result?.code === null || result?.code === undefined) {
+    throw new Error(`babel-preset-solid produced no output for ${filename}`)
+  }
+  return result.code
+}
+
 plugin({
   name: "solid-tsx-dom",
   setup(build) {
@@ -175,34 +206,10 @@ plugin({
       loader: "js",
     }))
 
-    build.onLoad({ filter: /\.tsx$/ }, (args) => {
-      const source = readFileSync(args.path, "utf8")
-      const result = transformSync(source, {
-        filename: args.path,
-        cwd: WEB_ROOT,
-        // Babel 8's `@babel/preset-typescript` no longer turns JSX parsing on
-        // for a `.tsx` file — it dropped the `isTSX` option that used to make
-        // the TypeScript syntax plugin enable `jsx` too — and a parser without
-        // `jsx` beside `typescript` reads `<Foo />` as a type argument list:
-        // "Unexpected token, expected ','". The syntax plugin is asked for here.
-        //
-        // `@babel/core` has to be on the preset's major for a second reason:
-        // Babel 8 renamed the AST field that carries a call's type arguments,
-        // and its TypeScript transform clears only the new name. Left on
-        // Babel 7 it would emit `createSignal<T>(...)`, which Bun reads as a
-        // comparison rather than a call.
-        plugins: ["@babel/plugin-syntax-jsx"],
-        presets: [
-          [solidPreset, { generate: "dom", hydratable: false }],
-          "@babel/preset-typescript",
-        ],
-        sourceMaps: false,
-      })
-      if (result?.code === null || result?.code === undefined) {
-        throw new Error(`babel-preset-solid produced no output for ${args.path}`)
-      }
-      return { contents: result.code, loader: "js" }
-    })
+    build.onLoad({ filter: /\.tsx$/ }, (args) => ({
+      contents: compileSolidJsx(readFileSync(args.path, "utf8"), args.path),
+      loader: "js",
+    }))
 
     build.onLoad({ filter: /\.module\.scss$/ }, () => ({
       contents: "export default new Proxy({}, { get: (_t, prop) => String(prop) })",

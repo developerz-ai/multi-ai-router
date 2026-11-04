@@ -243,8 +243,9 @@ configuration, not reactive data.
 bun test apps/web
 ```
 
-Deliberately DOM-free — pure mappers and formatters, with the clock injected (`describeReset(input,
-nowMs)`, `formatRelative(iso, nowMs)`), never read inside.
+Two kinds of suite live here. The `.ts` suites are DOM-free — pure mappers and formatters, with the
+clock injected (`describeReset(input, nowMs)`, `formatRelative(iso, nowMs)`), never read inside. The
+`.tsx` suites under `test/unit/` **mount real components**; component tests are not deferred.
 
 | File | Asserts |
 |---|---|
@@ -254,20 +255,49 @@ nowMs)`, `formatRelative(iso, nowMs)`), never read inside.
 | `api-errors` | Both error shapes parse; a failure always renders as a sentence, never a bare status |
 | `query-keys` | Every key is prefixed by its resource root, and the roots are disjoint |
 | `format`, `usage` | Number and time formatting; the usage contract — attempts ≥ requests, percentiles do not sum |
+| the `.tsx` suites | Mounted components — the tables, the dialogs, the route screens — against happy-dom, with real reactivity |
+| `solid-jsx-build` | The Solid JSX compile itself: Babel 8 output, and the declared ranges that keep the shipped build on Babel 7 |
 
-**Component tests are deferred, as a decision rather than an omission.** The house standard is
-`@solidjs/testing-library` + `bun test`, and it does work — it was built and verified at 33/33 in a
-clean install before being withdrawn. It was not kept because the harness needs five separate
-workarounds for one status dot: a Babel `babel-preset-solid` transform registered as a Bun plugin
-(Bun's built-in JSX transform is React's, and `jsxImportSource` alone gives Solid's runtime JSX
-without the `babel-plugin-jsx-dom-expressions` compilation reactivity depends on), a stub loader for
-`*.module.scss`, `@happy-dom/global-registrator` **≥ 20** (17.x drops `<tr>`/`<td>` when parsing
-template fragments, so no table renders), `--conditions=browser --conditions=development` on the
-command line (Bun otherwise resolves the *server* build of `solid-js/web` and every render throws
-"Client-only API called on the server side" — and bunfig has no key for it, so it cannot live in
-config), and a root test-runner change so `bun test` from the repo root does not pick the `.tsx`
-files up without any of the above. Revisit when a component has behaviour a pure function cannot
-cover; the recipe above is the whole of it.
+### The Solid JSX build
+
+`bunfig.toml` preloads `apps/web/test/support/solid-plugin.ts` for every `bun test` in the repo, and
+that plugin is the whole harness: the `.tsx` suites compile and mount because of it, not because of
+a per-suite setup.
+
+- **The transform is Babel 8.** `apps/web/package.json` declares `@babel/core@^8.0.10`,
+  `@babel/plugin-syntax-jsx@^8.0.1` and `@babel/preset-typescript@^8.0.7`, and the plugin runs
+  `babel-preset-solid@^1.9.16` over every `.tsx` file Bun loads. Two Babel-8 accommodations are
+  load-bearing, and both are documented in the plugin: `@babel/preset-typescript` no longer implies
+  JSX parsing for a `.tsx` file, so `@babel/plugin-syntax-jsx` is asked for explicitly; and Babel 8
+  renamed the AST field that carries a call's type arguments, so `@babel/core` has to be on the
+  preset's major — on a Babel 7 core the same source compiles to `createSignal<T>(...)`, which Bun
+  reads as a comparison rather than a call.
+- **The `--conditions` workaround is gone.** Bun resolves a bare `solid-js/web` to its *server*
+  build, and every render then throws "Client-only API called on the server side". The plugin does
+  not use `--conditions=browser --conditions=development` — bunfig has no key for it — it hooks
+  `onLoad` for the already-resolved `.../dist/server.js` of `solid-js`, `solid-js/web` and
+  `solid-js/store` and substitutes the sibling client (`dev.js`) build's source: same resolved path,
+  different contents, so real reactivity and real DOM mutation run.
+- **A stub loader for `*.module.scss`**, `@happy-dom/global-registrator` **≥ 20** (17.x drops
+  `<tr>`/`<td>` when parsing template fragments, so no table renders) and a patch on
+  `HTMLTemplateElement.prototype.innerHTML` for table-scoped fragments round out the harness.
+
+`solid-jsx-build` (`test/unit/solid-jsx-build.test.ts`) is the compatibility suite: it compiles JSX
+through the repository's own compile step, asserts the output is Solid DOM output, asserts a call
+with type arguments survives the Babel 8 AST rename, and reads the installed `@babel/core`,
+`babel-preset-solid` and `vite-plugin-solid` manifests to assert `@babel/core` is major 8 while the
+preset's peer range and `vite-plugin-solid`'s dependency range still say Babel 7. The range check is
+literal *and* semantic: a range can admit Babel 8 while naming only 7 (`>=7.0.0` parses as major 7
+and installs 8 all the same), so the guard also offers a concrete Babel 8 release to each range
+through `Bun.semver` — the same engine `bun install` resolves with — and admission fails the suite.
+
+**The shipped Vite build is still Babel 7.** `vite-plugin-solid@2.11.14` depends on
+`@babel/core@^7.23.3` and `babel-preset-solid@1.9.16` peers `@babel/core@^7.0.0`
+(`babel-plugin-jsx-dom-expressions@0.40.11` peers `^7.20.12`), so the SPA `bin/build` bundles
+compiles its JSX on Babel 7 while the tests compile on Babel 8. That is a declared-range
+constraint, not a crash, and nothing inside this repository can lift it: it needs upstream to ship a
+`vite-plugin-solid` that takes `@babel/core@^8` and a `babel-preset-solid` whose peer range admits
+Babel 8.
 
 ## Gotchas
 
