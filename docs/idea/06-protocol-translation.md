@@ -374,6 +374,7 @@ their boundaries. Completion events do not replay already emitted text.
 |---|---|
 | Clean | Anthropic `system` (string or text-block array) ⇄ OpenAI leading `role: "system"` / `"developer"` message. |
 | Lossy | `cache_control` on a system block is dropped when the target has no equivalent. Multiple system blocks are concatenated with newlines in one direction and cannot be split back — except toward a surface that carries `cache_control` (`ProviderSurface.cacheControl`, `openrouter`): a system array with a marker on any block stays one text part per block, each marker on its own part, so the cached prefix ends where the client put it. |
+| Dropped | Claude Code opens `system` with a billing-attribution block (`x-anthropic-billing-header: cc_version=…; cch=<checksum>;`) whose `cch` changes every request. Toward an OpenAI dialect (`instructions`, the leading system message, and the per-block parts toward a `cache_control` surface) a `system` block that starts with that prefix is **dropped**, so it cannot sit at the head of the prefix and defeat every prefix-keyed upstream cache. Only a block beginning with the prefix is removed; the same text elsewhere is untouched. **Same-dialect passthrough is deliberately untouched** (byte-passthrough, never parsed): Anthropic's own cache tolerates the header, and `claude-fast` already pins `cch=00000`. |
 | Rejected | Nothing. A system prompt always has a target representation. |
 
 ### Message roles and content blocks
