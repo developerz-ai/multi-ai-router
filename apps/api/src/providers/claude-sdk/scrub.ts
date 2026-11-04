@@ -6,7 +6,8 @@
  * that also announces some other harness is read as a third-party app wearing Claude Code's
  * credential. The account is then gated behind Extra Usage rather than its plan, and the request is
  * refused — `400 Third-party apps now draw from your extra usage, not your plan limits. Add more at
- * claude.ai/settings/usage and keep going.` (`failure-rules.ts`, `claude-sdk:extra-usage-gated`).
+ * claude.ai/settings/usage and keep going.` (`failure-rules-quota.ts`,
+ * `claude-sdk:extra-usage-gated`).
  *
  * The strongest tell is a **duplicate**. Claude Code's own preset already injects `Here is some
  * useful information about the environment you are running in:` followed by an `<env>` block; a
