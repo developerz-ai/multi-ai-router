@@ -29,7 +29,18 @@ const transport: NonNullable<Sentry.BunOptions["transport"]> = (options) => {
 const originalFetch = globalThis.fetch
 const originalServe = Bun.serve
 initSentry(env, createLogger({ level: "debug", write: (line) => logs.push(line) }), transport)
-const options = Sentry.getClient()?.getOptions()
+const client = Sentry.getClient()
+const options = client?.getOptions()
+// The names of the integrations the SDK actually installed, read from the client's own
+// registry: what is live in this process, not what the router asked for. Sorted, so the
+// comparison does not depend on the order the SDK happened to install them in.
+const installedIntegrations = (client?.getIntegrationNames() ?? []).sort()
+// The SDK declares `defaultIntegrations` on its init options, not on the `ClientOptions` that
+// `getOptions()` returns: the client keeps the whole init object, so the value is there
+// at runtime even though the type does not name it. One intersection, one read.
+const defaultIntegrations = (
+  options as typeof options & { defaultIntegrations?: false | { name: string }[] }
+)?.defaultIntegrations
 
 const secrets = {
   api: "sk-ant-privacyapitoken",
@@ -133,9 +144,18 @@ process.stdout.write(
     fetchUnchanged: originalFetch === globalThis.fetch,
     serveUnchanged: originalServe === Bun.serve,
     receivedHeaders,
+    installedIntegrations,
     options: options
       ? {
           integrations: options.integrations.map((integration) => integration.name).sort(),
+          // The client still carries the router's `defaultIntegrations: false` — the router's own
+          // input, echoed back, not a value the SDK resolved. The guard against a request-path
+          // default is the SDK's installed integration names, plus the unpatched global `fetch`
+          // and `Bun.serve`.
+          defaultIntegrations:
+            defaultIntegrations === false
+              ? false
+              : (defaultIntegrations ?? []).map((integration) => integration.name).sort(),
           tracesSampleRate: options.tracesSampleRate,
           traceLifecycle: options.traceLifecycle,
           sendClientReports: options.sendClientReports,

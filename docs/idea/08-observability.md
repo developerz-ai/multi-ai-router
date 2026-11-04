@@ -1231,8 +1231,9 @@ the DSN and 5xx errors leave the process tagged with `release`, `environment`, a
 violation, a rate limit is an operational state, not a defect, and stays in the logs.
 
 The credential-leak rule above applies just as hard here. Automatic collection of user identity,
-cookies, HTTP headers/bodies/query parameters, AI inputs/outputs, database payloads, queue arguments,
-frame variables and source snippets is explicitly disabled with `dataCollection`; Sentry 11's
+cookies, HTTP headers/bodies/query parameters, AI inputs/outputs, MCP tool inputs/outputs,
+database payloads, queue arguments, frame variables and source snippets is explicitly disabled
+with `dataCollection`; Sentry 11's
 expanded collection defaults cannot opt those surfaces back in. Explicit capture values still need
 scrubbing, so `beforeSend` is the **same redactor**
 the structured log uses (`logging/redact.ts`), not a second one; one scrubbing set covers both
@@ -1251,11 +1252,22 @@ Two properties hold the overhead budget ([06](06-protocol-translation.md), non-n
   automatic span-streaming integration setup. Trace propagation targets are empty.
   `enableRuntimeChannelInjection: false` prevents NodeClient's independent registration of
   runtime diagnostics-channel injection even when the integration defaults are disabled.
-- **Integrations are explicitly allowlisted**, with SDK defaults disabled: event filters,
-  function names, linked exceptions, deduplication, process crash/rejection handlers, machine
-  context and module versions. Request/fetch, framework, AI, database and console instrumentation
-  are excluded. Errors are captured explicitly in the Hono error handler on the 5xx path. Stack
-  file/function/line metadata survives; source snippets and automatic locals are excluded.
+- **Integrations are explicitly allowlisted**, with SDK defaults disabled. `@sentry/bun` is declared
+  as `^11.10.0` in `apps/api/package.json` and resolved to exactly **11.10.0** by `bun.lock`, and
+  the surviving allowlist is named — the transport test pins the same eight runtime names:
+  `EventFilters`, `FunctionToString`, `LinkedErrors`, `Dedupe`, `OnUncaughtException`,
+  `OnUnhandledRejection`, `Context` (machine context) and `Modules` (module versions). The SDK's
+  own default set — request data, HTTP, `fetch` and `Bun.serve` instrumentation — is turned off
+  with `defaultIntegrations: false`. The client copies the whole init object into its options, so
+  the `false` the transport fixture reads back is the router's own option echoed back, not a value
+  the SDK resolved on its own. The guard against an upstream default is the **installed**
+  integration set, read from the client's own registry and pinned to the same eight names, so an
+  upstream default that adds or renames a request-path integration fails by name — together with
+  the fixture's proof that global `fetch` and `Bun.serve` stay unpatched and no
+  `sentry-trace`/`baggage` header leaves the router.
+  Framework, AI, database and console instrumentation are excluded. Errors are captured explicitly
+  in the Hono error handler on the 5xx path. Stack file/function/line metadata survives; source
+  snippets and automatic locals are excluded.
 
 SDK logs and metrics are dropped by their final send hooks, and client reports/session tracking
 are disabled. The transport carries error envelopes only. Attachments are not used; `beforeSend`
