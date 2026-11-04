@@ -21,4 +21,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+# The measurement must come off the same runtime the suite and the released image ran on, so the
+# pinned version is checked before the harness starts. This is the repository's runtime contract,
+# not a bench-local one.
+bin/lib/require-bun
+
 exec bun apps/api/bench/run.ts "$@"
