@@ -286,7 +286,10 @@ a per-suite setup.
 through the repository's own compile step, asserts the output is Solid DOM output, asserts a call
 with type arguments survives the Babel 8 AST rename, and reads the installed `@babel/core`,
 `babel-preset-solid` and `vite-plugin-solid` manifests to assert `@babel/core` is major 8 while the
-preset's peer range and `vite-plugin-solid`'s dependency range still say Babel 7.
+preset's peer range and `vite-plugin-solid`'s dependency range still say Babel 7. The range check is
+literal *and* semantic: a range can admit Babel 8 while naming only 7 (`>=7.0.0` parses as major 7
+and installs 8 all the same), so the guard also offers a concrete Babel 8 release to each range
+through `Bun.semver` — the same engine `bun install` resolves with — and admission fails the suite.
 
 **The shipped Vite build is still Babel 7.** `vite-plugin-solid@2.11.14` depends on
 `@babel/core@^7.23.3` and `babel-preset-solid@1.9.16` peers `@babel/core@^7.0.0`

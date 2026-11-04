@@ -20,7 +20,9 @@ import { compileSolidJsx } from "../support/solid-plugin"
 // below machine-checks that, so the day upstream opens those ranges the
 // failure says so instead of the drift going unnoticed — it reads every major
 // a declared range names, because upstream widens a range by adding a clause
-// (`^7.0.0 || ^8.0.0`) rather than by replacing it.
+// (`^7.0.0 || ^8.0.0`) rather than by replacing it, and it asks the semver
+// engine whether a concrete Babel 8 release satisfies the range, because a
+// range can admit Babel 8 without naming it (`>=7.0.0`).
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..")
 
@@ -117,13 +119,34 @@ function declaredMajors(range: string): number[] {
 }
 
 /**
- * The blocker guard: a declared range that names Babel 8 fails here, so the
- * day upstream opens the peer range or the dependency range the suite says so
- * instead of the drift going unnoticed.
+ * A concrete Babel 8 release, offered to every declared range below. The final
+ * release is the right probe, not a prerelease: a caret clause like
+ * `^8.0.0-rc.1` already admits `8.0.0`, and npm installs a prerelease only
+ * when the range names one — so `8.0.0` is exactly the version that must fall
+ * outside a range still pinned to 7.
+ */
+const BABEL_8_PROBE = "8.0.0"
+
+/**
+ * The blocker guard: a declared range that names — or merely admits — Babel 8
+ * fails here, so the day upstream opens the peer range or the dependency range
+ * the suite says so instead of the drift going unnoticed.
+ *
+ * Literal, then semantic. Reading the majors catches the widening upstream
+ * actually writes (`^7.0.0 || ^8.0.0`), but satisfaction is semantic, and a
+ * range can admit Babel 8 while naming only 7: `>=7.0.0` parses as `[7]` and
+ * installs 8 all the same. So the probe release is offered to the range
+ * through `Bun.semver` — the same engine `bun install` resolves with — and
+ * admission is a failure.
  */
 function expectBabel7Range(range: string): void {
   expect(declaredMajors(range)).toContain(7)
   expect(declaredMajors(range)).not.toContain(8)
+  if (Bun.semver.satisfies(BABEL_8_PROBE, range)) {
+    throw new Error(
+      `declared range "${range}" admits Babel ${BABEL_8_PROBE} — not semantically pinned to major 7`,
+    )
+  }
 }
 
 describe("Solid compiler versions", () => {
@@ -152,6 +175,14 @@ describe("Solid compiler versions", () => {
     // see the range open.
     expect(declaredMajors("^7.0.0 || ^8.0.0")).toEqual([7, 8])
     expect(() => expectBabel7Range("^7.0.0 || ^8.0.0")).toThrow()
+
+    // The literal read's blind spot: a range that names only 7 can still
+    // admit 8, because satisfaction is semantic. `>=7.0.0` parses as `[7]`
+    // and must fail the guard anyway, as must a window that spans the
+    // majors without ever writing an 8.
+    expect(declaredMajors(">=7.0.0")).toEqual([7])
+    expect(() => expectBabel7Range(">=7.0.0")).toThrow(/admits Babel 8/)
+    expect(() => expectBabel7Range(">=7.0.0 <9.0.0")).toThrow(/admits Babel 8/)
 
     // ... and the ranges as they stand today.
     expect(declaredMajors("^7.0.0")).toEqual([7])
