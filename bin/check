@@ -1,9 +1,15 @@
 #!/bin/sh
-# The gate: lint, typecheck, test, build — the same commands CI runs, in order.
+# The gate: lint, typecheck, test, build — the four offline CI jobs, in order.
 #
-# Run this before committing. If it passes here it passes on the PR; if it fails
-# here you have the failure locally with a fast loop, instead of a red run and a
-# five-minute round trip.
+# Not the whole CI gate. CI also gates on the `advisory` job (it needs the
+# network, to reach OSV.dev) and the `ui-geometry` job (it needs a browser, for
+# the headless layout check) — neither belongs in a local gate, so both stay
+# in CI. The `bench` job is a report (job-level `continue-on-error`): it never
+# fails the build.
+#
+# Run this before committing. If it passes here the offline jobs pass on the PR
+# too; if it fails here you have the failure locally with a fast loop, instead
+# of a red run and a five-minute round trip.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -46,7 +52,7 @@ fi
 bun install --frozen-lockfile
 
 # Sequential and fail-fast (set -e): stop at the first broken gate, exactly like
-# reading the CI job list top to bottom (lint, typecheck, test, build).
+# reading those four CI jobs top to bottom (lint, typecheck, test, build).
 bin/lint
 bin/test
 bun run build

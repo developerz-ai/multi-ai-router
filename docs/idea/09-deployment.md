@@ -573,7 +573,11 @@ Multi-arch (`linux/amd64`, `linux/arm64`), published to `ghcr.io/developerz-ai/m
 | `v*` tag | `1.2.3`, `1.2`, `latest` (pre-releases like `v1.3.0-rc.1` skip `latest`) | Everything. Pin at least the minor — there is no bare-major (`1`) tag; `release.yml`'s `merge` job only emits `{version}`, `{major}.{minor}`, and `latest`. |
 
 **A tagged release is the only thing that publishes an image.** Pushing to `main` runs the quality
-gate (lint, typecheck, test, build) and stops there — it deliberately publishes nothing.
+gate — lint, typecheck, test, build, plus the `advisory` (live OSV.dev dependency assessment) and
+`ui-geometry` (headless Chromium against the built SPA) gates, which need the network and a browser
+and therefore run in CI only — and stops there. The `bench` job reports `router_overhead_seconds`
+against the committed baseline instead of blocking. A push to `main` deliberately publishes
+nothing.
 
 The required typecheck runs the existing production TypeScript solution build, then the separate
 `apps/api/tsconfig.tests.json` no-emit project. `bin/check` reaches both through `bin/lint` and the

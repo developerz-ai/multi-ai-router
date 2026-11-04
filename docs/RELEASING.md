@@ -56,9 +56,15 @@ shipped missing once (#265), and this is what catches a repeat.
 ## 3. Verify the gate is green
 
 ```sh
-bin/check   # lint + typecheck + full test suite, same order as CI
+bin/check   # lint + typecheck + full test suite + build — the offline CI jobs, in order
 bin/bench   # confirm the overhead budget hasn't regressed (non-blocking in CI, but check it here)
 ```
+
+`bin/check` covers the jobs CI can run offline — lint, typecheck, test, build. CI gates on two more
+that it cannot: `advisory` (the live OSV.dev dependency assessment, which needs the network) and
+`ui-geometry` (headless Chromium against the built SPA, which needs a browser). Both are hard
+gates, so a green `bin/check` is not a stand-in for them — read the `ci` workflow's required checks
+at merge time and let the gates decide.
 
 Commit the version bump and changelog as their own PR, merge it to `main`
 through the normal review flow — no direct pushes to `main`, no skipped
