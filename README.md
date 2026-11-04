@@ -210,8 +210,10 @@ describing an unbuilt capability are marked. Track progress in
 
 Use the exact Bun version in [`.bun-version`](.bun-version), also pinned in CI and the
 container. Select it with your runtime manager or put that version's binary on `PATH`.
-`bin/setup` and `bin/check` verify it before installing dependencies or checking the database;
-they report a missing or mismatched version without installing a runtime for you.
+`bin/setup` and `bin/check` verify it before installing dependencies or checking the database,
+and `bin/bench`, `bin/advisory` and `bin/ui-geometry` refuse a mismatched Bun before they do
+their own work; all of them report a missing or mismatched version without installing a runtime
+for you.
 
 Dependency updates track stable versions supported by their parents. The Solid JSX build compiles on
 two Babel majors, and the split is a recorded constraint rather than a choice: the **test-side**

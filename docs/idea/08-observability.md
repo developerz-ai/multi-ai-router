@@ -1015,6 +1015,12 @@ measurements, so `bin/bench` reports them as two tables:
 Both non-SDK egress paths are covered, streamed and not. The Agent-SDK path is excluded: it spawns a
 subprocess per request and is the budget's labeled exception.
 
+A measurement is only worth reading if it was taken on the runtime this code ships on, so the
+`bin/bench` wrapper checks the pinned runtime before the benchmark runs: it calls the repository's own
+runtime contract (`bin/lib/require-bun`, which compares `bun --version` against `.bun-version`) and
+exits non-zero on a mismatch. A budget is therefore never measured on a Bun the test suite and the
+released image never ran on.
+
 **Why the two claims are read at different quantiles.** `router_overhead_seconds` is a bucketed
 histogram fed whole-millisecond samples, so its tail is bounded by the bucket edges and a p99 read
 off it is stable run to run. Added TTFT is a raw sample series timed across an async relay on one
