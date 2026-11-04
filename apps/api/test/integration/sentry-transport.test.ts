@@ -6,6 +6,19 @@ import { z } from "zod"
 import { REDACTED } from "../../src/logging/redact"
 
 const fixture = fileURLToPath(new URL("../support/sentry-transport.ts", import.meta.url))
+
+// The SDK's default integration set installs request-path instrumentation — request data, HTTP,
+// `fetch` and `Bun.serve`. The installed set must contain none of them, so an upstream
+// default that slipped in is named by name instead of silently instrumenting the hot path.
+const REQUEST_PATH_INTEGRATIONS = [
+  "RequestData",
+  "Http",
+  "HttpServer",
+  "Fetch",
+  "BunServer",
+  "BunHttpServer",
+]
+
 const resultSchema = z.object({
   bodies: z.array(z.string()),
   logs: z.array(z.string()),
@@ -16,9 +29,11 @@ const resultSchema = z.object({
   fetchUnchanged: z.boolean(),
   serveUnchanged: z.boolean(),
   receivedHeaders: z.record(z.string(), z.string()),
+  installedIntegrations: z.array(z.string()),
   options: z
     .object({
       integrations: z.array(z.string()),
+      defaultIntegrations: z.union([z.literal(false), z.array(z.string())]),
       tracesSampleRate: z.number(),
       traceLifecycle: z.string(),
       sendClientReports: z.boolean(),
@@ -72,6 +87,25 @@ describe("real Sentry SDK transport privacy", () => {
     expect(result.receivedHeaders["sentry-trace"]).toBeUndefined()
     expect(result.receivedHeaders.baggage).toBeUndefined()
 
+    // The SDK's own defaults are off: `defaultIntegrations` is the router's own literal, echoed
+    // back by the client — not a value the SDK resolved. The guard against a request-path default
+    // is the SDK's installed integration set, read from the client itself: exactly the
+    // allowlisted names, so an upstream default that reappears fails here by name.
+    expect(result.options?.defaultIntegrations).toBe(false)
+    expect(result.installedIntegrations).toEqual([
+      "Context",
+      "Dedupe",
+      "EventFilters",
+      "FunctionToString",
+      "LinkedErrors",
+      "Modules",
+      "OnUncaughtException",
+      "OnUnhandledRejection",
+    ])
+    expect(
+      result.installedIntegrations.filter((name) => REQUEST_PATH_INTEGRATIONS.includes(name)),
+    ).toEqual([])
+
     const events = result.bodies.map(eventOf)
     for (const event of events) {
       expect(event.release).toBe(VERSION)
@@ -111,6 +145,7 @@ describe("real Sentry SDK transport privacy", () => {
         "OnUncaughtException",
         "OnUnhandledRejection",
       ],
+      defaultIntegrations: false,
       tracesSampleRate: 0,
       traceLifecycle: "static",
       sendClientReports: false,
@@ -125,6 +160,7 @@ describe("real Sentry SDK transport privacy", () => {
         urlQueryParams: false,
         graphQL: { document: false, variables: false },
         genAI: { inputs: false, outputs: false },
+        mcp: { inputs: false, outputs: false },
         databaseQueryData: false,
         queues: false,
         stackFrameVariables: false,

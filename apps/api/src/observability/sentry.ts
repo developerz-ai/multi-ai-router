@@ -60,7 +60,7 @@ export function initSentry(
   transport?: Sentry.BunOptions["transport"],
 ): void {
   if (env.sentryDsn === null) return
-  // Bun delegates to NodeClient, but v11.4's BunOptions omits this supported Node option.
+  // Bun delegates to NodeClient, but v11.10's BunOptions omits this supported Node option.
   const options: Sentry.BunOptions & { enableRuntimeChannelInjection: false } = {
     dsn: env.sentryDsn,
     environment: env.sentryEnvironment,
@@ -94,6 +94,11 @@ export function initSentry(
       urlQueryParams: false,
       graphQL: { document: false, variables: false },
       genAI: { inputs: false, outputs: false },
+      // v11.10 added MCP tool inputs/outputs as its own collection category, defaulting to on.
+      // No MCP integration is allowlisted, so nothing reaches it today — but the rule here is
+      // that every automatic collection surface is off, not the ones this release happens
+      // to reach.
+      mcp: { inputs: false, outputs: false },
       databaseQueryData: false,
       queues: false,
       stackFrameVariables: false,
