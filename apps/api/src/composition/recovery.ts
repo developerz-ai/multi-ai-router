@@ -29,7 +29,7 @@ export function createRecoveryComponents(deps: {
   config: Env["recovery"]
   logger: Logger
   now: () => Date
-  /** Which model each provider's recovery probe asks for (`IDLE_PROBE_MODELS`). */
+  /** Each provider's fallback probe model (`IDLE_PROBE_MODELS`), for accounts declaring none. */
   probeModels: Readonly<Record<string, string>>
   quotaSpentThreshold?: number
 }) {

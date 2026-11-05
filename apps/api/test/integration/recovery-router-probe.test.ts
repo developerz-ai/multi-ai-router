@@ -64,6 +64,7 @@ async function routerProbeFixture(
     reach?: "all" | "none"
     testNowCooldownSeconds?: number
     provider?: "zai" | "anthropic-oauth"
+    supportedModels?: string[]
   } = {},
 ) {
   await runMigrations({ url: databaseUrl, migrationsFolder: defaultMigrationsFolder() })
@@ -76,6 +77,7 @@ async function routerProbeFixture(
     ...(options.provider === "anthropic-oauth"
       ? { configDir: "/nonexistent/router-probe" }
       : { authMaterial: cipher.encrypt("fixture-key") }),
+    ...(options.supportedModels === undefined ? {} : { supportedModels: options.supportedModels }),
   })
   const lines: string[] = []
   const logger = createLogger({ level: "info", write: (line) => lines.push(line) })
@@ -544,6 +546,80 @@ test.skipIf(!databaseUrl)(
       expect((await f.recovery())?.state).toBe("uncertain")
       expect(refusals()).toHaveLength(1)
       expect(starts).toBe(0)
+    } finally {
+      await f.close()
+    }
+  },
+  20_000,
+)
+
+/** The model each upstream request named, read off the probe's own body. */
+async function modelOf(request: Request): Promise<string> {
+  return ((await request.clone().json()) as { model: string }).model
+}
+
+test.skipIf(!databaseUrl)(
+  "the probe asks for the account's first declared model, the provider default only without one",
+  async () => {
+    for (const [declared, expected] of [
+      [["glm-5", "glm-4.6"], "glm-5"],
+      [undefined, "glm-4.6"],
+    ] as const) {
+      const models: string[] = []
+      const f = await routerProbeFixture(
+        async (request) => {
+          models.push(await modelOf(request))
+          return completion()
+        },
+        declared === undefined ? {} : { supportedModels: [...declared] },
+      )
+      try {
+        await openPermit(f)
+        await sleep(200)
+        await f.components.coordinator.tick()
+        expect(models).toEqual([expected])
+        expect((await f.recovery())?.state).toBe("succeeded")
+      } finally {
+        await f.close()
+      }
+    }
+  },
+  20_000,
+)
+
+test.skipIf(!databaseUrl)(
+  "a probe whose model the upstream no longer serves settles uncertain, not succeeded",
+  async () => {
+    let starts = 0
+    const f = await routerProbeFixture(async () => {
+      starts++
+      // Prod 2026-11-05, MiniMax: the endpoint answered, about a model it retired.
+      return new Response(
+        JSON.stringify({ error: { message: 'The model "glm-4.6" is no longer available' } }),
+        { status: 404, headers: { "content-type": "application/json" } },
+      )
+    })
+    try {
+      await openPermit(f)
+      await sleep(200)
+      await f.components.coordinator.tick()
+      expect(starts).toBe(1)
+      expect((await f.recovery())?.state).toBe("uncertain")
+      const breaker = f.health.stateOf(f.account.id).breaker
+      expect(breaker.status).toBe("active")
+      expect(breaker.consecutiveFailures).toBe(0)
+      const refusals = () =>
+        f.lines.filter((line) => line.includes("router recovery probe was refused as a request"))
+      expect(refusals()).toHaveLength(1)
+      expect(refusals()[0]).toContain('"model":"glm-4.6"')
+      expect(refusals()[0]).toContain('"modelSource":"provider-default"')
+      // Not re-probed on every reopen with a model already refused.
+      await pastBounds(f)
+      await f.components.coordinator.tick()
+      await sleep(200)
+      await f.components.coordinator.tick()
+      expect(starts).toBe(1)
+      expect(refusals()).toHaveLength(1)
     } finally {
       await f.close()
     }
