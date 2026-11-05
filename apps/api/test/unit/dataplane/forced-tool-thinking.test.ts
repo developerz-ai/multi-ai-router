@@ -127,5 +127,8 @@ describe("a model that requires thinking keeps it on (prod 2026-11-05, MiniMax 2
     expect(requires("MiniMax-M3.1-Flash-Preview")).toBe(true)
     expect(requires("MiniMax-M3")).toBe(false)
     expect(requires("MiniMax-M3.1-Flashy")).toBe(false)
+    // No alias: the client's own spelling reaches the upstream (`routing/model.ts`).
+    expect(requires("minimax-m3.1-flash")).toBe(true)
+    expect(requires("MINIMAX-M3.1-FLASH-PREVIEW")).toBe(true)
   })
 })

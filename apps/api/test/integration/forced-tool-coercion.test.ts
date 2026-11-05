@@ -288,3 +288,88 @@ describe("/v1/chat/completions over the anthropic translation", () => {
     expect(body.choices[0]?.message.tool_calls).toBeUndefined()
   })
 })
+
+/**
+ * The path a model that requires thinking now takes (v2.45.9, MiniMax-M3.1-Flash): the forced tool
+ * is sent beside the vendor's default thinking, so a prose answer arrives after a thinking block.
+ */
+describe("/v1/messages: a thinking model's forced tool answered in text becomes the tool call", () => {
+  const FLASH = { ...PROBE, model: "MiniMax-M3.1-Flash" }
+
+  test("a thinking block plus a JSON text block becomes one tool_use", async () => {
+    const { app, upstream } = harness({
+      accounts: miniMax(),
+      responses: [
+        () =>
+          jsonResponse(200, {
+            id: "msg_1",
+            type: "message",
+            role: "assistant",
+            model: "MiniMax-M3.1-Flash",
+            content: [
+              { type: "thinking", thinking: "The user wants ok true.", signature: "sig" },
+              { type: "text", text: '{"ok": true}' },
+            ],
+            stop_reason: "end_turn",
+            usage: { input_tokens: 5, output_tokens: 6 },
+          }),
+      ],
+    })
+    const res = await app.request("/v1/messages", post(JSON.stringify(FLASH), bearer()))
+    const body = (await res.json()) as Message
+    await settle()
+
+    expect(JSON.parse(upstream.calls[0]?.body ?? "{}").thinking).toBeUndefined()
+    expect(res.status).toBe(200)
+    expect(body.stop_reason).toBe("tool_use")
+    const toolUses = body.content.filter((block) => block.type === "tool_use")
+    expect(toolUses).toHaveLength(1)
+    expect(toolUses[0]).toMatchObject({ name: "json", input: { ok: true } })
+    expect(body.content.some((block) => block.type === "text")).toBe(false)
+  })
+
+  test("streaming: thinking_delta then text_delta is re-emitted as a tool call", async () => {
+    const events = [
+      [
+        "message_start",
+        { message: { id: "msg_1", model: "MiniMax-M3.1-Flash", usage: { input_tokens: 5 } } },
+      ],
+      ["content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } }],
+      ["content_block_delta", { index: 0, delta: { type: "thinking_delta", thinking: "ok true" } }],
+      ["content_block_delta", { index: 0, delta: { type: "signature_delta", signature: "sig" } }],
+      ["content_block_stop", { index: 0 }],
+      ["content_block_start", { index: 1, content_block: { type: "text", text: "" } }],
+      ["content_block_delta", { index: 1, delta: { type: "text_delta", text: '{"ok": true}' } }],
+      ["content_block_stop", { index: 1 }],
+      ["message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 6 } }],
+      ["message_stop", {}],
+    ]
+    const { app } = harness({
+      accounts: miniMax(),
+      responses: [
+        () =>
+          new Response(
+            events
+              .map(
+                ([type, body]) =>
+                  `event: ${type}\ndata: ${JSON.stringify({ type, ...(body as object) })}\n\n`,
+              )
+              .join(""),
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          ),
+      ],
+    })
+    const res = await app.request(
+      "/v1/messages",
+      post(JSON.stringify({ ...FLASH, stream: true }), bearer()),
+    )
+    const raw = await res.text()
+
+    expect(res.headers.get("content-type")).toContain("text/event-stream")
+    expect(raw).toContain('"type":"tool_use"')
+    expect(raw).toContain('"stop_reason":"tool_use"')
+    expect(raw).toContain(JSON.stringify(JSON.stringify({ ok: true })).slice(1, -1))
+    expect(raw).not.toContain("text_delta")
+    expect(raw.indexOf("message_start")).toBeLessThan(raw.indexOf("message_stop"))
+  })
+})

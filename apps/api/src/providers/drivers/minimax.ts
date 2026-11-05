@@ -34,11 +34,12 @@ const INVALID_REQUEST_CODES = ["1027", "2013"]
  * Provenance: MiniMax's own refusal, prod 2026-11-05 22:41Z onward (61 `400`s): `model
  * "MiniMax-M3.1-Flash" requires adaptive thinking; thinking.type="disabled" (including
  * reasoning.effort=none) is not allowed (2013)`. The client named it `MiniMax-M3.1-Flash-Preview`,
- * so the pattern covers the family and its suffixed ids. MiniMax-M3 itself accepts `disabled`
+ * so the pattern covers the family and its suffixed ids, in any case: with no alias the client's
+ * spelling is what goes upstream (`routing/model.ts`). MiniMax-M3 itself accepts `disabled`
  * (measured 2026-10-15). Blast radius: a model matched here keeps thinking on beside a forced tool;
  * a model missed here is refused `400` (2013) on every forced-tool request.
  */
-const THINKING_REQUIRED_MODELS = /^MiniMax-M3\.1-Flash(?:-|$)/
+const THINKING_REQUIRED_MODELS = /^MiniMax-M3\.1-Flash(?:-|$)/i
 
 const MiniMaxEnvelope = z.object({
   base_resp: z.object({
