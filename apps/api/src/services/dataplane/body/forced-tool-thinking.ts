@@ -24,6 +24,31 @@
  */
 
 const MARKER = new TextEncoder().encode('"tool_choice"')
+const DISABLED = new TextEncoder().encode('"disabled"')
+
+/**
+ * A model that runs only with thinking on (`ProviderSurface.thinkingRequiredModels`, MiniMax-M3.1-
+ * Flash, prod 2026-11-05: `400` 2013 on every `thinking.type="disabled"`). For it the dial yields the
+ * other way: a stated `disabled`, whether the client's own or the translator's (a forced tool, a
+ * structured output, `reasoning_effort: none`), is removed and the vendor's default thinking stands.
+ * The forced `tool_choice` is kept: the vendor takes it beside thinking and, when it answers in prose
+ * instead, `forced-tool-coercion.ts` moves the text into the tool call. Removed rather than stated
+ * `adaptive`, because only the default is what the vendor has been observed to accept. Parses only
+ * when the bytes contain `"disabled"`; anything else is returned as the same bytes.
+ */
+export function keepThinkingForRequiredModel(bytes: Uint8Array): Uint8Array {
+  if (!contains(bytes, DISABLED)) return bytes
+  let body: unknown
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes))
+  } catch {
+    return bytes
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return bytes
+  const { thinking, ...rest } = body as Record<string, unknown>
+  if ((thinking as { type?: unknown } | null | undefined)?.type !== "disabled") return bytes
+  return new TextEncoder().encode(JSON.stringify(rest))
+}
 
 export function disableThinkingForForcedTool(bytes: Uint8Array): Uint8Array {
   if (!contains(bytes, MARKER)) return bytes

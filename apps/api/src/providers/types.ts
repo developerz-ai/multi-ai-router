@@ -303,6 +303,13 @@ export interface ProviderDriver {
   thinkingOnByDefault?(account: DriverAccount): boolean
 
   /**
+   * Whether this upstream model on this Account's anthropic surface runs only with thinking on
+   * (`ProviderSurface.thinkingRequiredModels`), so `thinking: {type: "disabled"}` is refused. Absent
+   * means no model requires it.
+   */
+  requiresThinking?(account: DriverAccount, upstreamModel: string): boolean
+
+  /**
    * Whether this Account's surface keys its prompt cache by the body's `prompt_cache_key`
    * (`ProviderSurface.bodyCacheKey`), so a translated body is sent one. Absent means no.
    */
