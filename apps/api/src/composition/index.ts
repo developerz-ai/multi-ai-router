@@ -1,6 +1,7 @@
 import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
 import { createAdminPlane } from "./admin"
 import { createCliResources } from "./cli-resources"
+import { recoveryProbeSender } from "./recovery"
 import { createRequestServices } from "./request-services"
 import { assembleRuntimeLifecycle } from "./runtime-lifecycle"
 import { createRuntimeRepositories } from "./runtime-repositories"
@@ -111,6 +112,10 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
       },
     },
   })
+
+  // The recovery probe's transport is the admin plane's "Test now", built just above; until this
+  // line no permit can issue (the coordinator starts with the lifecycle), so nothing waits on it.
+  recoveryComponents.probe.attach(recoveryProbeSender(admin.testNow))
 
   const { scheduler } = createRuntimeScheduler(
     deps,

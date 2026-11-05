@@ -154,6 +154,12 @@ export async function runHttpProbe(
     timeoutMs: deps.timeoutMs,
   })
 
+  // Folded as the SDK half folds its readings: a provider-reported reset must reach the health store
+  // routing reads, or the router's own recovery probe (`dataplane/recovery-probe.ts`) re-tests a
+  // window the provider already said is closed.
+  if (outcome.kind !== "admission-refused")
+    deps.health?.applyRateLimit(account.id, outcome.rateLimit, deps.now())
+
   if (outcome.kind === "success") {
     // Never relayed anywhere — this call has no client. Draining it is hygiene, not a translation.
     const raw = await outcome.response.arrayBuffer().catch(() => null)

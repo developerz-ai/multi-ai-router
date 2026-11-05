@@ -13,8 +13,9 @@ import { runHttpProbe, runSdkProbe } from "./test-now-probes"
  * The operator's **Test now** — a second, opt-in button beside "Re-check now"
  * (`recheck.ts`), and a deliberately different kind of answer.
  *
- * A re-check clears breaker marks and reports nothing about whether the account actually works,
- * because it sends nothing. This is the button for the question a re-check cannot answer: "does
+ * A re-check opens a recovery and answers before anything is sent: its one probe goes out later,
+ * through this same transport, when no client spends the permit first (`dataplane/recovery-probe.ts`).
+ * This is the button for the question a re-check's response cannot answer: "does
  * this credential actually complete a request?" It addresses **this one account directly** —
  * bypassing pool membership, key scope, and failover entirely, the same way `recheck.ts` reaches
  * past routing to touch one row — and sends the smallest real request the account's dialect can
@@ -66,6 +67,12 @@ export interface TestNowService {
       readonly model: string
       readonly confirmed?: boolean
       readonly backgroundExpectedAccount?: AccountRow
+      /**
+       * Internal, the router's own recovery probe only (`dataplane/recovery-probe.ts`): the
+       * designated permit's start guard, run once at the final upstream start and never ahead of
+       * it, because running it spends the permit. Exclusive with `backgroundExpectedAccount`.
+       */
+      readonly recoveryStartGuard?: () => Promise<void>
     },
   ): Promise<AdminResult<TestNowResult>>
   /** Local opt-in test timestamp; independent of durable recovery cooldown. */
@@ -140,6 +147,11 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
           : { ...input.backgroundExpectedAccount }
       if (backgroundExpectedAccount !== undefined && backgroundExpectedAccount.id !== accountId)
         return invalid("background account subject does not match", "background_admission_refused")
+      if (backgroundExpectedAccount !== undefined && input.recoveryStartGuard !== undefined)
+        return invalid(
+          "a background test cannot also spend a recovery permit",
+          "background_admission_refused",
+        )
       const account = await deps.accounts.findById(accountId)
       if (account === undefined) return notFound("No account has that id")
 
@@ -184,11 +196,12 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
       }
       lastChecked.set(accountId, now)
 
+      const startGuard = input.recoveryStartGuard ?? backgroundGuard
       const started = performance.now()
       const outcome =
         descriptor.transport === "agent-sdk"
-          ? await runSdkProbe(deps, account, input.model, backgroundGuard)
-          : await runHttpProbe(deps, call, account, input.model, backgroundGuard)
+          ? await runSdkProbe(deps, account, input.model, startGuard)
+          : await runHttpProbe(deps, call, account, input.model, startGuard)
       if (outcome.admissionRefused) {
         if (lastChecked.get(accountId) === now) {
           if (previous === undefined) lastChecked.delete(accountId)

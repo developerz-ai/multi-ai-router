@@ -217,9 +217,10 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     logger,
   })
 
-  // "Re-check now": clears the breaker marks so the next real request probes the account rather
-  // than sending a synthetic one the provider would still bill. Built before the services, because
-  // the accounts read overlays its last-checked timestamps.
+  // "Re-check now": clears the breaker marks and demands a recovery permit, which the next real
+  // request spends or, failing one inside the request wait budget, the router's own probe
+  // (`dataplane/recovery-probe.ts`). Built before the services, because the accounts read overlays
+  // its last-checked timestamps.
   const recheck = createRecheckService({
     accounts,
     audit,

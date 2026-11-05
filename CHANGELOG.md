@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.45.7] — 2026-11-05
+
+### Fixed
+
+- **A recovery no longer depends on a client request to settle: the router sends the one recovery probe itself.** A recovery permit was spent only by a client request, so with no traffic, or a client backing off past `RECOVERY_MAXIMUM_OUTCOME_MS`, the permit waited out that bound and was marked `uncertain`, and the next generation again needed a client request to demand it. "Re-check now" opened a permit and sent nothing. Prod, 2026-11-05: zai and MiniMax sat `uncertain` and out of rotation, each permit expiring at exactly 600 s with no attempt. Now (`apps/api/src/services/dataplane/recovery-probe.ts`): a permit still unspent after `RECOVERY_REQUEST_WAIT_MS` (the budget a waiting client gets first) is spent by one "Test now" completion through the same designated start guard a client uses, so the two can never both spend it; and each coordinator tick reopens an account whose `failed`/`uncertain` recovery is past `nextAllowedAt` with a usable status, no running breaker clock and no spent window (`recoveryAwaitsProbe`). An answer, or a refusal of the request itself, settles `succeeded`; any other failure settles `failed` and strikes the breaker as a recovery probe, whose clock holds off the next reopen; a spent permit with no verdict settles `uncertain`. One offer per permit, one permit per generation; a dead account is re-probed on the breaker's backoff, never faster than `RECOVERY_COOLDOWN_MS`. A Claude subscription spends one turn per generation, the turn its first client request would otherwise have spent. A client request that arrives during the probe is handled as before (`probe-in-flight`, inside the request wait budget). Regression: `apps/api/test/integration/recovery-router-probe.test.ts`, `apps/api/test/unit/recovery/awaits-probe.test.ts`. Documentation: `docs/idea/05-routing-and-failover.md` § The router sends the recovery probe itself.
+- **"Test now" over HTTP folds the provider's rate-limit reading into the health store**, as the Agent-SDK half always has. The reading was discarded, so a provider-reported reset never reached routing from a test; the router's recovery probe now relies on it to stay off a window the provider said is closed.
+- The `findIdle` contract comment (`packages/db/src/repositories/account-types.ts`) said `pending` and `uncertain` recoveries exclude an account; the predicate (`background-account-eligibility.ts`) excludes an `issued` permit and a `failed`/`uncertain` attempt only until its `next_allowed_at`, and never `pending`. The comment now says what the code does.
+
 ## [2.45.6] — 2026-11-04
 
 ### Fixed
@@ -1889,3 +1897,4 @@ your tooling config.
 [2.44.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.44.0
 [2.45.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.5
 [2.45.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.6
+[2.45.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.7

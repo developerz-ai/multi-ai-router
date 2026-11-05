@@ -58,6 +58,8 @@ export async function globalRecoveryFixture(fetch: FetchLike) {
         config: readRecoveryEnv({}).recovery,
         logger,
         now,
+        // No transport attached: these replicas spend permits through client requests only.
+        probeModels: {},
       })
       await catalog.refresh()
       let beforeDecrypt: (() => void) | undefined

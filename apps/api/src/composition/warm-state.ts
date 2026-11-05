@@ -1,5 +1,6 @@
 import { createCatalogSnapshotRepository } from "@multi-ai-router/db"
 import { createSdkQuotaStore } from "../providers"
+import { IDLE_PROBE_MODELS } from "../scheduler/tasks/idle-account-probe"
 import { createRoutingCatalog, loadCatalog } from "../services/catalog"
 import { createPriceBook } from "../services/cost"
 import {
@@ -108,6 +109,7 @@ export function createWarmState(
     config: env.recovery,
     logger,
     now,
+    probeModels: IDLE_PROBE_MODELS,
   })
   // The shipped price table plus the operator's overrides, held in memory for the same reason the
   // catalog is: every attempt is priced while the request is still being served. It shares the

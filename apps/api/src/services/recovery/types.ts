@@ -52,6 +52,11 @@ export interface RecoveryCoordinatorDeps {
   /** Must refuse reinstalling a consumed capability; synchronous and idempotent. */
   readonly install: (capability: RecoveryCapability) => boolean
   readonly retire: (accountId: string, generation: string) => void
+  /**
+   * Synchronous, each tick while issuing: request the recoveries no client is waiting on (a failed
+   * or uncertain attempt past `nextAllowedAt`) through the same automatic-request queue.
+   */
+  readonly reopen: () => void
   readonly warn: (message: string, error?: unknown) => void
 }
 export interface RecoveryCoordinator {
