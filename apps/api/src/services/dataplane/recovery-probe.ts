@@ -22,8 +22,10 @@ import type { RoutableAccount } from "./types"
  * Bounded by construction: one offer per installed permit (one permit per generation), consumed
  * through the same designated start guard a client request uses, so a client that takes the permit
  * first leaves the router nothing to send. Nothing is offered or sent once issuance closes. A failed
- * probe strikes the breaker, whose running clock `recoveryAwaitsProbe` respects before any reopen; an
- * account whose transport refuses before admission is not offered again until its lifecycle changes.
+ * probe strikes the breaker, whose running clock `recoveryAwaitsProbe` respects before any reopen. Two
+ * cases stop further offers to an account until its lifecycle changes (a re-check, a credential or
+ * status edit) or the process restarts: its transport refuses before admission, or the upstream
+ * refuses the probe's own request (`client-error`, `model-unsupported`), which settles `uncertain`.
  */
 
 /** What one router-sent probe came back with. */
@@ -61,7 +63,7 @@ export interface RecoveryProbeDeps {
     HealthStore,
     "captureAttempt" | "recordSuccess" | "recordFailure" | "applyRateLimit"
   >
-  /** Which model each provider is probed with; the account's own declared list is the fallback. */
+  /** Each provider's default probe model, used only when an account declares no models of its own. */
   readonly models: Readonly<Record<string, string>>
   /** `RECOVERY_REQUEST_WAIT_MS`: a client already waiting for the permit gets it first. */
   readonly graceMs: number
@@ -86,8 +88,9 @@ export function createRecoveryProbe(deps: RecoveryProbeDeps) {
     const account = deps.readAccount(id)
     const live = deps.access.currentSnapshot(id)
     if (account === undefined || live?.recovery?.generation !== capability.generation) return
-    const model = probeModel(live, deps.models)
-    if (model === undefined) return
+    const choice = probeModel(live, deps.models)
+    if (choice === undefined) return
+    const { model } = choice
     const candidate: Candidate = {
       account: live,
       poolId: null,
@@ -115,12 +118,32 @@ export function createRecoveryProbe(deps: RecoveryProbeDeps) {
       })
     } finally {
       if (attempt.started()) {
-        settle(deps, account, attempt, observation, result)
+        if (settle(deps, account, attempt, observation, result) === "request-refused")
+          modelRefused(account, choice, result)
         deps.health.applyRateLimit(id, reading, deps.now(), observation)
       } else if (result !== undefined) {
         notSent(account, result)
       }
     }
+  }
+
+  /**
+   * Our own one-line ping was refused as a request (prod 2026-11-05: MiniMax `404 The model
+   * "MiniMax-M2" is no longer available`, read as `succeeded`). The endpoint answered, which proves
+   * nothing about serving; re-probing with the same model would only be refused again.
+   */
+  const modelRefused = (
+    account: RoutableAccount,
+    choice: ProbeModel,
+    result: RecoveryProbeResult | undefined,
+  ) => {
+    unprobeable.set(account.id, account.lifecycleVersion)
+    deps.log.warn("router recovery probe was refused as a request; settled uncertain", {
+      accountId: account.id,
+      model: choice.model,
+      modelSource: choice.source,
+      signal: result?.kind === "answered" ? result.message : undefined,
+    })
   }
 
   const notSent = (account: RoutableAccount, result: RecoveryProbeResult) => {
@@ -210,26 +233,35 @@ export function createRecoveryProbe(deps: RecoveryProbeDeps) {
   }
 }
 
-/** The verdict first, as the client path records it; the caller folds the reading after. */
+/**
+ * The verdict first, as the client path records it; the caller folds the reading after.
+ *
+ * Unlike a client's request (`chain-recovery.ts`, where a `client-error` proves the account
+ * served), a refusal of the router's own ping proves only that the endpoint answered: its model or
+ * body is wrong for this account. That settles `uncertain` with no health verdict either way, never
+ * `succeeded`, and never `failed` (the breaker does not strike a refused request).
+ */
 function settle(
   deps: Pick<RecoveryProbeDeps, "health" | "now">,
   account: RoutableAccount,
   attempt: RecoveryAttempt,
   observation: HealthObservation,
   result: RecoveryProbeResult | undefined,
-) {
+): "settled" | "request-refused" {
   if (result?.kind !== "answered") {
     // Spent at the start guard with no verdict back: the call may have reached the provider.
     attempt.finish("uncertain")
-    return
+    return "settled"
   }
   const kind = result.ok ? null : failoverKind(result.failureKind ?? null, 0)
-  if (kind === null || kind === "client-error" || kind === "model-unsupported") {
-    // The account answered; a refusal of the request itself is not a failed recovery
-    // (`chain-recovery.ts`, prod 2026-10-13..15).
+  if (kind === "client-error" || kind === "model-unsupported") {
+    attempt.finish("uncertain")
+    return "request-refused"
+  }
+  if (kind === null) {
     attempt.finish("succeeded")
     deps.health.recordSuccess(account.id, observation)
-    return
+    return "settled"
   }
   attempt.finish("failed")
   const authKind = describeProvider(account.driver.provider).authKind
@@ -240,14 +272,27 @@ function settle(
     { ...(authKind === null ? {} : breakerOptionsFor(authKind)), recoveryProbe: true },
     observation,
   )
+  return "settled"
 }
 
-/** The provider's probe model when this account serves it, else the first model it declares. */
+interface ProbeModel {
+  readonly model: string
+  readonly source: "declared" | "provider-default"
+}
+
+/**
+ * The first model the account itself declares (the operator's order), and the provider's default
+ * only when it declares none: a shipped default goes stale when a vendor retires a model (prod
+ * 2026-11-05: `MiniMax-M2`), while the declared list is what this account routes today.
+ */
 function probeModel(
   account: AccountSnapshot,
   models: Readonly<Record<string, string>>,
-): string | undefined {
-  const preferred = models[account.provider]
-  if (preferred !== undefined && resolveModel(account, preferred).supported) return preferred
-  return account.supportedModels?.find((model) => resolveModel(account, model).supported)
+): ProbeModel | undefined {
+  const declared = account.supportedModels?.find((model) => resolveModel(account, model).supported)
+  if (declared !== undefined) return { model: declared, source: "declared" }
+  const fallback = models[account.provider]
+  if (fallback !== undefined && resolveModel(account, fallback).supported)
+    return { model: fallback, source: "provider-default" }
+  return undefined
 }
