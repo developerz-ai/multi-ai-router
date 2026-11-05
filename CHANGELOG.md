@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.45.9] — 2026-11-05
+
+### Fixed
+
+- **A forced tool on a MiniMax model that requires thinking no longer states thinking off.** From 2026-11-05 22:41 UTC developerz.ai's MiniMax-M3.1-Flash-Preview rung drew 61 `400`s: `model "MiniMax-M3.1-Flash" requires adaptive thinking; thinking.type="disabled" (including reasoning.effort=none) is not allowed (2013)`. Every structured call forces a tool, and the passthrough edit `body/forced-tool-thinking.ts` states `thinking: {type: "disabled"}` beside a forced tool for every vendor that thinks by default. That edit exists because MiniMax-M3 ignores a forced tool while thinking and answers in prose (2026-10-15, v2.37.3); it is kept for those models. A driver now names the models that refuse thinking off (`ProviderSurface.thinkingRequiredModels`; minimax: the `MiniMax-M3.1-Flash` family, from the vendor's own 2013 refusal; the router has no model-capability metadata to read it from). Toward such a model a stated `disabled` is removed, whoever wrote it — the client, the forced-tool edit, the translator's forced tool, structured output or `reasoning_effort: none` — and the vendor's default thinking stands, logged `thinking kept on`. The forced `tool_choice` is kept rather than degraded to `auto`: MiniMax takes a forced tool beside thinking (it ignored the force rather than refusing it on M3), and a forced tool answered in prose is still coerced into the tool call downstream (`dataplane/forced-tool-coercion.ts`). Regression: `apps/api/test/integration/forced-tool-thinking.test.ts` (an upstream that answers the prod `400` to any `disabled`), `apps/api/test/unit/dataplane/forced-tool-thinking.test.ts`. Documentation: `docs/idea/06-protocol-translation.md` § the forced-tool rows.
+
 ## [2.45.8] — 2026-11-05
 
 ### Fixed
@@ -1905,3 +1911,4 @@ your tooling config.
 [2.45.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.6
 [2.45.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.7
 [2.45.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.8
+[2.45.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.9

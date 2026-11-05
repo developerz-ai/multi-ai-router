@@ -12,7 +12,11 @@
  * than the router refusing a request the vendor can serve.
  */
 import { describe, expect, test } from "bun:test"
-import { disableThinkingForForcedTool } from "../../../src/services/dataplane/body/forced-tool-thinking"
+import { miniMaxDriver } from "../../../src/providers/drivers/minimax"
+import {
+  disableThinkingForForcedTool,
+  keepThinkingForRequiredModel,
+} from "../../../src/services/dataplane/body/forced-tool-thinking"
 
 const enc = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
 const dec = (bytes: Uint8Array) =>
@@ -94,5 +98,34 @@ describe("everything else is the client's own bytes", () => {
     const bytes = new TextEncoder().encode('"tool_choice" not json')
     expect(disableThinkingForForcedTool(bytes)).toBe(bytes)
     same([{ tool_choice: { type: "any" } }])
+  })
+})
+
+describe("a model that requires thinking keeps it on (prod 2026-11-05, MiniMax 2013)", () => {
+  const forced = { ...base, model: "MiniMax-M3.1-Flash", tool_choice: { type: "any" } }
+
+  test("a stated disabled is removed; everything else, the force included, is kept", () => {
+    expect(
+      dec(keepThinkingForRequiredModel(enc({ ...forced, thinking: { type: "disabled" } }))),
+    ).toEqual(forced)
+  })
+
+  test("absent, adaptive or enabled thinking, and a body that is not an object, are the same bytes", () => {
+    for (const body of [
+      enc(forced),
+      enc({ ...forced, thinking: { type: "adaptive" } }),
+      enc({ ...forced, thinking: { type: "enabled", budget_tokens: 9 } }),
+      new TextEncoder().encode('["disabled"]'),
+    ])
+      expect(keepThinkingForRequiredModel(body)).toBe(body)
+  })
+
+  test("MiniMax names the M3.1-Flash family only; MiniMax-M3 still accepts disabled", () => {
+    const account = { id: "mm", provider: "minimax" as const, dialect: "anthropic" as const }
+    const requires = (model: string) => miniMaxDriver.requiresThinking?.(account as never, model)
+    expect(requires("MiniMax-M3.1-Flash")).toBe(true)
+    expect(requires("MiniMax-M3.1-Flash-Preview")).toBe(true)
+    expect(requires("MiniMax-M3")).toBe(false)
+    expect(requires("MiniMax-M3.1-Flashy")).toBe(false)
   })
 })

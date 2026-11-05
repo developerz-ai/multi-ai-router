@@ -61,6 +61,13 @@ export interface ProviderSurface {
    */
   readonly thinkingOnByDefault?: boolean
   /**
+   * Anthropic-dialect surfaces only: the upstream model ids that run only with thinking on and
+   * refuse `thinking: {type: "disabled"}`. For these the router never states thinking off, not even
+   * beside a forced tool; a forced tool the vendor then answers in prose is coerced downstream
+   * (`services/dataplane/forced-tool-coercion.ts`). Provenance lives with each provider's pattern.
+   */
+  readonly thinkingRequiredModels?: RegExp
+  /**
    * openai-chat surfaces only: which spelling of the output ceiling this endpoint accepts. Defaults
    * to `max_tokens`, the name every OpenAI-compatible vendor states — a provider states the other
    * one here only where its own reference does, because guessing wrong drops the caller's ceiling
@@ -176,6 +183,8 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     resolveResponsesEgress: (account) =>
       surfaceFor(account).responsesEgress ?? DEFAULT_RESPONSES_EGRESS,
     thinkingOnByDefault: (account) => surfaceFor(account).thinkingOnByDefault === true,
+    requiresThinking: (account, upstreamModel) =>
+      surfaceFor(account).thinkingRequiredModels?.test(upstreamModel) === true,
     keysPromptCacheByBody: (account) => surfaceFor(account).bodyCacheKey === true,
     carriesCacheControl: (account) => surfaceFor(account).cacheControl === true,
     keysSessionByBody: (account) => surfaceFor(account).bodySessionId === true,

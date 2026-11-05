@@ -1,4 +1,7 @@
-import { disableThinkingForForcedTool } from "./body/forced-tool-thinking"
+import {
+  disableThinkingForForcedTool,
+  keepThinkingForRequiredModel,
+} from "./body/forced-tool-thinking"
 import { rewriteModel } from "./body/read"
 import type { ChainContext } from "./chain"
 import { sessionCacheKey } from "./egress/cache-key-header"
@@ -19,7 +22,7 @@ import type { AccountReasoningSeal } from "./reasoning-seal-context"
 export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | null {
   const pair = servable.translation
   if (pair !== null) {
-    return ctx.translated.bodyFor(
+    const translated = ctx.translated.bodyFor(
       pair,
       servable.upstreamModel,
       servable.chatCeiling,
@@ -42,6 +45,9 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
       reasoningSealFor(ctx, servable),
       servable.cacheControl,
     )
+    return pair.egress === "anthropic" && translated !== null
+      ? keepThinkingFor(ctx, servable, translated)
+      : translated
   }
   if (ctx.bodyBytes.length === 0) return null
   const named =
@@ -49,11 +55,36 @@ export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Ar
       ? ctx.bodyBytes
       : rewriteModel(ctx.bodyBytes, ctx.modelSpan, servable.upstreamModel)
   // The second passthrough edit: a vendor that thinks by default ignores a forced tool unless the
-  // body states thinking off (`body/forced-tool-thinking.ts`). Real Anthropic is never asked.
+  // body states thinking off (`body/forced-tool-thinking.ts`) — except on a model that refuses
+  // thinking off, where the edit runs the other way. Real Anthropic is never asked.
+  if (requiresThinking(servable)) return keepThinkingFor(ctx, servable, named)
   if (servable.kind === "http" && servable.driver.thinkingOnByDefault?.(servable.account.driver)) {
     return disableThinkingForForcedTool(named)
   }
   return named
+}
+
+function requiresThinking(servable: ServableCandidate): boolean {
+  return (
+    servable.kind === "http" &&
+    servable.driver.requiresThinking?.(servable.account.driver, servable.upstreamModel) === true
+  )
+}
+
+/** Reported, because a stated `disabled` the client or translator wrote did not reach the vendor. */
+function keepThinkingFor(
+  ctx: ChainContext,
+  servable: ServableCandidate,
+  bytes: Uint8Array,
+): Uint8Array {
+  if (!requiresThinking(servable)) return bytes
+  const kept = keepThinkingForRequiredModel(bytes)
+  if (kept !== bytes)
+    ctx.log?.info("thinking kept on: this model refuses thinking disabled", {
+      accountId: servable.account.id,
+      model: servable.upstreamModel,
+    })
+  return kept
 }
 
 /**
