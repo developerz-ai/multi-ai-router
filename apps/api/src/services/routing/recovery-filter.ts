@@ -1,4 +1,4 @@
-import { isWindowSpent } from "./quota"
+import { findSpentWindow, isWindowSpent } from "./quota"
 import type { AccountSnapshot } from "./types"
 
 export function hasRecoveryPermit(account: AccountSnapshot): boolean {
@@ -20,6 +20,26 @@ export function recoveryBlocksBackground(account: AccountSnapshot, now: Date): b
     (recovery.state === "failed" || recovery.state === "uncertain") &&
     recovery.nextAllowedAt.getTime() > now.getTime()
   )
+}
+/**
+ * A failed or uncertain recovery whose own `nextAllowedAt` has passed, on an account nothing else
+ * holds out: usable status, no breaker clock still running, no spent window. Only a new probe clears
+ * that gate, and with no client traffic none arrives, so the router opens one itself
+ * (`dataplane/recovery-probe.ts`). A spent window or a running clock is left to that clock: probing
+ * through it would spend a request the provider already said it will refuse.
+ */
+export function recoveryAwaitsProbe(
+  account: AccountSnapshot,
+  now: Date,
+  threshold: number,
+): boolean {
+  const recovery = account.recovery
+  if (recovery?.state !== "failed" && recovery?.state !== "uncertain") return false
+  if (recovery.nextAllowedAt.getTime() > now.getTime()) return false
+  if (account.status !== "active" && account.status !== "cooling_down") return false
+  const until = account.health.cooldownUntil
+  if (until !== undefined && until.getTime() > now.getTime()) return false
+  return findSpentWindow(account, now, threshold) === null
 }
 /** Only the exact captured persisted evidence may be bypassed by the designated permit. */
 export function recoveryAllowsQuota(

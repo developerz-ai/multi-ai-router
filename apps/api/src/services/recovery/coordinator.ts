@@ -125,6 +125,7 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
   }
   const work = async (): Promise<void> => {
     await coherent()
+    if (issuing()) await deps.reopen()
     for (const request of queues.automaticBatch(deps.config.batchSize)) {
       if (stopped) return
       dirty = true
@@ -244,6 +245,7 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
     closeIssuance: () => {
       issuanceClosed = true
     },
+    issuing,
     tick,
     start: () => {
       if (stopping !== undefined || flight !== undefined) return

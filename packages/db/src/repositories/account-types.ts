@@ -93,9 +93,10 @@ export interface AccountRepository extends AddedAccountRepositoryMethods {
    * credential expires without anyone noticing. Ordering puts the most neglected first, so a
    * bounded batch always makes progress on the worst case rather than revisiting the same head.
    *
-   * Only active accounts without an open recovery generation (`pending`, `issued`, or `uncertain`)
-   * are selected. Disabled, exhausted and needs_reauth accounts are excluded; an open recovery
-   * generation owns its account's next turn instead of background maintenance.
+   * Only active accounts whose recovery cannot still have a call on the wire are selected: an
+   * `issued` permit excludes the account, and so does a `failed` or `uncertain` attempt until its
+   * `next_allowed_at`; a `pending` row does not (`background-account-eligibility.ts`). Disabled,
+   * exhausted and needs_reauth accounts are excluded.
    */
   findIdle(input: { readonly before: Date; readonly limit: number }): Promise<AccountRow[]>
   /**

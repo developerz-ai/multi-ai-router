@@ -31,6 +31,7 @@ export async function runSdkProbe(
   deps: TestNowServiceDeps,
   account: AccountRow,
   model: string,
+  fold: (signal: RateLimitSignal) => void,
   beforeBackgroundUpstreamStart?: () => Promise<void>,
 ): Promise<ProbeOutcome> {
   if (deps.sdkProbe === undefined) return { ok: false, message: NO_SDK_PROBE }
@@ -83,7 +84,7 @@ export async function runSdkProbe(
       const snapshot = deps.quota.ingest(account.id, info, now)
       if (snapshot !== null) latest = snapshot.signal
     }
-    if (latest !== null) deps.health?.applyRateLimit(account.id, latest, now)
+    if (latest !== null) fold(latest)
   }
 
   return {
@@ -99,6 +100,7 @@ export async function runHttpProbe(
   call: FetchLike,
   account: AccountRow,
   requestedModel: string,
+  fold: (signal: RateLimitSignal) => void,
   beforeBackgroundUpstreamStart?: () => Promise<void>,
 ): Promise<ProbeOutcome> {
   const driver = httpDriver(account.provider)
@@ -153,6 +155,11 @@ export async function runHttpProbe(
     cipher: deps.cipher,
     timeoutMs: deps.timeoutMs,
   })
+
+  // Folded as the SDK half folds its readings: a provider-reported reset must reach the health store
+  // routing reads, or the router's own recovery probe (`dataplane/recovery-probe.ts`) re-tests a
+  // window the provider already said is closed. That probe's `fold` defers it past its verdict.
+  if (outcome.kind !== "admission-refused" && outcome.rateLimit !== null) fold(outcome.rateLimit)
 
   if (outcome.kind === "success") {
     // Never relayed anywhere — this call has no client. Draining it is hygiene, not a translation.
