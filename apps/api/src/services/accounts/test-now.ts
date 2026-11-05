@@ -1,6 +1,11 @@
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
-import type { SdkQuotaStore, SdkTestProbe, UpstreamFailureKind } from "../../providers"
+import type {
+  RateLimitSignal,
+  SdkQuotaStore,
+  SdkTestProbe,
+  UpstreamFailureKind,
+} from "../../providers"
 import { UpstreamAdmissionRefused } from "../../providers/upstream-admission"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, invalid, notFound, ok } from "../admin/result"
@@ -68,11 +73,17 @@ export interface TestNowService {
       readonly confirmed?: boolean
       readonly backgroundExpectedAccount?: AccountRow
       /**
-       * Internal, the router's own recovery probe only (`dataplane/recovery-probe.ts`): the
-       * designated permit's start guard, run once at the final upstream start and never ahead of
-       * it, because running it spends the permit. Exclusive with `backgroundExpectedAccount`.
+       * Internal, the router's own recovery probe only (`dataplane/recovery-probe.ts`).
+       * `startGuard` is the designated permit's guard, run once at the final upstream start and
+       * never ahead of it, because running it spends the permit. `rateLimitSink` receives the
+       * reading instead of the health store, so the caller folds it after its verdict. The press
+       * cooldown does not apply: the permit already bounds it to one per recovery generation.
+       * Exclusive with `backgroundExpectedAccount`.
        */
-      readonly recoveryStartGuard?: () => Promise<void>
+      readonly recovery?: {
+        readonly startGuard: () => Promise<void>
+        readonly rateLimitSink: (signal: RateLimitSignal) => void
+      }
     },
   ): Promise<AdminResult<TestNowResult>>
   /** Local opt-in test timestamp; independent of durable recovery cooldown. */
@@ -147,7 +158,7 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
           : { ...input.backgroundExpectedAccount }
       if (backgroundExpectedAccount !== undefined && backgroundExpectedAccount.id !== accountId)
         return invalid("background account subject does not match", "background_admission_refused")
-      if (backgroundExpectedAccount !== undefined && input.recoveryStartGuard !== undefined)
+      if (backgroundExpectedAccount !== undefined && input.recovery !== undefined)
         return invalid(
           "a background test cannot also spend a recovery permit",
           "background_admission_refused",
@@ -191,17 +202,24 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
       }
       const now = deps.now()
       const previous = lastChecked.get(accountId)
-      if (previous !== undefined && now.getTime() - previous.getTime() < cooldownMs) {
+      if (
+        input.recovery === undefined &&
+        previous !== undefined &&
+        now.getTime() - previous.getTime() < cooldownMs
+      ) {
         return ok(refused(accountId, previous))
       }
       lastChecked.set(accountId, now)
 
-      const startGuard = input.recoveryStartGuard ?? backgroundGuard
+      const startGuard = input.recovery?.startGuard ?? backgroundGuard
+      const fold =
+        input.recovery?.rateLimitSink ??
+        ((signal: RateLimitSignal) => deps.health?.applyRateLimit(accountId, signal, deps.now()))
       const started = performance.now()
       const outcome =
         descriptor.transport === "agent-sdk"
-          ? await runSdkProbe(deps, account, input.model, startGuard)
-          : await runHttpProbe(deps, call, account, input.model, startGuard)
+          ? await runSdkProbe(deps, account, input.model, fold, startGuard)
+          : await runHttpProbe(deps, call, account, input.model, fold, startGuard)
       if (outcome.admissionRefused) {
         if (lastChecked.get(accountId) === now) {
           if (previous === undefined) lastChecked.delete(accountId)
@@ -215,7 +233,16 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
         kind: AUDIT_KINDS.accountTested,
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: account.id,
-        detail: { provider: account.provider, outcome: outcome.ok ? "ok" : "failed" },
+        detail: {
+          provider: account.provider,
+          outcome: outcome.ok ? "ok" : "failed",
+          trigger:
+            input.recovery !== undefined
+              ? "router_recovery"
+              : backgroundExpectedAccount !== undefined
+                ? "idle_probe"
+                : "operator",
+        },
       })
 
       // A failed test used to leave no trace anywhere but the HTTP response the operator was

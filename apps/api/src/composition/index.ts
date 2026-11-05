@@ -154,7 +154,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
     start: lifecycle.start,
     closeAdmission: () => {
       activeRequests.closeAdmission()
-      recoveryComponents.coordinator.closeIssuance()
+      recoveryComponents.closeIssuance()
     },
     stop: lifecycle.stop,
   }

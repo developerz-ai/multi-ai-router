@@ -53,10 +53,10 @@ export interface RecoveryCoordinatorDeps {
   readonly install: (capability: RecoveryCapability) => boolean
   readonly retire: (accountId: string, generation: string) => void
   /**
-   * Synchronous, each tick while issuing: request the recoveries no client is waiting on (a failed
-   * or uncertain attempt past `nextAllowedAt`) through the same automatic-request queue.
+   * Each tick while issuing: request the recoveries no client is waiting on (a failed or uncertain
+   * attempt past `nextAllowedAt`) through the same automatic-request queue. Must not throw.
    */
-  readonly reopen: () => void
+  readonly reopen: () => Promise<void>
   readonly warn: (message: string, error?: unknown) => void
 }
 export interface RecoveryCoordinator {
@@ -68,6 +68,8 @@ export interface RecoveryCoordinator {
   recordOutcome(outcome: RecoveryOutcome): boolean
   /** Shutdown began: no new permit from here on; issued permits and outcomes keep flowing. */
   closeIssuance(): void
+  /** False once stopped or once issuance closed; true again only after `start`. */
+  issuing(): boolean
   tick(): Promise<void>
   start(): void
   stop(): Promise<void>

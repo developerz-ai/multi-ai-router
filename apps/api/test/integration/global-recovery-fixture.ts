@@ -1,6 +1,7 @@
 import { isRouterError } from "@multi-ai-router/core"
 import {
   createAccountRepository,
+  createApiKeyRepository,
   createCatalogSnapshotRepository,
   createDatabase,
   defaultMigrationsFolder,
@@ -60,6 +61,8 @@ export async function globalRecoveryFixture(fetch: FetchLike) {
         now,
         // No transport attached: these replicas spend permits through client requests only.
         probeModels: {},
+        keys: createApiKeyRepository(handle.db),
+        reachTtlMs: 1000,
       })
       await catalog.refresh()
       let beforeDecrypt: (() => void) | undefined

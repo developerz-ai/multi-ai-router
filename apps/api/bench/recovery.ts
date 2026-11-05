@@ -13,6 +13,7 @@ export function benchmarkRecovery(catalog: RoutingCatalog, health: HealthStore) 
   const coordinator: RecoveryCoordinator = {
     bootId: crypto.randomUUID(),
     closeIssuance: offPathOnly,
+    issuing: offPathOnly,
     demand: offPathOnly,
     requestAutomatic: offPathOnly,
     recordOutcome: offPathOnly,

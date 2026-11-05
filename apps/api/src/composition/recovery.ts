@@ -1,5 +1,6 @@
 import {
   type AccountRepository,
+  type ApiKeyRepository,
   createRecoveryRepository,
   type Database,
 } from "@multi-ai-router/db"
@@ -11,6 +12,7 @@ import type { HealthStore } from "../services/dataplane/health"
 import { createRecoveryAccess } from "../services/dataplane/recovery-access"
 import { createRecoveryCapabilities } from "../services/dataplane/recovery-capability"
 import { createRecoveryProbe, type RecoveryProbeSend } from "../services/dataplane/recovery-probe"
+import { createReachability } from "../services/dataplane/recovery-reach"
 import type { RoutableAccount } from "../services/dataplane/types"
 import { createRecoveryCoordinator } from "../services/recovery"
 import { DEFAULT_QUOTA_SPENT_THRESHOLD } from "../services/routing"
@@ -20,6 +22,10 @@ export function createRecoveryComponents(deps: {
   accounts: AccountRepository
   health: HealthStore
   catalog: RoutingCatalogStore
+  /** Key scopes, read off-path only when an account is due a reopen. */
+  keys: Pick<ApiKeyRepository, "list" | "listTargetsForKeys">
+  /** The catalog's staleness bound (`CATALOG_REFRESH_SECONDS`), reused for key reach. */
+  reachTtlMs: number
   config: Env["recovery"]
   logger: Logger
   now: () => Date
@@ -84,13 +90,20 @@ export function createRecoveryComponents(deps: {
     accounts: () => [...held.values()],
     readAccount: (id) => held.get(id),
     available: (id) => capabilities.available(id),
+    issuing: () => coordinator.issuing(),
+    reach: createReachability({
+      keys: deps.keys,
+      pools: () => deps.catalog.pools(),
+      now: deps.now,
+      ttlMs: deps.reachTtlMs,
+    }),
     health: deps.health,
     models: deps.probeModels,
     graceMs: deps.config.requestWaitMs,
     quotaSpentThreshold,
     schedule,
     now: deps.now,
-    warn,
+    log: deps.logger.child({ component: "recovery-probe" }),
   })
   return {
     repository,
@@ -99,6 +112,11 @@ export function createRecoveryComponents(deps: {
     access,
     /** `attach` the transport once the admin plane has built it (`composition/index.ts`). */
     probe,
+    /** The shutdown signal: no new permit, and no grace timer left to spend one. */
+    closeIssuance() {
+      coordinator.closeIssuance()
+      probe.close()
+    },
     reconcile(accounts: readonly RoutableAccount[]) {
       const next = new Map(accounts.map((account) => [account.id, account]))
       for (const id of held.keys())
@@ -113,17 +131,31 @@ export function createRecoveryComponents(deps: {
 
 /**
  * The recovery probe spends the admin plane's own "Test now", exactly as the idle sweep does: one
- * transport, one per-account cooldown, one audit kind. `confirmed`: a Claude subscription's probe is
- * the one turn its first client request would otherwise have spent, once per recovery generation.
+ * transport, one audit kind (`trigger: router_recovery`). Not its press cooldown: the permit already
+ * bounds the probe to one per generation, and a 120 s operator cooldown against a 30 s recovery
+ * cooldown would let the permit expire unspent, the defect this probe exists to close.
+ * `confirmed`: a Claude subscription's probe is the one turn its first client request would
+ * otherwise have spent.
  */
 export function recoveryProbeSender(testNow: Pick<TestNowService, "test">): RecoveryProbeSend {
-  return async (accountId, model, startGuard) => {
+  return async ({ accountId, model, startGuard, rateLimitSink }) => {
     const result = await testNow.test(accountId, {
       model,
       confirmed: true,
-      recoveryStartGuard: startGuard,
+      recovery: { startGuard, rateLimitSink },
     })
-    // A refusal (unknown id, unimplemented provider, declined admission) sent nothing.
-    return result.ok ? result.value : { tested: false }
+    if (!result.ok)
+      // The permit's own guard refused (a client took it) versus a transport that cannot serve.
+      return result.failure.code === "background_admission_refused"
+        ? { kind: "declined" }
+        : { kind: "refused", reason: result.failure.message }
+    const value = result.value
+    if (!value.tested) return { kind: "refused", reason: "test now declined the press" }
+    return {
+      kind: "answered",
+      ok: value.outcome === "ok",
+      message: value.message ?? "",
+      ...(value.failureKind === undefined ? {} : { failureKind: value.failureKind }),
+    }
   }
 }

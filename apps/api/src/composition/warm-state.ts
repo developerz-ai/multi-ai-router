@@ -21,7 +21,7 @@ export function createWarmState(
   now: () => Date,
 ) {
   const { env, database, logger } = deps
-  const { accounts, priceOverrides, modelCatalog } = repositories
+  const { accounts, keys, priceOverrides, modelCatalog } = repositories
   // --- warm state -----------------------------------------------------------
   // The Claude subscription transport's quota state: keyed by Account and living as long as this
   // runtime, because a `rate_limit_event` on one turn is what cools the account down on the next
@@ -106,6 +106,8 @@ export function createWarmState(
     accounts,
     catalog,
     health,
+    keys,
+    reachTtlMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     config: env.recovery,
     logger,
     now,
