@@ -22,8 +22,10 @@ import type { RoutableAccount } from "./types"
  * Bounded by construction: one offer per installed permit (one permit per generation), consumed
  * through the same designated start guard a client request uses, so a client that takes the permit
  * first leaves the router nothing to send. Nothing is offered or sent once issuance closes. A failed
- * probe strikes the breaker, whose running clock `recoveryAwaitsProbe` respects before any reopen; an
- * account whose transport refuses before admission is not offered again until its lifecycle changes.
+ * probe strikes the breaker, whose running clock `recoveryAwaitsProbe` respects before any reopen. Two
+ * cases stop further offers to an account until its lifecycle changes (a re-check, a credential or
+ * status edit) or the process restarts: its transport refuses before admission, or the upstream
+ * refuses the probe's own request (`client-error`, `model-unsupported`), which settles `uncertain`.
  */
 
 /** What one router-sent probe came back with. */

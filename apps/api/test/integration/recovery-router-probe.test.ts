@@ -626,3 +626,43 @@ test.skipIf(!databaseUrl)(
   },
   20_000,
 )
+
+test.skipIf(!databaseUrl)(
+  "after a refused probe, a client request takes the next permit and the recovery succeeds",
+  async () => {
+    let starts = 0
+    const f = await routerProbeFixture(
+      async () => {
+        starts++
+        return starts === 1
+          ? new Response(
+              JSON.stringify({ error: { message: 'The model "glm-4.6" is no longer available' } }),
+              { status: 404, headers: { "content-type": "application/json" } },
+            )
+          : completion()
+      },
+      // The refused probe's own nextAllowedAt passes at once, so a client can open the next one.
+      { cooldownMs: 1 },
+    )
+    try {
+      await openPermit(f)
+      await sleep(200)
+      await f.components.coordinator.tick()
+      expect((await f.recovery())?.state).toBe("uncertain")
+      // The first client request finds the account gated and files the automatic request.
+      expect((await f.dispatch()).status).toBe(429)
+      await f.components.coordinator.tick()
+      expect((await f.recovery())?.state).toBe("issued")
+      await sleep(200)
+      // The router does not race the client for it: this account's probe was refused.
+      expect(starts).toBe(1)
+      expect((await f.dispatch()).status).toBe(200)
+      expect(starts).toBe(2)
+      await f.components.coordinator.tick()
+      expect((await f.recovery())?.state).toBe("succeeded")
+    } finally {
+      await f.close()
+    }
+  },
+  20_000,
+)
