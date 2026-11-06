@@ -72,8 +72,9 @@ schedules:
     days: [mon, tue, wed, fri, sat, sun]
     hours_utc: [5]
     brief_file: .dz/briefs/security-release.md
+  # Weekly: CI, review and security are event-driven or have their own daily slot above.
   - name: health
-    days: [mon, tue, wed, thu, fri, sat, sun]
+    days: [mon]
     hours_utc: [7]
     brief_file: .dz/briefs/health.md
   - name: improve
