@@ -225,6 +225,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
             authMaterial: null,
             configDir: null,
             tokenExpiresAt: null,
+            authRefreshSpentOn: null,
             lastUsedAt: null,
             status: "active",
             label: "fake-codex",

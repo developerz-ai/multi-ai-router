@@ -1,13 +1,17 @@
-import type {
-  AccountObservation,
-  AccountRepository,
-  AccountRow,
-  OauthStateRow,
+import {
+  type AccountObservation,
+  type AccountRepository,
+  type AccountRow,
+  credentialFingerprint,
+  type OauthStateRow,
 } from "@multi-ai-router/db"
 
 type Methods = Pick<
   AccountRepository,
   | "saveRefreshedCredential"
+  | "reviveRefreshedCredential"
+  | "spendAuthRefresh"
+  | "releaseAuthRefresh"
   | "transitionObservedStatus"
   | "updateOperatorAccount"
   | "recheckAccount"
@@ -85,6 +89,39 @@ export function memoryAccountLifecycle(
       const row = find(id)
       if (row === undefined || row.authMaterial !== expectedAuthMaterial) return undefined
       return write(row, { authMaterial, tokenExpiresAt }, now)
+    },
+    reviveRefreshedCredential: async ({
+      id,
+      expectedAuthMaterial,
+      authMaterial,
+      tokenExpiresAt,
+      now,
+    }) => {
+      const row = find(id)
+      if (row === undefined || row.authMaterial !== expectedAuthMaterial) return undefined
+      return write(
+        row,
+        {
+          authMaterial,
+          tokenExpiresAt,
+          authRefreshSpentOn: credentialFingerprint(authMaterial),
+          lifecycleVersion: row.lifecycleVersion + 1,
+          authRecoveryVersion: row.authRecoveryVersion + 1,
+          status: row.status === "needs_reauth" ? "active" : row.status,
+        },
+        now,
+      )
+    },
+    spendAuthRefresh: async ({ id, expectedAuthMaterial, now }) => {
+      const row = find(id)
+      if (row === undefined || row.authMaterial !== expectedAuthMaterial) return undefined
+      return write(row, { authRefreshSpentOn: credentialFingerprint(expectedAuthMaterial) }, now)
+    },
+    releaseAuthRefresh: async ({ id, expectedAuthMaterial, now }) => {
+      const row = find(id)
+      if (row === undefined || row.authMaterial !== expectedAuthMaterial) return undefined
+      // `write` drops undefined, not null, so this does clear the column.
+      return write(row, { authRefreshSpentOn: null }, now)
     },
     transitionObservedStatus: async ({ id, expected, status, now, quotaWindows }) => {
       const row = find(id)

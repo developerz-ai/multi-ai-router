@@ -40,6 +40,7 @@ import {
   createDiscoverModelsService,
   createRecheckService,
   createTestNowService,
+  refreshErrorLogger,
   refresherFromEnv,
   withAvailability,
   withCredentialMetadata,
@@ -204,6 +205,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     catalog,
     refreshLock: deps.refreshLock,
   })
+  const refreshFailed = refreshErrorLogger(logger)
   const connect = connectFromEnv({
     cli,
     accounts,
@@ -232,6 +234,12 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     operatorCheckLeaseMs: env.recovery.operatorCheckLeaseMs,
     recovery: deps.recovery.repository,
     onRecoveryRequested: (accountId) => deps.recovery.coordinator.demand(accountId),
+    // `retryParked` answers `not-refreshable` for a Claude subscription: its token is the SDK's.
+    onParkedRecheck: (accountId) => {
+      refresher
+        .retryParked(accountId)
+        .catch((error) => refreshFailed("re-checked refresh raised", error, accountId))
+    },
   })
 
   // "Test now": one real, opt-in completion against one account. Its own cooldown and its own

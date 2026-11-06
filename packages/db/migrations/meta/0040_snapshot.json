@@ -1,5 +1,5 @@
 {
-  "id": "bf9c6475-da68-4b6d-95dd-a0c8dc31dcbb",
+  "id": "97a75b30-c60c-4969-85e2-6c43ebb6f86f",
   "prevId": "e9ebe6ae-8223-48ca-a187-7912c858a72d",
   "version": "7",
   "dialect": "postgresql",
@@ -274,6 +274,12 @@
         "token_expires_at": {
           "name": "token_expires_at",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "auth_refresh_spent_on": {
+          "name": "auth_refresh_spent_on",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -3230,7 +3236,6 @@
         "mistral",
         "together",
         "cerebras",
-        "opencode-go",
         "ollama",
         "openai-compatible",
         "anthropic-compatible"
@@ -3272,7 +3277,8 @@
         "sdk_transcript_sweep",
         "credential_keepalive",
         "login_lifetime_watch",
-        "usage_weekly_report"
+        "usage_weekly_report",
+        "cooldown_recheck"
       ]
     },
     "public.scheduled_task_outcome": {

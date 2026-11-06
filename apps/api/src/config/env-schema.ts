@@ -147,6 +147,7 @@ export const ENV_FIELDS = {
   USAGE_ROLLUP_INTERVAL_MINUTES: atLeastOne.optional(),
   OAUTH_STATE_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
   QUOTA_FLOOR_INTERVAL_MINUTES: atLeastOne.optional(),
+  COOLDOWN_RECHECK_INTERVAL_MINUTES: atLeastOne.optional(),
   CONFIG_DIR_REAP_INTERVAL_MINUTES: atLeastOne.optional(),
   SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES: atLeastOne.optional(),
   // Both refuse 0: an interval of zero re-arms every millisecond, and a threshold of zero makes

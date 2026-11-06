@@ -68,23 +68,21 @@ export function createRequestServices(
     ...(cli.sessionCarrier === undefined ? {} : { carrier: cli.sessionCarrier }),
   })
   let backgroundAdmissionOpen = true
+  const backgroundAdmission = {
+    accounts,
+    catalog,
+    access: recoveryComponents.access,
+    now,
+    quotaSpentThreshold: DEFAULT_QUOTA_SPENT_THRESHOLD,
+    logger,
+    accepting: () => backgroundAdmissionOpen,
+  }
   const backgroundStartGuard = (
     expected: Parameters<typeof createWarmBackgroundStartGuard>[1],
     signal?: AbortSignal,
-  ) =>
-    createWarmBackgroundStartGuard(
-      {
-        accounts,
-        catalog,
-        access: recoveryComponents.access,
-        now,
-        quotaSpentThreshold: DEFAULT_QUOTA_SPENT_THRESHOLD,
-        logger,
-        accepting: () => backgroundAdmissionOpen,
-      },
-      expected,
-      signal,
-    )
+  ) => createWarmBackgroundStartGuard(backgroundAdmission, expected, signal)
+  const cooldownRecheckGuard = (expected: Parameters<typeof createWarmBackgroundStartGuard>[1]) =>
+    createWarmBackgroundStartGuard({ ...backgroundAdmission, admitCooling: true }, expected)
 
   // The Claude subscription transport, over the semaphore pair above. Its quota store is built
   // with the rest of the warm state, since `HealthStore.reset` has to be able to clear it.
@@ -219,6 +217,7 @@ export function createRequestServices(
     limiter,
     sessionStore,
     backgroundStartGuard,
+    cooldownRecheckGuard,
     invokeSdk,
     usageGaugeProbe,
     catalogRefreshDeps,

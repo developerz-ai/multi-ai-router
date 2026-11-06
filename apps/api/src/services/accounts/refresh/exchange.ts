@@ -11,7 +11,8 @@ export type RefreshFailure =
   | "refused"
   | "unreadable-tokens"
 export type RefreshOutcome =
-  | { readonly kind: "success"; readonly row: AccountRow }
+  /** `revived`: the refresh ran on a parked account and ended its `needs_reauth`. */
+  | { readonly kind: "success"; readonly row: AccountRow; readonly revived: boolean }
   | {
       readonly kind: "skipped"
       readonly reason: "busy" | "superseded" | "aborted" | "not-refreshable" | "unknown-account"
@@ -20,7 +21,10 @@ export type RefreshOutcome =
   | { readonly kind: "failure"; readonly reason: RefreshFailure; readonly observed: AccountRow }
 
 export interface RefreshExchangeDeps {
-  readonly accounts: Pick<AccountRepository, "saveRefreshedCredential">
+  readonly accounts: Pick<
+    AccountRepository,
+    "saveRefreshedCredential" | "reviveRefreshedCredential"
+  >
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   readonly fetch: (request: Request) => Promise<Response>
   readonly now: () => Date
@@ -84,7 +88,7 @@ export async function refreshCredential(
 
   // Persist a known rotated grant even if shutdown arrived after its response was parsed.
   const now = deps.now()
-  const committed = await deps.accounts.saveRefreshedCredential({
+  const grant = {
     id: row.id,
     expectedAuthMaterial: row.authMaterial as string,
     authMaterial: deps.cipher.encrypt(
@@ -99,10 +103,14 @@ export async function refreshCredential(
         ? null
         : new Date(now.getTime() + tokens.expiresInSeconds * 1_000),
     now,
-  })
+  }
+  const revived = row.status === "needs_reauth"
+  const committed = revived
+    ? await deps.accounts.reviveRefreshedCredential(grant)
+    : await deps.accounts.saveRefreshedCredential(grant)
   return committed === undefined
     ? { kind: "skipped", reason: "superseded" }
-    : { kind: "success", row: committed }
+    : { kind: "success", row: committed, revived }
 }
 
 function readHeld(deps: RefreshExchangeDeps, row: AccountRow): StoredOAuthCredential | null {

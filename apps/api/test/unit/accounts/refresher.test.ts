@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { writeStoredOAuth } from "../../../src/services/accounts"
-import { accountRow, CIPHER, harness, NOW, tokenResponse } from "./refresh-fixtures"
+import { accountRow, CIPHER, harness, NOW, spentParked, tokenResponse } from "./refresh-fixtures"
 
 describe("arming, driven by the clock", () => {
   test("arms at a fraction of the remaining lifetime, not a fixed lead", async () => {
@@ -33,9 +33,9 @@ describe("arming, driven by the clock", () => {
     expect(h.schedule.count()).toBe(0)
   })
 
-  test("arms nothing for a disabled account, or one already needing reauth", async () => {
+  test("arms nothing for a disabled account, or one whose parked refresh is spent", async () => {
     const disabled = accountRow({ id: "d", status: "disabled" })
-    const needsReauth = accountRow({ id: "n", status: "needs_reauth" })
+    const needsReauth = spentParked({ id: "n" })
     const h = harness([disabled, needsReauth])
 
     await h.refresher.start()
@@ -146,8 +146,8 @@ describe("failure never fails a request — it parks the account", () => {
     expect(h.rows.find((r) => r.id === row.id)?.status).toBe("disabled")
   })
 
-  test("a parked account requires an explicit authorization", async () => {
-    const row = accountRow({ status: "needs_reauth" })
+  test("a parked account whose one refresh is spent requires an explicit authorization", async () => {
+    const row = spentParked()
     const h = harness([row])
     expect(await h.refresher.refreshNow(row.id)).toMatchObject({
       kind: "skipped",

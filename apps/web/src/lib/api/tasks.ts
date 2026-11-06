@@ -49,6 +49,7 @@ const TASK_LABELS: Readonly<Record<string, string>> = {
   credential_keepalive: "Subscription credential keepalive",
   login_lifetime_watch: "Subscription login lifetime watch",
   usage_weekly_report: "Weekly usage report",
+  cooldown_recheck: "Cooldown recheck",
 }
 
 /** An unknown name is humanised, never dropped — a task added upstream must still render. */
@@ -72,6 +73,7 @@ const TASK_ITEMS: Readonly<Record<string, string>> = {
   credential_keepalive: "keepalive turns spent",
   login_lifetime_watch: "renewals warned about",
   usage_weekly_report: "reports generated",
+  cooldown_recheck: "accounts rechecked",
 }
 
 /** What this task's `itemsProcessed` counts, so the sentence reads like English. */

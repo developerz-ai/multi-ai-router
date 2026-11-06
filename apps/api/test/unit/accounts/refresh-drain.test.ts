@@ -17,6 +17,42 @@ function expireDrain(h: ReturnType<typeof harness>): void {
   timeout?.run()
 }
 
+test("a revival committing after the drain gave up is still audited, with no catalog work", async () => {
+  const rows = [accountRow({ status: "needs_reauth" })]
+  const repository = fakeAccounts(rows)
+  const entered = deferred<void>()
+  const permit = deferred<void>()
+  let barriers = 0
+  const h = harness(
+    rows,
+    { shutdownDrainMs: 20 },
+    {
+      accounts: {
+        ...repository,
+        reviveRefreshedCredential: async (input) => {
+          entered.resolve()
+          await permit.promise
+          return repository.reviveRefreshedCredential(input)
+        },
+      },
+      refreshCatalogAfterMutation: async () => {
+        barriers++
+      },
+    },
+  )
+  const flight = h.refresher.refreshNow("acct-1")
+  await entered.promise
+  const stop = h.refresher.stop()
+  expireDrain(h)
+  await stop
+  permit.resolve()
+  await flight
+
+  expect(h.rows[0]?.status).toBe("active")
+  expect(h.events).toMatchObject([{ kind: "account.reauthorized", subjectId: "acct-1" }])
+  expect(barriers).toBe(0)
+})
+
 test("shutdown bounds stalled parsed-token CAS and suppresses subsequent catalog work", async () => {
   const rows = [accountRow()]
   const repository = fakeAccounts(rows)

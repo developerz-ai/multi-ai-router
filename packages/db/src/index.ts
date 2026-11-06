@@ -37,6 +37,7 @@ export type {
   AccountLifecycleMethods,
   AccountObservation,
 } from "./repositories/account-lifecycle-types"
+export { credentialFingerprint } from "./repositories/account-recovery-common"
 export { createRecoveryRepository } from "./repositories/account-recovery-repository"
 export type { RecoveryRepository } from "./repositories/account-recovery-types"
 export type {

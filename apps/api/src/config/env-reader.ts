@@ -196,6 +196,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       usageReportIntervalMinutes: usageReport.usageReportIntervalMinutes,
       oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
       quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
+      cooldownRecheckIntervalMinutes: raw.COOLDOWN_RECHECK_INTERVAL_MINUTES ?? 60,
       // Hours, not minutes: an orphan is a crash artifact, so a router that never crashes sweeps
       // an empty root forever and one that did leaves a directory nobody is racing to reclaim.
       configDirReapIntervalMinutes: raw.CONFIG_DIR_REAP_INTERVAL_MINUTES ?? 360,

@@ -75,6 +75,8 @@ export interface RecheckServiceDeps {
   readonly refreshCatalog: () => Promise<void>
   /** Synchronous off-path scheduling; never blocks on issuer or exposes the permit. */
   readonly onRecoveryRequested?: (accountId: string) => void
+  /** A committed re-check of a `needs_reauth` account: its refresh gets one more try, off-path. */
+  readonly onParkedRecheck?: (accountId: string) => void
   readonly operatorCheckLeaseMs?: number
   readonly cooldownSeconds: number
 }
@@ -130,6 +132,7 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
               : { loggedIn: auth.loggedIn, statusChangedTo: auth.statusChangedTo }),
           },
         })
+        if (committed.account.status === "needs_reauth") deps.onParkedRecheck?.(accountId)
       }
       return ok({ ...recheckView(accountId, committed), ...(auth === undefined ? {} : { auth }) })
     } finally {

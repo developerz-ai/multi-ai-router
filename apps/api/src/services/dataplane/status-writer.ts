@@ -36,6 +36,11 @@ export interface AccountStatusWriter {
     quotaWindows?: readonly QuotaWindowState[],
   ): void
   forget(accountId: string): void
+  /**
+   * Told once per committed `needs_reauth`, off the request path, on the replica whose write won.
+   * Wired after the refresher exists, which is built after this writer. Must not throw.
+   */
+  attachParked(listener: (accountId: string) => void): void
   flush(): Promise<void>
   start(): void
   stop(): Promise<void>
@@ -56,6 +61,7 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
 
   const forgotten = new Map<string, number>()
 
+  let onParked: ((accountId: string) => void) | undefined
   let timer: ReturnType<typeof setInterval> | null = null
   let inFlight: Promise<void> | null = null
   let unsettled = 0
@@ -106,6 +112,7 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
         }
         written += 1
         log.warn("account parked by the router", { accountId, status })
+        if (status === "needs_reauth") onParked?.(accountId)
       } catch (error) {
         const newer = pending.get(accountId)
         if (
@@ -169,6 +176,10 @@ export function createAccountStatusWriter(deps: AccountStatusWriterDeps): Accoun
     forget(accountId) {
       forgotten.set(accountId, (forgotten.get(accountId) ?? 0) + 1)
       pending.delete(accountId)
+    },
+
+    attachParked(listener) {
+      onParked = listener
     },
 
     flush,

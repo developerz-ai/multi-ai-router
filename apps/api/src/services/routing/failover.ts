@@ -9,7 +9,7 @@
  * | `5xx`, connection failure, timeout | Retry the next candidate; counts toward the failure streak. |
  * | other `4xx` | **Do not retry.** A bad request is bad at every account. |
  * | model not served (driver-classified) | Retry the next candidate. No breaker strike: the account answered, about a name it never served. |
- * | `401` / `403` | Retry the next candidate. The account is parked `needs_reauth` / `disabled`; a rejected credential is *this account's* problem, not the request's. |
+ * | `401` / `403` | Retry the next candidate. The account is parked `needs_reauth`, where a refreshable credential earns one off-path refresh, or cools `credential-rejected`; a rejected credential is *this account's* problem, not the request's. |
  *
  * Three rules dominate the table:
  *
