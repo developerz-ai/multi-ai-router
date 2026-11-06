@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { CODEX_RESPONSES_EGRESS } from "../../../src/providers"
 import {
   cacheKeyHeader,
+  conversationId,
   effectiveCacheKey,
   sessionCacheKey,
 } from "../../../src/services/dataplane/egress/cache-key-header"
@@ -71,5 +72,22 @@ describe("effectiveCacheKey", () => {
       expect(effectiveCacheKey(none, "router")).toBe("router")
     }
     expect(effectiveCacheKey(undefined, undefined)).toBeUndefined()
+  })
+})
+
+describe("conversationId", () => {
+  test("is stable for one conversation and differs per conversation and per router key", () => {
+    expect(conversationId("key-a", "turn-1")).toBe(conversationId("key-a", "turn-1"))
+    expect(conversationId("key-a", "turn-1")).not.toBe(conversationId("key-a", "turn-2"))
+    expect(conversationId("key-a", "turn-1")).not.toBe(conversationId("key-b", "turn-1"))
+  })
+
+  test("carries no client value", () => {
+    expect(conversationId("key-a", "turn-1")).not.toContain("turn-1")
+  })
+
+  test("answers for an unbound key, which sessionCacheKey leaves unnamed", () => {
+    expect(sessionCacheKey("key-a", "unbound_1", "unbound")).toBeUndefined()
+    expect(conversationId("key-a", "unbound_1")).toMatch(/^[0-9a-f-]{36}$/)
   })
 })

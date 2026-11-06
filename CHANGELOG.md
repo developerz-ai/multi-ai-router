@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.47.0] — 2026-11-06
+
+### Added
+
+- **`opencode-go` provider: OpenCode Go accounts by API key, poolable one personal key per team member.** Chat Completions, Anthropic Messages and Responses surfaces, chosen per account, so a same-dialect client stays a byte relay. The endpoint answers `400 MissingSessionID` on every surface to a request that does not name its conversation, and the trust-boundary allowlist strips client headers, so the router now names it: `ProviderSurface.sessionHeader` declares the header and `runAttempt` sends a hash of router key and session key, stable across turns and failover and carrying no client value. Model listing and account tests are no conversation and go under a one-off id; without one neither could ever pass. Requests state `user-agent: developerz.ai`. `402 Insufficient account funds`, `429 FreeUsageLimitError` and `400 Model is unavailable` are classified from bodies observed live. The log redactor scrubs `oc_sk_` keys. Context and output sizes are read from the catalog's `limit`, and a list-price table attributes spend. Migration 0041 adds the `provider_id` value.
+
 ## [2.46.0] — 2026-11-06
 
 ### Added
@@ -1924,3 +1930,4 @@ your tooling config.
 [2.45.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.8
 [2.45.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.9
 [2.46.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.46.0
+[2.47.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.47.0

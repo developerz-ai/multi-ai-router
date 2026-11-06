@@ -106,6 +106,12 @@ export interface ProviderSurface {
    * (`dataplane/translate-body.ts`). Absent means the field is never added.
    */
   readonly bodySessionId?: boolean
+  /**
+   * The request header this upstream requires to name the conversation, and refuses a request
+   * without. Touches no body byte, so it applies to a byte relay and a translated body alike. Sent
+   * the router's own conversation id (`dataplane/egress/cache-key-header.ts`), never a client value.
+   */
+  readonly sessionHeader?: string
 }
 
 export interface HttpDriverConfig {
@@ -188,6 +194,7 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     keysPromptCacheByBody: (account) => surfaceFor(account).bodyCacheKey === true,
     carriesCacheControl: (account) => surfaceFor(account).cacheControl === true,
     keysSessionByBody: (account) => surfaceFor(account).bodySessionId === true,
+    sessionHeader: (account) => surfaceFor(account).sessionHeader,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)
       return surfaceHeaders(surfaceFor(account), credential)

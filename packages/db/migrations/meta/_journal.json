@@ -288,6 +288,13 @@
       "when": 1793972931448,
       "tag": "0040_auth_refresh_and_cooldown_recheck",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793977735513,
+      "tag": "0041_sparkling_inhumans",
+      "breakpoints": true
     }
   ]
 }

@@ -328,6 +328,12 @@ export interface ProviderDriver {
   keysSessionByBody?(account: DriverAccount): boolean
 
   /**
+   * The header this Account's surface requires to name the conversation
+   * (`ProviderSurface.sessionHeader`). Absent or `undefined` means none is sent.
+   */
+  sessionHeader?(account: DriverAccount): string | undefined
+
+  /**
    * Auth plus every provider-mandated header. Never mutates the Account, never logs.
    *
    * `null` is an Account of a provider whose `authKind` is `none` holding no credential — a local

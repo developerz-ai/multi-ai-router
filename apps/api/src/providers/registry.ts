@@ -14,6 +14,7 @@ import { ollamaDriver } from "./drivers/ollama"
 import { openAiApiDriver } from "./drivers/openai-api"
 import { openAiCompatibleDriver } from "./drivers/openai-compatible"
 import { openAiOAuthDriver } from "./drivers/openai-oauth"
+import { opencodeGoDriver } from "./drivers/opencode-go"
 import { openRouterDriver } from "./drivers/openrouter"
 import { togetherDriver } from "./drivers/together"
 import { xaiDriver } from "./drivers/xai"
@@ -71,6 +72,9 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
   mistral: http(mistralDriver),
   together: http(togetherDriver),
   cerebras: http(cerebrasDriver),
+  // A flat-fee plan behind an API key: one key per team member, three wire surfaces, and an endpoint
+  // that refuses any request not naming its conversation (`ProviderSurface.sessionHeader`).
+  "opencode-go": http(opencodeGoDriver),
   // The local one: an operator-supplied endpoint and no credential required, which is what makes an
   // Account on somebody's own machine expressible without inventing a key to satisfy a form.
   ollama: http(ollamaDriver),

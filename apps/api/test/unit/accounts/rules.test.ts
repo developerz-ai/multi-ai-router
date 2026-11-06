@@ -232,11 +232,11 @@ describe("resolving what an account is billed as", () => {
     expect(resolveBilling(describeOf("openai-oauth"), "metered")).toBe("subscription")
   })
 
-  test("exactly the two providers sold only as a plan are fixed there", () => {
+  test("exactly the three providers sold only as a plan are fixed there", () => {
     // A provider that grows a flat-fee plan alongside its API must not become fixed by accident:
     // fixed means "the operator cannot say otherwise", which is only true with no per-token price.
     const fixed = ProviderId.options.filter((id) => describeProvider(id).billingFixed)
-    expect(fixed.sort()).toEqual(["anthropic-oauth", "openai-oauth"])
+    expect(fixed.sort()).toEqual(["anthropic-oauth", "openai-oauth", "opencode-go"])
     for (const id of fixed) expect(describeProvider(id).defaultBilling).toBe("subscription")
   })
 

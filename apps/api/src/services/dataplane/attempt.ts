@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { Dialect } from "@multi-ai-router/core"
 import type {
   FailureClassification,
@@ -72,6 +73,9 @@ export interface AttemptInput {
    * overrides a driver header: only the selected account's driver speaks for the account.
    */
   readonly cacheKey?: readonly [string, string]
+  /** For a surface that requires one (`ProviderDriver.sessionHeader`). Absent: a one-off id, as a
+   * model listing or an account test is no conversation and that surface refuses none at all. */
+  readonly conversationId?: string
 }
 
 /** What the upstream said, when it said something the client should see. */
@@ -112,6 +116,8 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   if (input.cacheKey !== undefined && !driverHeaders.has(input.cacheKey[0])) {
     headers.set(input.cacheKey[0], input.cacheKey[1])
   }
+  const sessionHeader = plan.driver.sessionHeader?.(plan.account.driver)
+  if (sessionHeader !== undefined) headers.set(sessionHeader, input.conversationId ?? randomUUID())
 
   const deadline =
     input.stream === undefined

@@ -56,6 +56,7 @@ export const PRICE_SOURCES: readonly PriceSource[] = [
   read("mistral", "https://mistral.ai/pricing/api", "2026-11-03"),
   read("together", "https://docs.together.ai/docs/serverless/models", "2026-11-03"),
   read("cerebras", "https://www.cerebras.ai/pricing", "2026-11-03"),
+  read("opencode-go", "https://opencode.ai/v2/docs/console/go/", "2026-11-06"),
   read("kimi-coding-reference", "https://platform.kimi.ai/docs/pricing/chat", "2026-11-03"),
 ]
 export const KIMI_IDENTITY_SOURCE = "https://www.kimi.com/code/docs/en/"
