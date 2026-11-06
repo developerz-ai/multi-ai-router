@@ -130,6 +130,35 @@ describe("building a subscription's catalog rows", () => {
 })
 
 describe("what an account contributes to GET /v1/models", () => {
+  test("thinking modes follow the upstream id, and a row without them adds no key", () => {
+    const reasoning = { supported: true, effort: ["high"] }
+    const row = {
+      id: "GLM-5",
+      contextTokens: null,
+      maxOutputTokens: null,
+      contextSource: null,
+      listingSource: "upstream" as const,
+      resolvedModel: null,
+      reasoning,
+    }
+    const account = snapshot({
+      provider: "zai",
+      modelAliases: { sonnet: "glm-5" },
+      supportedModels: ["glm-5", "glm-4"],
+    })
+
+    const listed = listableModels(account, [row])
+
+    expect(listed.find((model) => model.id === "sonnet")?.reasoning).toEqual(reasoning)
+    expect(listed.find((model) => model.id === "glm-5")?.reasoning).toEqual(reasoning)
+    expect(listed.find((model) => model.id === "glm-4")).toEqual({
+      id: "glm-4",
+      resolvedModel: null,
+      contextTokens: null,
+      maxOutputTokens: null,
+    })
+  })
+
   test("a subscription with no catalog rows yet lists the shipped table", () => {
     const listed = listableModels(snapshot(), [])
 

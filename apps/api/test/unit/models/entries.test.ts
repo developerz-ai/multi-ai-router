@@ -30,6 +30,21 @@ describe("turning an upstream listing entry into a catalog row", () => {
     })
   })
 
+  test("a listing that states no thinking modes carries no key for them", () => {
+    const row = catalogEntry("zai", { id: "glm-4.6", contextTokens: 1, maxOutputTokens: 1 })
+    expect("reasoning" in row).toBe(false)
+  })
+
+  test("thinking modes ride the row whichever source its size came from", () => {
+    const reasoning = { supported: true, effort: ["high"] }
+    const entry = { id: "glm-4.6", contextTokens: null, maxOutputTokens: null, reasoning }
+
+    expect(catalogEntry("zai", entry).contextSource).toBe("shipped")
+    expect(catalogEntry("zai", entry).reasoning).toEqual(reasoning)
+    expect(catalogEntry("zai", { ...entry, id: "unheard-of" }).reasoning).toEqual(reasoning)
+    expect(catalogEntry("zai", { ...entry, contextTokens: 8 }).reasoning).toEqual(reasoning)
+  })
+
   /** The rule that makes `contextSource` answerable at all. */
   test("a row is sourced whole: a live window does not borrow a shipped output ceiling", () => {
     const shipped = lookupContextWindow("zai", "glm-4.6")

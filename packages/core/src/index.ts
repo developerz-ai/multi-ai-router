@@ -25,6 +25,7 @@ export {
   CLAUDE_SUBSCRIPTION_MODELS,
   ModelContextSource,
   ModelListingSource,
+  ModelReasoning,
 } from "./domain/catalog"
 export {
   DEFAULT_OPENAI_CHAT_CEILING,

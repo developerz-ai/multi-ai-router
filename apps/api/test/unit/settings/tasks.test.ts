@@ -140,6 +140,7 @@ describe("the tasks read", () => {
       "login_lifetime_watch",
       "usage_weekly_report",
       "cooldown_recheck",
+      "plan_quota_read",
     ])
 
     const janitor = result.value.tasks[0]

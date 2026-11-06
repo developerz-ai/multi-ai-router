@@ -8,7 +8,7 @@ import { QueryBoundary } from "../components/QueryBoundary"
 import { StatusDot } from "../components/StatusDot"
 import { type Column, Table } from "../components/Table"
 import { TableSkeleton } from "../components/TableSkeleton"
-import { isRoutable } from "../lib/account-status"
+import { routablePoolMembers } from "../lib/account-groups"
 import type { PoolMemberView, PoolView } from "../lib/api/types"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { useCreatePool, useDeletePool, usePools, useUpdatePool } from "../lib/queries/pools"
@@ -78,7 +78,15 @@ export default function PoolsRoute() {
       id: "routable",
       header: "Routable",
       numeric: true,
-      cell: (pool) => `${routableCount(pool)} / ${pool.members.length}`,
+      cell: (pool) => {
+        const routable = routablePoolMembers(pool, accountList())
+        const down = routable === 0 && pool.members.length > 0
+        return (
+          <span
+            class={down ? styles.noneRoutable : undefined}
+          >{`${routable} / ${pool.members.length}`}</span>
+        )
+      },
     },
     {
       id: "members",
@@ -206,10 +214,6 @@ export default function PoolsRoute() {
       </Show>
     </>
   )
-}
-
-function routableCount(pool: PoolView): number {
-  return pool.members.filter((member) => isRoutable(member.status)).length
 }
 
 /**

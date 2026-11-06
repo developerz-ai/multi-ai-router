@@ -61,6 +61,7 @@ const factories: Record<string, Factory> = {
           contextSource: "upstream",
           listingSource: "upstream",
           resolvedModel: null,
+          reasoning: null,
           refreshedAt: now(),
         },
       ],

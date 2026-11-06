@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.48.0] — 2026-11-06
+
+### Added
+
+- **Thinking modes come from the upstream catalog.** `opencode-go` reads `capabilities.reasoning` into a new `model_catalog.reasoning` column, and `GET /v1/models` publishes it as `reasoning` on both wire shapes. Information only: a client's requested effort is neither validated nor rewritten. Migration 0042.
+- **Plan quota is read off the request path.** New `plan_quota_read` scheduler task (`PLAN_QUOTA_READ_INTERVAL_MINUTES`, default 15, `PLAN_QUOTA_READ_BATCH_SIZE`, default 25) calls a driver-declared usage endpoint and folds the reading in as `advisory` windows, so it ranks accounts and never blocks one. `opencode-go` declares `/zen/go/v1/usage`. A `monthly` window travels as a limiter window, not a named one.
+- **A response the router writes states its cost (#335).** `usage.cost`, `cost_source: "estimated"` and `cost_basis: metered|notional`, on translated bodies and final stream frames, from the same calculation as the usage row. A byte relay carries none, because rewriting it would break byte passthrough; absent means unknown, never zero.
+
+### Changed
+
+- **Operator console pass.** The add form no longer carries a typed key or base URL into the next account, or submits hidden fields after a provider switch. `opencode-go` shows its three surfaces and the personal-key note. The status cell names the next action; a lost OAuth login reads "login lost" instead of a green "stored" pill; a refused API key reaches the Overview banner. Disable confirms and names any pool left with nothing to serve it. Row actions report failures, the pools Routable count excludes accounts with a spent window, and Overview tiles stop shimmering on a failed read.
+
 ## [2.47.0] — 2026-11-06
 
 ### Added
@@ -1931,3 +1943,4 @@ your tooling config.
 [2.45.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.9
 [2.46.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.46.0
 [2.47.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.47.0
+[2.48.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.0

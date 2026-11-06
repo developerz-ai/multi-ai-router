@@ -25,8 +25,9 @@ import { ZAI_MODELS } from "./tables/zai"
  * is reported as NULL rather than as zero (docs/idea/08-observability.md#cost-estimation): a zero in
  * a spend column is the claim that a request was free.
  *
- * Blast radius of a wrong number here: one cost line in a report. Nothing about pricing reaches
- * routing, a response, or a model choice — the client picks the model, always.
+ * Blast radius of a wrong number here: one cost line in a report, and the `usage.cost` a translated
+ * response states. Nothing about pricing reaches routing or a model choice — the client picks the
+ * model, always.
  *
  * Operator-editable overrides layer *over* this table rather than replacing it (`book.ts`): an
  * override wins for the provider + model it names, and every other model keeps the shipped number.

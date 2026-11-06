@@ -22,6 +22,7 @@ function row(overrides: Partial<ModelCatalogRow> = {}): ModelCatalogRow {
     contextSource: "shipped",
     listingSource: "upstream",
     resolvedModel: null,
+    reasoning: null,
     refreshedAt: NOW,
     ...overrides,
   }
@@ -36,6 +37,23 @@ describe("the warm model catalog", () => {
     expect(warm.describe("acc-1", "glm-4.6")).toBeNull()
     expect(warm.modelsOf("acc-1")).toEqual([])
     expect(warm.loadedAt()).toBeNull()
+  })
+
+  test("a reasoning column this build cannot read is nothing stated, never a throw", async () => {
+    const future = { supported: "maybe" } as unknown as ModelCatalogRow["reasoning"]
+    const warm = store(async () => [row({ reasoning: future })])
+    await warm.refresh()
+
+    expect(warm.describe("acc-1", "glm-4.6")?.reasoning).toBeUndefined()
+  })
+
+  test("stored thinking modes reach the descriptor, and a null column adds no key", async () => {
+    const reasoning = { supported: true, effort: ["low", "max"] }
+    const warm = store(async () => [row({ reasoning }), row({ modelId: "bare" })])
+    await warm.refresh()
+
+    expect(warm.describe("acc-1", "glm-4.6")?.reasoning).toEqual(reasoning)
+    expect(Object.keys(warm.describe("acc-1", "bare") ?? {})).not.toContain("reasoning")
   })
 
   test("describes a stored model and stamps when it loaded", async () => {

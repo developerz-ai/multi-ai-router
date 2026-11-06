@@ -35,6 +35,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+// A pool with members and nothing to serve: an outage, not a figure.
+.noneRoutable {
+  color: var(--danger);
+  font-weight: var(--weight-medium);
+}
+
 .muted {
   color: var(--text-muted);
 }

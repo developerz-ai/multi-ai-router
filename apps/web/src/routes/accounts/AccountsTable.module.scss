@@ -33,6 +33,13 @@
   white-space: nowrap;
 }
 
+// A human has to act: the same token the two no-clock statuses carry.
+.nextAction {
+  color: var(--danger);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

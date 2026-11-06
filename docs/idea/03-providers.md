@@ -455,9 +455,34 @@ user agent, and it was accepted on every surface.
 | Key | A member's **personal** key. A service-account key of the same workspace authenticates and is refused on every Go model: `403 permission_error`, "Go Teams covers workspace members, not service accounts". Status default reads it as `auth`, so the key is refused like any other |
 | Conversation | `400 MissingSessionID` without `x-opencode-session`, on all three surfaces. `ProviderSurface.sessionHeader` declares it; `runAttempt` sends `conversationId()` — a hash of router key and session key, stable across turns and failover, carrying no client value. A listing or account test is no conversation and goes under a one-off id. The client's own header of that name is stripped at the trust boundary like any other |
 | Billing | `subscription`. A response's `usage.opencode` states `billing_source: go-teams`, `cost: 0`, `list_cost`, and `allowance`, the plan spend it drew. `allowance` is not `list_cost`: the ratio varies by model |
-| Limits | The plan states 5-hour, weekly and monthly limits **per model**, and `GET /zen/go/v1/usage` reports three account-level windows as percentages. The router reads neither yet, and a `429` cools the whole Account, not the model. Tracked as follow-up: no spent-window `429` has been observed to key the fix on |
-| Catalog | `GET /openai/v1/models` states `limit.context`, `limit.output` and `capabilities.reasoning.effort` per model. Sizes are read; the effort list is not stored yet, so nothing validates a requested effort against it |
+| Limits | The plan states 5-hour, weekly and monthly limits **per model**; `GET /zen/go/v1/usage` reports three account-level windows as percentages. `ProviderDriver.quotaRead` reads them off the request path (below). A `429` still cools the whole Account, not the model, and per-model cooldown is deliberately unbuilt: no spent-window `429` has been observed to key the fix on |
+| Catalog | `GET /openai/v1/models` states `limit.context`, `limit.output` and `capabilities.reasoning` (`{supported, toggle?, effort?}`) per model. All are read into `model_catalog`; `reasoning` is a `jsonb` column and a reshaped block costs that one fact, not the row. Information only: nothing validates or rewrites a client's requested effort against it |
 | Failures | `429 FreeUsageLimitError` with `Retry-After` is `rate-limited`. `400 Model is unavailable` is `model-unsupported`: the plan does not serve that name, and the next account may |
+
+### Plan quota, read off the request path
+
+A response carries no usage reading for this plan, so the `plan_quota_read` task asks for one:
+in-process, jittered, under its advisory lock, every `PLAN_QUOTA_READ_INTERVAL_MINUTES` (15), at most
+`PLAN_QUOTA_READ_BATCH_SIZE` (25) accounts per tick, longest-unread first. The driver owns the shape
+(`ProviderQuotaRead`: URL, no-plan statuses, Zod reader), `services/models/plan-quota.ts` the fetch,
+and neither the service nor the task names a provider.
+
+| Upstream | Router | Note |
+|---|---|---|
+| `rolling` | `five_hour`, `advisory: true` | |
+| `weekly` | `seven_day`, `advisory: true` | |
+| `monthly` | limiter window `monthly` | No `QuotaWindowKind` names it, so it follows the rule for a window the vocabulary lacks: the provider's own word, ranked by `quota-aware`, held in memory, not persisted and not on the console |
+
+- **Advisory.** The windows are per account and the limits per model, so a spent reading never takes
+  an Account out of rotation. `quota-aware` does rank on them. The signal's `limited` is always false.
+- **`status: rate-limited`** reads as utilization 1, whatever percentage came beside it.
+- **`403`** (`EntitlementError`, a key with no Go plan) is a skip at info level, every tick.
+- **Any other failed read** is a warning and nothing else: no breaker strike, no status change.
+- **Not asked:** `disabled` and `needs_reauth` accounts, and an Account with a `baseUrl` override.
+  The usage URL is pinned, so a key pointed elsewhere is never sent there.
+- **Unverified:** only `percent: 0` has been seen live, so a 0..100 scale is read from the name, and
+  the `resetsAt` format is assumed to be a parseable date. An unparseable reset costs the countdown,
+  not the percentage. Check the first non-zero reading against this.
 
 Pooling is one key per real member. OpenCode's terms forbid multiple accounts used to circumvent
 usage limits; a pool of member keys is the shape the plan is sold in, and buying extra workspaces to
@@ -642,6 +667,10 @@ spelling), labels the row `upstream`, and falls back to the shipped table (`serv
 | `kimi`, `deepseek`, `xai` | `GET /models` | any spelling above if stated (not verified live), else shipped table | same |
 | `opencode-go` | `GET /models` | `limit.context` (verified live) | `limit.output` (verified live) |
 | `cerebras`, `ollama`, `anthropic-compatible` | `GET /models` | whatever spelling above the endpoint uses, else `null` | same |
+
+`opencode-go` also states thinking modes, kept on the same row (`ListedModel.reasoning`, optional, so
+no other driver changes). `GET /v1/models` publishes them as `reasoning` on both wire shapes, an extra
+field like `resolved_model`. Information only: nothing validates a requested effort against it.
 
 `GET /v1/models` then publishes the numbers from the warm store — Anthropic shape `max_input_tokens`
 / `max_tokens`, OpenAI shape `context_length` / `max_completion_tokens`

@@ -4,6 +4,7 @@ import { render } from "solid-js/web"
 import type { AccountView, ProviderDescriptor } from "../../src/lib/api/types"
 import { NO_USAGE } from "../../src/lib/usage-index"
 import { AccountsTable } from "../../src/routes/accounts/AccountsTable"
+import { typeInto } from "../support/dom"
 
 const PROVIDER: ProviderDescriptor = {
   id: "anthropic",
@@ -290,6 +291,78 @@ describe("AccountsTable", () => {
         expect(container.querySelectorAll("[class*='absolute']").length).toBe(0)
       },
     )
+  })
+
+  test("an exhausted row states the next action, not only the top-up", () => {
+    withMount([account({ status: "exhausted" })], {}, (container) => {
+      expect(container.textContent).toContain("top up, then Re-check")
+    })
+  })
+
+  test("a refused key says where to rotate it", () => {
+    withMount(
+      [
+        account({
+          status: "cooling_down",
+          availability: {
+            configuredStatus: "active",
+            resetsAt: null,
+            resetSource: "estimated",
+            cooldownReason: "credential-rejected",
+            lastCheckedAt: null,
+            consecutiveFailures: 1,
+            inFlight: 0,
+            quotaWindows: [],
+          },
+        }),
+      ],
+      {},
+      (container) => {
+        expect(container.textContent).toContain("key rejected — rotate it in Edit")
+      },
+    )
+  })
+
+  test("a dead OAuth login offers Reconnect in the credential cell, beside the reason", () => {
+    const oauth = { ...PROVIDER, connectFlow: "oauth" } as const
+    const connected: string[] = []
+    withMount(
+      [account({ provider: "openai-oauth", status: "needs_reauth", label: "codex-1" })],
+      { providerFor: () => oauth, onConnect: (row) => connected.push(row.label) },
+      (container) => {
+        expect(container.textContent).toContain("login lost")
+        const inCell = [...container.querySelectorAll("td")]
+          .find((cell) => cell.textContent?.includes("login lost"))
+          ?.querySelector("button")
+        inCell?.click()
+        expect(connected).toEqual(["codex-1"])
+      },
+    )
+  })
+
+  test("a pinned surface is visible on the row, an unpinned one is not invented", () => {
+    withMount([account({ dialect: "openai-responses" })], {}, (container) => {
+      expect(container.textContent).toContain("dialect openai-responses")
+    })
+    withMount([account({ dialect: null })], {}, (container) => {
+      expect(container.textContent).not.toContain("dialect ")
+    })
+  })
+
+  test("the Claude test confirmation names the account, not its uuid", () => {
+    const sdk = { ...PROVIDER, transport: "agent-sdk" } as const
+    withMount([account({ label: "claude-max-3" })], { providerFor: () => sdk }, (container) => {
+      const input = container.querySelector("input")
+      if (input === null) throw new Error("no model box")
+      typeInto(input, "claude-sonnet-5-5")
+      const press = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Test now",
+      )
+      press?.click()
+      const dialog = document.body.querySelector("[role=dialog]")
+      expect(dialog?.textContent).toContain("claude-max-3")
+      expect(dialog?.textContent).not.toContain("acc-1")
+    })
   })
 
   test("usage cell renders a dash while loading, never a zero", () => {

@@ -10,18 +10,40 @@ interface Outcome<T> {
 }
 
 export interface AccountsNoticesProps {
+  readonly recheck: Outcome<unknown>
   readonly recheckAll: Outcome<unknown>
+  readonly test: Outcome<unknown>
+  /** A row's Enable. Null while the edit dialog is open, which shows its own errors. */
+  readonly enableError: unknown
   readonly discover: Outcome<{ readonly saved: boolean; readonly message: string }>
 }
 
 /**
- * The page-level verdicts that have no cell of their own. A failed discovery has to say so
- * somewhere: the button's cell has room for a state, not for a reason, and "could not read the
- * model listing: …" is the whole diagnosis.
+ * The page-level verdicts that have no cell of their own. A failed press has to say so somewhere:
+ * the button's cell has room for a state, not for a reason, and "could not read the model listing:
+ * …" is the whole diagnosis.
  */
 export function AccountsNotices(props: AccountsNoticesProps) {
   return (
     <>
+      <Show when={props.recheck.isError}>
+        <Banner title="Re-check failed" tone="danger">
+          {errorMessage(props.recheck.error)}
+        </Banner>
+      </Show>
+
+      <Show when={props.test.isError}>
+        <Banner title="Test could not run" tone="danger">
+          {errorMessage(props.test.error)}
+        </Banner>
+      </Show>
+
+      <Show when={props.enableError !== null && props.enableError !== undefined}>
+        <Banner title="Enable failed" tone="danger">
+          {errorMessage(props.enableError)}
+        </Banner>
+      </Show>
+
       <Show when={props.recheckAll.isError}>
         <Banner title="Re-check all failed" tone="danger">
           {errorMessage(props.recheckAll.error)}

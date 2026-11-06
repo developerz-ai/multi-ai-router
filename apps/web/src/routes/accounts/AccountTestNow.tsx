@@ -9,6 +9,8 @@ import styles from "./AccountTestNow.module.scss"
 
 export interface AccountTestNowProps {
   readonly accountId: string
+  /** What the confirmation names: an id tells one of six subscriptions from nothing. */
+  readonly accountLabel: string
   readonly busy: boolean
   readonly nowMs: number
   /** From `GET /providers` — decides whether a press needs the subprocess confirmation. */
@@ -110,7 +112,7 @@ export function AccountTestNow(props: AccountTestNowProps) {
         onClose={() => setConfirming(false)}
         onConfirm={() => fire(true)}
         open={confirming()}
-        subject={`account ${props.accountId}`}
+        subject={props.accountLabel}
         title="Test this Claude subscription now?"
       />
     </div>

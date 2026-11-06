@@ -5,21 +5,21 @@ import { Banner } from "../components/Banner"
 import { Button } from "../components/Button"
 import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
-import { StatTile } from "../components/StatTile"
 import { StatusDot } from "../components/StatusDot"
 import { type Column, Table } from "../components/Table"
 import { TableSkeleton } from "../components/TableSkeleton"
 import {
   hasSpentWindow,
+  isCredentialRejected,
   isRoutable,
   isRoutableNow,
   STATUS_DISPLAY_ORDER,
   statusPresentation,
 } from "../lib/account-status"
+import { errorMessage } from "../lib/api/errors"
 import type { AccountView } from "../lib/api/types"
 import { USAGE_WINDOWS, type UsageWindow, usageWindowLabel } from "../lib/api/usage"
 import { createNow } from "../lib/clock"
-import { formatCost, formatCount, formatPercent } from "../lib/format"
 import { useAllAccounts, useRecheckAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
 import { useProviders } from "../lib/queries/providers"
@@ -29,6 +29,7 @@ import { useUsageSummary } from "../lib/queries/usage"
 import { isSubscriptionLogin, listNames } from "../lib/subscription-login"
 import { SubscriptionBanner } from "./accounts/SubscriptionBanner"
 import styles from "./OverviewRoute.module.scss"
+import { FleetTiles } from "./overview/FleetTiles"
 import { OnboardingPanel } from "./overview/OnboardingPanel"
 
 interface StatusCount {
@@ -90,6 +91,9 @@ export default function OverviewRoute() {
   const needsReauth = createMemo(() =>
     list().filter((account) => account.status === "needs_reauth" && !isSubscriptionLogin(account)),
   )
+
+  // A cooldown to routing, but a wrong key outlasts every re-test, so it asks for the operator.
+  const rejected = createMemo(() => list().filter(isCredentialRejected))
 
   const counts = createMemo<readonly StatusCount[]>(() =>
     STATUS_DISPLAY_ORDER.map((status) => ({
@@ -158,6 +162,12 @@ export default function OverviewRoute() {
         title="Overview"
       />
 
+      <Show when={recheckAll.isError}>
+        <Banner title="Re-check all failed" tone="danger">
+          {errorMessage(recheckAll.error)}
+        </Banner>
+      </Show>
+
       <Show when={loaded()}>
         <OnboardingPanel
           accounts={list()}
@@ -179,62 +189,39 @@ export default function OverviewRoute() {
           nowMs={now()}
         />
 
-        <Show when={exhausted().length > 0 || needsReauth().length > 0}>
+        <Show when={exhausted().length + needsReauth().length + rejected().length > 0}>
           <Banner
             action={
               <A class={styles.bannerLink} href="/accounts">
                 Open accounts
               </A>
             }
-            title={bannerTitle(exhausted().length, needsReauth().length)}
+            title={bannerTitle(exhausted().length, needsReauth().length, rejected().length)}
             tone="danger"
           >
             <Show when={exhausted().length > 0}>
-              <p>Out of credits, no reset to wait for — needs top-up: {names(exhausted())}</p>
+              <p>
+                Out of credits, no reset to wait for — needs top-up, then press Re-check on its row:{" "}
+                {names(exhausted())}
+              </p>
             </Show>
             <Show when={needsReauth().length > 0}>
               <p>Credentials can no longer be renewed — reconnect: {names(needsReauth())}</p>
+            </Show>
+            <Show when={rejected().length > 0}>
+              <p>The upstream refused the key — rotate it in Edit: {names(rejected())}</p>
             </Show>
           </Banner>
         </Show>
 
         <section aria-label="Headline figures" class={styles.tiles}>
-          <StatTile
-            label="Accounts"
-            // `isRoutableNow`, not the status alone: an active sub with a spent window is a green
-            // dot every request bounces off, and "5 routable now" above a fleet answering 429s is
-            // the exact headline this screen exists not to print.
-            note={`${routableNow()} routable now`}
-            value={accounts.isSuccess ? String(list().length) : undefined}
-          />
-          <StatTile
-            label="Pools"
-            note="Each one addressable by a key"
-            value={pools.isSuccess ? String((pools.data ?? []).length) : undefined}
-          />
-          <StatTile
-            label="Router keys"
-            note={`${keys.isSuccess ? (keys.data ?? []).filter((key) => !key.revoked).length : 0} active`}
-            value={keys.isSuccess ? String((keys.data ?? []).length) : undefined}
-          />
-          <StatTile
-            label="Requests"
-            note={usageWindowLabel(window()).toLowerCase()}
-            value={usage.isSuccess ? formatCount(usage.data?.totals.requests ?? 0) : undefined}
-          />
-          <StatTile
-            label="Metered spend"
-            note="Notional shown apart"
-            value={usage.isSuccess ? formatCost(usage.data?.totals.costMetered ?? 0) : undefined}
-          />
-          <StatTile
-            label="Error rate"
-            note={usageWindowLabel(window()).toLowerCase()}
-            value={
-              usage.isSuccess
-                ? formatPercent(usage.data?.totals.errors ?? 0, usage.data?.totals.attempts ?? 0)
-                : undefined
-            }
+          <FleetTiles
+            accounts={accounts}
+            keys={keys}
+            pools={pools}
+            routableNow={routableNow()}
+            usage={usage}
+            windowLabel={usageWindowLabel(window()).toLowerCase()}
           />
         </section>
 
@@ -257,10 +244,13 @@ export default function OverviewRoute() {
   )
 }
 
-function bannerTitle(exhausted: number, needsReauth: number): string {
+function bannerTitle(exhausted: number, needsReauth: number, rejected: number): string {
   const parts: string[] = []
-  if (exhausted > 0) parts.push(`${exhausted} account(s) exhausted`)
-  if (needsReauth > 0) parts.push(`${needsReauth} need re-authentication`)
+  if (exhausted > 0) parts.push(`${exhausted} account${exhausted === 1 ? "" : "s"} exhausted`)
+  if (needsReauth > 0) {
+    parts.push(`${needsReauth} need${needsReauth === 1 ? "s" : ""} re-authentication`)
+  }
+  if (rejected > 0) parts.push(`${rejected} key${rejected === 1 ? "" : "s"} rejected`)
   return parts.join(" · ")
 }
 
