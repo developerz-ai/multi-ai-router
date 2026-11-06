@@ -23,11 +23,20 @@ import { retiredEvidence } from "./quota-evidence"
  * The latest reset among the spent windows, because the account serves again only once every spent
  * window has reopened. The exit stays the one every long cooldown has: the reset itself, and the
  * hourly `cooldown_recheck` for a window the provider reopens early.
+ *
+ * **Only a fresh reading lends.** A window `maxAgeMs` old or older (two `plan_quota_read` intervals:
+ * one missed tick tolerated) lends nothing. A plan whose usage endpoint stopped answering, or was
+ * cancelled, would otherwise keep stretching every reset-less throttle to a reset nobody re-stated.
  */
-export function spentPlanReset(windows: readonly QuotaWindowState[], now: Date): Date | null {
+export function spentPlanReset(
+  windows: readonly QuotaWindowState[],
+  now: Date,
+  maxAgeMs: number,
+): Date | null {
   let latest: Date | null = null
   for (const window of windows) {
     if (retiredEvidence(window)) continue
+    if (now.getTime() - window.lastCheckedAt.getTime() >= maxAgeMs) continue
     if (window.resetSource !== "provider-reported" || window.resetsAt === undefined) continue
     if (window.utilization === undefined || window.utilization < 1) continue
     if (window.resetsAt.getTime() <= now.getTime()) continue
@@ -41,11 +50,12 @@ export function withPlanReset(
   failure: AttemptFailure,
   windows: readonly QuotaWindowState[],
   now: Date,
+  maxAgeMs: number,
 ): AttemptFailure {
   if (failure.kind !== "rate-limited") return failure
   const stated = reportedReset(failure, now) !== null && failure.resetSource !== "estimated"
   if (stated) return failure
-  const planReset = spentPlanReset(windows, now)
+  const planReset = spentPlanReset(windows, now, maxAgeMs)
   if (planReset === null) return failure
   const { retryAfterSeconds: _dropped, ...rest } = failure
   return { ...rest, resetsAt: planReset, resetSource: "provider-reported" }

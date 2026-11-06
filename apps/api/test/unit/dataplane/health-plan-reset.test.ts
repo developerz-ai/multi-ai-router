@@ -31,7 +31,7 @@ const token2056 = { kind: "rate-limited", status: 429, message: "(2056)" } as co
 
 describe("a held plan reading sets how long a reset-less refusal cools", () => {
   test("a 2056 after a spent weekly reading cools until the weekly reset, provider-reported", () => {
-    const store = createHealthStore()
+    const store = createHealthStore({ planReadingMaxAgeMs: 30 * 60_000 })
     const reading = httpDriver("minimax")?.quotaRead?.read(spentWeekly, READ_AT) ?? null
     store.applyRateLimit("mm", reading, READ_AT)
 
@@ -46,7 +46,7 @@ describe("a held plan reading sets how long a reset-less refusal cools", () => {
   })
 
   test("with no reading held the same refusal keeps its short estimated backoff", () => {
-    const store = createHealthStore()
+    const store = createHealthStore({ planReadingMaxAgeMs: 30 * 60_000 })
     store.recordFailure("mm", token2056, REFUSED_AT)
     const { breaker } = store.stateOf("mm")
     expect(breaker.cooldownSource).toBe("estimated")
@@ -54,7 +54,7 @@ describe("a held plan reading sets how long a reset-less refusal cools", () => {
   })
 
   test("a limited reading with no reset of its own borrows the held window's reset too", () => {
-    const store = createHealthStore()
+    const store = createHealthStore({ planReadingMaxAgeMs: 30 * 60_000 })
     store.applyRateLimit(
       "mm",
       httpDriver("minimax")?.quotaRead?.read(spentWeekly, READ_AT) ?? null,

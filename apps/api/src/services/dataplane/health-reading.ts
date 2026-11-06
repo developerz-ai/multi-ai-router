@@ -43,6 +43,7 @@ export function foldRateLimit(
   signal: RateLimitSignal,
   now: Date,
   breaker: BreakerOptions,
+  planReadingMaxAgeMs = 0,
 ): AccountHealthState {
   const recorded: AccountHealthState = {
     ...state,
@@ -65,6 +66,7 @@ export function foldRateLimit(
     },
     recorded.quotaWindows,
     now,
+    planReadingMaxAgeMs,
   )
   const tripped = refusalStands(state.breaker, now)
     ? lengthenRefusal(state.breaker, reading, now)

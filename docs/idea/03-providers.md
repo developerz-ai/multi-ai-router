@@ -511,7 +511,7 @@ estimated`). Now a `rate-limited` failure without a stated reset borrows the lat
 `provider-reported` reset among the account's spent windows (`routing/plan-reset.ts`): the refusal
 says *now*, the reading says *until when*, and the cooldown is labeled `provider-reported`. The
 reading alone still cools nothing — a plan with Credits behind it serves past a spent window — and
-a stated reset (a header, z.ai's message stamp) is never replaced. The exits stay the reset itself
+a stated reset (a header, z.ai's message stamp) is never replaced. Only a fresh reading lends: one younger than two `PLAN_QUOTA_READ_INTERVAL_MINUTES`, so a plan whose endpoint stopped answering or was cancelled stops stretching throttles after one missed tick. The exits stay the reset itself
 and the hourly `cooldown_recheck` for a window reopened early.
 
 Pooling is one key per real member. OpenCode's terms forbid multiple accounts used to circumvent

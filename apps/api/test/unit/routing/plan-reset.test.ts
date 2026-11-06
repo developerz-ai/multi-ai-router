@@ -11,6 +11,8 @@ import { type AttemptFailure, spentPlanReset, withPlanReset } from "../../../src
 
 const NOW = new Date("2026-11-06T23:02:36.000Z")
 const WEEKLY_RESET = new Date("2026-11-09T00:00:00.000Z")
+/** Two 15-minute plan read intervals, as `composition/warm-state.ts` derives it. */
+const FRESH = 30 * 60_000
 const FIVE_HOUR_RESET = new Date("2026-11-07T00:00:00.000Z")
 
 function window(overrides: Partial<QuotaWindowState> = {}): QuotaWindowState {
@@ -34,7 +36,7 @@ const token2056: AttemptFailure = {
 
 describe("withPlanReset, failure case first", () => {
   test("a reset-less 429 on a spent weekly window cools until the window's own reset", () => {
-    const planned = withPlanReset(token2056, [window()], NOW)
+    const planned = withPlanReset(token2056, [window()], NOW, FRESH)
     expect(planned.resetsAt).toEqual(WEEKLY_RESET)
     expect(planned.resetSource).toBe("provider-reported")
   })
@@ -47,7 +49,7 @@ describe("withPlanReset, failure case first", () => {
       resetSource: "estimated",
       message: "You've reached your weekly (7-day) usage limit.",
     }
-    const planned = withPlanReset(kimi, [window()], NOW)
+    const planned = withPlanReset(kimi, [window()], NOW, FRESH)
     expect(planned.resetsAt).toEqual(WEEKLY_RESET)
     expect(planned.retryAfterSeconds).toBeUndefined()
     expect(planned.resetSource).toBe("provider-reported")
@@ -55,7 +57,9 @@ describe("withPlanReset, failure case first", () => {
 
   test("with two spent windows the account opens when the later one does", () => {
     const fiveHour = window({ window: "five_hour", resetsAt: FIVE_HOUR_RESET })
-    expect(withPlanReset(token2056, [fiveHour, window()], NOW).resetsAt).toEqual(WEEKLY_RESET)
+    expect(withPlanReset(token2056, [fiveHour, window()], NOW, FRESH).resetsAt).toEqual(
+      WEEKLY_RESET,
+    )
   })
 })
 
@@ -66,17 +70,17 @@ describe("withPlanReset leaves everything else alone", () => {
       resetsAt: FIVE_HOUR_RESET,
       resetSource: "provider-reported",
     }
-    expect(withPlanReset(zai, [window()], NOW)).toBe(zai)
+    expect(withPlanReset(zai, [window()], NOW, FRESH)).toBe(zai)
   })
 
   test("a Retry-After the upstream sent stands", () => {
     const stated: AttemptFailure = { ...token2056, retryAfterSeconds: 30 }
-    expect(withPlanReset(stated, [window()], NOW)).toBe(stated)
+    expect(withPlanReset(stated, [window()], NOW, FRESH)).toBe(stated)
   })
 
   test("only a rate limit borrows: a server error keeps its backoff", () => {
     const fault: AttemptFailure = { kind: "server-error", status: 500, message: "boom" }
-    expect(withPlanReset(fault, [window()], NOW)).toBe(fault)
+    expect(withPlanReset(fault, [window()], NOW, FRESH)).toBe(fault)
   })
 
   test("a window with headroom, an estimated or unknown reset, or a past reset lends nothing", () => {
@@ -88,11 +92,17 @@ describe("withPlanReset leaves everything else alone", () => {
       window({ utilization: undefined, utilizationSource: "threshold-triggered" }),
       window({ blocksRouting: false }),
     ]) {
-      expect(withPlanReset(token2056, [held], NOW)).toBe(token2056)
+      expect(withPlanReset(token2056, [held], NOW, FRESH)).toBe(token2056)
     }
   })
 
+  test("a stale reading lends nothing: the endpoint may have died or the plan been cancelled", () => {
+    const stale = window({ lastCheckedAt: new Date(NOW.getTime() - FRESH - 1) })
+    expect(withPlanReset(token2056, [stale], NOW, FRESH)).toBe(token2056)
+    expect(withPlanReset(token2056, [window()], NOW, 0)).toBe(token2056)
+  })
+
   test("no windows, no reset", () => {
-    expect(spentPlanReset([], NOW)).toBeNull()
+    expect(spentPlanReset([], NOW, FRESH)).toBeNull()
   })
 })
