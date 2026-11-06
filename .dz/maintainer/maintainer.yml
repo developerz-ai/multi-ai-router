@@ -5,6 +5,10 @@
 # green for its own and the dependency bots' pull requests. Releases stay with release.yml: nothing here publishes.
 version: 1
 
+# `bin/check` refuses to run without a Postgres, so a box with none would claim this repo's coding
+# work and discard every diff at the gate. Declaring it routes the work to a box that can grade it.
+services: [postgres]
+
 tone:
   voice: friendly
   language: en
@@ -54,10 +58,20 @@ release:
   channels: []
 
 escalate:
-  # Empty: nothing beyond the platform's hardcoded asks (security, license, CLA).
-  ask_before_acting: []
+  # A human decides a breaking change. The platform's hardcoded asks (security, license, CLA) stay.
+  ask_before_acting: [breaking_change]
 
 schedules:
+  # Weekly and judged, so a merge never cuts a release. Thursday: one weekday per repo in the fleet.
+  - name: release-due
+    days: [thu]
+    hours_utc: [3]
+    brief_file: .dz/briefs/release-due.md
+  # The one exception, so a confirmed security fix does not wait up to a week for the slot above.
+  - name: security-release
+    days: [mon, tue, wed, fri, sat, sun]
+    hours_utc: [5]
+    brief_file: .dz/briefs/security-release.md
   - name: health
     days: [mon, tue, wed, thu, fri, sat, sun]
     hours_utc: [7]
