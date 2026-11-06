@@ -319,5 +319,7 @@ export function egressRejectionError(rejection: EgressRejection): RouterError {
   // No account in this scope performs the operation: another key or route, not a wait.
   if (rejection.reason === "unsupported-operation")
     return new NoHealthyAccountError(rejection.message, { wall: "scope" })
-  return new NoHealthyAccountError(rejection.message)
+  // `unimplemented`: an account whose provider this build has no driver for. No retry fixes that;
+  // an operator removes the account or deploys a build that has one.
+  return new NoHealthyAccountError(rejection.message, { wall: "human" })
 }
