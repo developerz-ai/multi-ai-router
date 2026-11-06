@@ -1,1 +1,0 @@
-ALTER TYPE "public"."scheduled_task" ADD VALUE 'config_dir_reap';

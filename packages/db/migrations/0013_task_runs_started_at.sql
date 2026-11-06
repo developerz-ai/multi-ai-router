@@ -1,1 +1,0 @@
-CREATE INDEX "scheduled_task_runs_started_at_idx" ON "scheduled_task_runs" USING btree ("started_at");

@@ -1,6 +1,0 @@
-// One section per provider, with room between them: the header of the next
-// group must not read as a footer of the previous table.
-.groups {
-  display: grid;
-  gap: var(--space-6);
-}

@@ -1,1 +1,0 @@
-ALTER TYPE "public"."provider_id" ADD VALUE 'ollama' BEFORE 'openai-compatible';
