@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.50.0] — 2026-11-06
+
+### Added
+
+- **`error.router`: a machine-readable verdict on every error the router renders, in every dialect.** Inside the `error` member, beside the unchanged sentence: `wall` (`clock` / `capacity` / `human` / `scope` / `request` / `internal`, fixed per error code so it cannot disagree with the status: `429` clock, `402` human, `403` scope; a `503` `no_healthy_account` is `capacity` unless its throw site names `human` — only disabled / re-auth / credential-rejected members, a missing base URL or config directory, a provider with no driver — or `scope` — no account serves the model, or none performs the operation; the type admits no other), `scope` (`pool` / `account` / `session` / `key` / `request` / `router`), `retryable`, `reset_at`, `reset_source`, `retry_after_s` (equal to `Retry-After`), `accounts` (`{account, state, reset_at}`, every pool member by filter reason or each attempted account by outcome), `pools`, `signal` (the classifier token or filter reason that decided it), `attempts`, `request_id`. Accounts are opaque: `acct_` + 16 hex of SHA-256 of the router id — but the frozen session-bound sentence (`session is bound to account <id>, …`) still prints the raw router id, so opacity holds only once developerz.ai stops reading sentences. `signal` and `pools` pass the same credential scrub as the message. Additive; the old sentences are frozen by `apps/api/test/unit/errors/frozen-sentences.test.ts` until developerz.ai reads the object alone. Not on an upstream's own relayed error or an in-stream error event. Regression: `apps/api/test/integration/router-contract.test.ts`, `packages/core/test/unit/wall.test.ts`. Documentation: `docs/idea/06-protocol-translation.md` § The router error object.
+- **`x-router-*` headers on every data-plane answer.** `x-router-request-id` on every answer; `x-router-attempts` on every `/v1` inference answer and every error the transport renders (`0` when the request was refused before the dispatcher; one count for success and failure, a stale-session replay included); `x-router-served-model` (post-alias), `x-router-provider` and `x-router-account` (opaque) whenever an account answered, including its own relayed error. A stream carries them before its first byte. Documentation: § Router response headers.
+- **`x-router-usage: cost` opts a same-dialect answer into `usage.cost` (#335).** 2.48.0 stated the cost on translated answers only. With the header, a passthrough is re-framed through the translated relay with an identity pair: the JSON body or the final usage frame gains `cost`, `cost_source`, `cost_basis`; content and order are unchanged, byte identity is not kept. Without it nothing changes. Any other value is refused `400 invalid_request` before an upstream is asked; the header is never forwarded. A cost the upstream stated itself is kept as sent. Regression: `apps/api/test/integration/usage-cost-wire.test.ts`.
+
+### Fixed
+
+- **The usage observer reads a Codex passthrough as SSE.** The driver declares the surface answers only as a stream, and it sends no `content-type`; observation keyed on the header alone, outside the translated path. Its declaration now decides, on both paths — and the `x-router-usage: cost` relay streams such an answer frame by frame instead of buffering it.
+- **The `openai-chat` usage frame is found by parsing.** The final `choices: []` chunk with a `usage` object, whatever its spacing; a provider that puts usage on every content chunk no longer has each one stamped.
+- **`x-request-id` reaches data-plane answers.** It was set only on responses the transport built itself; every `/v1` route returns its own `Response`, which bypassed it. Stamped on what leaves now.
+
 ## [2.49.0] — 2026-11-06
 
 ### Added
@@ -1968,3 +1982,4 @@ your tooling config.
 [2.48.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.0
 [2.48.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.1
 [2.49.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.49.0
+[2.50.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.50.0

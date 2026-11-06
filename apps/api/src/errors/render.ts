@@ -10,6 +10,7 @@ import {
   RouterShutdownError,
 } from "../services/dataplane/active-requests"
 import { ClientCancelledError } from "../services/dataplane/relay-cancellation"
+import { type RouterErrorObject, routerErrorObject } from "./router-object"
 
 /**
  * Turns a thrown value into the HTTP status and the dialect-appropriate JSON body the client
@@ -30,7 +31,11 @@ import { ClientCancelledError } from "../services/dataplane/relay-cancellation"
 /** An error body is one of two shapes; every OpenAI dialect shares the second. */
 export interface AnthropicErrorBody {
   readonly type: "error"
-  readonly error: { readonly type: string; readonly message: string }
+  readonly error: {
+    readonly type: string
+    readonly message: string
+    readonly router?: RouterErrorObject
+  }
 }
 
 export interface OpenAiErrorBody {
@@ -39,6 +44,7 @@ export interface OpenAiErrorBody {
     readonly type: string
     readonly param: null
     readonly code: string | null
+    readonly router?: RouterErrorObject
   }
 }
 
@@ -132,7 +138,27 @@ function renderContextOverflow(
   }
 }
 
-export function toErrorResponse(error: unknown, dialect: Dialect | null): ErrorResponse {
+/**
+ * The rendered failure, with `error.router` beside the sentence (`router-object.ts`). `requestId`
+ * is the transport's own id for the request, echoed so a caller can quote it back to an operator.
+ */
+export function toErrorResponse(
+  error: unknown,
+  dialect: Dialect | null,
+  requestId: string | null = null,
+): ErrorResponse {
+  const response = renderFailure(error, dialect)
+  const router = routerErrorObject(error, response.retryAfterSeconds, requestId)
+  return { ...response, body: withRouter(response.body, router) }
+}
+
+function withRouter(body: ErrorBody, router: RouterErrorObject): ErrorBody {
+  // Narrowed per shape: a spread over the union would not keep each error with its own envelope.
+  if ("type" in body) return { ...body, error: { ...body.error, router } }
+  return { ...body, error: { ...body.error, router } }
+}
+
+function renderFailure(error: unknown, dialect: Dialect | null): ErrorResponse {
   if (error instanceof ClientCancelledError)
     return {
       status: 499,
@@ -169,10 +195,19 @@ export function toErrorResponse(error: unknown, dialect: Dialect | null): ErrorR
   }
 }
 
-export function notFoundResponse(dialect: Dialect | null): ErrorResponse {
+export function notFoundResponse(
+  dialect: Dialect | null,
+  requestId: string | null = null,
+): ErrorResponse {
+  const router: RouterErrorObject = {
+    ...routerErrorObject(null, null, requestId),
+    wall: "request",
+    scope: "request",
+    retryable: false,
+  }
   return {
     status: 404,
-    body: renderErrorBody(dialect, 404, "Not found", "not_found"),
+    body: withRouter(renderErrorBody(dialect, 404, "Not found", "not_found"), router),
     retryAfterSeconds: null,
   }
 }

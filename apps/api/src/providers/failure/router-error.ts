@@ -54,6 +54,8 @@ export function toRouterError(
   classification: FailureClassification,
   context?: FailureContext,
 ): RouterError | null {
+  // One account's own answer, named by the classifier token that decided it.
+  const detail = { scope: "account", signal: classification.signal } as const
   if (classification.kind === "rate-limited") {
     const signal = classification.rateLimit ?? context?.signal ?? null
     const resetsAt =
@@ -76,23 +78,34 @@ export function toRouterError(
       stated === undefined
         ? `upstream rate limited (${classification.signal})`
         : `${stated} (${classification.signal})`,
-      { retryAfterSeconds, resetsAt },
+      {
+        retryAfterSeconds,
+        resetsAt,
+        detail: {
+          ...detail,
+          ...(resetsAt === undefined ? {} : { resetSource: signal?.resetSource ?? "unknown" }),
+        },
+      },
     )
   }
 
   if (classification.kind === "invalid-request" && classification.status === 403) {
-    return new InvalidRequestError("upstream rejected the request under its content policy")
+    return new InvalidRequestError("upstream rejected the request under its content policy", {
+      detail,
+    })
   }
 
   if (classification.kind === "credits-exhausted") {
     return new CreditsExhaustedError(
       `upstream account is out of credits (${classification.signal}) — needs a top-up, no timer will fix it`,
+      { detail },
     )
   }
 
   if (classification.kind === "auth") {
     return new UpstreamAuthError(
       `upstream rejected the account's credential (${classification.signal}) — the account needs re-authenticating, the presented router key was fine`,
+      { detail },
     )
   }
 

@@ -114,6 +114,7 @@ export const claudeSdkDriver: ClaudeSdkDriver = {
     if (!dir) {
       throw new NoHealthyAccountError(
         `account ${account.id} (anthropic-oauth) has no config directory: a Claude subscription is served from an isolated CLAUDE_CONFIG_DIR`,
+        { wall: "human" },
       )
     }
     return dir

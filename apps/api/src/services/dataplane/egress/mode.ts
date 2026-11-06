@@ -315,7 +315,11 @@ function embeddable(decision: TransportDecision): EgressDecision {
  * is missing is an account that states the endpoint, which only the operator can add.
  */
 export function egressRejectionError(rejection: EgressRejection): RouterError {
-  return rejection.reason === "no-translator"
-    ? new TranslationError(rejection.message)
-    : new NoHealthyAccountError(rejection.message)
+  if (rejection.reason === "no-translator") return new TranslationError(rejection.message)
+  // No account in this scope performs the operation: another key or route, not a wait.
+  if (rejection.reason === "unsupported-operation")
+    return new NoHealthyAccountError(rejection.message, { wall: "scope" })
+  // `unimplemented`: an account whose provider this build has no driver for. No retry fixes that;
+  // an operator removes the account or deploys a build that has one.
+  return new NoHealthyAccountError(rejection.message, { wall: "human" })
 }

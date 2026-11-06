@@ -1,4 +1,5 @@
 import type { Dialect, RouterError } from "@multi-ai-router/core"
+import { noteRequestFacts } from "../../errors/router-object"
 import { PROVIDER_REGISTRY } from "../../providers"
 import type { Candidate } from "../routing"
 import { type FailoverOptions, selectAccounts } from "../routing"
@@ -17,10 +18,12 @@ import { planCandidates } from "./plan"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
 import { hintRecoveryRejections } from "./recovery-hints"
 import { createRequestRecovery } from "./recovery-wait"
+import { costRequested } from "./relay-cost-optin"
 import { createRequestAccounting, type RequestAccounting } from "./request-accounting"
 import { requestLifetime } from "./request-lifetime"
 import { requestTerminalObserver } from "./request-terminal"
 import { createRotationCounters } from "./rotation"
+import { ROUTER_ATTEMPTS_HEADER, withHeaders } from "./router-headers"
 import { createRuntime } from "./runtime"
 import { sessionBindings } from "./session-binding"
 import { buildSnapshot } from "./snapshot"
@@ -137,6 +140,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     if (limit !== undefined && !limit.allowed) throw keyRateLimitedError(input.key, limit)
 
     refuseEncodedBody(input.request.headers)
+    // Read again at relay time; asked here so an unknown option is refused before any upstream.
+    costRequested(input.request.headers)
 
     const body = await readTrackedRequestBody(input.request, options.body, progress, clock)
     input.request.signal.throwIfAborted()
@@ -270,6 +275,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     // Loops only while the router's own recovery hold is the obstacle (`recovery-wait.ts`).
     for (;;) {
       const selection = await recovery.select(select)
+      progress.pools = selection.decision.groups
+        .map((group) => group.poolName)
+        .filter((name): name is string => name !== null)
       // A `blocked` binding is kept: its account returns on a clock (`invalidated`: see below).
       if (!selection.ok) return fail(selection.error)
 
@@ -376,9 +384,12 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           lifetime,
         )
         accounting.respond(response)
-        return response
+        return withHeaders(response, {
+          [ROUTER_ATTEMPTS_HEADER]: String(accounting.answeredAttempts(response)),
+        })
       } catch (error) {
         const { error: failure } = lifetime.fail(error)
+        noteRequestFacts(failure, { ...accounting.facts(), pools: progress.pools ?? [] })
         throw failure
       }
     },

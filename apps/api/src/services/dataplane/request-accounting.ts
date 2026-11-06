@@ -28,6 +28,10 @@ export function createRequestAccounting(
   let winner: UsageRecord | undefined
   let winnerSelected = false
   let finalized = false
+  // Upstream attempts so far, and each attempted account's latest outcome: `error.router`'s
+  // `attempts` and its fallback `accounts` (`errors/router-object.ts`).
+  let attempts = 0
+  const attempted = new Map<string, string>()
   const finalize = (event: UsageRecord | undefined) => {
     if (finalized || event === undefined) return
     finalized = true
@@ -82,6 +86,11 @@ export function createRequestAccounting(
       : latest
   const record = (event: UsageRecord) => {
     latest = event
+    if (event.accountId !== null) {
+      attempts += 1
+      attempted.delete(event.accountId)
+      attempted.set(event.accountId, event.outcome)
+    }
     recorded = true
     flush(null)
     if (responseStatus !== undefined) write({ ...event, responseStatus })
@@ -89,6 +98,15 @@ export function createRequestAccounting(
   }
   return {
     record,
+    facts: () => ({
+      attempts,
+      accounts: [...attempted].map(([accountId, state]) => ({ accountId, state })),
+    }),
+    /**
+     * Upstream attempts behind an answer about to leave. A success settles its usage row when its
+     * body ends — after its headers — so an unsettled `2xx` counts the attempt it is still relaying.
+     */
+    answeredAttempts: (response: Response) => attempts + (response.ok && !finalized ? 1 : 0),
     selectTerminal(event: UsageRecord | undefined) {
       winner = event
       winnerSelected = true

@@ -26,6 +26,8 @@ export interface RequestProgress {
   bodyReadMs: number
   bodyReadWaitingSince?: number | undefined
   model: string | null
+  /** Names of the pools selection drew from, once it has run. */
+  pools?: readonly string[]
 }
 
 export function sampleOf(

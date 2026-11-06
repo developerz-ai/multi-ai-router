@@ -18,6 +18,7 @@ import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
 import { ClientCancelledError } from "./relay-cancellation"
 import { type CostReport, usageCostFields } from "./relay-cost"
+import { costRequested, restampingPair } from "./relay-cost-optin"
 import { createRelayTerminal } from "./relay-terminal"
 import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
@@ -95,12 +96,15 @@ export function relaySuccess(
           ctx.request?.signal,
         )
   const upstreamStreams = forcesUpstreamStream(servable)
+  // Whether the body is SSE whatever its `content-type` says: the driver declares a surface that
+  // answers only as a stream (Codex sends one with no `content-type` at all), translated or not.
+  const sendsSse = servable.responsesEgress.requireStream
   let modelOutput = false
   const observation = createResponseObserver({
     dialect: servable.dialect,
     operation: ctx.runtime.operation,
     // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
-    contentType: upstreamStreams ? "text/event-stream" : response.headers.get("content-type"),
+    contentType: sendsSse ? "text/event-stream" : response.headers.get("content-type"),
     maximumObservationBytes: ctx.runtime.responseObservationMaxBytes ?? 65_536,
     descriptor: observingModelOutput(servable.dialect, servable.driver.responseObservation, () => {
       modelOutput = true
@@ -200,7 +204,15 @@ export function relaySuccess(
     onEnd: (bytes: number) => settle(bytes > 0, undefined, true),
     onError: (error: unknown, bytes: number) => settle(bytes > 0, error),
   }
-  if (servable.translation === null) return relayResponse(response, observer, relaySignal)
+  // Only inference has a completion to price.
+  const priced = ctx.runtime.operation === "messages"
+  const restamp =
+    servable.translation === null &&
+    priced &&
+    ctx.request !== undefined &&
+    costRequested(ctx.request.headers)
+  if (servable.translation === null && !restamp)
+    return relayResponse(response, observer, relaySignal)
   const cost: CostReport = {
     ingress: ctx.runtime.ingressDialect,
     fields: (whole) => {
@@ -212,18 +224,19 @@ export function relaySuccess(
   }
   return relayTranslatedResponse({
     upstream: response,
-    pair: servable.translation,
+    pair: servable.translation ?? restampingPair(servable.dialect),
     // The same account's seal the request was converted under, so reasoning this upstream issues
     // is sealed to it and only it.
     context: withReasoningSeal(
       { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
       reasoningSealFor(ctx, servable),
     ),
-    // Only for a client that did not ask to stream; one that did is forwarded event by event.
-    collectStream: upstreamStreams && ctx.translated?.clientStreams() !== true,
-    upstreamStreams,
-    // Only inference has a completion to price.
-    ...(ctx.runtime.operation === "messages" ? { cost } : {}),
+    // Only for a client that did not ask to stream; one that did is forwarded event by event. A
+    // restamped passthrough keeps the upstream's framing, so it is never collected.
+    collectStream:
+      servable.translation !== null && upstreamStreams && ctx.translated?.clientStreams() !== true,
+    upstreamStreams: sendsSse,
+    ...(priced ? { cost } : {}),
     observer,
     ...(relaySignal === undefined ? {} : { signal: relaySignal }),
     onUnrecognizedStopReason: (reason) =>

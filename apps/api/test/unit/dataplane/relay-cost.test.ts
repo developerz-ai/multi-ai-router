@@ -77,6 +77,21 @@ describe("usageFrameIndex", () => {
     expect(usageFrameIndex("openai-chat", [{ data: "[DONE]" }])).toBe(-1)
   })
 
+  test("openai-chat: read by parsing, so spacing does not hide the usage chunk", () => {
+    expect(
+      usageFrameIndex("openai-chat", [{ data: '{"choices": [], "usage": {"prompt_tokens": 1}}' }]),
+    ).toBe(0)
+  })
+
+  test("openai-chat: only the final usage chunk, not a content chunk that also carries usage", () => {
+    const events = [
+      { data: '{"choices":[{"delta":{"content":"hi"}}],"usage":{"prompt_tokens":1}}' },
+      { data: '{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}' },
+    ]
+    expect(usageFrameIndex("openai-chat", events)).toBe(1)
+    expect(usageFrameIndex("openai-chat", events.slice(0, 1))).toBe(-1)
+  })
+
   test("openai-responses: the terminal events, and not a failed one", () => {
     const failed = { event: "response.failed", data: '{"response":{"usage":{"input_tokens":1}}}' }
     const done = { event: "response.incomplete", data: '{"response":{"usage":{"input_tokens":1}}}' }

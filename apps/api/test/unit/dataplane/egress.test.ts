@@ -46,13 +46,24 @@ describe("egress mode", () => {
     } as const
     expect(egressRejectionError(rejection)).toBeInstanceOf(TranslationError)
   })
-  test("an unimplemented provider is a capacity failure, not a bad request", () => {
+  test("an unimplemented provider is a 503 a person must fix, not a bad request or a retry", () => {
     const rejection = {
       mode: "rejected",
       reason: "unimplemented",
       message: "provider x has no driver",
     } as const
-    expect(egressRejectionError(rejection)).toBeInstanceOf(NoHealthyAccountError)
+    const error = egressRejectionError(rejection)
+    expect(error).toBeInstanceOf(NoHealthyAccountError)
+    expect(error instanceof NoHealthyAccountError && error.wall).toBe("human")
+  })
+  test("an operation no account in scope performs is a scope wall, never a retry", () => {
+    const error = egressRejectionError({
+      mode: "rejected",
+      reason: "unsupported-operation",
+      message: "no account can count tokens",
+    })
+    expect(error).toBeInstanceOf(NoHealthyAccountError)
+    expect(error instanceof NoHealthyAccountError && error.wall).toBe("scope")
   })
   test("gemini speaks Google's OpenAI-compatibility surface, so a chat client passes through", () => {
     const gemini = account("g", { provider: "gemini" })

@@ -7,11 +7,11 @@ import { responseObject } from "../usage/response-usage"
 /**
  * `usage.cost` on a response the router itself writes.
  *
- * **Only a translated response carries it.** A translated body and its frames are already the
- * router's own serialization, so one more member costs nothing. A same-dialect relay never reaches
- * this module: its bytes are the upstream's (non-negotiable 10), its headers leave before any usage
- * exists, and rewriting its usage frame would mean parsing the passthrough. Absent is the answer
- * there, and a caller reads absent as "not stated", the way it does on any provider without a cost.
+ * **A translated response carries it; a same-dialect one only on request.** A translated body and
+ * its frames are already the router's own serialization, so one more member costs nothing. A
+ * same-dialect relay is the upstream's bytes (non-negotiable 10) and reaches this module only when
+ * the caller sent `x-router-usage: cost` (`relay-cost-optin.ts`). Absent is the answer otherwise,
+ * and a caller reads absent as "not stated", the way it does on any provider without a cost.
  *
  * The figure is the `UsageRecord`'s own (`attemptCost`), priced on the upstream's counts rather than
  * on the translated ones, which fold cache writes into the prompt. Absent, never zero, whenever
@@ -51,12 +51,29 @@ export function usageCostFields(facts: CountFacts, estimate: CostEstimate): Usag
   }
 }
 
-/** Compact JSON, so `usage: null` on a content chunk never reads as a usage frame. */
-const USAGE_OBJECT = '"usage":{'
+/**
+ * The chunk `stream_options.include_usage` adds at the end: a `usage` object and `choices: []`.
+ * Parsed, not matched: a relayed upstream's own spacing must not hide it, and a provider that
+ * puts usage on every content chunk must not have each one stamped — only the final one.
+ */
+function isOpenAiChatUsageChunk(data: string): boolean {
+  // A cheap pre-check, so a content chunk is not parsed a second time just to be ruled out.
+  if (!data.includes('"usage"')) return false
+  try {
+    const chunk = responseObject(JSON.parse(data))
+    return (
+      responseObject(chunk?.usage) !== undefined &&
+      Array.isArray(chunk?.choices) &&
+      chunk.choices.length === 0
+    )
+  } catch {
+    return false
+  }
+}
 
 function isUsageFrame(ingress: Dialect, event: SseEvent): boolean {
   if (ingress === "anthropic") return event.event === "message_delta"
-  if (ingress === "openai-chat") return event.data.includes(USAGE_OBJECT)
+  if (ingress === "openai-chat") return isOpenAiChatUsageChunk(event.data)
   return event.event === "response.completed" || event.event === "response.incomplete"
 }
 
@@ -68,7 +85,8 @@ export function usageFrameIndex(ingress: Dialect, events: readonly SseEvent[]): 
 function withUsage(holder: unknown, fields: UsageCostFields): Record<string, unknown> | null {
   const object = responseObject(holder)
   const usage = responseObject(object?.usage)
-  return object === undefined || usage === undefined
+  // A cost the upstream stated itself (OpenRouter's, on an opted-in relay) is its own word: kept.
+  return object === undefined || usage === undefined || "cost" in usage
     ? null
     : { ...object, usage: { ...usage, ...fields } }
 }

@@ -299,3 +299,132 @@ describe("a same-dialect relay is byte-for-byte: no cost, whatever the row says"
     expect(await res.text()).toBe(upstreamBody)
   })
 })
+
+describe("x-router-usage: cost opts a same-dialect relay in", () => {
+  const OPT_IN = { ...bearer(), "x-router-usage": "cost" }
+
+  test("a JSON body states the row's estimate beside the upstream's own fields", async () => {
+    const upstreamBody = '{ "id":"c",  "usage": {"prompt_tokens":300000,"completion_tokens":1000} }'
+    const { app, upstream } = harness({
+      accounts: [chatAccount()],
+      responses: [
+        () => new Response(upstreamBody, { headers: { "content-type": "application/json" } }),
+      ],
+    })
+    const res = await app.request("/v1/chat/completions", post(JSON.stringify(CHAT), OPT_IN))
+    expect(await res.json()).toEqual({
+      id: "c",
+      usage: {
+        prompt_tokens: 300_000,
+        completion_tokens: 1_000,
+        cost: 1.215,
+        cost_source: "estimated",
+        cost_basis: "metered",
+      },
+    })
+    // A router header: never forwarded to the provider.
+    expect(upstream.calls[0]?.headers.get("x-router-usage")).toBeNull()
+  })
+
+  test("a stream states it on the usage frame alone, every other frame as sent", async () => {
+    const { app } = harness({ accounts: [chatAccount()], responses: [chatStream] })
+    const res = await app.request(
+      "/v1/chat/completions",
+      post(JSON.stringify({ ...CHAT, stream: true }), OPT_IN),
+    )
+    const text = await res.text()
+    expect(text.startsWith(`${CONTENT}${FINISH}`)).toBe(true)
+    expect(text.endsWith("data: [DONE]\n\n")).toBe(true)
+    const frames = dataFrames(text)
+    expect(frames.filter((frame) => usageOf(frame)?.cost !== undefined)).toHaveLength(1)
+    expect(usageOf(frames.at(-1))).toMatchObject({ cost: 1.215, cost_basis: "metered" })
+  })
+
+  test("an openai-responses stream: response.completed", async () => {
+    const { app } = harness({ accounts: [responsesAccount()], responses: [responsesStream] })
+    const res = await app.request(
+      "/v1/responses",
+      post(JSON.stringify({ ...RESPONSES, stream: true }), OPT_IN),
+    )
+    const done = dataFrames(await res.text()).find((frame) => frame.type === "response.completed")
+    expect(usageOf(done?.response)?.cost).toBe(1.215)
+  })
+
+  test("a stream with no content-type (Codex) is still streamed frame by frame, not buffered", async () => {
+    const ACCESS_TOKEN = `eyJhbGciOiJub25lIn0.${Buffer.from(
+      JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }),
+    ).toString("base64url")}.sig`
+    const created = responsesFrame("response.created", {
+      response: { id: "r", status: "in_progress", output: [] },
+    })
+    let finish: () => void = () => undefined
+    const held = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(new TextEncoder().encode(created))
+        await held
+        const rest = await responsesStream().text()
+        controller.enqueue(
+          new TextEncoder().encode(rest.slice(rest.indexOf("event: response.output"))),
+        )
+        controller.close()
+      },
+    })
+    const { app } = harness({
+      accounts: [
+        {
+          ...account("codex", { provider: "openai-oauth", cipher: CRYPTOR }),
+          authMaterial: CRYPTOR.encrypt(JSON.stringify({ accessToken: ACCESS_TOKEN })),
+        },
+      ],
+      // The ChatGPT Codex backend: 200, an event stream, and no content-type at all.
+      responses: [() => new Response(upstreamBody, { status: 200 })],
+    })
+    const res = await app.request(
+      "/v1/responses",
+      post(JSON.stringify({ ...RESPONSES, stream: true }), OPT_IN),
+    )
+    const reader = res.body?.getReader()
+    if (reader === undefined) throw new Error("missing body")
+    const first = await Promise.race([
+      reader.read().then((step) => new TextDecoder().decode(step.value)),
+      Bun.sleep(1_000).then(() => "buffered: nothing before the upstream finished"),
+    ])
+    expect(first).toContain("response.created")
+    expect(res.headers.get("content-type")).toBe("text/event-stream")
+    finish()
+    let rest = ""
+    for (let step = await reader.read(); !step.done; step = await reader.read()) {
+      rest += new TextDecoder().decode(step.value)
+    }
+    const done = dataFrames(rest).find((frame) => frame.type === "response.completed")
+    expect(usageOf(done?.response)).toMatchObject({ cost: 1.215, cost_basis: "metered" })
+  })
+
+  test("a cost the upstream itself states is kept, not overwritten", async () => {
+    const upstreamBody = '{"id":"c","usage":{"prompt_tokens":1,"completion_tokens":1,"cost":0.5}}'
+    const { app } = harness({
+      accounts: [chatAccount()],
+      responses: [
+        () => new Response(upstreamBody, { headers: { "content-type": "application/json" } }),
+      ],
+    })
+    const res = await app.request("/v1/chat/completions", post(JSON.stringify(CHAT), OPT_IN))
+    expect(usageOf(await res.json())).toEqual({ prompt_tokens: 1, completion_tokens: 1, cost: 0.5 })
+  })
+
+  test("an unknown option is refused before any upstream is asked", async () => {
+    const { app, upstream } = harness({ accounts: [chatAccount()], responses: [chatStream] })
+    const res = await app.request(
+      "/v1/chat/completions",
+      post(JSON.stringify(CHAT), { ...bearer(), "x-router-usage": "costs" }),
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe("invalid_request")
+    expect(body.error.message).toContain('"costs"')
+    expect(upstream.calls).toHaveLength(0)
+  })
+})

@@ -16,6 +16,7 @@ export function resolveBaseUrl(account: DriverAccount, pinnedDefault: string | n
   if (!candidate) {
     throw new NoHealthyAccountError(
       `account ${account.id} (${account.provider}) has no base URL: this provider requires an operator-supplied endpoint`,
+      { wall: "human" },
     )
   }
 
@@ -24,6 +25,7 @@ export function resolveBaseUrl(account: DriverAccount, pinnedDefault: string | n
   } catch {
     throw new NoHealthyAccountError(
       `account ${account.id} (${account.provider}) has an unusable base URL`,
+      { wall: "human" },
     )
   }
 }

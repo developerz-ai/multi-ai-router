@@ -9,6 +9,8 @@
  *    them makes the router retry a dead account on a timer.
  */
 
+import type { RouterErrorDetail, RouterErrorInit } from "./wall"
+
 export const ROUTER_ERROR_CODES = [
   "no_healthy_account",
   "quota_exhausted",
@@ -39,26 +41,42 @@ export type RouterErrorCode = (typeof ROUTER_ERROR_CODES)[number]
 export abstract class RouterError extends Error {
   abstract readonly code: RouterErrorCode
   abstract readonly status: number
+  /** What the throw site knew beyond the class; rendered as `error.router` (`wall.ts`). */
+  readonly detail: RouterErrorDetail
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: RouterErrorInit) {
     super(message, options)
     // The subclass name is what `UsageRecord.errorClass` and the logs record.
     this.name = new.target.name
+    this.detail = options?.detail ?? {}
   }
 }
 
 /**
  * Candidate filtering produced nothing, for a reason that is neither "rate limited",
  * "out of credits", nor "out of scope" — no account configured, or none supporting the
- * requested model. `503`, because the pool may become serviceable without the caller changing
- * anything.
+ * requested model. `503`. One status, three walls (`wall.ts`): `capacity` by default, `human`
+ * when only an operator brings an account back, `scope` when no account here serves what was
+ * asked. The throw site says which; the type admits no other.
  */
 export class NoHealthyAccountError extends RouterError {
   readonly code = "no_healthy_account"
   readonly status = 503
+  readonly wall: NoHealthyAccountWall
+
+  constructor(message: string, init: NoHealthyAccountInit = {}) {
+    super(message, init)
+    this.wall = init.wall ?? "capacity"
+  }
 }
 
-export interface RetryableInit extends ErrorOptions {
+export type NoHealthyAccountWall = "capacity" | "human" | "scope"
+
+export interface NoHealthyAccountInit extends RouterErrorInit {
+  readonly wall?: NoHealthyAccountWall
+}
+
+export interface RetryableInit extends RouterErrorInit {
   /** Seconds to wait before retrying — rendered as the `Retry-After` header. */
   readonly retryAfterSeconds?: number
 }
@@ -182,7 +200,7 @@ export class AdminAuthError extends RouterError {
   }
 }
 
-export interface AdminAuthInit extends ErrorOptions {
+export interface AdminAuthInit extends RouterErrorInit {
   /** See {@link AdminAuthError.reason}. Operator-facing, never rendered. */
   readonly reason?: string
 }

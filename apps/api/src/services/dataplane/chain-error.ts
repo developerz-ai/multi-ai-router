@@ -197,7 +197,10 @@ export function answeredFailure(
   // time, and a coding agent's retry policy reads the two differently. A connect failure still
   // contributes nothing: it says the account was never reached, which is what "nothing" means.
   if (classification === null && context?.failureKind === "timeout") {
-    return { kind: "router", error: new UpstreamTimeoutError(context.clientMessage) }
+    return {
+      kind: "router",
+      error: new UpstreamTimeoutError(context.clientMessage, { detail: { signal: "timeout" } }),
+    }
   }
   if (classification === null || context === undefined) return null
   return {
