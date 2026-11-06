@@ -43,6 +43,22 @@ export const ModelListingSource = z.enum(["upstream", "live", "shipped"])
 export type ModelListingSource = z.infer<typeof ModelListingSource>
 
 /**
+ * What an upstream's own listing says about a model's thinking modes. **Information only**: a
+ * client's requested effort is never validated or rewritten against it (non-negotiable 4).
+ *
+ * - `supported` — the model reasons at all.
+ * - `toggle` — thinking can be switched off, not just tuned. Absent is not stated, never false.
+ * - `effort` — the levels the upstream names, in its own words and order. Open strings, because the
+ *   set differs per vendor (`low`/`high`/`max`) and a closed enum would need a release to learn one.
+ */
+export const ModelReasoning = z.object({
+  supported: z.boolean(),
+  toggle: z.boolean().optional(),
+  effort: z.array(z.string().min(1)).optional(),
+})
+export type ModelReasoning = z.infer<typeof ModelReasoning>
+
+/**
  * One model as this router can describe it. Every field beyond the id is nullable, and null means
  * **unknown** rather than zero or unlimited — a client that reads a missing context window as "no
  * limit" would build a request the upstream rejects, so the absence has to be visible.
@@ -63,6 +79,8 @@ export interface ModelDescriptor {
    * Information only: the client's model string is still what goes upstream, unchanged.
    */
   readonly resolvedModel: string | null
+  /** Absent wherever the listing said nothing — most providers. See {@link ModelReasoning}. */
+  readonly reasoning?: ModelReasoning
 }
 
 /**

@@ -1,5 +1,14 @@
-import type { ModelContextSource, ModelListingSource } from "@multi-ai-router/core"
-import { index, integer, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core"
+import type { ModelContextSource, ModelListingSource, ModelReasoning } from "@multi-ai-router/core"
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 
 /**
@@ -68,6 +77,13 @@ export const modelCatalog = pgTable(
      * concrete model id. Information for a listing, never a rename on the request path.
      */
     resolvedModel: text("resolved_model"),
+
+    /**
+     * What the listing said about the model's thinking modes, or NULL where it said nothing — most
+     * providers. Information for a listing: nothing validates a client's effort against it. `jsonb`
+     * because the upstream's effort levels are an open list, read back through core's Zod schema.
+     */
+    reasoning: jsonb("reasoning").$type<ModelReasoning>(),
 
     /**
      * When the refresh that wrote this row ran. Rendered beside the catalog, because a listing with

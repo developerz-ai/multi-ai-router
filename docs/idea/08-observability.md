@@ -100,6 +100,10 @@ request fact; it never invents an upstream account or a token charge.
 
 ## Cost estimation
 
+A response the router writes (translated, or folded from a forced stream) also states the estimate as
+`usage.cost`, `cost_source` and `cost_basis`; a byte relay cannot, so it states none. See
+[06-protocol-translation.md](06-protocol-translation.md).
+
 The rules below are the contract. The **numbers** live in the code, not in this document: a
 document that restates a price is wrong the day the vendor moves it, and a wrong price in a spec
 reads as a promise. Every rule names the module that owns it.
@@ -1340,6 +1344,7 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Subscription login lifetime watch (`login_lifetime_watch`) | `LOGIN_LIFETIME_WATCH_INTERVAL_MINUTES` (daily); one `warn` per subscription inside the renewal window — see below |
 | Weekly usage report (`usage_weekly_report`) | `USAGE_REPORT_INTERVAL_MINUTES` (hourly check); one report per UTC week once its anchor has passed — see [Weekly usage report](#weekly-usage-report) |
 | Cooldown recheck (`cooldown_recheck`) | `COOLDOWN_RECHECK_INTERVAL_MINUTES` (hourly) |
+| Plan quota read (`plan_quota_read`) | `PLAN_QUOTA_READ_INTERVAL_MINUTES` (15) |
 
 ### The catalog refresh is not a scheduled task
 

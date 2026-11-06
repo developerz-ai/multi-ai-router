@@ -1,4 +1,9 @@
-import { type Dialect, describeError, isRouterError } from "@multi-ai-router/core"
+import {
+  type Dialect,
+  describeError,
+  isRouterError,
+  type ModelReasoning,
+} from "@multi-ai-router/core"
 import type { AccountRow } from "@multi-ai-router/db"
 import { z } from "zod"
 import { type DriverAccount, httpDriver } from "../../providers"
@@ -34,6 +39,8 @@ export interface UpstreamModelEntry {
   readonly id: string
   readonly contextTokens: number | null
   readonly maxOutputTokens: number | null
+  /** Only a driver with its own listing states this; the stock reader never does. */
+  readonly reasoning?: ModelReasoning
 }
 
 export type ListingFailureCode =

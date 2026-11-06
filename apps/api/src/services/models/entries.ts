@@ -18,6 +18,15 @@ import { lookupContextWindow } from "./windows"
  * because the fact that this router can reach it is worth stating on its own.
  */
 export function catalogEntry(provider: ProviderId, entry: UpstreamModelEntry): ModelCatalogEntry {
+  return { ...sizedEntry(provider, entry), ...reasoningOf(entry) }
+}
+
+/** Not part of the sourcing rule above: only the listing can state this, so it rides every row. */
+function reasoningOf(entry: UpstreamModelEntry): Pick<ModelCatalogEntry, "reasoning"> {
+  return entry.reasoning === undefined ? {} : { reasoning: entry.reasoning }
+}
+
+function sizedEntry(provider: ProviderId, entry: UpstreamModelEntry): ModelCatalogEntry {
   if (entry.contextTokens !== null) {
     return {
       modelId: entry.id,

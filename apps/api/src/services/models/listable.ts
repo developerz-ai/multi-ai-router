@@ -1,4 +1,4 @@
-import type { ModelDescriptor } from "@multi-ai-router/core"
+import type { ModelDescriptor, ModelReasoning } from "@multi-ai-router/core"
 import { PROVIDER_REGISTRY } from "../../providers"
 import { type AccountSnapshot, advertisedModels, resolveModel } from "../routing"
 import { shippedSubscriptionModels } from "./subscription"
@@ -35,6 +35,9 @@ import { shippedSubscriptionModels } from "./subscription"
  * as first — `sonnet -> glm-4.7` is as big as `glm-4.7` — then by the name, then by what it resolves
  * to. Null is unknown, never a default: a client reading a missing window as unlimited builds a
  * request the upstream rejects.
+ *
+ * Thinking modes are found the same way, and are the same kind of fact: what the upstream's listing
+ * said, for a reader to use or ignore. A client's requested effort is never checked against them.
  */
 
 export interface ListedModel {
@@ -46,6 +49,8 @@ export interface ListedModel {
   readonly contextTokens: number | null
   /** Output ceiling in tokens, from the same row. Null when nothing states one. */
   readonly maxOutputTokens: number | null
+  /** Thinking modes, from the same catalog. Absent when nothing states them. */
+  readonly reasoning?: ModelReasoning
 }
 
 export function listableModels(
@@ -58,20 +63,25 @@ export function listableModels(
   // `claude-opus-5`, …) — a client that types `--model opus` must find it listed, and a freshly
   // connected account lists models before its first sweep.
   const rows = subscription ? [...catalogRows, ...shippedSubscriptionModels()] : catalogRows
-  const sizeOf = sizeLookup(account, rows)
+  const sizeOf = rowLookup(account, rows, sizeOfRow)
+  const reasoningOf = rowLookup(account, rows, reasoningOfRow)
+  const describe = (name: string, resolvedModel: string | null): ListedModel => ({
+    id: name,
+    resolvedModel,
+    ...(sizeOf(name, resolvedModel) ?? UNKNOWN),
+    ...reasoningOf(name, resolvedModel),
+  })
   const listed = new Map<string, ListedModel>()
 
   for (const name of advertisedModels(account)) {
-    const resolvedModel = aliasTarget(account, name)
-    listed.set(name, { id: name, resolvedModel, ...sizeOf(name, resolvedModel) })
+    listed.set(name, describe(name, aliasTarget(account, name)))
   }
 
   if (!subscription) return [...listed.values()]
 
   for (const row of rows) {
     if (listed.has(row.id) || !resolveModel(account, row.id).supported) continue
-    const resolvedModel = row.resolvedModel ?? aliasTarget(account, row.id)
-    listed.set(row.id, { id: row.id, resolvedModel, ...sizeOf(row.id, resolvedModel) })
+    listed.set(row.id, describe(row.id, row.resolvedModel ?? aliasTarget(account, row.id)))
   }
   return [...listed.values()]
 }
@@ -80,26 +90,36 @@ type Size = Pick<ListedModel, "contextTokens" | "maxOutputTokens">
 
 const UNKNOWN: Size = { contextTokens: null, maxOutputTokens: null }
 
+function sizeOfRow(row: ModelDescriptor): Size | null {
+  if (row.contextTokens === null && row.maxOutputTokens === null) return null
+  return { contextTokens: row.contextTokens, maxOutputTokens: row.maxOutputTokens }
+}
+
+function reasoningOfRow(row: ModelDescriptor): Pick<ListedModel, "reasoning"> | null {
+  return row.reasoning === undefined ? null : { reasoning: row.reasoning }
+}
+
 /**
  * Case-insensitive, first row wins — the same keying the warm store uses, because the listing and
- * an alias map are written by different hands (`MiniMax-M2` vs `minimax-m2`). A row that states no
- * size is not indexed, so it cannot shadow a later spelling that does.
+ * an alias map are written by different hands (`MiniMax-M2` vs `minimax-m2`). A row that states
+ * nothing for `pick` is not indexed, so it cannot shadow a later spelling that does.
  */
-function sizeLookup(
+function rowLookup<T>(
   account: AccountSnapshot,
   rows: readonly ModelDescriptor[],
-): (name: string, resolvedModel: string | null) => Size {
-  const byId = new Map<string, Size>()
+  pick: (row: ModelDescriptor) => T | null,
+): (name: string, resolvedModel: string | null) => T | undefined {
+  const byId = new Map<string, T>()
   for (const row of rows) {
     const key = normalize(row.id)
-    if (byId.has(key) || (row.contextTokens === null && row.maxOutputTokens === null)) continue
-    byId.set(key, { contextTokens: row.contextTokens, maxOutputTokens: row.maxOutputTokens })
+    const fact = pick(row)
+    if (byId.has(key) || fact === null) continue
+    byId.set(key, fact)
   }
   return (name, resolvedModel) =>
     byId.get(normalize(resolveModel(account, name).upstreamModel)) ??
     byId.get(normalize(name)) ??
-    (resolvedModel === null ? undefined : byId.get(normalize(resolvedModel))) ??
-    UNKNOWN
+    (resolvedModel === null ? undefined : byId.get(normalize(resolvedModel)))
 }
 
 function normalize(id: string): string {

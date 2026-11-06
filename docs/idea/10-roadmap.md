@@ -170,7 +170,8 @@ Genuinely unsettled. Listed so they are not mistaken for decided.
 - **Per-key rate limits: tokens or requests?** Requests per window is simple and useless against a
   single enormous prompt. Tokens per window is meaningful but is only known after the upstream
   answers. Which one, or both?
-- **Quota headroom for providers that report nothing.** Claude subscriptions expose usage signals;
+- **Quota headroom for providers that report nothing.** Claude subscriptions expose usage signals,
+  `opencode-go` a usage endpoint read by `plan_quota_read` ([03-providers.md](03-providers.md));
   most API providers expose only response rate-limit headers, and some expose nothing. What does
   `quota-aware` do with an account whose headroom is unknowable — treat it as full, as empty, or
   exclude it from the policy?

@@ -1,3 +1,5 @@
+import type { ModelReasoning } from "@multi-ai-router/core"
+
 /**
  * A provider whose model listing is not the stock `GET {base}/models?limit=…` returning
  * `{data: [{id}]}` declares how to ask and how to read the answer here — on the driver, so the
@@ -14,4 +16,6 @@ export interface ListedModel {
   readonly id: string
   readonly contextTokens: number | null
   readonly maxOutputTokens: number | null
+  /** Thinking modes, for a listing that states them. Absent is unknown, never "does not think". */
+  readonly reasoning?: ModelReasoning
 }

@@ -75,6 +75,37 @@ async function seedAccount() {
 }
 
 describe.skipIf(!runnable)("the model catalog against a live database", () => {
+  test("thinking modes round-trip as stated, and a row stating none reads back null", async () => {
+    const accountId = await seedAccount()
+    const reasoning = { supported: true, toggle: true, effort: ["low", "high", "max"] }
+
+    await catalog.replaceForAccount(
+      accountId,
+      [
+        {
+          modelId: "thinks",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          reasoning,
+          ...HTTP_ROW,
+        },
+        {
+          modelId: "silent",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          ...HTTP_ROW,
+        },
+      ],
+      LATER,
+    )
+
+    const rows = await catalog.listForAccounts([accountId])
+    expect(rows.find((row) => row.modelId === "thinks")?.reasoning).toEqual(reasoning)
+    expect(rows.find((row) => row.modelId === "silent")?.reasoning).toBeNull()
+  })
+
   test("stores a listing, nulls and all", async () => {
     const accountId = await seedAccount()
 

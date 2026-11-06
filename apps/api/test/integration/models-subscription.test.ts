@@ -137,6 +137,7 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
           contextSource: null,
           listingSource: "live",
           resolvedModel: null,
+          reasoning: null,
           refreshedAt: new Date(),
         },
       ],
@@ -156,6 +157,38 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
     expect(anthropic.data.find((entry) => entry.id === "claude-unreleased-9")).toMatchObject({
       max_input_tokens: null,
       max_tokens: null,
+    })
+  })
+
+  test("thinking modes a listing states reach both wire shapes, and stay absent when unstated", async () => {
+    const reasoning = { supported: true, effort: ["low", "high", "max"] }
+    const store = createModelCatalogStore({
+      load: async () => [
+        {
+          accountId: "sub-a",
+          modelId: "claude-unreleased-9",
+          contextTokens: null,
+          maxOutputTokens: null,
+          contextSource: null,
+          listingSource: "live",
+          resolvedModel: null,
+          reasoning,
+          refreshedAt: new Date(),
+        },
+      ],
+      refreshIntervalMs: 60_000,
+    })
+    await store.refresh()
+    const { app } = subscriptionPool(store)
+
+    const openAi = await listed(app)
+    expect(openAi.data.find((row) => row.id === "claude-unreleased-9")).toMatchObject({ reasoning })
+    expect(openAi.data.find((row) => row.id === "haiku")).not.toHaveProperty("reasoning")
+
+    const res = await app.request("/v1/models", { headers: { "x-api-key": KEY } })
+    const anthropic = (await res.json()) as { data: { id: string }[] }
+    expect(anthropic.data.find((row) => row.id === "claude-unreleased-9")).toMatchObject({
+      reasoning,
     })
   })
 
@@ -206,7 +239,7 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
       ) => {
         table.set(
           accountId,
-          rows.map((row) => ({ accountId, ...row, refreshedAt })),
+          rows.map((row) => ({ accountId, ...row, reasoning: row.reasoning ?? null, refreshedAt })),
         )
       },
     }

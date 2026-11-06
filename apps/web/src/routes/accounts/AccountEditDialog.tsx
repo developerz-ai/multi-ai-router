@@ -1,7 +1,7 @@
 import type { AccountBilling, Dialect, QuotaWindowKind } from "@multi-ai-router/core"
-import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
+import { createEffect, createSignal, on, Show } from "solid-js"
 import { Button } from "../../components/Button"
-import { Field, SelectField, type SelectOption, TextField } from "../../components/Field"
+import { Field, SelectField, TextField } from "../../components/Field"
 import { Modal } from "../../components/Modal"
 import {
   formatModelAliases,
@@ -13,6 +13,7 @@ import type { UpdateAccountInput } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
+import { DIALECT_HINT, dialectChoices, providerCredentialNote } from "../../lib/provider-display"
 import styles from "./AccountEditDialog.module.scss"
 import { LoginLifetimeSummary } from "./LoginLifetimeSummary"
 import {
@@ -93,11 +94,6 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
   const rotatable = () => (props.provider?.connectFlow ?? null) === null
   const credentialOptional = () => props.provider?.authKind === "none"
 
-  const dialectOptions = createMemo<readonly SelectOption[]>(() => [
-    { value: "", label: "Provider default" },
-    ...(props.provider?.supportedDialects ?? []).map((value) => ({ value, label: value })),
-  ])
-
   /** Refused before the request, in the operator's own line numbers rather than as a 400. */
   const aliasError = () => {
     const parsed = parseModelAliases(aliases())
@@ -173,6 +169,9 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
         </p>
 
         <Show when={rotatable()}>
+          <Show when={providerCredentialNote(props.account?.provider ?? "")}>
+            {(note) => <p class={styles.note}>{note()}</p>}
+          </Show>
           <TextField
             autocomplete="off"
             hint={
@@ -207,10 +206,10 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
 
         <Show when={(props.provider?.supportedDialects.length ?? 0) > 1}>
           <SelectField
-            hint="The wire protocol this account is addressed on. Leave on the default unless you know it serves another."
+            hint={DIALECT_HINT}
             label="Dialect"
             onChange={(event) => setDialect(event.currentTarget.value)}
-            options={dialectOptions()}
+            options={dialectChoices(props.provider)}
             value={dialect()}
           />
         </Show>

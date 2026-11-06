@@ -168,3 +168,62 @@ describe("the chain: a hung upstream fails over, a stalled stream fails honestly
     expect(built.usage.rows.at(-1)?.outcome).toBe("upstream_timeout")
   })
 })
+
+/**
+ * Issue #276's fingerprint: a ChatGPT (Codex) stream that stalls after its first frame held the
+ * client for the whole 600 s and recorded 0 output tokens. Translated, so through the relay that
+ * parses frames, and in both shapes a Codex answer takes: forwarded, and folded into one body.
+ */
+describe("a stalled Codex stream ends on the idle clock", () => {
+  const ACCESS_TOKEN = `eyJhbGciOiJub25lIn0.${Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-codex" } }),
+  ).toString("base64url")}.sig`
+  const codex = {
+    ...account("codex", { provider: "openai-oauth", cipher: CRYPTOR, billing: "subscription" }),
+    authMaterial: CRYPTOR.encrypt(JSON.stringify({ accessToken: ACCESS_TOKEN })),
+  }
+  const stalled = () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}}\n\n',
+            ),
+          )
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+
+  for (const stream of [true, false]) {
+    test(`client stream:${stream}: one call, an upstream_timeout row, inside the window`, async () => {
+      const built = harness({
+        accounts: [codex],
+        responses: [stalled],
+        upstreamStream: { firstByteMs: 5_000, idleMs: 100, totalMs: 60_000 },
+      })
+      const started = performance.now()
+      const res = await built.app.request(
+        "/v1/chat/completions",
+        post(
+          JSON.stringify({
+            model: "gpt-5.5",
+            stream,
+            messages: [{ role: "user", content: "hello" }],
+          }),
+          bearer(),
+        ),
+      )
+      await res.text().catch(() => "")
+      await Bun.sleep(20)
+      expect(performance.now() - started).toBeLessThan(5_000)
+      expect(built.upstream.calls).toHaveLength(1)
+      expect(built.usage.rows.at(-1)).toMatchObject({
+        outcome: "upstream_timeout",
+        errorClass: "upstream_timeout",
+        tokensOut: 0,
+      })
+    })
+  }
+})

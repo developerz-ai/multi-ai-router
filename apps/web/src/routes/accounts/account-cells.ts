@@ -1,6 +1,6 @@
-import { needsOperator } from "../../lib/account-status"
-import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
-import { credentialOf } from "../../lib/subscription-login"
+import { isCredentialRejected, needsOperator } from "../../lib/account-status"
+import type { AccountView, PoolView, ProviderDescriptor } from "../../lib/api/types"
+import { credentialOf, listNames } from "../../lib/subscription-login"
 
 // The words the accounts table's credential and connect cells use. Pure — an
 // account fact and a provider descriptor in, a word out — and split from the
@@ -15,6 +15,7 @@ export function credentialLabel(
   account: AccountView,
   provider: ProviderDescriptor | undefined,
 ): string {
+  if (account.hasCredential && needsLogin(account, provider)) return "login lost"
   if (account.hasCredential) return "stored"
   if (provider?.authKind === "none") return "not needed"
   return (provider?.connectFlow ?? null) === null ? "missing" : "not connected"
@@ -24,6 +25,9 @@ export function credentialHint(
   account: AccountView,
   provider: ProviderDescriptor | undefined,
 ): string {
+  if (account.hasCredential && needsLogin(account, provider)) {
+    return "The stored login no longer renews, so this account serves nothing until Reconnect."
+  }
   if (account.hasCredential) return "A credential is stored, encrypted. No endpoint returns it."
   if (provider?.authKind === "none") {
     return "This upstream authenticates nobody, so none is stored. Add one only if something in front of it checks."
@@ -39,8 +43,31 @@ export function credentialTone(
   account: AccountView,
   provider: ProviderDescriptor | undefined,
 ): "ok" | "neutral" | "warn" {
-  if (account.hasCredential) return "ok"
+  if (account.hasCredential) return needsLogin(account, provider) ? "warn" : "ok"
   return provider?.authKind === "none" ? "neutral" : "warn"
+}
+
+/** Parked until a person signs in, on a provider that has a sign-in to offer. */
+export function needsLogin(
+  account: AccountView,
+  provider: ProviderDescriptor | undefined,
+): boolean {
+  return account.status === "needs_reauth" && (provider?.connectFlow ?? null) !== null
+}
+
+/**
+ * What the operator does next, for a state no clock fixes. Shown in the status cell because the
+ * row's own buttons sit a dozen columns to the right, and a hover title reaches no keyboard user.
+ * Re-check is what clears `exhausted`; nothing clears it on a timer.
+ */
+export function statusNextAction(
+  account: AccountView,
+  provider: ProviderDescriptor | undefined,
+): string | null {
+  if (isCredentialRejected(account)) return "key rejected — rotate it in Edit"
+  if (account.status === "exhausted") return "top up, then Re-check"
+  if (account.status !== "needs_reauth" || provider === undefined) return null
+  return needsLogin(account, provider) ? "press Reconnect" : "rotate the key in Edit"
 }
 
 /**
@@ -75,5 +102,35 @@ export function deleteConsequences(account: AccountView): readonly string[] {
     needsOperator(account.status)
       ? "This account already needs an operator; disabling it keeps the id and the history."
       : "Disable is the non-destructive door: it keeps the id, the pool membership and the joinable history.",
+  ]
+}
+
+/**
+ * What a disable breaks, pool by pool. Reversible, but it takes effect on live traffic: the line
+ * that matters is the pool it leaves with nothing to serve it.
+ */
+export function disableConsequences(
+  account: AccountView,
+  pools: readonly Pick<PoolView, "name" | "members">[],
+): readonly string[] {
+  const joined = pools.filter((pool) =>
+    pool.members.some((member) => member.accountId === account.id),
+  )
+  const stranded = joined.filter((pool) =>
+    pool.members.every((member) => member.accountId === account.id || member.status === "disabled"),
+  )
+  const covered = joined.filter((pool) => !stranded.includes(pool))
+  const names = (list: readonly { readonly name: string }[]) =>
+    listNames(list.map((pool) => pool.name))
+
+  return [
+    `"${account.label}" stops taking new requests at once, from every key that can reach it.`,
+    ...(stranded.length > 0
+      ? [
+          `Nothing else serves ${names(stranded)}: a key scoped only there is refused until this is enabled again.`,
+        ]
+      : []),
+    ...(covered.length > 0 ? [`${names(covered)} keep serving from their other members.`] : []),
+    "Enable brings it back with its id, pool memberships and usage history intact.",
   ]
 }

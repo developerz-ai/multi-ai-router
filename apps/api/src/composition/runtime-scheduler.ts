@@ -1,7 +1,7 @@
 import { IDLE_PROBE_MODELS, schedulerFromEnv } from "../scheduler"
 import { createLastLoginLookup } from "../services/accounts/last-login"
 import { describeProvider } from "../services/accounts/providers"
-import { refreshAccountCatalog } from "../services/models"
+import { readPlanQuota, refreshAccountCatalog } from "../services/models"
 import { DEFAULT_QUOTA_SPENT_THRESHOLD } from "../services/routing"
 import type { AdminServices } from "../types"
 import type { createCliResources } from "./cli-resources"
@@ -118,6 +118,11 @@ export function createRuntimeScheduler(
         }),
       models: IDLE_PROBE_MODELS,
       quotaSpentThreshold: DEFAULT_QUOTA_SPENT_THRESHOLD,
+    },
+    // One free GET per account, through the catalog sweep's own credential and fetch seams.
+    planQuotaRead: {
+      accounts: () => catalog.accounts(),
+      read: (account) => readPlanQuota({ ...catalogRefreshDeps, health, now }, account),
     },
     env,
     schedulerLock,

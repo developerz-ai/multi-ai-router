@@ -5,7 +5,7 @@ import type {
   ProviderId,
   UsageOutcome,
 } from "@multi-ai-router/core"
-import { estimateCost, type RateLookup, UNKNOWN_COST } from "../cost"
+import { type CostEstimate, estimateCost, type RateLookup, UNKNOWN_COST } from "../cost"
 import type { FailureKind } from "../routing"
 import type { UsageRecord } from "../usage"
 import { errorClassOf, NO_TOKENS, outcomeOf, type TokenCounts, USAGE_SUCCESS } from "../usage"
@@ -105,6 +105,30 @@ export interface AttemptRecordInput {
   readonly errorClass: string | null
 }
 
+/**
+ * What one attempt cost: the single pricing path behind both the `UsageRecord` and the `usage.cost`
+ * a translated response states (`relay-cost.ts`), so the two can never disagree.
+ *
+ * Priced on the model that went upstream, not on the one the client asked for: the account's alias
+ * map decides which name the upstream billed.
+ */
+export function attemptCost(
+  input: Pick<
+    AttemptRecordInput,
+    "priced" | "provider" | "upstreamModel" | "accountId" | "billing" | "prices"
+  > & { readonly tokens: TokenCounts },
+): CostEstimate {
+  if (input.priced === false || input.upstreamModel === null) return UNKNOWN_COST
+  return estimateCost({
+    provider: input.provider,
+    model: input.upstreamModel,
+    ...(input.accountId === null ? {} : { accountId: input.accountId }),
+    tokens: input.tokens,
+    ...(input.billing === undefined ? {} : { billing: input.billing }),
+    ...(input.prices === undefined ? {} : { prices: input.prices }),
+  })
+}
+
 export function attemptRecord(input: AttemptRecordInput): UsageRecord {
   const tokens = input.tokens ?? NO_TOKENS
   const ttfbMs = input.timing.ttfbMs
@@ -127,18 +151,7 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     tokensOut: tokens.tokensOut,
     cacheReadTokens: tokens.cacheReadTokens,
     cacheWriteTokens: tokens.cacheWriteTokens,
-    // Priced on the model that went upstream, not on the one the client asked for: the account's
-    // alias map decides which name the upstream billed.
-    ...(input.priced === false || input.upstreamModel === null
-      ? UNKNOWN_COST
-      : estimateCost({
-          provider: input.provider,
-          model: input.upstreamModel,
-          ...(input.accountId === null ? {} : { accountId: input.accountId }),
-          tokens,
-          ...(input.billing === undefined ? {} : { billing: input.billing }),
-          ...(input.prices === undefined ? {} : { prices: input.prices }),
-        })),
+    ...attemptCost({ ...input, tokens }),
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(

@@ -701,6 +701,43 @@ delta without the cache fields, and that keeps the cache counts `message_start` 
 zeroing them. An OpenAI-shaped upstream's cache write is recorded when it states one (OpenRouter's
 `cache_write_tokens`) and is otherwise zero — those upstreams bill no separate write.
 
+#### Per-call cost on the wire
+
+A response **the router writes** states what the attempt cost, in its `usage`, OpenRouter-compatible:
+
+```json
+"usage": { "...": "...", "cost": 1.215, "cost_source": "estimated", "cost_basis": "metered" }
+```
+
+| Field | Meaning |
+|---|---|
+| `cost` | USD, a JSON number. The `UsageRecord`'s own `cost_estimate`: one pricing path (`attemptCost`, `dataplane/records.ts`), so the long-context tier and the operator's price book apply, priced on the upstream's counts and the post-alias model |
+| `cost_source` | Always `estimated`: the router prices from a table, nothing here is a provider's measurement |
+| `cost_basis` | `metered`, or `notional` on a subscription account: what the call would have cost on the API, an attribution and not a spend ([08](08-observability.md#cost-estimation)) |
+
+Where it rides: the body's `usage` on a whole response; on a stream, the one final usage frame.
+That frame is `message_delta` toward `anthropic`, the usage-only chunk toward `openai-chat` (which
+exists only when the client set `stream_options.include_usage`; the router adds no frame of its own),
+and `response.completed` / `response.incomplete` toward `openai-responses`, under `response.usage`.
+
+**Which responses carry it.** Every translated inference response, including a Claude subscription
+reached from an OpenAI dialect. **Never a same-dialect one.** That body is the upstream's bytes
+(non-negotiable 10), its status and headers leave before the upstream has stated any usage, so
+neither the body nor a header can carry the figure without parsing or holding the relay. That holds
+for an opt-in as well: rewriting the usage frame on request is still a parse of the passthrough. So
+whether a call states a cost depends on which account served it, and a caller reads absent as "not
+stated" and falls back. A cost an upstream states itself (OpenRouter's `usage.cost`) still passes
+through a relay as the upstream's. A Claude subscription reached from `anthropic` states none: it
+leaves through the byte relay like any same-dialect answer.
+
+**Absent, never zero.** The fields are left out when no rate is known, when the upstream stated no
+counts, or when the observation could not trust them (`usageInvalid`, `evidenceUnavailable`). A
+stated `0` claims the call was free. `count_tokens` and embeddings price nothing and state nothing.
+
+**It adds no time to first token.** The stamp touches only the final usage frame, the one frame that
+has to wait on the usage observer (`relay-cost.ts`). Everything ahead of it in the same chunk is
+written first, and the chunks before it are unaffected.
+
 ### Error shapes
 
 | Dialect | Shape |

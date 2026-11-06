@@ -21,6 +21,10 @@ export interface SchedulerConfig {
   readonly quotaFloorIntervalMinutes: number
   /** `cooldown_recheck` cadence: how often a long cooldown gets a look before its stated reset. */
   readonly cooldownRecheckIntervalMinutes: number
+  /** `plan_quota_read` cadence: how often a plan's own usage endpoint is read, per account. */
+  readonly planQuotaReadIntervalMinutes: number
+  /** Accounts read per `plan_quota_read` tick, longest-unread first. Each is one free GET. */
+  readonly planQuotaReadBatchSize: number
   /** Orphaned `CLAUDE_CONFIG_DIR` reap interval, in minutes. The window itself is `retention`. */
   readonly configDirReapIntervalMinutes: number
   /** Agent-SDK transcript sweep interval, in minutes. The window itself is `retention`. */

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { groupAccountsByProvider, poolNamesFor } from "../../src/lib/account-groups"
+import {
+  groupAccountsByProvider,
+  poolNamesFor,
+  routablePoolMembers,
+} from "../../src/lib/account-groups"
 import type { AccountView, PoolView } from "../../src/lib/api/types"
 
 const NOW = Date.parse("2026-09-05T12:00:00.000Z")
@@ -166,5 +170,69 @@ describe("poolNamesFor", () => {
     ]
     expect(poolNamesFor(pools, [{ id: "s2" }])).toEqual(["claude-subs", "mixed"])
     expect(poolNamesFor(pools, [{ id: "nobody" }])).toEqual([])
+  })
+})
+
+function availability(
+  overrides: Partial<NonNullable<AccountView["availability"]>>,
+): NonNullable<AccountView["availability"]> {
+  return {
+    configuredStatus: "active",
+    resetsAt: null,
+    resetSource: "unknown",
+    lastCheckedAt: null,
+    consecutiveFailures: 0,
+    inFlight: 0,
+    quotaWindows: [],
+    ...overrides,
+  }
+}
+
+describe("a refused key", () => {
+  // A refusal is a cooldown to routing, but no clock fixes a wrong key: it wants the operator.
+  test("counts as attention and sorts its group first", () => {
+    const groups = groupAccountsByProvider(
+      [
+        account({ label: "a", provider: "zai" }),
+        account({ label: "b", provider: "zai" }),
+        account({
+          label: "go",
+          provider: "opencode-go",
+          status: "cooling_down",
+          availability: availability({ cooldownReason: "credential-rejected" }),
+        }),
+      ],
+      NOW,
+    )
+    expect(groups[0]?.provider).toBe("opencode-go")
+    expect(groups[0]?.attention).toBe(1)
+  })
+
+  test("an ordinary cooldown does not", () => {
+    const groups = groupAccountsByProvider(
+      [account({ label: "a", status: "cooling_down", availability: availability({}) })],
+      NOW,
+    )
+    expect(groups[0]?.attention).toBe(0)
+  })
+})
+
+describe("routablePoolMembers", () => {
+  const spent = availability({ quotaWindows: [{ spent: true }] as never })
+  const pool = {
+    members: [
+      { accountId: "a", status: "active" },
+      { accountId: "b", status: "active" },
+      { accountId: "c", status: "cooling_down" },
+    ],
+  } as unknown as PoolView
+
+  test("a green member whose window is spent is not capacity", () => {
+    const accounts = [account({ id: "a", availability: spent }), account({ id: "b" })]
+    expect(routablePoolMembers(pool, accounts)).toBe(1)
+  })
+
+  test("reads the member's own status while the accounts list has not arrived", () => {
+    expect(routablePoolMembers(pool, [])).toBe(2)
   })
 })

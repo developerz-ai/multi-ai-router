@@ -1,4 +1,9 @@
-import { isStandingBlock, ModelNotFoundError, type ProviderId } from "@multi-ai-router/core"
+import {
+  isStandingBlock,
+  ModelNotFoundError,
+  type ModelReasoning,
+  type ProviderId,
+} from "@multi-ai-router/core"
 import { listableModels, type ModelCatalogStore, mergeResolution } from "../models"
 import { resolveScope, selectAccounts } from "../routing"
 import type { VerifiedKey } from "./auth/verifier"
@@ -52,6 +57,8 @@ export interface ReachableModel {
   readonly contextTokens: number | null
   /** Largest completion in tokens, from the same place. Null is unknown. */
   readonly maxOutputTokens: number | null
+  /** The upstream listing's word on thinking modes. Information only; absent when unstated. */
+  readonly reasoning?: ModelReasoning
 }
 
 /** The warm model catalog, or nothing: a runtime built without one lists routing's view alone. */
@@ -85,7 +92,9 @@ export function reachableModels(
       // First known answer wins and a known one beats an unknown one, per field — the rule
       // `/v1/catalog` folds by (`catalog-listing.ts`): two accounts of one provider agree on a
       // model's size, and where they differ one has been swept and the other has not.
+      const reasoning = current?.reasoning ?? model.reasoning
       merged.set(model.id, {
+        ...(reasoning === undefined ? {} : { reasoning }),
         owner: current?.owner ?? account.driver.provider,
         resolvedModel: mergeResolution(current?.resolvedModel ?? null, model.resolvedModel),
         contextTokens: current?.contextTokens ?? model.contextTokens,
@@ -144,7 +153,9 @@ export function reachableModel(
   // sized the one asked for.
   const described =
     listed === undefined ? models?.describe(account.id, head.upstreamModel) : undefined
+  const reasoning = listed?.reasoning ?? described?.reasoning
   return {
+    ...(reasoning === undefined ? {} : { reasoning }),
     id,
     owner: account.provider,
     resolvedModel: listed?.resolvedModel ?? null,

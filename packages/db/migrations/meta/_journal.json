@@ -295,6 +295,13 @@
       "when": 1793977735513,
       "tag": "0041_sparkling_inhumans",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1793980570272,
+      "tag": "0042_fuzzy_exodus",
+      "breakpoints": true
     }
   ]
 }

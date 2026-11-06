@@ -1,5 +1,5 @@
 import type { AccountBilling, Dialect, ProviderId } from "@multi-ai-router/core"
-import { createMemo, createSignal, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, on, Show } from "solid-js"
 import { Button } from "../../components/Button"
 import { SelectField, type SelectOption, TextField } from "../../components/Field"
 import { Modal } from "../../components/Modal"
@@ -9,7 +9,9 @@ import { errorMessage } from "../../lib/api/errors"
 import { findProvider } from "../../lib/api/providers"
 import type { ProviderDescriptor } from "../../lib/api/types"
 import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
+import { DIALECT_HINT, dialectChoices, providerDisplayName } from "../../lib/provider-display"
 import styles from "./AccountFormDialog.module.scss"
+import { ProviderNotes } from "./ProviderNotes"
 
 export interface AccountFormDialogProps {
   readonly open: boolean
@@ -61,6 +63,35 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
   const [supportedModels, setSupportedModels] = createSignal("")
   const [billing, setBilling] = createSignal<AccountBilling | "">("")
 
+  const clearProviderFields = () => {
+    setCredential("")
+    setBaseUrl("")
+    setDialect("")
+    setBilling("")
+  }
+
+  // A field the next provider hides still submits. A base URL typed for a compatible endpoint
+  // would send the new provider's key to that host, so nothing crosses a provider change.
+  const chooseProvider = (id: string) => {
+    setProviderId(id)
+    clearProviderFields()
+  }
+
+  // This dialog stays mounted, so the last account's key would otherwise sit in the box.
+  createEffect(
+    on(
+      () => props.open,
+      (open) => {
+        if (open) return
+        setLabel("")
+        setProviderId("")
+        setSupportedModels("")
+        clearProviderFields()
+      },
+      { defer: true },
+    ),
+  )
+
   const selected = createMemo(() => findProvider(props.providers, providerId()))
   /** An upstream that authenticates nobody: the key is an option, not a requirement. */
   const credentialOptional = createMemo(() => selected()?.authKind === "none")
@@ -78,16 +109,13 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
 
   const providerOptions = createMemo<readonly SelectOption[]>(() => [
     { value: "", label: "Choose a provider…" },
-    ...props.providers.map((provider) => ({
-      value: provider.id,
-      label: providerOptionLabel(provider),
-      disabled: !provider.creatable,
-    })),
-  ])
-
-  const dialectOptions = createMemo<readonly SelectOption[]>(() => [
-    { value: "", label: "Provider default" },
-    ...(selected()?.supportedDialects ?? []).map((value) => ({ value, label: value })),
+    ...props.providers
+      .map((provider) => ({
+        value: provider.id,
+        label: providerOptionLabel(provider),
+        disabled: !provider.creatable,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label)),
   ])
 
   const billingOptions = createMemo<readonly SelectOption[]>(() => [
@@ -147,54 +175,13 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
 
         <SelectField
           label="Provider"
-          onChange={(event) => setProviderId(event.currentTarget.value)}
+          onChange={(event) => chooseProvider(event.currentTarget.value)}
           options={providerOptions()}
           required
           value={providerId()}
         />
 
-        <Show when={selected()}>
-          {(provider) => (
-            <div class={styles.providerNote}>
-              <Show when={provider().reason}>{(reason) => <p>{reason()}</p>}</Show>
-              <p>
-                Transport: {provider().transport}
-                {provider().authKind === null ? "" : ` · auth: ${provider().authKind}`}
-              </p>
-            </div>
-          )}
-        </Show>
-
-        <Show when={selected()?.requiresConfigDir === true}>
-          <div class={styles.providerNote}>
-            <p>
-              This account gets a <code>CLAUDE_CONFIG_DIR</code> of its own on the persistent
-              volume, named after its id and created with it. Nothing to fill in: the Agent SDK owns
-              the credentials inside it and the router never reads them.
-            </p>
-          </div>
-        </Show>
-
-        <Show when={selected()?.connectFlow === "oauth"}>
-          <div class={styles.providerNote}>
-            <p>
-              This provider is logged in, not pasted. Add the account first — it exists so the
-              authorization can bind to it — then choose <strong>Connect</strong> on its row. The
-              router performs the code exchange itself and stores only the resulting credential,
-              encrypted.
-            </p>
-          </div>
-        </Show>
-
-        <Show when={credentialOptional()}>
-          <div class={styles.providerNote}>
-            <p>
-              A local endpoint: it authenticates nobody, so the credential below is optional. Give
-              it an address this router can reach — inside a container <code>localhost</code> is the
-              router itself, not the machine you are sitting at.
-            </p>
-          </div>
-        </Show>
+        <ProviderNotes provider={selected()} />
 
         <Show when={selected() !== undefined && selected()?.connectFlow === null}>
           <TextField
@@ -206,6 +193,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
             }
             label={credentialOptional() ? "Credential (optional)" : "Credential"}
             onInput={(event) => setCredential(event.currentTarget.value)}
+            required={!credentialOptional()}
             type="password"
             value={credential()}
           />
@@ -224,10 +212,10 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
 
         <Show when={(selected()?.supportedDialects.length ?? 0) > 1}>
           <SelectField
-            hint="The wire protocol this account is addressed on. Leave on the default unless you know it serves another."
+            hint={DIALECT_HINT}
             label="Dialect"
             onChange={(event) => setDialect(event.currentTarget.value)}
-            options={dialectOptions()}
+            options={dialectChoices(selected())}
             value={dialect()}
           />
         </Show>
@@ -279,6 +267,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
  * in this file (CLAUDE.md non-negotiable 12).
  */
 function providerOptionLabel(provider: ProviderDescriptor): string {
-  if (!provider.creatable) return `${provider.id} — not implemented`
-  return provider.connectFlow === null ? provider.id : `${provider.id} — connect after adding`
+  const name = `${providerDisplayName(provider.id)} (${provider.id})`
+  if (!provider.creatable) return `${name} — not implemented`
+  return provider.connectFlow === null ? name : `${name} — connect after adding`
 }

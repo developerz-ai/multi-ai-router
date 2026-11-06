@@ -13,10 +13,11 @@ import type { HealthObservation } from "./health-observation"
 import { observingModelOutput } from "./model-output"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { withReasoningSeal } from "./reasoning-seal-context"
-import { attemptRecord, failureOutcome } from "./records"
+import { attemptCost, attemptRecord, failureOutcome } from "./records"
 import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
 import { ClientCancelledError } from "./relay-cancellation"
+import { type CostReport, usageCostFields } from "./relay-cost"
 import { createRelayTerminal } from "./relay-terminal"
 import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
@@ -200,6 +201,15 @@ export function relaySuccess(
     onError: (error: unknown, bytes: number) => settle(bytes > 0, error),
   }
   if (servable.translation === null) return relayResponse(response, observer, relaySignal)
+  const cost: CostReport = {
+    ingress: ctx.runtime.ingressDialect,
+    fields: (whole) => {
+      // A JSON body's usage reads only at its end, and `whole` says the end has been observed.
+      const facts = whole ? observation.finish() : observation.snapshot()
+      const attribution = ctx.runtime.attribution(attempt, servable)
+      return usageCostFields(facts, attemptCost({ ...attribution, tokens: facts.counts }))
+    },
+  }
   return relayTranslatedResponse({
     upstream: response,
     pair: servable.translation,
@@ -212,6 +222,8 @@ export function relaySuccess(
     // Only for a client that did not ask to stream; one that did is forwarded event by event.
     collectStream: upstreamStreams && ctx.translated?.clientStreams() !== true,
     upstreamStreams,
+    // Only inference has a completion to price.
+    ...(ctx.runtime.operation === "messages" ? { cost } : {}),
     observer,
     ...(relaySignal === undefined ? {} : { signal: relaySignal }),
     onUnrecognizedStopReason: (reason) =>

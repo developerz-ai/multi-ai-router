@@ -1,4 +1,4 @@
-import type { ModelContextSource, ModelListingSource } from "@multi-ai-router/core"
+import type { ModelContextSource, ModelListingSource, ModelReasoning } from "@multi-ai-router/core"
 import { asc, eq, inArray, max, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { type ModelCatalogRow, modelCatalog, modelCatalogAttempts } from "../schema/model-catalog"
@@ -86,6 +86,8 @@ export interface ModelCatalogEntry {
   readonly listingSource: ModelListingSource
   /** What an alias row resolves to; null for a concrete id. */
   readonly resolvedModel: string | null
+  /** The listing's word on thinking modes. Absent where it said nothing. */
+  readonly reasoning?: ModelReasoning
 }
 
 export type { ModelCatalogRow }
@@ -107,6 +109,7 @@ export function createModelCatalogRepository(db: Database): ModelCatalogReposito
             contextSource: row.contextSource,
             listingSource: row.listingSource,
             resolvedModel: row.resolvedModel,
+            reasoning: row.reasoning ?? null,
             refreshedAt,
           })),
         )

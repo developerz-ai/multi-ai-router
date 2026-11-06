@@ -2,6 +2,7 @@ import { collectResponsesStream } from "../translate"
 import { TranslationStreamError } from "../translate/shared/stream-error"
 import { readRelayBody } from "./relay-body-read"
 import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
+import { stampUsageBody } from "./relay-cost"
 import type { TranslatedRelayInput } from "./relay-translate"
 
 /**
@@ -105,5 +106,7 @@ function translate(input: TranslatedRelayInput, source: unknown): Uint8Array {
   const translated = input.pair.response(source, input.context)
   const unrecognized = translated.unrecognizedStopReason
   if (unrecognized !== null) guard(() => input.onUnrecognizedStopReason?.(unrecognized))
-  return new TextEncoder().encode(JSON.stringify(translated.body))
+  const body =
+    input.cost === undefined ? translated.body : stampUsageBody(input.cost, translated.body)
+  return new TextEncoder().encode(JSON.stringify(body))
 }

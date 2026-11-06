@@ -2,6 +2,7 @@ import {
   type ModelContextSource,
   type ModelDescriptor,
   ModelListingSource,
+  ModelReasoning,
 } from "@multi-ai-router/core"
 import type { ModelCatalogRow } from "@multi-ai-router/db"
 import { createSnapshotRefresh } from "../snapshots/refresh"
@@ -120,6 +121,7 @@ function index(rows: readonly ModelCatalogRow[]): Snapshot {
       contextSource: normalizeSource(row.contextSource),
       listingSource: normalizeListingSource(row.listingSource),
       resolvedModel: row.resolvedModel,
+      ...normalizeReasoning(row.reasoning),
     })
     byAccount.set(row.accountId, table)
   }
@@ -143,6 +145,12 @@ function normalizeSource(value: string | null): ModelContextSource | null {
 function normalizeListingSource(value: string): ModelListingSource {
   const parsed = ModelListingSource.safeParse(value)
   return parsed.success ? parsed.data : "upstream"
+}
+
+/** `jsonb` carries no shape of its own: a row a future build wrote reads as nothing stated. */
+function normalizeReasoning(value: unknown): Pick<ModelDescriptor, "reasoning"> {
+  const parsed = ModelReasoning.safeParse(value)
+  return parsed.success ? { reasoning: parsed.data } : {}
 }
 
 /**

@@ -3,6 +3,7 @@ import { createSseParser, encodeSseEvent } from "../translate"
 import { clientHeaders } from "./egress/headers"
 import type { RelayObserver } from "./relay"
 import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
+import { type CostReport, stampUsageFrame, usageFrameIndex } from "./relay-cost"
 import { collected, guard, parsed, translatedBody } from "./relay-translate-body"
 
 /**
@@ -53,6 +54,10 @@ import { collected, guard, parsed, translatedBody } from "./relay-translate-body
  * cadence rather than sent per chunk, so a stream that is merely dropping a few frames pays
  * nothing.
  *
+ * **The one frame that waits on observation is the final usage frame**, which states `usage.cost`
+ * (`relay-cost.ts`) and so needs the upstream's counts first. Everything ahead of it in the chunk is
+ * written before that read; no earlier chunk is touched, so time-to-first-token cannot move.
+ *
  * A non-streaming body is read whole before it is converted. That is not a violation of the
  * streaming rule: there is no stream — the upstream sent one JSON object and the client is owed one
  * JSON object, and no byte is delayed that could have gone out earlier.
@@ -97,6 +102,8 @@ export interface TranslatedRelayInput {
    * client-dialect events to a streaming client, unconverted SSE to a non-streaming one.
    */
   readonly upstreamStreams?: boolean
+  /** States the attempt's cost on the response's usage. Absent, usage is left as translated. */
+  readonly cost?: CostReport
 }
 
 const EVENT_STREAM = "text/event-stream"
@@ -184,6 +191,24 @@ function translatedStream(
     lastWrite = now()
   }
 
+  /** `observe` shows the upstream chunk to the observer; the usage frame needs that done first. */
+  const emit = (
+    controller: TransformStreamDefaultController<Uint8Array>,
+    events: readonly SseEvent[],
+    observe: () => void,
+  ): void => {
+    const { cost } = input
+    const at = cost === undefined ? -1 : usageFrameIndex(cost.ingress, events)
+    const frame = events[at]
+    if (cost === undefined || frame === undefined) {
+      write(controller, render(events))
+      return
+    }
+    write(controller, render(events.slice(0, at)))
+    observe()
+    write(controller, render([stampUsageFrame(cost, frame), ...events.slice(at + 1)]))
+  }
+
   const settle = (error: unknown): void => {
     if (settled) return
     settled = true
@@ -197,13 +222,18 @@ function translatedStream(
     transform(chunk, controller) {
       const events = parser.push(chunk).flatMap((frame) => translator.push(frame))
       keepalive(controller)
-      const out = render(events)
       // Before the write, so a chunk that *does* produce output resets the clock through `write`
       // rather than sending a comment it did not need.
-      if (out.length === 0) heartbeat(controller)
-      write(controller, out)
-      // The upstream's own bytes, so token counting reads the numbers the provider stated.
-      guard(() => observer.onChunk?.(chunk))
+      if (events.length === 0) heartbeat(controller)
+      let observed = false
+      const observe = (): void => {
+        if (observed) return
+        observed = true
+        // The upstream's own bytes, so token counting reads the numbers the provider stated.
+        guard(() => observer.onChunk?.(chunk))
+      }
+      emit(controller, events, observe)
+      observe()
       const failure = translator.translationFailure?.()
       if (failure != null) settle(failure)
     },
@@ -211,7 +241,7 @@ function translatedStream(
       // A frame the upstream never terminated is still a frame; the translator decides whether the
       // stream earned a terminator, and emits nothing at all when it was truncated.
       const trailing = parser.flush().flatMap((frame) => translator.push(frame))
-      write(controller, render([...trailing, ...translator.flush()]))
+      emit(controller, [...trailing, ...translator.flush()], () => {})
       settle(translator.translationFailure?.() ?? undefined)
     },
   })

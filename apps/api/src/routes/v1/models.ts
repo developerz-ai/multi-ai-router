@@ -1,3 +1,4 @@
+import type { ModelReasoning } from "@multi-ai-router/core"
 import type { Context } from "hono"
 import type { RouterKeyEnv } from "../../middleware/routerKeyAuth"
 import { credentialStyle, type ReachableModel } from "../../services/dataplane"
@@ -30,6 +31,9 @@ import { credentialStyle, type ReachableModel } from "../../services/dataplane"
  *   `max_completion_tokens` (the output cap under OpenAI's own request-parameter name, and
  *   OpenRouter's `top_provider` spelling). **Absent when unknown**, not null: with no documented
  *   field, a reader's schema is typically `optional(number)`, which a null fails.
+ *
+ * Both carry `reasoning` as `resolved_model` rides: an extra field neither ecosystem defines, the
+ * upstream listing's own `{supported, toggle?, effort?}`, absent when unstated. Information only.
  */
 interface AnthropicModel {
   readonly type: "model"
@@ -38,6 +42,7 @@ interface AnthropicModel {
   readonly max_input_tokens: number | null
   readonly max_tokens: number | null
   readonly resolved_model?: string
+  readonly reasoning?: ModelReasoning
 }
 
 interface OpenAiModel {
@@ -48,6 +53,7 @@ interface OpenAiModel {
   readonly context_length?: number
   readonly max_completion_tokens?: number
   readonly resolved_model?: string
+  readonly reasoning?: ModelReasoning
 }
 
 export function renderModels(
@@ -77,6 +83,7 @@ function anthropicModel(model: ReachableModel): AnthropicModel {
     max_input_tokens: model.contextTokens,
     max_tokens: model.maxOutputTokens,
     ...resolution(model),
+    ...reasoning(model),
   }
 }
 
@@ -89,11 +96,16 @@ function openAiModel(model: ReachableModel, created: number): OpenAiModel {
     ...(model.contextTokens === null ? {} : { context_length: model.contextTokens }),
     ...(model.maxOutputTokens === null ? {} : { max_completion_tokens: model.maxOutputTokens }),
     ...resolution(model),
+    ...reasoning(model),
   }
 }
 
 function resolution(model: ReachableModel): { resolved_model?: string } {
   return model.resolvedModel === null ? {} : { resolved_model: model.resolvedModel }
+}
+
+function reasoning(model: ReachableModel): { reasoning?: ModelReasoning } {
+  return model.reasoning === undefined ? {} : { reasoning: model.reasoning }
 }
 
 function anthropicList(models: readonly ReachableModel[]): {

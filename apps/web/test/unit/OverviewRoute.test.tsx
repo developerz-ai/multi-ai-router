@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import OverviewRoute from "../../src/routes/OverviewRoute"
@@ -26,11 +27,24 @@ const usageRequests: string[] = []
 /** What `GET /accounts` answers with — each test sets its own fleet before mounting. */
 let accountRows: readonly unknown[] = []
 
-function stubFetch(accounts: readonly unknown[] = [account()]): void {
+/** URL fragments this test wants answered with a 500. */
+let failing: readonly string[] = []
+
+function stubFetch(
+  accounts: readonly unknown[] = [account()],
+  failures: readonly string[] = [],
+): void {
   usageRequests.length = 0
   accountRows = accounts
+  failing = failures
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString()
+    if (failing.some((fragment) => url.includes(fragment))) {
+      return new Response(JSON.stringify({ error: { code: "x", message: "stub failure" } }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })
+    }
     return new Response(JSON.stringify(responseFor(url)), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -58,7 +72,9 @@ function mount(): { readonly dispose: () => void; readonly container: HTMLElemen
   const dispose = render(
     () => (
       <QueryClientProvider client={client}>
-        <OverviewRoute />
+        <MemoryRouter history={createMemoryHistory()}>
+          <Route component={OverviewRoute} path="/" />
+        </MemoryRouter>
       </QueryClientProvider>
     ),
     container,
@@ -125,7 +141,93 @@ describe("OverviewRoute", () => {
       container.remove()
     }
   })
+
+  test("a failed usage read ends the shimmer: the tile says so rather than loading forever", async () => {
+    stubFetch([account()], ["/usage"])
+    const { dispose, container } = mount()
+    try {
+      await settle()
+
+      const busy = [...container.querySelectorAll("[aria-busy='true']")]
+      expect(busy.map((tile) => tile.textContent)).toEqual([])
+      expect(container.textContent).toContain("could not load")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("no routable figure is printed before the accounts have answered", async () => {
+    stubFetch([account()], ["/accounts"])
+    const { dispose, container } = mount()
+    try {
+      await settle()
+
+      expect(container.textContent).not.toContain("0 routable now")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("a failed Re-check all says so", async () => {
+    stubFetch([account()], ["/recheck"])
+    const { dispose, container } = mount()
+    try {
+      await settle()
+      const button = [...container.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent === "Re-check all",
+      )
+      button?.click()
+      await settle()
+
+      expect(container.textContent).toContain("Re-check all failed")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("a refused key reaches the banner: no clock fixes it and the dot only says cooling", async () => {
+    stubFetch([
+      {
+        ...(account() as object),
+        status: "cooling_down",
+        label: "go-sebastian",
+        availability: { ...availabilityOf(account()), cooldownReason: "credential-rejected" },
+      },
+    ])
+    const { dispose, container } = mount()
+    try {
+      await settle()
+
+      expect(container.textContent).toContain("1 key rejected")
+      expect(container.textContent).toContain("go-sebastian")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test("an exhausted account's banner names the press that clears it, and no countdown", async () => {
+    stubFetch([{ ...(account() as object), status: "exhausted", label: "broke" }])
+    const { dispose, container } = mount()
+    try {
+      await settle()
+
+      expect(container.textContent).toContain("1 account exhausted")
+      expect(container.textContent).toContain("then press Re-check")
+      expect(container.textContent).not.toContain("account(s)")
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
 })
+
+function availabilityOf(row: unknown): object {
+  return (row as { readonly availability?: object }).availability ?? {}
+}
 
 function usageSummary(): unknown {
   const totals = {

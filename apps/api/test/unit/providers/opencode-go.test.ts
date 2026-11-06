@@ -134,7 +134,40 @@ describe("opencode-go model listing", () => {
     }
 
     expect(read(body)).toEqual([
-      { id: "deepseek-v4.1-flash", contextTokens: 1000000, maxOutputTokens: 384000 },
+      {
+        id: "deepseek-v4.1-flash",
+        contextTokens: 1000000,
+        maxOutputTokens: 384000,
+        reasoning: { supported: true, effort: ["low", "high", "max"] },
+      },
+    ])
+  })
+
+  test("a reshaped reasoning block costs that one fact, never the row or the listing", () => {
+    const rows = [
+      { id: "a", capabilities: { reasoning: { supported: "yes" } } },
+      { id: "b", capabilities: "none" },
+      { id: "c", capabilities: { reasoning: { supported: true, effort: "high" } } },
+    ]
+    const bare = (id: string) => ({ id, contextTokens: null, maxOutputTokens: null })
+
+    expect(read({ data: rows })).toEqual([bare("a"), bare("b"), bare("c")])
+  })
+
+  test("each thinking shape the catalog states survives as stated", () => {
+    const reasoning = (shape: object) => ({ capabilities: { reasoning: shape } })
+    const rows = [
+      { id: "effort", ...reasoning({ supported: true, effort: ["low", "high", "max"] }) },
+      { id: "toggle", ...reasoning({ supported: true, toggle: true, effort: ["high"] }) },
+      { id: "plain", ...reasoning({ supported: true }) },
+      { id: "none", capabilities: { tools: true } },
+    ]
+
+    expect(read({ data: rows })?.map((model) => model.reasoning)).toEqual([
+      { supported: true, effort: ["low", "high", "max"] },
+      { supported: true, toggle: true, effort: ["high"] },
+      { supported: true },
+      undefined,
     ])
   })
 

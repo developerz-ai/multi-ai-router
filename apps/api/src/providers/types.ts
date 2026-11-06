@@ -13,6 +13,7 @@ import type { ModelFamily } from "../services/routing/model-family"
 import type { ResponsesEgressRules } from "../services/translate/shared/responses-egress"
 import type { ProviderDeviceFlow } from "./device-flow"
 import type { ProviderModelListing } from "./model-listing"
+import type { ProviderQuotaRead } from "./quota-read"
 
 /**
  * The provider driver contract: one interface, many implementations. Adding a provider is one
@@ -109,7 +110,7 @@ export interface RateLimitSignal {
    * `quota-window-spent`, `quota-aware`'s ranking, the console's per-window countdowns — reads what
    * lands there and nothing else.
    *
-   * Absent for every HTTP driver **except** the Codex one: `openai-oauth-quota.ts` parses the
+   * Absent on every HTTP reply **except** Codex's: `openai-oauth-quota.ts` parses the
    * `x-codex-primary-*` / `-secondary-*` headers it already returns on every reply and maps them
    * onto `five_hour` and `seven_day` (an unmatched minute count travels in {@link windows}).
    * Each named window it builds is `advisory: true`, so it never blocks routing — see the field
@@ -266,6 +267,8 @@ export interface ProviderDriver {
   readonly oauth?: ProviderOAuthFlow
   /** A non-stock model listing (`model-listing.ts`). Absent: `{data: [{id}]}` at `/models`. */
   readonly modelListing?: ProviderModelListing
+  /** A plan-usage endpoint read off the request path (`quota-read.ts`). Absent: nothing to read. */
+  readonly quotaRead?: ProviderQuotaRead
   /**
    * The names an Account of this provider serves when its operator declared no `supportedModels`
    * (`services/routing/model-family.ts`). Only a single-vendor upstream — a subscription — declares

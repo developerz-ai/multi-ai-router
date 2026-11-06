@@ -15,7 +15,7 @@ import { AccountModels } from "./AccountModels"
 import { AccountRecheck } from "./AccountRecheck"
 import styles from "./AccountsTable.module.scss"
 import { AccountTestNow } from "./AccountTestNow"
-import { connectLabel } from "./account-cells"
+import { connectLabel, statusNextAction } from "./account-cells"
 import { CredentialCell } from "./CredentialCell"
 import { TrafficCell } from "./TrafficCell"
 
@@ -80,6 +80,11 @@ export function AccountsTable(props: AccountsTableProps) {
               subscription · notional cost
             </span>
           </Show>
+          {/* Only a pinned surface: one provider's accounts can sit on different dialects, and
+              an unpinned row has nothing to add to its provider's default. */}
+          <Show when={account.dialect}>
+            {(dialect) => <span class={styles.provider}>dialect {dialect()}</span>}
+          </Show>
         </div>
       ),
     },
@@ -98,10 +103,10 @@ export function AccountsTable(props: AccountsTableProps) {
           >
             <span class={styles.spentNote}>window spent — not routable</span>
           </Show>
-          {/* The breaker's re-test of a key the provider refused. Said here because the dot
-              alone reads "cooling down", and this one wants a human to look at the key. */}
-          <Show when={account.availability?.cooldownReason === "credential-rejected"}>
-            <span class={styles.spentNote}>credential rejected upstream — check the key</span>
+          {/* The states no clock fixes, with the press that does. A refused key is among them:
+              the dot alone reads "cooling down", and this one wants a human. */}
+          <Show when={statusNextAction(account, props.providerFor(account))}>
+            {(action) => <span class={styles.nextAction}>{action()}</span>}
           </Show>
         </div>
       ),
@@ -190,6 +195,7 @@ export function AccountsTable(props: AccountsTableProps) {
       cell: (account) => (
         <AccountTestNow
           accountId={account.id}
+          accountLabel={account.label}
           busy={props.testingId === account.id}
           nowMs={props.nowMs}
           onTest={props.onTest}

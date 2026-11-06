@@ -10,7 +10,13 @@ import {
   isSubscriptionLogin,
   subscriptionBadge,
 } from "../../lib/subscription-login"
-import { credentialHint, credentialLabel, credentialTone } from "./account-cells"
+import {
+  connectLabel,
+  credentialHint,
+  credentialLabel,
+  credentialTone,
+  needsLogin,
+} from "./account-cells"
 import styles from "./CredentialCell.module.scss"
 
 export interface CredentialCellProps {
@@ -42,12 +48,21 @@ export function CredentialCell(props: CredentialCellProps) {
   return (
     <Show
       fallback={
-        <Badge
-          tone={credentialTone(props.account, props.provider)}
-          title={credentialHint(props.account, props.provider)}
-        >
-          {credentialLabel(props.account, props.provider)}
-        </Badge>
+        <>
+          <Badge
+            tone={credentialTone(props.account, props.provider)}
+            title={credentialHint(props.account, props.provider)}
+          >
+            {credentialLabel(props.account, props.provider)}
+          </Badge>
+          <Show when={needsLogin(props.account, props.provider)}>
+            <div class={styles.expired}>
+              <Button onClick={() => props.onReconnect(props.account)} size="sm" tone="primary">
+                {connectLabel(props.account)}
+              </Button>
+            </div>
+          </Show>
+        </>
       }
       when={isSubscriptionLogin(props.account)}
     >

@@ -22,6 +22,8 @@ export type {
   UpstreamModelEntry,
 } from "./listing"
 export { listUpstreamModels, NOT_HTTP } from "./listing"
+export type { PlanQuotaDeps, PlanQuotaOutcome } from "./plan-quota"
+export { isPlanQuotaReadable, readPlanQuota, selectForPlanQuotaRead } from "./plan-quota"
 export type { CatalogRefreshDeps, CatalogRefreshOutcome } from "./refresh"
 export { isRefreshable, refreshAccountCatalog } from "./refresh"
 export type { RefreshSubscriptionModels, SubscriptionModelRefreshDeps } from "./refresher"

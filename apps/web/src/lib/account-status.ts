@@ -47,7 +47,7 @@ const PRESENTATION: Readonly<Record<AccountStatus, StatusPresentation>> = {
     token: "--danger",
     fill: "solid",
     label: "Exhausted",
-    hint: "Out of credits. Needs top-up — there is no reset to wait for.",
+    hint: "Out of credits. Needs top-up — there is no reset to wait for. Press Re-check once paid.",
   },
   needs_reauth: {
     token: "--danger",
@@ -132,6 +132,20 @@ export function isRoutableNow(
 /** True when no clock will fix it — drives the dashboard's red banner. */
 export function needsOperator(status: AccountStatus): boolean {
   return status === "exhausted" || status === "needs_reauth"
+}
+
+/**
+ * The provider refused this account's key. Routing reads it as a cooldown and re-tests on a timer,
+ * but a wrong key does not heal with time, so everything that asks for the operator counts it.
+ */
+export function isCredentialRejected(account: {
+  readonly status: AccountStatus
+  readonly availability?: { readonly cooldownReason?: string | null }
+}): boolean {
+  return (
+    account.status === "cooling_down" &&
+    account.availability?.cooldownReason === "credential-rejected"
+  )
 }
 
 /** True when a reset countdown is meaningful for this status. */

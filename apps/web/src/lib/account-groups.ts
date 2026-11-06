@@ -1,5 +1,10 @@
 import type { AccountStatus } from "@multi-ai-router/core"
-import { isRoutableNow, needsOperator, STATUS_DISPLAY_ORDER } from "./account-status"
+import {
+  isCredentialRejected,
+  isRoutableNow,
+  needsOperator,
+  STATUS_DISPLAY_ORDER,
+} from "./account-status"
 import type { AccountView, PoolView } from "./api/types"
 import { providerDisplayName } from "./provider-display"
 import { describeLoginExpiry, isSubscriptionLogin } from "./subscription-login"
@@ -16,7 +21,7 @@ export interface ProviderGroup {
   readonly accounts: readonly AccountView[]
   /** Routable *right now* — status allows it and no quota window is spent. */
   readonly routable: number
-  /** How many need a human: `exhausted`, `needs_reauth`, or a subscription login that is gone. */
+  /** How many need a human: `exhausted`, `needs_reauth`, a refused key, or a login that is gone. */
   readonly attention: number
   /** The least healthy status in the group, in lifecycle order (`active` … `disabled`). */
   readonly worst: AccountStatus
@@ -39,6 +44,20 @@ export function poolNamesFor(
   return pools
     .filter((pool) => pool.members.some((member) => ids.has(member.accountId)))
     .map((pool) => pool.name)
+}
+
+/**
+ * Members routable *right now*. A member row carries status but no quota windows, so the windows
+ * come from the accounts read; an active member with a spent window is not capacity.
+ */
+export function routablePoolMembers(
+  pool: Pick<PoolView, "members">,
+  accounts: readonly AccountView[],
+): number {
+  const byId = new Map(accounts.map((account) => [account.id, account]))
+  return pool.members.filter((member) =>
+    isRoutableNow(member.status, byId.get(member.accountId)?.availability?.quotaWindows),
+  ).length
 }
 
 export function groupAccountsByProvider(
@@ -67,7 +86,7 @@ function describeGroup(
   let attention = 0
 
   for (const account of members) {
-    if (needsOperator(account.status)) attention += 1
+    if (needsOperator(account.status) || isCredentialRejected(account)) attention += 1
     if (!isSubscriptionLogin(account) || account.status === "disabled") continue
     const login = describeLoginExpiry(account, nowMs)
     if (login.kind === "expired") {

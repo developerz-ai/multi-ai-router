@@ -1,7 +1,6 @@
 import type { AccountStatus, ProviderId } from "@multi-ai-router/core"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { Button } from "../components/Button"
-import { EmptyState } from "../components/EmptyState"
 import { PageHeader } from "../components/PageHeader"
 import { QueryBoundary } from "../components/QueryBoundary"
 import { TableSkeleton } from "../components/TableSkeleton"
@@ -14,7 +13,6 @@ import {
   useAccounts,
   useCreateAccount,
   useDeleteAccount,
-  useDisableAccount,
   useDiscoverAccountModels,
   useRecheckAccount,
   useRecheckAllAccounts,
@@ -28,8 +26,10 @@ import styles from "./AccountsRoute.module.scss"
 import { AccountConnect } from "./accounts/AccountConnect"
 import { AccountDeleteDialog } from "./accounts/AccountDeleteDialog"
 import { AccountDeletionNotice } from "./accounts/AccountDeletionNotice"
+import { AccountDisableDialog } from "./accounts/AccountDisableDialog"
 import { AccountEditDialog } from "./accounts/AccountEditDialog"
 import { AccountFormDialog } from "./accounts/AccountFormDialog"
+import { AccountsEmpty } from "./accounts/AccountsEmpty"
 import { AccountsFilters } from "./accounts/AccountsFilters"
 import { AccountsNotices } from "./accounts/AccountsNotices"
 import { AccountsTable } from "./accounts/AccountsTable"
@@ -48,6 +48,7 @@ export default function AccountsRoute() {
   const [editing, setEditing] = createSignal<AccountView | null>(null)
   const [deferredDeletionLabel, setDeferredDeletionLabel] = createSignal<string | null>(null)
   const [pendingDelete, setPendingDelete] = createSignal<AccountView | null>(null)
+  const [pendingDisable, setPendingDisable] = createSignal<AccountView | null>(null)
   const [connecting, setConnecting] = createSignal<AccountView | null>(null)
   /** The accounts a "Reconnect all" run walks, or null while none is running. */
   const [reconnectQueue, setReconnectQueue] = createSignal<readonly AccountView[] | null>(null)
@@ -92,7 +93,6 @@ export default function AccountsRoute() {
 
   const create = useCreateAccount()
   const update = useUpdateAccount()
-  const disable = useDisableAccount()
   const remove = useDeleteAccount()
   const recheck = useRecheckAccount()
   const recheckAll = useRecheckAllAccounts()
@@ -148,7 +148,13 @@ export default function AccountsRoute() {
         nowMs={now()}
       />
 
-      <AccountsNotices discover={discover} recheckAll={recheckAll} />
+      <AccountsNotices
+        discover={discover}
+        enableError={editing() === null ? update.error : null}
+        recheck={recheck}
+        recheckAll={recheckAll}
+        test={test}
+      />
       <AccountDeletionNotice
         label={deferredDeletionLabel()}
         onDismiss={() => setDeferredDeletionLabel(null)}
@@ -170,19 +176,13 @@ export default function AccountsRoute() {
         {(rows) => (
           <Show
             fallback={
-              <EmptyState
-                action={
-                  <Button onClick={() => setAdding(true)} tone="primary">
-                    Add account
-                  </Button>
-                }
-                description="An account is one upstream subscription or API key. Attach several of the same provider — the router pools them behind one endpoint and picks between them per request."
-                icon="accounts"
-                title={
-                  status() === "" && provider() === ""
-                    ? "No accounts yet"
-                    : "No accounts match this filter"
-                }
+              <AccountsEmpty
+                filtered={status() !== "" || provider() !== ""}
+                onAdd={() => setAdding(true)}
+                onClear={() => {
+                  setStatus("")
+                  setProvider("")
+                }}
               />
             }
             when={rows.length > 0}
@@ -204,7 +204,7 @@ export default function AccountsRoute() {
                           nowMs={now()}
                           onConnect={setConnecting}
                           onDelete={setPendingDelete}
-                          onDisable={(account) => disable.mutate(account.id)}
+                          onDisable={setPendingDisable}
                           onDiscoverModels={(id) => discover.mutate(id)}
                           onEdit={openEdit}
                           onEnable={(account) =>
@@ -272,6 +272,12 @@ export default function AccountsRoute() {
         onClose={() => setReconnectQueue(null)}
         open={reconnectQueue() !== null}
         queue={reconnectQueue() ?? []}
+      />
+
+      <AccountDisableDialog
+        account={pendingDisable()}
+        onClose={() => setPendingDisable(null)}
+        pools={poolList()}
       />
 
       <AccountDeleteDialog
