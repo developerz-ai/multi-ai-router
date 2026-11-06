@@ -5,7 +5,7 @@ import {
   type ModelReasoning,
   type ProviderId,
 } from "@multi-ai-router/core"
-import type { RateCard } from "../cost"
+import type { ModelRates } from "../cost"
 import type { ModelCatalogStore } from "../models"
 import { advertisedModels, resolveModel, resolveScope } from "../routing"
 import type { VerifiedKey } from "./auth/verifier"
@@ -35,7 +35,7 @@ export interface CatalogOffer {
   readonly contextTokens: number | null
   readonly maxOutputTokens: number | null
   readonly contextSource: ModelContextSource | null
-  readonly pricing: RateCard | null
+  readonly pricing: ModelRates | null
 }
 
 /** One model, as this router can describe it, unioned across every in-scope account serving it. */
@@ -59,7 +59,7 @@ export interface CatalogModel {
    * US dollars per million tokens, or null where this image ships no price and no operator set one.
    * Null is **unknown**, never free — the same rule the usage reports follow.
    */
-  readonly pricing: RateCard | null
+  readonly pricing: ModelRates | null
   /** Each in-scope provider's own answer, in the enum's order. Additive to the fields above. */
   readonly offers: readonly CatalogOffer[]
   /** The upstream listing's word on thinking modes. Absent when no serving account stated one. */
@@ -71,7 +71,7 @@ export interface CatalogListingDeps {
   readonly health: HealthStore
   readonly models: Pick<ModelCatalogStore, "describe" | "modelsOf">
   /** The warm book, so an operator's price override shows up here as it does in a usage report. */
-  readonly prices: (provider: ProviderId, model: string) => RateCard | null
+  readonly prices: (provider: ProviderId, model: string) => ModelRates | null
 }
 
 export function catalogListing(
@@ -192,7 +192,7 @@ interface Sizes {
   contextTokens: number | null
   maxOutputTokens: number | null
   contextSource: ModelContextSource | null
-  pricing: RateCard | null
+  pricing: ModelRates | null
 }
 
 interface Mutable extends Sizes {
@@ -216,7 +216,7 @@ function absorb(
   id: string,
   provider: ProviderId,
   described: ModelDescriptor | null,
-  pricing: RateCard | null,
+  pricing: ModelRates | null,
 ): void {
   const row = merged.get(id) ?? { id, offers: new Map<ProviderId, Sizes>(), ...emptySizes() }
   const offer = row.offers.get(provider) ?? emptySizes()
@@ -238,7 +238,7 @@ function emptySizes(): Sizes {
   }
 }
 
-function fold(sizes: Sizes, described: ModelDescriptor | null, pricing: RateCard | null): void {
+function fold(sizes: Sizes, described: ModelDescriptor | null, pricing: ModelRates | null): void {
   sizes.accounts += 1
   const context = described?.contextTokens ?? null
   if (context !== null && (sizes.contextTokens === null || context < sizes.contextTokens)) {

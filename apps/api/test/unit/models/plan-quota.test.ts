@@ -134,7 +134,7 @@ describe("reading a plan's quota, failures first", () => {
 
   test("a provider with no usage endpoint is never asked", async () => {
     const { deps, seen } = harness(async () => json(SPENT))
-    const outcome = await readPlanQuota(deps, routable({ provider: "zai" }))
+    const outcome = await readPlanQuota(deps, routable({ provider: "deepseek" }))
     expect(outcome.kind).toBe("skipped")
     expect(seen).toHaveLength(0)
   })
@@ -201,7 +201,7 @@ describe("which accounts the sweep asks", () => {
   })
 
   test("a provider declaring no read is not a candidate", () => {
-    expect(isPlanQuotaReadable(routable({ provider: "zai" }))).toBe(false)
+    expect(isPlanQuotaReadable(routable({ provider: "deepseek" }))).toBe(false)
   })
 
   test("an account another replica just read is dropped", () => {

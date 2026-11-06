@@ -645,6 +645,7 @@ attempt cap apply identically to both paths.
 | Backoff source | Used when |
 |---|---|
 | **Provider-reported reset** | The response carries a reset instant (rate-limit header, or a quota window's `resets_at`). Always preferred — it is the truth. |
+| **A spent plan window's reset** | A `rate-limited` failure states no reset (or only the driver's `estimated` re-test cadence), and the account's held quota windows include one at utilization 1 with a future `provider-reported` reset — the latest such reset, labeled `provider-reported` (`routing/plan-reset.ts`). The refusal says *now*, the plan's own reading (`plan_quota_read`, [03-providers.md](03-providers.md)) says *until when*. The reading alone never cools an account. |
 | **Exponential backoff** | Nothing is reported. Grows per consecutive failure, jittered, capped. Resets to the floor on the first success. |
 
 `ROUTING_FAILURE_THRESHOLD`, `ROUTING_BASE_BACKOFF_MS`, and `ROUTING_MAX_BACKOFF_MS` are the

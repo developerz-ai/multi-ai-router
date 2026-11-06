@@ -8,6 +8,7 @@ import {
   phase,
   recordFailure,
   recordSuccess,
+  withPlanReset,
 } from "../routing"
 import { mergeQuotaWindows } from "../routing/quota"
 import {
@@ -179,7 +180,9 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (!observations.accepts(accountId, observation)) return
       const before = read(accountId).breaker
       if (phase(before, now) === "blocked") return
-      const after = recordFailure(before, failure, now, breakerOptions(caller))
+      // A limit refusal with no reset of its own lasts until the plan's reading says it lifts.
+      const planned = withPlanReset(failure, read(accountId).quotaWindows, now)
+      const after = recordFailure(before, planned, now, breakerOptions(caller))
       if (after !== before) observations.advanceVerdict(accountId)
       write(accountId, { breaker: after })
       if (after.status !== before.status && phase(after, now) === "blocked") {

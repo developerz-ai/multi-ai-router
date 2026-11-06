@@ -1,6 +1,6 @@
 import type { QuotaWindowKind, QuotaWindowState } from "@multi-ai-router/core"
 import { z } from "zod"
-import type { ProviderQuotaRead } from "../quota-read"
+import { advisoryWindow, type ProviderQuotaRead } from "../quota-read"
 import type { RateLimitWindow } from "../types"
 
 /**
@@ -70,14 +70,7 @@ function resetFacts(reading: Reading): Pick<RateLimitWindow, "resetsAt" | "reset
 }
 
 function namedWindow(window: QuotaWindowKind, reading: Reading, at: Date): QuotaWindowState {
-  return {
-    window,
-    utilization: utilization(reading),
-    utilizationSource: "continuous",
-    ...resetFacts(reading),
-    lastCheckedAt: at,
-    advisory: true,
-  }
+  return advisoryWindow(window, utilization(reading), reading.resetsAt, at)
 }
 
 export const opencodeGoQuotaRead: ProviderQuotaRead = {

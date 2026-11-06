@@ -1,8 +1,9 @@
 import { z } from "zod"
 import { createHttpDriver } from "../driver"
-import { codeRule } from "../failure/classify"
+import { codeRule, messageRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
-import type { UpstreamErrorFacts } from "../types"
+import type { ProviderDriver, UpstreamErrorFacts } from "../types"
+import { miniMaxQuotaRead } from "./minimax-quota"
 
 /**
  * `minimax` — Anthropic-compatible surface, prepaid balance, own model ids.
@@ -29,6 +30,15 @@ const THROTTLE_CODES = ["1002"]
 const AUTH_CODES = ["1004"]
 const SERVER_CODES = ["1000", "1013", "1039"]
 const INVALID_REQUEST_CODES = ["1027", "2013"]
+
+/**
+ * Provenance: prod, 2026-11-06 (every recheck of the `minimax` account): `429 Token Plan usage limit
+ * reached: Upgrade your Token Plan or purchase Credits for more usage. (2056)`, in the message, no
+ * `base_resp`, no reset header. A spent plan window: `rate-limited`, which the `429` already said —
+ * the rule names the signal, and keeps the word "Credits" from ever reading as a dead balance. The
+ * reset lives on the plan's own usage endpoint (`minimax-quota.ts`). Blast radius: the signal name.
+ */
+const TOKEN_PLAN_LIMIT = /token plan usage limit|\(2056\)\s*$/i
 
 /**
  * Provenance: MiniMax's own refusal, prod 2026-11-05 22:41Z onward (61 `400`s): `model
@@ -84,24 +94,28 @@ export function inspectMiniMaxSuccess(body: unknown) {
   } satisfies import("../types").FailureClassification
 }
 
-export const miniMaxDriver = createHttpDriver({
-  responseObservation: { terminalPolicy: "evidence-only", inspectPayload: inspectMiniMaxSuccess },
-  id: "minimax",
-  surfaces: [
-    {
-      dialect: "anthropic",
-      baseUrl: BASE_URL,
-      anthropicAuth: "vendor-bearer",
-      thinkingOnByDefault: true,
-      thinkingRequiredModels: THINKING_REQUIRED_MODELS,
-    },
-  ],
-  readFacts: readMiniMaxFacts,
-  rules: [
-    codeRule("credits-exhausted", "minimax:base_resp-1008", BALANCE_CODES),
-    codeRule("rate-limited", "minimax:base_resp-1002", THROTTLE_CODES),
-    codeRule("auth", "minimax:base_resp-1004", AUTH_CODES),
-    codeRule("server-error", "minimax:base_resp-server", SERVER_CODES),
-    codeRule("invalid-request", "minimax:base_resp-invalid", INVALID_REQUEST_CODES),
-  ],
-})
+export const miniMaxDriver: ProviderDriver = {
+  ...createHttpDriver({
+    responseObservation: { terminalPolicy: "evidence-only", inspectPayload: inspectMiniMaxSuccess },
+    id: "minimax",
+    surfaces: [
+      {
+        dialect: "anthropic",
+        baseUrl: BASE_URL,
+        anthropicAuth: "vendor-bearer",
+        thinkingOnByDefault: true,
+        thinkingRequiredModels: THINKING_REQUIRED_MODELS,
+      },
+    ],
+    readFacts: readMiniMaxFacts,
+    rules: [
+      codeRule("credits-exhausted", "minimax:base_resp-1008", BALANCE_CODES),
+      codeRule("rate-limited", "minimax:base_resp-1002", THROTTLE_CODES),
+      messageRule("rate-limited", "minimax:token-plan-limit", TOKEN_PLAN_LIMIT),
+      codeRule("auth", "minimax:base_resp-1004", AUTH_CODES),
+      codeRule("server-error", "minimax:base_resp-server", SERVER_CODES),
+      codeRule("invalid-request", "minimax:base_resp-invalid", INVALID_REQUEST_CODES),
+    ],
+  }),
+  quotaRead: miniMaxQuotaRead,
+}

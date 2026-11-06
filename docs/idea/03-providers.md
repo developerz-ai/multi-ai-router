@@ -484,6 +484,36 @@ and neither the service nor the task names a provider.
   the `resetsAt` format is assumed to be a parseable date. An unparseable reset costs the countdown,
   not the percentage. Check the first non-zero reading against this.
 
+### MiniMax, z.ai and Kimi plans — the same read
+
+Each of these subscriptions answers a usage endpoint with the same key that serves inference, so
+each driver declares a `quotaRead` beside `opencode-go`'s, in a sibling file (`minimax-quota.ts`,
+`zai-quota.ts`, `kimi-quota.ts`). All three shapes were driven live from the production router on
+2026-11-06 while each Account was refused for a spent weekly window; the tests replay those bodies.
+
+| Provider | Endpoint | Upstream → router | Not read |
+|---|---|---|---|
+| `minimax` | `GET https://api.minimax.io/v1/token_plan/remains` (documented in the Token Plan FAQ; `www.minimax.io` answers the same) | `model_remains[model_name=general]`: interval → `five_hour`, weekly → `seven_day`; utilization `1 − remaining_percent/100`, and `1` whenever `*_status` is `2` (spent, as observed beside a live `2056`); reset `end_time` / `weekly_end_time` (epoch ms) | the `video` bucket; every `*_usage_count`, which the legacy `coding_plan/remains` path fills with the count *remaining* and this one with zero |
+| `zai` | `GET https://api.z.ai/api/monitor/usage/quota/limit` (undocumented; the path community usage tools read) | `TOKENS_LIMIT` unit 3 × 5 → `five_hour`, unit 6 × 1 → `seven_day`, any other span → limiter window `tokens-<n>-<unit>`; utilization `percentage/100`; reset `nextResetTime` (epoch ms), absent on a window not yet started | `TIME_LIMIT`, the monthly MCP tool-call allowance: no request here spends it |
+| `kimi` | `GET https://api.kimi.com/coding/v1/usages` (undocumented) | `usages.limit_5h` → `five_hour`, `usages.limit_7d` → `seven_day`; utilization `used_ratio`; reset `reset_time` | the `usage` / `limits` spellings of the same windows |
+
+Every window is `advisory: true`, every reading `limited: false`, and an unreadable body is a
+`quota:unreadable` warning: the same rules as `opencode-go` above. The z.ai weekly `nextResetTime`
+read live was `2026-11-10T02:02:31.996Z` — the `1310` message's `2026-11-10 10:02:31` read as UTC+8,
+to the second, which also confirms `drivers/zai.ts`'s offset.
+
+**What the reading buys beyond the gauge: the length of a cooldown.** MiniMax's
+`429 Token Plan usage limit reached … (2056)` (signal `minimax:token-plan-limit`) names no reset, and
+Kimi's limit `403`s carry only the driver's estimated re-test cadence. Through 2.50.0 the breaker
+filled that gap with its backoff, capped at five minutes, so a weekly window was walked into every
+five minutes for days (prod, 2026-11-06: 92 consecutive failures on `minimax`, `resetSource:
+estimated`). Now a `rate-limited` failure without a stated reset borrows the latest future
+`provider-reported` reset among the account's spent windows (`routing/plan-reset.ts`): the refusal
+says *now*, the reading says *until when*, and the cooldown is labeled `provider-reported`. The
+reading alone still cools nothing — a plan with Credits behind it serves past a spent window — and
+a stated reset (a header, z.ai's message stamp) is never replaced. The exits stay the reset itself
+and the hourly `cooldown_recheck` for a window reopened early.
+
 Pooling is one key per real member. OpenCode's terms forbid multiple accounts used to circumvent
 usage limits; a pool of member keys is the shape the plan is sold in, and buying extra workspaces to
 stack limits is not.
@@ -554,7 +584,7 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `openrouter` | message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through with another status. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test. A `400`/`404` saying `is not a valid model ID` is `model-unsupported`: the next account gets its turn |
 | `zai` | `error.code` in `1113`, `1112`; or message matches `insufficient balance` / `balance is insufficient` / `account balance` | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
 | `kimi` | `error.type` is `exceeded_current_quota_error`; or message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human |
-| `minimax` | `base_resp.status_code` is `1008` | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |
+| `minimax` | `base_resp.status_code` is `1008`. A spent Token Plan window — `429`, message `… Token Plan usage limit reached … (2056)` — is `rate-limited` (`minimax:token-plan-limit`), never a dead balance, though it names Credits | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |
 | `gemini` | message matches `enable billing` / `requires billing` / `billing account … not found` / `has been suspended` — and **nothing else** | Google's `RESOURCE_EXHAUSTED` (429) covers a per-minute limit *and* a spent free-tier day, and its message says "check your plan and billing details". Both refill on a clock, so both are `cooling_down`. Keying on the word "billing" would flip every throttled request to `exhausted` and pull a healthy key out of the pool. Only a project with billing off, a billing account that no longer resolves, or a suspended project is permanent |
 | `groq` | `error.code` is `blocked_api_access` — on an HTTP **400** | Groq's only documented billing-dead signal is a spend limit, and it wears the status of a malformed request. Read the status alone and a blocked organization is debugged as a bad request while it fails every call it is handed |
 | `deepseek` | HTTP `402`; message matches `insufficient balance` | The one vendor here that answers a spent balance with the status that means it. The wording rule exists for the relayed case and to record a signal better than `http-status:402` |

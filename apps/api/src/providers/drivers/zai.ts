@@ -3,7 +3,8 @@ import { codeRule, messageRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
 import { parseInstant } from "../rate-limit/duration"
 import { parseRateLimitHeaders } from "../rate-limit/parse"
-import type { RateLimitSignal, UpstreamResponse } from "../types"
+import type { ProviderDriver, RateLimitSignal, UpstreamResponse } from "../types"
+import { zaiQuotaRead } from "./zai-quota"
 
 /**
  * `zai` — two compatible surfaces, and the Account picks one. The choice decides the endpoint
@@ -111,26 +112,29 @@ function parseZaiRateLimit(response: UpstreamResponse): RateLimitSignal | null {
   }
 }
 
-export const zaiDriver = createHttpDriver({
-  id: "zai",
-  surfaces: [
-    // Verified: the operator drives this endpoint with Claude Code's `ANTHROPIC_AUTH_TOKEN`,
-    // i.e. `Authorization: Bearer`. Blast radius of `x-api-key` here: an unexpected header a
-    // vendor may reject or log.
-    {
-      dialect: "anthropic",
-      baseUrl: ANTHROPIC_BASE_URL,
-      anthropicAuth: "vendor-bearer",
-      thinkingOnByDefault: true,
-    },
-    { dialect: "openai-chat", baseUrl: OPENAI_BASE_URL },
-  ],
-  parseRateLimit: parseZaiRateLimit,
-  rules: [
-    codeRule("credits-exhausted", "zai:balance-code", BALANCE_CODES),
-    messageRule("credits-exhausted", "zai:insufficient-balance", INSUFFICIENT_BALANCE),
-    codeRule("rate-limited", "zai:throttle-code", THROTTLE_CODES),
-    codeRule("rate-limited", "zai:window-exhausted", WINDOW_CODES),
-    codeRule("auth", "zai:auth-code", AUTH_CODES),
-  ],
-})
+export const zaiDriver: ProviderDriver = {
+  ...createHttpDriver({
+    id: "zai",
+    surfaces: [
+      // Verified: the operator drives this endpoint with Claude Code's `ANTHROPIC_AUTH_TOKEN`,
+      // i.e. `Authorization: Bearer`. Blast radius of `x-api-key` here: an unexpected header a
+      // vendor may reject or log.
+      {
+        dialect: "anthropic",
+        baseUrl: ANTHROPIC_BASE_URL,
+        anthropicAuth: "vendor-bearer",
+        thinkingOnByDefault: true,
+      },
+      { dialect: "openai-chat", baseUrl: OPENAI_BASE_URL },
+    ],
+    parseRateLimit: parseZaiRateLimit,
+    rules: [
+      codeRule("credits-exhausted", "zai:balance-code", BALANCE_CODES),
+      messageRule("credits-exhausted", "zai:insufficient-balance", INSUFFICIENT_BALANCE),
+      codeRule("rate-limited", "zai:throttle-code", THROTTLE_CODES),
+      codeRule("rate-limited", "zai:window-exhausted", WINDOW_CODES),
+      codeRule("auth", "zai:auth-code", AUTH_CODES),
+    ],
+  }),
+  quotaRead: zaiQuotaRead,
+}

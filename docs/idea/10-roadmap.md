@@ -171,7 +171,7 @@ Genuinely unsettled. Listed so they are not mistaken for decided.
   single enormous prompt. Tokens per window is meaningful but is only known after the upstream
   answers. Which one, or both?
 - **Quota headroom for providers that report nothing.** Claude subscriptions expose usage signals,
-  `opencode-go` a usage endpoint read by `plan_quota_read` ([03-providers.md](03-providers.md));
+  `opencode-go`, `minimax`, `zai` and `kimi` a usage endpoint read by `plan_quota_read` ([03-providers.md](03-providers.md));
   most API providers expose only response rate-limit headers, and some expose nothing. What does
   `quota-aware` do with an account whose headroom is unknowable — treat it as full, as empty, or
   exclude it from the policy?

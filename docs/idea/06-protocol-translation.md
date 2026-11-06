@@ -68,6 +68,14 @@ behind half of it. So: per-million-token prices, the unit every price in this sy
 provider *list* rather than a winner, because pooling is the product; and no field this router cannot
 source. `null` means **unknown** in every numeric field — never zero, never unlimited.
 
+**`pricing`** is `{ currency: "USD", input_per_mtok, output_per_mtok, cache_read_per_mtok,
+cache_write_per_mtok }` from the shipped tables (`services/cost/tables/`) or the operator's override,
+`null` where neither has one. A model priced in tiers adds **`long_context`** — the same four numbers
+plus `from_prompt_tokens` — the card that replaces the standard one, every token direction, once a
+request's total prompt (input + cache read + cache write) reaches that size; absent means one price
+whatever the prompt. These are the numbers the router's own usage records are priced by, so a client
+pricing its own usage from them gets the router's answer.
+
 **`/v1/catalog` sizes are the smallest known across the accounts behind a name.** Selection may
 send a request to any of them, so the size a client can size a prompt against is the one every
 account can take: `context_length` and `max_output_tokens` are each the minimum *known* value, and

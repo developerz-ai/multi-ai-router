@@ -414,6 +414,23 @@ describe("minimax", () => {
     expect(minimax?.classifyFailure(response(200, { body: miniMaxSuccessBody }))).toBeNull()
   })
 
+  test("a spent Token Plan (2056) is a cooldown, never a dead balance despite naming Credits", () => {
+    // Prod, 2026-11-06: the whole body MiniMax sends, message only, no base_resp, no reset header.
+    const body = {
+      type: "error",
+      error: {
+        type: "rate_limit_error",
+        message:
+          "Token Plan usage limit reached: Upgrade your Token Plan or purchase Credits for more usage. (2056)",
+      },
+    }
+    const result = minimax?.classifyFailure(response(429, { body }))
+
+    expect(result?.kind).toBe("rate-limited")
+    expect(result?.signal).toBe("minimax:token-plan-limit")
+    expect(result?.retryable).toBe(true)
+  })
+
   test("it still reads ordinary Anthropic-shaped errors", () => {
     const result = minimax?.classifyFailure(
       response(401, { body: { type: "error", error: { type: "authentication_error" } } }),
