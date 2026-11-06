@@ -1,11 +1,11 @@
 import type { Logger } from "../../logging/logger"
 import type { RateLimitSignal, UpstreamFailureKind } from "../../providers"
-import { describeProvider } from "../accounts/providers"
 import { type AccountSnapshot, type Candidate, resolveModel } from "../routing"
 import { recoveryAwaitsProbe } from "../routing/recovery-filter"
 import { failoverKind } from "./attempt"
-import { breakerOptionsFor, type HealthStore } from "./health"
+import type { HealthStore } from "./health"
 import { accountHealthFacts, type HealthObservation } from "./health-observation"
+import { strikeProbeFailure } from "./probe-verdict"
 import type { RecoveryAccess, RecoveryAttempt } from "./recovery-access"
 import type { RecoveryCapability } from "./recovery-capability"
 import type { Reach } from "./recovery-reach"
@@ -266,12 +266,11 @@ function settle(
     return "settled"
   }
   attempt.finish("failed")
-  const authKind = describeProvider(account.driver.provider).authKind
-  deps.health.recordFailure(
-    account.id,
+  strikeProbeFailure(
+    deps.health,
+    account,
     { kind, message: "router recovery probe failed" },
     deps.now(),
-    { ...(authKind === null ? {} : breakerOptionsFor(authKind)), recoveryProbe: true },
     observation,
   )
   return "settled"

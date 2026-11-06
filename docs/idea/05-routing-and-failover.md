@@ -1107,14 +1107,16 @@ A recovery generation captures, as bypassable evidence, only quota windows that 
 
 ### The hourly cooldown recheck
 
-The rule above is about the recovery permit, which retries every cooldown. `cooldown_recheck` is the owner-requested exception on a slower clock: it looks at an account whose provider-reported reset is still ahead, once per `COOLDOWN_RECHECK_INTERVAL_MINUTES`, because providers do reset windows early and a weekly window otherwise means days with no look. It holds no permit and clears no recovery state; its start guard admits `cooling_down` and spent windows and refuses every standing block.
+The rule above is about the recovery permit, which retries every cooldown. `cooldown_recheck` is the owner-requested exception on a slower clock: it looks at an account whose provider-reported reset is still ahead, once per `COOLDOWN_RECHECK_INTERVAL_MINUTES`, because providers do reset windows early and a weekly window otherwise means days with no look. It holds no permit and clears no recovery state; its start guard admits `cooling_down` and spent windows and refuses every standing block and a `credential-rejected` key.
 
 | Transport | Signal | Cost per account per interval |
 |---|---|---|
 | Agent SDK (`anthropic-oauth`) | Turn-free usage read. A window re-read below the threshold ends the cooldown; a cold credential is skipped | No turn, no billed usage. One `claude` subprocess |
 | HTTP, any other provider | One minimal real request through "Test now", audited `trigger: cooldown_recheck` | One small request. Billed only if the provider serves it, which is the case that ends the cooldown |
 
-A still-limited answer records its window readings and moves nothing else. A cooldown held only in another replica's memory is not visible to the replica that won the advisory lock, and runs to its own reset. Spent windows are durable and visible from any replica.
+A still-limited answer records its window readings and moves nothing else. Every other failure settles through the recovery probe's verdict path: out of credits becomes `exhausted` and is never asked again, and a refused token parks `needs_reauth`, which earns its one refresh. A `5xx` or timeout counts against the streak, and can push a reset out only where our backoff is the later instant.
+
+Each replica keeps its own timer, and the advisory lock only stops two runs overlapping. So each replica rechecks the cooldowns in its own memory, the "one per interval" bound is per replica, and a success clears only that replica's breaker. The interval is a nominal, jittered gap, not a guarantee.
 
 Successful CLI/browser authorization, guarded passive authentication recovery, manual credential replacement and explicit enable publish their recovery generation in the same account transaction, already settled (`cancelled`, outcome now, `nextAllowedAt` after `RECOVERY_COOLDOWN_MS`): the generation bump fences stale observations and supersedes any open probe, but routing is never gated on a probe after a credential was just verified or an operator just enabled the account. Through v2.22.0 these published `pending`, and the first requests after a reconnect were refused as `probe-in-flight` until a permit was issued on demand (prod, 2026-10-06). Routine refresh preserves operator intent.
 

@@ -10,7 +10,8 @@ import { recoveryBlocksBackground } from "../services/routing/recovery-filter"
 /**
  * Background turns use ordinary eligibility and never spend a designated recovery permit.
  * `admitCooling` is the hourly recheck's one difference: a cooldown or a spent window is what it came
- * to look at. Every standing block still refuses, at this final boundary, whatever selected it.
+ * to look at. Every standing block, and a refused key on its own re-test clock, still refuses at
+ * this final boundary, whatever selected it.
  */
 export function createWarmBackgroundStartGuard(
   deps: {
@@ -44,6 +45,7 @@ export function createWarmBackgroundStartGuard(
           account.configDir !== subject.configDir ||
           (live.status !== "active" &&
             !(deps.admitCooling === true && live.status === "cooling_down")) ||
+          live.health.cooldownReason === "credential-rejected" ||
           recoveryBlocksBackground(live, deps.now()) ||
           (deps.admitCooling !== true &&
             findSpentWindow(live, deps.now(), deps.quotaSpentThreshold) !== null)

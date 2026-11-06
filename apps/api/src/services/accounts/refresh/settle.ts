@@ -53,9 +53,9 @@ export function createRefreshSettle(deps: {
     expected: RefreshExpectation,
     signal: AbortSignal,
   ): Promise<RefreshOutcome> => {
-    if (abandoned()) return outcome
     if (outcome.kind === "success") {
-      await barrier()
+      if (!abandoned()) await barrier()
+      // A committed revival is audited even past the drain: the row did change.
       if (outcome.revived) {
         await auditRevival(deps, outcome.row)
         deps.logger.info("refresh returned a parked account to service", {
@@ -65,6 +65,7 @@ export function createRefreshSettle(deps: {
       }
       return outcome
     }
+    if (abandoned()) return outcome
     if (outcome.kind === "skipped") {
       if (
         outcome.reason === "busy" ||

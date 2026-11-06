@@ -5,7 +5,7 @@ import { createLogger } from "../../../src/logging/logger"
 import type { RateLimitSignal } from "../../../src/providers"
 import { UpstreamAdmissionRefused } from "../../../src/providers/upstream-admission"
 import { createCooldownRecheckTask } from "../../../src/scheduler/tasks/cooldown-recheck"
-import { createHealthStore } from "../../../src/services/dataplane"
+import { createAccountStatusWriter, createHealthStore } from "../../../src/services/dataplane"
 import type { RecoveryProbeResult } from "../../../src/services/dataplane/recovery-probe"
 import { overlayHealth } from "../../../src/services/dataplane/snapshot"
 import type { RoutableAccount } from "../../../src/services/dataplane/types"
@@ -113,7 +113,13 @@ function harness(
   answer: () => RecoveryProbeResult = () => ({ kind: "answered", ok: true, message: "" }),
   options: { reading?: RateLimitSignal; batchSize?: number } = {},
 ) {
-  const store = createHealthStore({ jitter: () => 0 })
+  const blocked: { accountId: string; status: AccountStatus }[] = []
+  const store = createHealthStore({
+    jitter: () => 0,
+    onBlocked: (accountId, status, observation) => {
+      if (observation !== undefined) blocked.push({ accountId, status })
+    },
+  })
   const sent: { accountId: string; model: string; trigger?: string }[] = []
   const rows = new Map<string, AccountRow>(
     accounts.map((held) => [
@@ -154,7 +160,7 @@ function harness(
     })
   const cool = (id: string, resetsAt = at(3 * DAY)) =>
     store.recordFailure(id, { kind: "rate-limited", resetsAt, message: "limit" }, NOW)
-  return { store, sent, run, cool, hooks }
+  return { store, sent, blocked, run, cool, hooks }
 }
 
 describe("the cooldown_recheck task", () => {
@@ -226,13 +232,109 @@ describe("the cooldown_recheck task", () => {
     expect(h.store.stateOf("a").limiterWindows).toHaveLength(1)
   })
 
-  test("a failure that is not a limit strikes nothing", async () => {
+  const refused = (failureKind: "credits-exhausted" | "auth" | "invalid-request") => () =>
+    ({
+      kind: "answered",
+      ok: false,
+      failureKind,
+      message: "upstream refused",
+    }) as const
+
+  test("an out-of-credits answer is exhausted, and no timer ever asks again", async () => {
+    const h = harness([routable("a", "openai-oauth")], refused("credits-exhausted"))
+    h.cool("a")
+
+    for (let tick = 0; tick < 4; tick++) await h.run()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.store.stateOf("a").breaker.status).toBe("exhausted")
+    expect(h.store.stateOf("a").breaker.cooldownUntil).toBeUndefined()
+    expect(h.blocked).toEqual([{ accountId: "a", status: "exhausted" }])
+  })
+
+  test("a 401 on an OAuth account parks it, so its one refresh actually runs", async () => {
+    const h = harness([routable("a", "openai-oauth")], refused("auth"))
+    h.cool("a")
+
+    for (let tick = 0; tick < 3; tick++) await h.run()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.store.stateOf("a").breaker.status).toBe("needs_reauth")
+    expect(h.blocked).toEqual([{ accountId: "a", status: "needs_reauth" }])
+  })
+
+  test("a 401 on an API key takes the credential-rejected clock, not a park", async () => {
+    const h = harness([routable("a", "openai-api")], refused("auth"))
+    h.cool("a")
+
+    for (let tick = 0; tick < 3; tick++) await h.run()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.store.stateOf("a").breaker.cooldownReason).toBe("credential-rejected")
+    expect(h.store.stateOf("a").breaker.cooldownUntil).toEqual(at(3 * DAY))
+    expect(h.blocked).toEqual([])
+  })
+
+  test("a 5xx counts against the streak and leaves a longer stated reset standing", async () => {
     const h = harness([routable("a", "openai-oauth")], () => ({
       kind: "answered",
       ok: false,
-      failureKind: "auth",
-      message: "http-status:401",
+      failureKind: "server-error",
+      message: "http-status:503",
     }))
+    h.cool("a")
+
+    await h.run()
+
+    expect(h.store.stateOf("a").breaker.status).toBe("cooling_down")
+    expect(h.store.stateOf("a").breaker.cooldownUntil).toEqual(at(3 * DAY))
+    expect(h.store.stateOf("a").breaker.cooldownSource).toBe("provider-reported")
+  })
+
+  test("the parked verdict reaches the status writer, whose commit starts the refresh", async () => {
+    const parked: string[] = []
+    const writer = createAccountStatusWriter({
+      accounts: {
+        transitionObservedStatus: async ({ id, status }) => accountRow({ id, status }),
+      },
+      logger: createLogger({ level: "error", write: () => undefined }),
+      flushIntervalMs: 1_000,
+      now: () => NOW,
+    })
+    writer.attachParked((id) => parked.push(id))
+    const held = routable("a", "openai-oauth")
+    const store = createHealthStore({
+      jitter: () => 0,
+      onBlocked: (id, status, observation) => {
+        if (observation !== undefined) writer.record(id, status, observation)
+      },
+    })
+    store.recordFailure("a", { kind: "rate-limited", resetsAt: at(3 * DAY), message: "limit" }, NOW)
+    const task = createCooldownRecheckTask({
+      accounts: () => [held],
+      snapshot: () => overlayHealth(held.snapshot, store.stateOf("a")),
+      rows: { findById: async () => accountRow({ id: "a" }) },
+      health: store,
+      send: async () => refused("auth")(),
+      startGuard: () => async () => undefined,
+      models: {},
+      quotaSpentThreshold: 1,
+      intervalMs: HOUR,
+      batchSize: 5,
+    })
+
+    await task.run({
+      now: NOW,
+      logger: createLogger({ level: "error", write: () => undefined }),
+      signal: new AbortController().signal,
+    })
+    await writer.flush()
+
+    expect(parked).toEqual(["a"])
+  })
+
+  test("a refused ping says nothing about the account", async () => {
+    const h = harness([routable("a", "openai-oauth")], refused("invalid-request"))
     h.cool("a")
     const before = h.store.stateOf("a").breaker
 

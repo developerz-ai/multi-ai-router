@@ -5,12 +5,21 @@ import { UpstreamAdmissionRefused } from "../../../src/providers/upstream-admiss
 import { accountRow } from "../../support/account-row"
 import { account, NOW } from "../dataplane/fixtures"
 
-function guard(status: AccountStatus, admitCooling: boolean, utilization = 0) {
+function guard(
+  status: AccountStatus,
+  admitCooling: boolean,
+  utilization = 0,
+  cooldownReason?: "credential-rejected",
+) {
   const row = accountRow()
   const current = account(row.id, { provider: row.provider })
   const live = {
     ...current.snapshot,
     status,
+    health: {
+      ...current.snapshot.health,
+      ...(cooldownReason === undefined ? {} : { cooldownReason }),
+    },
     quotaWindows: [
       {
         window: "seven_day" as const,
@@ -47,6 +56,12 @@ describe("the cooldown recheck's start guard", () => {
       expect(guard(status, true)()).rejects.toBeInstanceOf(UpstreamAdmissionRefused)
     },
   )
+
+  test("refuses a refused key: it has its own re-test clock", async () => {
+    expect(guard("cooling_down", true, 0, "credential-rejected")()).rejects.toBeInstanceOf(
+      UpstreamAdmissionRefused,
+    )
+  })
 
   test("ordinary background admission is unchanged: both still refuse", async () => {
     expect(guard("cooling_down", false)()).rejects.toBeInstanceOf(UpstreamAdmissionRefused)
