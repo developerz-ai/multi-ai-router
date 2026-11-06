@@ -172,7 +172,9 @@ export function planNextAttempt(
 
   if (lastFailure.kind === "stale-session") return replayInPlace(ordered, progress, options)
   if (!isRetryable(lastFailure.kind)) return { action: "stop", reason: "not-retryable" }
-  if (progress.attemptedAccountIds.length >= maxAttempts(ordered, options)) {
+  if (
+    progress.attemptedAccountIds.length >= attemptCeiling(plannedCount(ordered, progress), options)
+  ) {
     return { action: "stop", reason: "attempts-exhausted" }
   }
 
@@ -199,9 +201,26 @@ export function planNextAttempt(
  * it can only ever lower this, never raise it past the candidates that exist.
  */
 export function maxAttempts(ordered: readonly Candidate[], options: FailoverOptions = {}): number {
-  if (options.maxAttempts === undefined) return ordered.length
+  return attemptCeiling(ordered.length, options)
+}
+
+function attemptCeiling(planned: number, options: FailoverOptions): number {
+  if (options.maxAttempts === undefined) return planned
   const configured = Math.max(1, Math.trunc(options.maxAttempts))
-  return Math.min(configured, ordered.length)
+  return Math.min(configured, planned)
+}
+
+/**
+ * How many candidates this request was planned with: those still offered plus those already tried.
+ * The chain drops a designated recovery probe that failed from `ordered` while its attempt stays
+ * counted, so bounding on `ordered` alone stopped the walk one healthy account short per dropped
+ * probe. An unattempted candidate the chain dropped (a refused probe) is in neither, which is right:
+ * it will not be tried.
+ */
+function plannedCount(ordered: readonly Candidate[], progress: FailoverProgress): number {
+  const offered = new Set(ordered.map((candidate) => candidate.account.id))
+  const dropped = new Set(progress.attemptedAccountIds.filter((id) => !offered.has(id)))
+  return ordered.length + dropped.size
 }
 
 /** Folds one dispatched attempt into the progress. Returns a new value; nothing mutates. */

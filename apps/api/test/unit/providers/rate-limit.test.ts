@@ -87,6 +87,73 @@ describe("OpenRouter's unsuffixed budget headers", () => {
   })
 })
 
+describe("an epoch-seconds reset on an x-ratelimit header", () => {
+  /** The response's own clock, an hour before the reset: the plausibility check reads it. */
+  const DATE = "Tue, 14 Jul 2026 02:33:20 GMT"
+  const DAY = 86_400_000
+  // Read as a duration, `1784000000` seconds parked the account until 2083. A value in the epoch
+  // seconds range is an instant; the unit is our inference, so the label says `estimated`.
+  const signal = parseRateLimitHeaders(
+    response(429, {
+      headers: {
+        "x-ratelimit-limit": "100",
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": "1784000000",
+        date: DATE,
+      },
+    }),
+  )
+
+  test("is read as an instant, not as fifty-six years", () => {
+    const requests = windowNamed(signal?.windows ?? [], "requests")
+
+    expect(requests.resetsAt?.getTime()).toBe(1784000000000)
+    expect(requests.resetAfterSeconds).toBeUndefined()
+    expect(signal?.resetsAt?.getTime()).toBe(1784000000000)
+    expect(signal?.retryAfterSeconds).toBeUndefined()
+  })
+
+  test("is labeled estimated, because the unit was inferred", () => {
+    expect(windowNamed(signal?.windows ?? [], "requests").resetSource).toBe("estimated")
+    expect(signal?.resetSource).toBe("estimated")
+  })
+
+  test("an implausible instant is capped at a week past the response's own Date", () => {
+    // `9999999999` is 2286. No limiter resets a week out; past that the number is a misread.
+    const far = parseRateLimitHeaders(
+      response(429, {
+        headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "9999999999", date: DATE },
+      }),
+    )
+    const requests = windowNamed(far?.windows ?? [], "requests")
+
+    expect(requests.resetsAt?.getTime()).toBe(Date.parse(DATE) + 7 * DAY)
+    expect(requests.resetSource).toBe("estimated")
+  })
+
+  test("with no Date to check it against, an epoch-seconds value is not trusted as a reset", () => {
+    const blind = parseRateLimitHeaders(
+      response(429, {
+        headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "9999999999" },
+      }),
+    )
+    const requests = windowNamed(blind?.windows ?? [], "requests")
+
+    expect(requests.resetsAt).toBeUndefined()
+    expect(requests.resetAfterSeconds).toBeUndefined()
+    expect(requests.resetSource).toBe("unknown")
+  })
+
+  test("a short duration is still a duration", () => {
+    const short = parseRateLimitHeaders(response(429, { headers: { "x-ratelimit-reset": "60" } }))
+
+    const requests = windowNamed(short?.windows ?? [], "requests")
+
+    expect(requests.resetAfterSeconds).toBe(60)
+    expect(requests.resetSource).toBe("provider-reported")
+  })
+})
+
 describe("what a driver refuses to invent", () => {
   test("a 429 with no headers is still a signal, but with an unknown reset", () => {
     const signal = parseRateLimitHeaders(response(429))

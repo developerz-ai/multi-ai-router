@@ -48,6 +48,7 @@ interface CatalogBody {
     readonly max_output_tokens: number | null
     readonly context_source: string | null
     readonly pricing: Record<string, number | string> | null
+    readonly offers: readonly Record<string, unknown>[]
   }[]
 }
 
@@ -85,11 +86,55 @@ describe("GET /v1/catalog", () => {
           cache_read_per_mtok: 0.11,
           cache_write_per_mtok: 0,
         },
+        offers: [
+          {
+            provider: "zai",
+            accounts: 1,
+            context_length: 204_800,
+            max_output_tokens: 131_072,
+            context_source: "shipped",
+            pricing: {
+              currency: "USD",
+              input_per_mtok: 0.6,
+              output_per_mtok: 2.2,
+              cache_read_per_mtok: 0.11,
+              cache_write_per_mtok: 0,
+            },
+          },
+        ],
       },
     ])
     // The shipped table's own date rides the response: a `shipped` window is only as current as
     // this, and a listing that could not age visibly is one nobody can judge.
     expect(body.context_table_as_of).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  test("publishes the size every account can take, and each provider's own answer in offers", async () => {
+    const { app } = harness({
+      accounts: [
+        zaiAccount(),
+        account("acct-or", { apiKey: "sk-two", cipher: CRYPTOR, provider: "openai-compatible" }),
+      ],
+      responses: [() => jsonResponse(200, {})],
+      models: models({
+        "acct-zai": { shared: { contextTokens: 204_800, contextSource: "shipped" } },
+        "acct-or": { shared: { contextTokens: 128_000, contextSource: "upstream" } },
+      }),
+    })
+
+    const res = await app.request("/v1/catalog", { headers: bearer() })
+    const body = (await res.json()) as CatalogBody
+    const shared = body.data.find((row) => row.id === "shared")
+
+    expect(shared).toMatchObject({ context_length: 128_000, context_source: "upstream" })
+    expect(shared?.offers).toEqual([
+      expect.objectContaining({ provider: "openai-compatible", context_length: 128_000 }),
+      expect.objectContaining({
+        provider: "zai",
+        context_length: 204_800,
+        context_source: "shipped",
+      }),
+    ])
   })
 
   test("states the thinking modes a listing gave, and nothing where none was given", async () => {

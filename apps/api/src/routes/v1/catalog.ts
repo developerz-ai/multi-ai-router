@@ -50,6 +50,21 @@ interface CatalogEntry {
    * tells "this model does not think" (`supported: false`) from "nobody said".
    */
   readonly reasoning?: ModelReasoning
+  /**
+   * Each in-scope provider's own answer, in provider order. The fields above are the smallest
+   * known across every account behind the name — the size any of them can take — so a client
+   * wanting the largest window reads which provider holds it here.
+   */
+  readonly offers: readonly OfferBody[]
+}
+
+interface OfferBody {
+  readonly provider: string
+  readonly accounts: number
+  readonly context_length: number | null
+  readonly max_output_tokens: number | null
+  readonly context_source: string | null
+  readonly pricing: PricingBody | null
 }
 
 /** US dollars per million tokens. The unit every price in this system is stated in. */
@@ -92,16 +107,27 @@ function toEntry(model: CatalogModel): CatalogEntry {
     context_length: model.contextTokens,
     max_output_tokens: model.maxOutputTokens,
     context_source: model.contextSource,
-    pricing:
-      model.pricing === null
-        ? null
-        : {
-            currency: "USD",
-            input_per_mtok: model.pricing.inputPerMtok,
-            output_per_mtok: model.pricing.outputPerMtok,
-            cache_read_per_mtok: model.pricing.cacheReadPerMtok,
-            cache_write_per_mtok: model.pricing.cacheWritePerMtok,
-          },
+    pricing: toPricing(model.pricing),
     ...(model.reasoning === undefined ? {} : { reasoning: model.reasoning }),
+    offers: model.offers.map((offer) => ({
+      provider: offer.provider,
+      accounts: offer.accounts,
+      context_length: offer.contextTokens,
+      max_output_tokens: offer.maxOutputTokens,
+      context_source: offer.contextSource,
+      pricing: toPricing(offer.pricing),
+    })),
   }
+}
+
+function toPricing(pricing: CatalogModel["pricing"]): PricingBody | null {
+  return pricing === null
+    ? null
+    : {
+        currency: "USD",
+        input_per_mtok: pricing.inputPerMtok,
+        output_per_mtok: pricing.outputPerMtok,
+        cache_read_per_mtok: pricing.cacheReadPerMtok,
+        cache_write_per_mtok: pricing.cacheWritePerMtok,
+      }
 }

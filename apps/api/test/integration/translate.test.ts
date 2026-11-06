@@ -3,7 +3,7 @@ import { createLogger } from "../../src/logging/logger"
 import type { PoolSnapshot } from "../../src/services/routing"
 import type { BodyReader } from "../support/body-reader"
 import { account, jsonResponse, slowStream } from "../unit/dataplane/fixtures"
-import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
+import { bearer, CRYPTOR, harness, MESSAGE, post, STREAMED_MESSAGE, settle } from "./harness"
 
 /**
  * The `translate` egress mode end to end: an Anthropic client dispatched to an openai-chat
@@ -48,7 +48,7 @@ describe("cross-dialect streaming (translate egress)", () => {
       responses: [() => slow.response],
     })
 
-    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     slow.release(0)
     slow.finish()
     const text = await res.text()
@@ -105,7 +105,7 @@ describe("cross-dialect streaming (translate egress)", () => {
     const slow = slowStream([body])
     const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
 
-    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     slow.release(0)
     slow.finish()
     const text = await res.text()
@@ -129,7 +129,7 @@ describe("cross-dialect streaming (translate egress)", () => {
     const slow = slowStream([first, second])
     const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
 
-    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
@@ -435,7 +435,7 @@ describe("a Claude Code turn on translate egress", () => {
     const slow = slowStream([first, second])
     const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
 
-    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 

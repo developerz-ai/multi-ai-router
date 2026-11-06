@@ -1,5 +1,11 @@
 import type { RateLimitSignal, RateLimitWindow, UpstreamResponse } from "../types"
-import { parseDurationSeconds, parseEpochMillis, parseInstant } from "./duration"
+import {
+  isEpochSeconds,
+  parseDurationSeconds,
+  parseEpochMillis,
+  parseEpochSeconds,
+  parseInstant,
+} from "./duration"
 
 /**
  * Rate-limit headers, normalized. Two families cover every HTTP provider in the registry and they
@@ -27,6 +33,8 @@ interface Draft {
   remaining?: number
   resetsAt?: Date
   resetAfterSeconds?: number
+  /** The reset was epoch seconds on a header documented as a duration: the unit is inferred. */
+  inferredUnit?: boolean
 }
 
 function draftFor(drafts: Map<string, Draft>, limiter: string): Draft {
@@ -44,7 +52,13 @@ function parseCount(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
-function applyField(draft: Draft, field: string, value: string, absoluteReset: boolean): void {
+function applyField(
+  draft: Draft,
+  field: string,
+  value: string,
+  absoluteReset: boolean,
+  reference: Date | null,
+): void {
   if (field === "limit") {
     draft.limit = parseCount(value)
     return
@@ -62,21 +76,33 @@ function applyField(draft: Draft, field: string, value: string, absoluteReset: b
     draft.resetsAt = epoch
     return
   }
+  if (isEpochSeconds(value)) {
+    // Never a duration: unchecked against a `Date`, it is no reset at all (`duration.ts`).
+    const at = parseEpochSeconds(value, reference)
+    if (at !== null) {
+      draft.resetsAt = at
+      draft.inferredUnit = true
+    }
+    return
+  }
   draft.resetAfterSeconds = parseDurationSeconds(value) ?? undefined
 }
 
 function collect(headers: Headers): Map<string, Draft> {
   const drafts = new Map<string, Draft>()
+  // The response's own clock: the only one a parser has to check an inferred instant against.
+  const date = headers.get("date")
+  const reference = date === null ? null : parseInstant(date)
 
   headers.forEach((value, name) => {
     const anthropic = ANTHROPIC_HEADER.exec(name)
     if (anthropic?.[1] && anthropic[2]) {
-      applyField(draftFor(drafts, anthropic[1]), anthropic[2], value, true)
+      applyField(draftFor(drafts, anthropic[1]), anthropic[2], value, true, reference)
       return
     }
     const openai = OPENAI_HEADER.exec(name)
     if (openai?.[1]) {
-      applyField(draftFor(drafts, openai[2] ?? DEFAULT_LIMITER), openai[1], value, false)
+      applyField(draftFor(drafts, openai[2] ?? DEFAULT_LIMITER), openai[1], value, false, reference)
     }
   })
 
@@ -99,7 +125,7 @@ function toWindow(limiter: string, draft: Draft): RateLimitWindow {
     utilizationSource: measurable ? "continuous" : "none",
     resetsAt: draft.resetsAt,
     resetAfterSeconds: draft.resetAfterSeconds,
-    resetSource: reported ? "provider-reported" : "unknown",
+    resetSource: !reported ? "unknown" : draft.inferredUnit ? "estimated" : "provider-reported",
   }
 }
 
@@ -127,16 +153,20 @@ function parseRetryAfter(headers: Headers): RetryAfter {
   return at ? { at } : {}
 }
 
-function depletedReset(windows: readonly RateLimitWindow[]): RetryAfter {
+function depletedReset(windows: readonly RateLimitWindow[]): RetryAfter & { estimated: boolean } {
   let at: Date | undefined
   let seconds: number | undefined
+  let estimated = false
   for (const window of windows) {
     if (window.remaining === undefined || window.remaining > 0) continue
-    if (window.resetsAt && (!at || window.resetsAt > at)) at = window.resetsAt
+    if (window.resetsAt && (!at || window.resetsAt > at)) {
+      at = window.resetsAt
+      estimated = window.resetSource === "estimated"
+    }
     if (window.resetAfterSeconds !== undefined && window.resetAfterSeconds > 0)
       seconds = Math.max(seconds ?? 0, window.resetAfterSeconds)
   }
-  return { at, seconds }
+  return { at, seconds, estimated }
 }
 
 export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSignal | null {
@@ -153,7 +183,9 @@ export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSign
   }
 
   const effective =
-    retryAfter.at || retryAfter.seconds !== undefined ? retryAfter : depletedReset(windows)
+    retryAfter.at || retryAfter.seconds !== undefined
+      ? { ...retryAfter, estimated: false }
+      : depletedReset(windows)
   const resetsAt = effective.at
   const reported = resetsAt !== undefined || effective.seconds !== undefined
 
@@ -161,7 +193,7 @@ export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSign
     limited: limitedByStatus || windows.some((window) => window.remaining === 0),
     retryAfterSeconds: effective.seconds,
     resetsAt,
-    resetSource: reported ? "provider-reported" : "unknown",
+    resetSource: !reported ? "unknown" : effective.estimated ? "estimated" : "provider-reported",
     windows,
   }
 }

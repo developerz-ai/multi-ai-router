@@ -141,6 +141,25 @@ describe("ordering and bounds", () => {
     ).toEqual({ action: "stop", reason: "attempts-exhausted" })
   })
 
+  test("a failed recovery probe dropped from the plan does not shrink the bound for the rest", () => {
+    // The chain removes a designated recovery probe that failed from `ordered`, while its attempt
+    // stays counted. Bounded on the shrunken list, `[a(probe), b, c]` stopped after `b` with `c`
+    // healthy and unasked: two attempts against a bound of two.
+    const withoutProbe = chain.slice(1, 3)
+    expect(planNextAttempt(withoutProbe, after("a", "b"), failure("server-error"))).toMatchObject({
+      action: "attempt",
+      candidate: { account: { id: "c" } },
+      attempt: 3,
+    })
+  })
+
+  test("an operator ceiling still counts the dropped probe as one of its attempts", () => {
+    const withoutProbe = chain.slice(1, 3)
+    expect(
+      planNextAttempt(withoutProbe, after("a", "b"), failure("server-error"), { maxAttempts: 2 }),
+    ).toEqual({ action: "stop", reason: "attempts-exhausted" })
+  })
+
   test("an empty candidate list has nothing to attempt", () => {
     expect(planNextAttempt([], NO_ATTEMPTS, null)).toEqual({
       action: "stop",

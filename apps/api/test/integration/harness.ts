@@ -189,6 +189,13 @@ export const MESSAGE = JSON.stringify({
   messages: [{ role: "user", content: "hello" }],
 })
 
+/**
+ * The same turn asked as a stream. A streaming client is committed at the upstream's headers; a
+ * non-streaming one has the front of a `2xx` read for a wall first (`success-wall.ts`), so a test
+ * of the stream relay asks as a streaming client does.
+ */
+export const STREAMED_MESSAGE = JSON.stringify({ ...JSON.parse(MESSAGE), stream: true })
+
 export function post(body = MESSAGE, headers: Record<string, string> = {}): RequestInit {
   return {
     method: "POST",

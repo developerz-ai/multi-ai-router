@@ -219,11 +219,15 @@ describe("a stalled Codex stream ends on the idle clock", () => {
       await Bun.sleep(20)
       expect(performance.now() - started).toBeLessThan(5_000)
       expect(built.upstream.calls).toHaveLength(1)
-      expect(built.usage.rows.at(-1)).toMatchObject({
-        outcome: "upstream_timeout",
-        errorClass: "upstream_timeout",
-        tokensOut: 0,
-      })
+      // A streaming client was committed at headers, so its stream ends on the clock. One that is
+      // not streaming is still inside the success peek (`success-wall.ts`): nothing was sent, and
+      // it hears an honest 504 instead of a 200 that breaks.
+      expect(built.usage.rows.at(-1)).toMatchObject(
+        stream
+          ? { outcome: "upstream_timeout", errorClass: "upstream_timeout", tokensOut: 0 }
+          : { outcome: "upstream_timeout", responseStatus: 504, streamed: false, tokensOut: 0 },
+      )
+      if (!stream) expect(res.status).toBe(504)
     })
   }
 })

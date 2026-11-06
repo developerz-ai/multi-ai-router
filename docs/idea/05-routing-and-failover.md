@@ -494,7 +494,8 @@ that pool — the policy never runs across the union.
 | Condition | Action |
 |---|---|
 | `429` | Retry the next candidate. Mark the account `cooling_down` until its reset. |
-| `402`, or an out-of-credits / billing error body | Retry the next candidate. Mark the account **`exhausted`** — no timer, no automatic retry. See below. |
+| `402`, or an out-of-credits / billing error body | Retry the next candidate. Mark the account **`exhausted`** — no reset, no request routed to it; its only clock is the bounded re-test (*The bounded `exhausted` re-test* below). |
+| **A wall inside a `2xx`**, for a client that is not streaming (MiniMax `base_resp`, an `event: error` or Codex `response.failed` before any output) | Classified **before** the response is committed, from the front of the body (*A wall inside a 2xx* below), then exactly as the matching row of this table. With no candidate left, the client hears the real `429` / `402` / `503`, never a `200`. |
 | `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. A **streamed** HTTP attempt's timeout before response headers is the first-byte clock (see *Upstream deadlines* below). |
 | `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
@@ -793,6 +794,7 @@ Rules:
 |---|---|
 | **Detect, don't guess** | The classification comes from the upstream signal — status code plus the provider's error body. This is a **driver-level** concern ([03-providers.md](03-providers.md)), because every provider words it differently. The router records *which* signal produced the classification, so a misclassification is debuggable. |
 | **A verdict outranks a header** | Limiter headers ride *every* response, including the `402` that says the balance is dead — a drained account very often answers `402` **and** `x-ratelimit-remaining-requests: 0` in the same breath. The classified failure is the verdict and lands first; the parsed headers are a reading and land second, where they may extend a cooldown but **never** overwrite `exhausted`, `needs_reauth`, or `disabled`. Without this, a dead balance becomes a countdown, gets retried on a timer, and the client is told `429 + Retry-After` for something no clock fixes. The reading is still recorded — refused, not discarded — so the console can show what the limiter said. |
+| **An instant is not a duration** | `x-ratelimit-reset` is documented as a duration (`6m0s`), OpenRouter sends epoch milliseconds, and some gateways send epoch **seconds** (`1784000000`). Read as a duration, epoch seconds parked an account until 2083. A bare number from 1e9 up to the epoch-millis floor (1e11) is read as an instant in seconds, labeled `estimated` because the unit is the router's inference. It is checked against the response's own `Date`: capped at a week past it (`9999999999` is 2286, a misread), and with no `Date` it is not trusted as a reset at all, so the breaker uses its own backoff (`providers/rate-limit/duration.ts`). |
 | **A verdict outranks a later verdict, too** | The same precedence holds between two classified failures. Requests run concurrently, so a `429` can classify *after* the `402` that already marked the account `exhausted` — and must not demote it back to `cooling_down`. Once an account is in a state no timer changes (`exhausted`, `needs_reauth`, `disabled`), later failures of any kind leave it standing; the first terminal verdict wins. |
 | **Remove immediately** | An `exhausted` account leaves every candidate set at once, for every key and every pool. |
 | **Surface loudly** | `exhausted` gets a **red banner on the dashboard**, not a status buried on a detail page. This is the failure an operator most needs to see, because it silently shrinks the pool while everything still appears to work. |
@@ -963,7 +965,8 @@ continuous signal invisible — the one case an operator needs to act on, becaus
 silently stops working without it.
 
 **`exhausted` has no reset.** That absence is exactly what distinguishes it from `cooling_down`.
-Display **"needs top-up"**, never a countdown, and never invent an ETA.
+Display **"needs top-up"**, never a countdown, and never invent an ETA. Its bounded re-test (below)
+is a recheck the router presses, not a reset: it names no instant the account will serve again.
 
 ### "Re-check now"
 
@@ -1114,9 +1117,34 @@ The rule above is about the recovery permit, which retries every cooldown. `cool
 | Agent SDK (`anthropic-oauth`) | Turn-free usage read. A window re-read below the threshold ends the cooldown; a cold credential is skipped | No turn, no billed usage. One `claude` subprocess |
 | HTTP, any other provider | One minimal real request through "Test now", audited `trigger: cooldown_recheck` | One small request. Billed only if the provider serves it, which is the case that ends the cooldown |
 
-A still-limited answer records its window readings and moves nothing else. Every other failure settles through the recovery probe's verdict path: out of credits becomes `exhausted` and is never asked again, and a refused token parks `needs_reauth`, which earns its one refresh. A `5xx` or timeout counts against the streak, and can push a reset out only where our backoff is the later instant.
+A still-limited answer records its window readings and moves nothing else. Every other failure settles through the recovery probe's verdict path: out of credits becomes `exhausted` and leaves this lane for the bounded re-test below, and a refused token parks `needs_reauth`, which earns its one refresh. A `5xx` or timeout counts against the streak, and can push a reset out only where our backoff is the later instant.
 
 A refusal can ride a `200`, in a Codex stream or a MiniMax `base_resp`. Every "Test now" transport call reads its body through the relay's own observer and driver hook, so a recheck or recovery probe reaches the verdict a client's request would: in-stream `account_deactivated` or `insufficient_quota` is `exhausted` after one send, in-stream `usage_limit_reached` behaves like a `429`, and a failed stream nothing classifies stays `server-error`.
+
+### The bounded `exhausted` re-test
+
+Rule 7, amended 2026-11-06 (developerz.ai#7868): `exhausted` keeps every property that separates it from `cooling_down` — no reset, refused by every candidate filter, `402` to a client, "needs top-up" in the console — but it is no longer a park with no exit. A wall is read from words, words get misread, and a misread park cost a healthy MiniMax account 10-28 to 11-03 with nobody pressing the button. A re-test is cheap; an account lost for a week is not.
+
+| | |
+|---|---|
+| What runs | The operator's own **Re-check now** (`services/accounts/recheck.ts`), pressed by the `cooldown_recheck` task, audited `source: exhausted_recheck`. It clears the stored `exhausted` and demands one recovery probe; that probe's verdict — the next real request, or the router's own probe — puts a still-drained account straight back. Nothing else sends a request |
+| When | First `EXHAUSTED_RECHECK_FIRST_MINUTES` (60) after the task first sees the account `exhausted` — it looks once per `COOLDOWN_RECHECK_INTERVAL_MINUTES`, so the first re-test lands 1 to 2 h after the account went `exhausted` at the defaults — then a wait doubling per re-test, capped at `EXHAUSTED_RECHECK_MAX_MINUTES` (1440): 1, 2, 4, 8, 16, 24, 24 … hours. A refused claim (an operator's own check holds the lease, or the recheck cooldown runs) is no re-test: no count, no alert, asked again next tick |
+| Alert | Each re-test writes `exhausted account re-tested` at `warn` with `accountId`, `provider`, `retest` (count) and `nextRetestAt` — the line an alert rule matches ([08-observability.md](08-observability.md)). A re-test that could not run writes `exhausted account re-test failed` at `error` |
+| Doubling memory | Per replica, in memory (`services/routing/exhausted-retest.ts`). A re-tested account that reads healthy keeps its count until it has served a full cap, so a balance that drains again within a day resumes the doubling. A restart starts at the first wait — sooner, never later. Each replica may re-test once per wait: the recheck's durable cooldown (`ACCOUNT_RECHECK_COOLDOWN_SECONDS`, 60 s) only keeps two re-tests from landing together |
+
+### A wall inside a 2xx
+
+Some upstreams answer a wall with a success status: MiniMax a drained balance as `200` and `base_resp.status_code: 1008`; Anthropic-shaped streams `200` then `event: error`; Codex `response.created` then `response.failed`. Relayed, that was a fake success — the client got an error body under a `200`, the account was struck only after the relay settled, and a healthy sibling went unasked. Until a byte reaches the client failover is still open, so the attempt reads the front of a `2xx` body before committing it (`services/dataplane/success-wall.ts`):
+
+- **Only for a client that is not streaming.** It sees nothing before the whole answer exists, so holding its status line costs it nothing. A **streaming client is committed at the upstream's headers, as before**: holding its status line until a first event — which a reasoning upstream may not send for minutes — would trip `SERVER_IDLE_TIMEOUT_SECONDS` and a client's own header timeout. A wall in its stream stays in-stream (the response observer strikes the account; the next request routes around it).
+- **An upstream stream** is read to its first event that is not a preamble (`message_start`, `response.created`, `response.in_progress`; Codex answers a spent plan as `response.created` then `response.failed`). An error there is a wall; anything else — content, a `ping`, a keepalive comment — commits.
+- **A JSON body** is read whole, because an envelope is only an envelope once complete.
+- Either read stops at `UPSTREAM_ERROR_MAX_BYTES` and commits, and the upstream's own clocks (first-byte, idle, `UPSTREAM_TIMEOUT_MS`) bound the wait.
+- The driver's own success hook decides first (MiniMax `base_resp`, Codex stream codes), then the dialect's explicit error shape worded into a kind by the driver's rules; an explicit error no rule names is a retryable `server-error`.
+- A wall is the failure it names: the breaker settles it, the chain walks on, and with nobody left the client hears `429` (clock), `402` (human), `503` (capacity) — never a `2xx`.
+- A committed body is replayed byte for byte, pulled on demand. The bytes held are bytes that precede the first token, so time to first token is unchanged.
+
+A wall after the commit point (an `event: error` after content) is past failover: the stream ends honestly with it, as before.
 
 A transient edge `401`/`403` on a cooling OAuth account parks it like a real refusal, and `needs_reauth` drops the stated reset. If the refresh then succeeds the account is back early; if the token endpoint is also down past the retry budget, the attempt is spent until an operator's Re-check.
 

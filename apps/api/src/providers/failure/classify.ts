@@ -20,13 +20,21 @@ export interface ClassificationRule {
   readonly kind: UpstreamFailureKind
   /** Recorded on the classification so a misclassification is traceable to its trigger. */
   readonly signal: string
-  readonly when: (facts: UpstreamErrorFacts, status: number) => boolean
+  readonly when: (facts: UpstreamErrorFacts, status: number, stated: StatedReset) => boolean
   /**
    * How long to assume the limit lasts when the response itself names no instant — no
    * `retry-after`, no limiter headers, no time in the body. Labeled `estimated` wherever it travels,
    * and never applied over a reset the provider did report. See {@link withEstimatedReset}.
    */
   readonly estimatedResetSeconds?: number
+}
+
+/**
+ * Whether the response itself names when the limit lifts — a `retry-after`, or a depleted limiter's
+ * reset. A rule reading *wording* yields to it: a provider that states a reset is describing a clock.
+ */
+export interface StatedReset {
+  readonly reset: boolean
 }
 
 export interface ClassifyOptions {
@@ -92,7 +100,11 @@ export function classifyUpstreamFailure(
   response: UpstreamResponse,
 ): FailureClassification | null {
   const facts = options.readFacts(response.body)
-  const matched = options.rules.find((rule) => rule.when(facts, response.status))
+  const rateLimit = options.parseRateLimit(response)
+  const stated = {
+    reset: rateLimit?.resetsAt !== undefined || rateLimit?.retryAfterSeconds !== undefined,
+  }
+  const matched = options.rules.find((rule) => rule.when(facts, response.status, stated))
   const verdict: StatusVerdict | null = matched
     ? { kind: matched.kind, signal: matched.signal }
     : verdictForStatus(response.status)
@@ -105,7 +117,7 @@ export function classifyUpstreamFailure(
     retryable: RETRYABLE[verdict.kind],
     signal: verdict.signal,
     message: facts.message,
-    rateLimit: withEstimatedReset(options.parseRateLimit(response), matched?.estimatedResetSeconds),
+    rateLimit: withEstimatedReset(rateLimit, matched?.estimatedResetSeconds),
   }
 }
 
@@ -146,7 +158,10 @@ export function onStatus(
   statuses: readonly number[],
   rule: ClassificationRule,
 ): ClassificationRule {
-  return { ...rule, when: (facts, status) => statuses.includes(status) && rule.when(facts, status) }
+  return {
+    ...rule,
+    when: (facts, status, stated) => statuses.includes(status) && rule.when(facts, status, stated),
+  }
 }
 
 /** The same rule, carrying an estimated reset for responses that name none. */

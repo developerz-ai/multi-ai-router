@@ -6,6 +6,7 @@ import type { UsageRecord } from "../../../src/services/usage"
 import { account, catalog, cipher } from "./fixtures"
 
 const encoder = new TextEncoder()
+const OPEN = ": open\n\n"
 const FAKE_KEY = "sk-LIVEFAKEKEY-do-not-leak-1234567890abcdef"
 
 /**
@@ -78,6 +79,10 @@ async function codexFixture(health = createHealthStore({ jitter: () => 0 })) {
         new ReadableStream<Uint8Array>({
           start(controller) {
             source = controller
+            // A keepalive comment commits the response (`success-wall.ts`), so the refusals below
+            // arrive in-stream — the post-commit phase this file pins. A refusal before any byte
+            // is a pre-commit wall instead (`success-wall.test.ts`).
+            controller.enqueue(encoder.encode(OPEN))
           },
         }),
         { headers: { "content-type": "text/event-stream" } },
@@ -103,6 +108,7 @@ async function codexFixture(health = createHealthStore({ jitter: () => 0 })) {
   })
   if (source === undefined || response.body === null) throw new Error("missing stream")
   const reader = response.body.getReader()
+  expect(new TextDecoder().decode((await reader.read()).value)).toBe(OPEN)
   return { source, reader, response, rows, health, log, lines, registry, requestAbort, finished }
 }
 

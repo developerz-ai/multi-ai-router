@@ -13,6 +13,7 @@ import type { RoutableAccount } from "../../services/dataplane/types"
 import type { AccountSnapshot } from "../../services/routing"
 import { cooldownRecheckDue, readingReopened } from "../../services/routing/cooldown-recheck"
 import type { ScheduledTask } from "../types"
+import { createExhaustedRetest, type ExhaustedRetestPorts } from "./exhausted-retest"
 
 /**
  * The look an account on a long cooldown gets while its stated reset is still days away. Providers
@@ -25,7 +26,8 @@ import type { ScheduledTask } from "../types"
  *
  * **An answer is a verdict, except "still limited".** Every other failure settles through the same
  * path as the recovery probe (`dataplane/probe-verdict.ts`): out of credits becomes `exhausted` and
- * is never asked again, a rejected token parks and so earns its one refresh. A `429` alone keeps its
+ * leaves this lane for the bounded re-test below (`exhausted-retest.ts`), a rejected token parks and
+ * so earns its one refresh. A `429` alone keeps its
  * window readings and drops its verdict, so the stated reset, its source and the failure streak all
  * stand. Folded as a verdict, a reset-less `429` would replace a provider's instant with our backoff
  * arithmetic, once an hour, for as long as the window lasted.
@@ -60,6 +62,8 @@ export interface CooldownRecheckPorts {
   /** Each provider's fallback probe model, for accounts declaring none. */
   readonly models: Readonly<Record<string, string>>
   readonly quotaSpentThreshold: number
+  /** "Re-check now" for an `exhausted` account, attributed to this task (`exhausted-retest.ts`). */
+  readonly recheckExhausted: ExhaustedRetestPorts["recheck"]
 }
 
 export interface CooldownRecheckDeps extends CooldownRecheckPorts {
@@ -67,6 +71,8 @@ export interface CooldownRecheckDeps extends CooldownRecheckPorts {
   readonly intervalMs: number
   /** Accounts looked at per tick. Each may bill a request or spawn a subprocess. */
   readonly batchSize: number
+  /** The bounded re-test clock `exhausted` accounts get. */
+  readonly exhaustedSchedule: ExhaustedRetestPorts["schedule"]
 }
 
 type Verdict = "reopened" | "still-cooling" | "failed" | "skipped"
@@ -74,7 +80,7 @@ type Verdict = "reopened" | "still-cooling" | "failed" | "skipped"
 /** Nothing wired means no task, like every other sweep with nothing to spend. */
 export function createCooldownRecheckTasks(
   ports: CooldownRecheckPorts | undefined,
-  options: Pick<CooldownRecheckDeps, "intervalMs" | "batchSize">,
+  options: Pick<CooldownRecheckDeps, "intervalMs" | "batchSize" | "exhaustedSchedule">,
 ): readonly ScheduledTask[] {
   return ports === undefined ? [] : [createCooldownRecheckTask({ ...ports, ...options })]
 }
@@ -83,6 +89,10 @@ export function createCooldownRecheckTask(deps: CooldownRecheckDeps): ScheduledT
   // Per account, so bounded by the account count: oldest look first, or a pool larger than the
   // batch would recheck the same few accounts forever.
   const lastLook = new Map<string, number>()
+  const retestExhausted = createExhaustedRetest({
+    recheck: deps.recheckExhausted,
+    schedule: deps.exhaustedSchedule,
+  })
 
   return {
     name: "cooldown_recheck",
@@ -118,10 +128,17 @@ export function createCooldownRecheckTask(deps: CooldownRecheckDeps): ScheduledT
         lastLook.set(account.id, now.getTime())
         tally[await recheck(deps, account, now, logger)] += 1
       }
+      const exhausted = await retestExhausted({
+        accounts: () => accounts,
+        snapshot: deps.snapshot,
+        now,
+        logger,
+        signal,
+      })
 
-      const outcome = due.length > deps.batchSize ? "partial" : "success"
-      logger.info("cooldown recheck", { outcome, due: due.length, ...tally })
-      return { outcome, itemsProcessed: looked() }
+      const outcome = due.length > deps.batchSize || signal.aborted ? "partial" : "success"
+      logger.info("cooldown recheck", { outcome, due: due.length, ...tally, exhausted })
+      return { outcome, itemsProcessed: looked() + exhausted }
     },
   }
 }

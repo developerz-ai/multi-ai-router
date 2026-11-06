@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.49.0] — 2026-11-06
+
+### Added
+
+- **`exhausted` has a bounded exit (rule 7 amended, developerz.ai#7868).** Through 2.48.0 only an operator's "Re-check now" ever looked at an `exhausted` account again, so a misread wall parked a healthy one for good (MiniMax, 10-28 to 11-03). The `cooldown_recheck` task now presses that same button for an `exhausted` account: first after `EXHAUSTED_RECHECK_FIRST_MINUTES` (default 60), then on a wait doubling per re-test (the first lands 1-2 h after the account went `exhausted`; a refused claim is no re-test), capped at `EXHAUSTED_RECHECK_MAX_MINUTES` (default 1440; below the first wait refused at boot). The recheck clears the stored `exhausted` and demands one recovery probe, whose verdict puts a still-drained balance straight back; audit `source: exhausted_recheck`. Each re-test is an alert line, `exhausted account re-tested` at `warn` (`accountId`, `provider`, `retest`, `nextRetestAt`). `exhausted` still carries no reset and is never routed a request. Regression: `apps/api/test/unit/scheduler/exhausted-retest.test.ts`. Documentation: `docs/idea/05-routing-and-failover.md` § The bounded `exhausted` re-test.
+- **`GET /v1/catalog` publishes `offers[]`**: each in-scope provider's own `provider`, `accounts`, `context_length`, `max_output_tokens`, `context_source` and `pricing` for the name. Additive.
+
+### Fixed
+
+- **A wall inside a `2xx` fails over instead of reaching a non-streaming client as a success.** MiniMax answers a drained balance `200` + `base_resp.status_code: 1008`; Anthropic-shaped streams send `200` then `event: error`; Codex sends `response.created` then `response.failed`. Each was relayed as a `200` while a healthy sibling went unasked. For a client that is not streaming (it sees nothing before the end anyway) the attempt now reads the front of a `2xx` body before committing it: an upstream stream to its first non-preamble event (a keepalive comment commits), a JSON body whole, both bounded by `UPSTREAM_ERROR_MAX_BYTES` and the upstream clocks. A streaming client is still committed at the upstream's headers — holding its status line until a first event would trip the server idle timeout on a slow-first-token upstream — so a wall in its stream stays in-stream, as before. A wall is the failure it names: the breaker settles it and the chain walks on; with nobody left the client hears `429` / `402` / `503`, never a `200`. A committed body is replayed byte for byte. Regression: `apps/api/test/unit/dataplane/success-wall.test.ts`.
+- **A failed recovery probe no longer cuts the failover walk short.** The chain drops a failed designated probe from its candidate list while its attempt stays counted, and the bound was taken from the shrunken list: `[probe, b, c]` stopped after `b` with `c` healthy. The bound is now the planned candidates. Regression: `apps/api/test/unit/routing/failover.test.ts`.
+- **The shared credits rule: codes first, a status guard, a stated reset wins.** A `429` carrying OpenAI's `insufficient_quota` behind a pinned vendor or an escape hatch read as a throttle with no reset and cooled for one second, forever; it is now `exhausted`. "Quota exceeded" on a `429`, quota wording on a `5xx`, and quota wording beside a `retry-after` or depleted limiter no longer park an account `exhausted`; balance wording ("insufficient balance") still does, reset or not. Regression: `apps/api/test/unit/providers/failure-vendors.test.ts`.
+- **An epoch-seconds `x-ratelimit-reset` no longer parks an account until 2083.** A bare number from 1e9 to 1e11 is read as an instant in seconds, labeled `estimated` because the unit is inferred, and checked against the response's `Date`: capped a week past it, and not trusted at all without one. Regression: `apps/api/test/unit/providers/rate-limit.test.ts`.
+- **A streamed attempt's error body is bounded by the idle clock.** An upstream that sent error headers and went silent held the attempt to the total stream deadline. Regression: `apps/api/test/unit/dataplane/attempt-error-body-idle.test.ts`.
+- **`GET /v1/catalog` sizes are safe to size a prompt against.** `context_length` and `max_output_tokens` are the smallest known across the accounts behind a name, not the first account's answer; a prompt sized from a 204,800 listing failed on a 128,000 sibling. Regression: `apps/api/test/unit/dataplane/catalog-listing.test.ts`.
+
 ## [2.48.1] — 2026-11-06
 
 ### Fixed
@@ -1951,3 +1967,4 @@ your tooling config.
 [2.47.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.47.0
 [2.48.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.0
 [2.48.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.1
+[2.49.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.49.0

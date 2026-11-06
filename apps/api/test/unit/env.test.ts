@@ -79,6 +79,8 @@ describe("parseEnv", () => {
       oauthStatePurgeIntervalMinutes: 5,
       quotaFloorIntervalMinutes: 30,
       cooldownRecheckIntervalMinutes: 60,
+      exhaustedRecheckFirstMinutes: 60,
+      exhaustedRecheckMaxMinutes: 1_440,
       planQuotaReadIntervalMinutes: 15,
       planQuotaReadBatchSize: 25,
       configDirReapIntervalMinutes: 360,
@@ -141,6 +143,8 @@ describe("parseEnv", () => {
       OAUTH_STATE_PURGE_INTERVAL_MINUTES: "10",
       QUOTA_FLOOR_INTERVAL_MINUTES: "45",
       COOLDOWN_RECHECK_INTERVAL_MINUTES: "90",
+      EXHAUSTED_RECHECK_FIRST_MINUTES: "30",
+      EXHAUSTED_RECHECK_MAX_MINUTES: "720",
       PLAN_QUOTA_READ_INTERVAL_MINUTES: "5",
       PLAN_QUOTA_READ_BATCH_SIZE: "3",
       CONFIG_DIR_REAP_INTERVAL_MINUTES: "90",
@@ -205,6 +209,8 @@ describe("parseEnv", () => {
       oauthStatePurgeIntervalMinutes: 10,
       quotaFloorIntervalMinutes: 45,
       cooldownRecheckIntervalMinutes: 90,
+      exhaustedRecheckFirstMinutes: 30,
+      exhaustedRecheckMaxMinutes: 720,
       planQuotaReadIntervalMinutes: 5,
       planQuotaReadBatchSize: 3,
       configDirReapIntervalMinutes: 90,
@@ -842,6 +848,19 @@ describe("parseEnv", () => {
         RETENTION_USAGE_DAILY_DAYS: "60",
       })
       expect(env.retention.usageDailyDays).toBe(60)
+    })
+  })
+
+  describe("EXHAUSTED_RECHECK_MAX_MINUTES", () => {
+    test("refuses a cap below the first wait, and names both", () => {
+      const error = expectEnvError({
+        ...base,
+        EXHAUSTED_RECHECK_FIRST_MINUTES: "120",
+        EXHAUSTED_RECHECK_MAX_MINUTES: "60",
+      })
+
+      expect(error.variables).toEqual(["EXHAUSTED_RECHECK_MAX_MINUTES"])
+      expect(error.message).toContain("EXHAUSTED_RECHECK_FIRST_MINUTES (120)")
     })
   })
 

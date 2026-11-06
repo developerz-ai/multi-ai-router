@@ -21,6 +21,10 @@ export interface SchedulerConfig {
   readonly quotaFloorIntervalMinutes: number
   /** `cooldown_recheck` cadence: how often a long cooldown gets a look before its stated reset. */
   readonly cooldownRecheckIntervalMinutes: number
+  /** The wait before an `exhausted` account's first re-test, and the base that wait doubles from. */
+  readonly exhaustedRecheckFirstMinutes: number
+  /** The longest an `exhausted` account goes without a re-test. At least the first wait. */
+  readonly exhaustedRecheckMaxMinutes: number
   /** `plan_quota_read` cadence: how often a plan's own usage endpoint is read, per account. */
   readonly planQuotaReadIntervalMinutes: number
   /** Accounts read per `plan_quota_read` tick, longest-unread first. Each is one free GET. */

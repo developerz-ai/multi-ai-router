@@ -73,3 +73,20 @@ export function sanitizeErrorBody(text: string, secrets: readonly string[] = [])
     return redactAttemptText(text, secrets)
   }
 }
+
+/**
+ * The already-sanitized error body in the shape the driver's classifier reads: a parsed object when
+ * it is JSON, otherwise the raw (redacted) string. A gateway in front of a provider may answer with
+ * plain text or HTML, and the classifier carries that as the upstream message
+ * (`providers/failure/error-body.ts` accepts a string) — returning `undefined` here dropped it, so
+ * four prod `400`s surfaced with no `upstreamMessage`. Empty stays `undefined`: no body, no facts.
+ * The text has already passed `sanitizeErrorBody`, so this adds no credential exposure.
+ */
+export function classifiableBody(text: string): unknown {
+  if (text.length === 0) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
