@@ -2,9 +2,10 @@ import type { AttemptOutcome } from "./attempt"
 import type { ChainContext } from "./chain"
 import { relaySuccess, type SuccessClock } from "./chain-relay"
 import type { ServableCandidate } from "./plan"
+import { ROUTER_ATTEMPTS_HEADER, servedByHeaders, withHeaders } from "./router-headers"
 import { withSessionRestart } from "./session-restart"
 
-/** Header evidence and session restart framing precede terminal body settlement. */
+/** Header evidence, the served-by headers and session restart framing precede body settlement. */
 export function finishSuccessfulAttempt(
   ctx: ChainContext,
   servable: ServableCandidate,
@@ -21,7 +22,14 @@ export function finishSuccessfulAttempt(
       ctx.runtime.clock.now(),
       at.observation,
     )
-  const relayed = relaySuccess(ctx, servable, attempt, outcome.response, at)
+  const relayed = withHeaders(relaySuccess(ctx, servable, attempt, outcome.response, at), {
+    ...servedByHeaders({
+      accountId: servable.account.id,
+      provider: servable.account.driver.provider,
+      upstreamModel: servable.upstreamModel,
+    }),
+    [ROUTER_ATTEMPTS_HEADER]: String(attempt),
+  })
   if (restart === undefined) return relayed
   // The transcript followed the turn to this account (`claude-sdk/session-carry.ts`): the upstream
   // conversation is intact, so there is no restart to surface.

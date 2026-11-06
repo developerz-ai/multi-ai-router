@@ -7,11 +7,11 @@ import { responseObject } from "../usage/response-usage"
 /**
  * `usage.cost` on a response the router itself writes.
  *
- * **Only a translated response carries it.** A translated body and its frames are already the
- * router's own serialization, so one more member costs nothing. A same-dialect relay never reaches
- * this module: its bytes are the upstream's (non-negotiable 10), its headers leave before any usage
- * exists, and rewriting its usage frame would mean parsing the passthrough. Absent is the answer
- * there, and a caller reads absent as "not stated", the way it does on any provider without a cost.
+ * **A translated response carries it; a same-dialect one only on request.** A translated body and
+ * its frames are already the router's own serialization, so one more member costs nothing. A
+ * same-dialect relay is the upstream's bytes (non-negotiable 10) and reaches this module only when
+ * the caller sent `x-router-usage: cost` (`relay-cost-optin.ts`). Absent is the answer otherwise,
+ * and a caller reads absent as "not stated", the way it does on any provider without a cost.
  *
  * The figure is the `UsageRecord`'s own (`attemptCost`), priced on the upstream's counts rather than
  * on the translated ones, which fold cache writes into the prompt. Absent, never zero, whenever
@@ -68,7 +68,8 @@ export function usageFrameIndex(ingress: Dialect, events: readonly SseEvent[]): 
 function withUsage(holder: unknown, fields: UsageCostFields): Record<string, unknown> | null {
   const object = responseObject(holder)
   const usage = responseObject(object?.usage)
-  return object === undefined || usage === undefined
+  // A cost the upstream stated itself (OpenRouter's, on an opted-in relay) is its own word: kept.
+  return object === undefined || usage === undefined || "cost" in usage
     ? null
     : { ...object, usage: { ...usage, ...fields } }
 }

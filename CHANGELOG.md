@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.50.0] — 2026-11-06
+
+### Added
+
+- **`error.router`: a machine-readable verdict on every error the router renders, in every dialect.** Inside the `error` member, beside the unchanged sentence: `wall` (`clock` / `capacity` / `human` / `scope` / `request` / `internal`, one per error code so it can never disagree with the status: `429` clock, `402` human, `403` scope, `503` capacity), `scope` (`pool` / `account` / `session` / `key` / `request` / `router`), `retryable`, `reset_at`, `reset_source`, `retry_after_s` (equal to `Retry-After`), `accounts` (`{account, state, reset_at}`, every pool member by filter reason or each attempted account by outcome), `pools`, `signal` (the classifier token or filter reason that decided it), `attempts`, `request_id`. Accounts are opaque: `acct_` + 16 hex of SHA-256 of the router id. Additive; the old sentences are frozen by `apps/api/test/unit/errors/frozen-sentences.test.ts` until developerz.ai reads the object alone. Not on an upstream's own relayed error or an in-stream error event. Regression: `apps/api/test/integration/router-contract.test.ts`, `packages/core/test/unit/wall.test.ts`. Documentation: `docs/idea/06-protocol-translation.md` § The router error object.
+- **`x-router-*` headers on every data-plane answer.** `x-router-request-id` and `x-router-attempts` always; `x-router-served-model` (post-alias), `x-router-provider` and `x-router-account` (opaque) whenever an account answered, including its own relayed error. A stream carries them before its first byte. Documentation: § Router response headers.
+- **`x-router-usage: cost` opts a same-dialect answer into `usage.cost` (#335).** 2.48.0 stated the cost on translated answers only. With the header, a passthrough is re-framed through the translated relay with an identity pair: the JSON body or the final usage frame gains `cost`, `cost_source`, `cost_basis`; content and order are unchanged, byte identity is not kept. Without it nothing changes. Any other value is refused `400 invalid_request` before an upstream is asked; the header is never forwarded. A cost the upstream stated itself is kept as sent. Regression: `apps/api/test/integration/usage-cost-wire.test.ts`.
+
+### Fixed
+
+- **`x-request-id` reaches data-plane answers.** It was set only on responses the transport built itself; every `/v1` route returns its own `Response`, which bypassed it. Stamped on what leaves now.
+
 ## [2.49.0] — 2026-11-06
 
 ### Added
@@ -1968,3 +1980,4 @@ your tooling config.
 [2.48.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.0
 [2.48.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.1
 [2.49.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.49.0
+[2.50.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.50.0

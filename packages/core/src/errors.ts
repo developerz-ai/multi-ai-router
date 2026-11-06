@@ -9,6 +9,8 @@
  *    them makes the router retry a dead account on a timer.
  */
 
+import type { RouterErrorDetail, RouterErrorInit } from "./wall"
+
 export const ROUTER_ERROR_CODES = [
   "no_healthy_account",
   "quota_exhausted",
@@ -39,11 +41,14 @@ export type RouterErrorCode = (typeof ROUTER_ERROR_CODES)[number]
 export abstract class RouterError extends Error {
   abstract readonly code: RouterErrorCode
   abstract readonly status: number
+  /** What the throw site knew beyond the class; rendered as `error.router` (`wall.ts`). */
+  readonly detail: RouterErrorDetail
 
-  constructor(message: string, options?: ErrorOptions) {
+  constructor(message: string, options?: RouterErrorInit) {
     super(message, options)
     // The subclass name is what `UsageRecord.errorClass` and the logs record.
     this.name = new.target.name
+    this.detail = options?.detail ?? {}
   }
 }
 
@@ -58,7 +63,7 @@ export class NoHealthyAccountError extends RouterError {
   readonly status = 503
 }
 
-export interface RetryableInit extends ErrorOptions {
+export interface RetryableInit extends RouterErrorInit {
   /** Seconds to wait before retrying — rendered as the `Retry-After` header. */
   readonly retryAfterSeconds?: number
 }
@@ -182,7 +187,7 @@ export class AdminAuthError extends RouterError {
   }
 }
 
-export interface AdminAuthInit extends ErrorOptions {
+export interface AdminAuthInit extends RouterErrorInit {
   /** See {@link AdminAuthError.reason}. Operator-facing, never rendered. */
   readonly reason?: string
 }

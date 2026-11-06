@@ -20,6 +20,7 @@ import {
   QuotaExhaustedError,
   type ResetSource,
   type RouterError,
+  type RouterErrorDetail,
   ScopeViolationError,
 } from "@multi-ai-router/core"
 import {
@@ -61,19 +62,37 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
   // A bound session whose account a clock will return: the honest 429 keeps the conversation
   // resumable. Resuming elsewhere is not an option — the other account never heard of the id.
   if (input.binding.state === "blocked") {
+    const { accountId, reason, resetsAt } = input.binding
     return quotaError(
-      `session is bound to account ${input.binding.accountId}, which is ${blockedCondition(input.binding.reason)}`,
-      { resetsAt: input.binding.resetsAt, resetSource: input.binding.resetSource },
+      `session is bound to account ${accountId}, which is ${blockedCondition(reason)}`,
+      { resetsAt, resetSource: input.binding.resetSource },
       input.now,
       unknownFloor,
+      {
+        scope: "session",
+        signal: reason,
+        accounts: [{ accountId, state: reason, ...(resetsAt === undefined ? {} : { resetsAt }) }],
+      },
     )
   }
 
   if (input.scope.inScopeAccountIds.length === 0) {
     return new ScopeViolationError(
       `no account is reachable through this key's scope (${input.scope.scope.kind})${unresolved(input.scope)}`,
+      { detail: { signal: "no-account-in-scope" } },
     )
   }
+
+  // Every member the request saw, by router id and reason: the sentence's "N of M" as data.
+  const pool = (signal: string | undefined): RouterErrorDetail => ({
+    ...(signal === undefined ? {} : { signal }),
+    accounts: input.rejected.map((entry) => ({
+      accountId: entry.accountId,
+      state: entry.reason,
+      ...(entry.resetsAt === undefined ? {} : { resetsAt: entry.resetsAt }),
+    })),
+    pools: poolNames(input.groups),
+  })
 
   const recoverable = input.rejected.filter((entry) =>
     RECOVERABLE_FILTER_REASONS.includes(entry.reason),
@@ -87,11 +106,13 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
   // limited (a, b)" with the third silently `needs_reauth` read as though one account were healthy
   // (#88); the ones a human or a client change would fix are named in their own clause instead.
   if (recoverable.length > 0) {
+    const earliest = earliestRecoverable(recoverable)
     return quotaError(
       `${recoverable.length} of ${total} ${accountWord(total)}${where(input.groups)} ${recoverable.length === 1 ? "is" : "are"} ${recoverableCondition(recoverable)} (${labels(recoverable)})${remainder(input.rejected, recoverable.length)}`,
-      earliestRecoverable(recoverable),
+      earliest,
       input.now,
       unknownFloor,
+      pool(earliest.reason ?? recoverable[0]?.reason),
     )
   }
 
@@ -99,6 +120,7 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
     const scope = exhausted.length === total ? "all" : `${exhausted.length} of`
     return new CreditsExhaustedError(
       `${scope} ${total} ${accountWord(total)}${where(input.groups)} ${exhausted.length === 1 ? "is" : "are"} out of credits and ${exhausted.length === 1 ? "needs" : "need"} a top-up (${labels(exhausted)})${remainder(input.rejected, exhausted.length)}`,
+      { detail: pool("exhausted") },
     )
   }
 
@@ -108,11 +130,13 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
     const named = input.model === undefined ? "this model" : `model "${input.model}"`
     return new NoHealthyAccountError(
       `no account${where(input.groups)} serves ${named} — a client change (${total} ${accountWord(total)} in scope: ${labels(input.rejected)})`,
+      { detail: pool("model-unsupported") },
     )
   }
 
   return new NoHealthyAccountError(
     `no eligible account${where(input.groups)}: ${input.rejected.map(describe).join(", ")}`,
+    { detail: pool(input.rejected[0]?.reason) },
   )
 }
 
@@ -157,6 +181,8 @@ function remainder(rejected: readonly RejectedCandidate[], described: number): s
 interface Reset {
   readonly resetsAt: Date | undefined
   readonly resetSource: ResetSource | undefined
+  /** The filter reason of the account the instant belongs to. */
+  readonly reason?: string
 }
 
 /** The rejection whose reset comes soonest — its provenance travels with the instant it names. */
@@ -167,7 +193,11 @@ function earliestRecoverable(entries: readonly RejectedCandidate[]): Reset {
     if (earliest?.resetsAt === undefined || entry.resetsAt.getTime() < earliest.resetsAt.getTime())
       earliest = entry
   }
-  return { resetsAt: earliest?.resetsAt, resetSource: earliest?.resetSource }
+  return {
+    resetsAt: earliest?.resetsAt,
+    resetSource: earliest?.resetSource,
+    ...(earliest === undefined ? {} : { reason: earliest.reason }),
+  }
 }
 
 /**
@@ -203,11 +233,13 @@ function quotaError(
   reset: Reset,
   now: Date,
   unknownFloorSeconds: number,
+  detail: RouterErrorDetail,
 ): QuotaExhaustedError {
   const { resetsAt, resetSource } = reset
   if (resetsAt === undefined) {
     return new QuotaExhaustedError(`${message}, reset time unknown`, {
       retryAfterSeconds: unknownFloorSeconds,
+      detail,
     })
   }
   return new QuotaExhaustedError(
@@ -215,6 +247,7 @@ function quotaError(
     {
       resetsAt,
       retryAfterSeconds: retryAfterSeconds(resetsAt, now),
+      detail: { ...detail, resetSource: resetSource ?? "provider-reported" },
     },
   )
 }
@@ -224,10 +257,12 @@ function retryAfterSeconds(resetsAt: Date, now: Date): number {
   return Math.max(1, Math.ceil((resetsAt.getTime() - now.getTime()) / 1000))
 }
 
+function poolNames(groups: readonly GroupDecision[]): string[] {
+  return groups.map((group) => group.poolName).filter((name): name is string => name !== null)
+}
+
 function where(groups: readonly GroupDecision[]): string {
-  const named = groups
-    .map((group) => group.poolName)
-    .filter((name): name is string => name !== null)
+  const named = poolNames(groups)
   if (named.length === 0) return ""
   if (named.length === 1) return ` in pool ${named[0]}`
   return ` in pools ${named.join(", ")}`

@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "hono"
+import { ROUTER_REQUEST_ID_HEADER, withHeaders } from "../services/dataplane/router-headers"
 import { createRequestIdentity } from "../services/usage/request-identity"
 import type { AppEnv } from "../types"
 
@@ -20,7 +21,15 @@ export function requestId(): MiddlewareHandler<AppEnv> {
     c.set("requestId", identity.requestId)
     c.set("correlationId", identity.correlationId)
     c.set("clientRequestId", identity.clientRequestId)
-    c.header(REQUEST_ID_HEADER, identity.requestId)
+    // The same id under the router's own header family, beside the other `x-router-*` facts.
+    const ids = {
+      [REQUEST_ID_HEADER]: identity.requestId,
+      [ROUTER_REQUEST_ID_HEADER]: identity.requestId,
+    }
+    for (const [name, value] of Object.entries(ids)) c.header(name, value)
     await next()
+    // A handler that returns its own `Response` — every data-plane route does — bypasses the
+    // headers set above, so they are stamped on what actually leaves.
+    if (!c.res.headers.has(REQUEST_ID_HEADER)) c.res = withHeaders(c.res, ids)
   }
 }

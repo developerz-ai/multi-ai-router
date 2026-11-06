@@ -1,3 +1,5 @@
+import { withHeaders } from "./router-headers"
+
 /**
  * The client-visible surfacing of a restarted upstream session.
  *
@@ -28,16 +30,9 @@ export const SESSION_RESTART_HEADER = "x-router-session-restart"
 export type SessionRestartReason = string
 
 /**
- * Stamps the header, copying the response only when its headers are immutable. The body stream is
+ * Stamps the header (`withHeaders`), copying the response only when its headers are immutable. The body stream is
  * carried by reference either way — nothing is buffered.
  */
 export function withSessionRestart(response: Response, reason: SessionRestartReason): Response {
-  try {
-    response.headers.set(SESSION_RESTART_HEADER, reason)
-    return response
-  } catch {
-    const copy = new Response(response.body, response)
-    copy.headers.set(SESSION_RESTART_HEADER, reason)
-    return copy
-  }
+  return withHeaders(response, { [SESSION_RESTART_HEADER]: reason })
 }

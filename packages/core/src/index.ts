@@ -95,3 +95,13 @@ export { ownEntry } from "./own-entry"
 export { DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS, latestResetDeadline } from "./reset-deadline"
 export { scrubCredentials } from "./scrub-credentials"
 export { UNKNOWN_REVISION, VERSION } from "./version"
+export type { RouterErrorDetail, RouterErrorInit, WalledAccount } from "./wall"
+export {
+  defaultWallScope,
+  isRetryableWall,
+  WALL_SCOPES,
+  WALLS,
+  type Wall,
+  type WallScope,
+  wallOf,
+} from "./wall"

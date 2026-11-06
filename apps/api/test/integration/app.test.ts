@@ -191,6 +191,21 @@ describe("GET /readyz", () => {
   })
 })
 
+/** `error.router` on a rendered error, its request id read off the answer's own header. */
+function routerOf(res: Response, fields: Record<string, unknown>) {
+  return {
+    accounts: [],
+    attempts: 0,
+    pools: [],
+    request_id: res.headers.get(REQUEST_ID_HEADER),
+    reset_at: null,
+    reset_source: null,
+    retry_after_s: null,
+    signal: null,
+    ...fields,
+  }
+}
+
 describe("unknown routes", () => {
   test("404 in the OpenAI error shape by default", async () => {
     const res = await harness().app.request("/nope")
@@ -202,6 +217,7 @@ describe("unknown routes", () => {
         type: "invalid_request_error",
         param: null,
         code: "not_found",
+        router: routerOf(res, { wall: "request", scope: "request", retryable: false }),
       },
     })
   })
@@ -212,7 +228,11 @@ describe("unknown routes", () => {
     expect(res.status).toBe(404)
     expect(await res.json()).toEqual({
       type: "error",
-      error: { type: "not_found_error", message: "Not found" },
+      error: {
+        type: "not_found_error",
+        message: "Not found",
+        router: routerOf(res, { wall: "request", scope: "request", retryable: false }),
+      },
     })
   })
 })
@@ -233,6 +253,7 @@ describe("error handling", () => {
         type: "invalid_request_error",
         param: null,
         code: "credits_exhausted",
+        router: routerOf(res, { wall: "human", scope: "pool", retryable: false }),
       },
     })
   })
@@ -249,7 +270,11 @@ describe("error handling", () => {
     expect(res.headers.get("Retry-After")).toBe("90")
     expect(await res.json()).toEqual({
       type: "error",
-      error: { type: "rate_limit_error", message: "every account is cooling down" },
+      error: {
+        type: "rate_limit_error",
+        message: "every account is cooling down",
+        router: routerOf(res, { wall: "clock", scope: "pool", retryable: true, retry_after_s: 90 }),
+      },
     })
   })
 
@@ -265,7 +290,13 @@ describe("error handling", () => {
     expect(res.status).toBe(500)
     expect(body).not.toContain("hunter2")
     expect(JSON.parse(body)).toEqual({
-      error: { message: "Internal server error", type: "server_error", param: null, code: null },
+      error: {
+        message: "Internal server error",
+        type: "server_error",
+        param: null,
+        code: null,
+        router: routerOf(res, { wall: "internal", scope: "router", retryable: false }),
+      },
     })
     // The operator still gets the detail, on the log line rather than the wire.
     expect(lines.join("\n")).toContain("request failed")

@@ -730,14 +730,16 @@ exists only when the client set `stream_options.include_usage`; the router adds 
 and `response.completed` / `response.incomplete` toward `openai-responses`, under `response.usage`.
 
 **Which responses carry it.** Every translated inference response, including a Claude subscription
-reached from an OpenAI dialect. **Never a same-dialect one.** That body is the upstream's bytes
-(non-negotiable 10), its status and headers leave before the upstream has stated any usage, so
-neither the body nor a header can carry the figure without parsing or holding the relay. That holds
-for an opt-in as well: rewriting the usage frame on request is still a parse of the passthrough. So
-whether a call states a cost depends on which account served it, and a caller reads absent as "not
-stated" and falls back. A cost an upstream states itself (OpenRouter's `usage.cost`) still passes
-through a relay as the upstream's. A Claude subscription reached from `anthropic` states none: it
-leaves through the byte relay like any same-dialect answer.
+reached from an OpenAI dialect. **A same-dialect one only on request.** That body is the upstream's
+bytes (non-negotiable 10), so by default it states none. A caller that sends
+**`x-router-usage: cost`** trades byte identity for the figure on that request: the answer is
+re-framed through the translated relay with an identity pair (`relay-cost-optin.ts`) — a JSON body
+parsed and re-serialized with the cost in its `usage`, a stream re-framed per SSE event with the cost
+on the final usage frame. Content and order are unchanged; JSON formatting and SSE fields other than
+`event:` / `data:` are not kept. The header is read off the client request and never forwarded; any
+value but `cost` is refused `400 invalid_request` before an upstream is asked. Without it, every path
+is unchanged — same bytes, same latency. A cost an upstream states itself (OpenRouter's
+`usage.cost`) is its own word and is kept as sent, opted in or not.
 
 **Absent, never zero.** The fields are left out when no rate is known, when the upstream stated no
 counts, or when the observation could not trust them (`usageInvalid`, `evidenceUnavailable`). A
@@ -758,7 +760,54 @@ Rules: an upstream error is translated into the **ingress** dialect, so a Claude
 receives an Anthropic-shaped error even when the account that failed was an OpenAI one — or an
 Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedError`, …) use the same
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
-ever carries credential material or the identity of the account that failed.
+ever carries credential material; an account appears only as its operator label inside a router
+sentence and as an opaque reference in `error.router` — never a row id or a provider-side identity.
+
+#### The router error object
+
+Every error the transport renders (`errorHandler` / `notFoundHandler` → `toErrorResponse` /
+`notFoundResponse`: every thrown `RouterError` on the data and admin planes, a cancelled, shut-down
+or unadmitted request, an unknown `500`, a `404`) carries **`error.router`** beside the sentence, in
+every dialect: inside the `error` member, so an SDK that hands the caller only that member (the
+OpenAI SDKs do) still shows it. Additive: the sentence is unchanged and frozen by
+`test/unit/errors/frozen-sentences.test.ts` until developerz.ai reads this object alone. Not on an
+upstream's own error the router relays — those are the provider's words — and not on an in-stream
+error event after a `200`; the `x-router-*` headers below name the account in both cases.
+
+```json
+{"type":"error","error":{"type":"rate_limit_error","message":"…","router":{
+  "wall":"clock","scope":"pool","retryable":true,
+  "reset_at":"2026-11-06T18:00:30.000Z","reset_source":"estimated","retry_after_s":30,
+  "accounts":[{"account":"acct_3f2a…","state":"cooling-down","reset_at":"2026-11-06T18:00:30.000Z"}],
+  "pools":["coding"],"signal":"cooling-down","attempts":0,"request_id":"9c1e…"}}}
+```
+
+| Field | Meaning |
+|---|---|
+| `wall` | What clears it, one value per error code (`packages/core/src/wall.ts`): `clock` (`429`: wait `retry_after_s`), `capacity` (`503`/`504`: retry later, no instant), `human` (`402` top-up, `502` re-auth, `500` stored credential, `401` revoked key), `scope` (`403`, `404` model: another key or model), `request` (`400`/`413`/`415`, `499`: change the request), `internal` (an unknown `500`) |
+| `scope` | Who the verdict is about: `pool` (selection judged every account the key reaches), `account` (one upstream account's own answer, the most actionable the chain held), `session` (a bound session's account), `key`, `request`, `router` |
+| `retryable` | `true` exactly when `wall` is `clock` or `capacity` |
+| `reset_at`, `reset_source` | A `429`'s refill instant and its provenance (`provider-reported` / `estimated` / `unknown`); `null` otherwise. A `402` never carries one |
+| `retry_after_s` | Equal to the `Retry-After` header, `null` when none is sent |
+| `accounts` | The accounts the verdict names, as `{account, state, reset_at}`: on a `pool` verdict every member by its filter reason (`cooling-down`, `quota-window-spent`, `probe-in-flight`, `exhausted`, `needs-reauth`, `model-unsupported`, …), otherwise each attempted account by its usage outcome. `account` is opaque: `acct_` + 16 hex of SHA-256 of the router id (`errors/account-ref.ts`), the same value as `x-router-account` |
+| `pools` | Names of the pools selection drew from |
+| `signal` | The machine token that decided it: a classifier signal (`anthropic:rate_limit_error`, `openai:insufficient_quota`), a filter reason, `no-account-in-scope`, `timeout`; `null` when none |
+| `attempts` | Upstream attempts made before the router answered; `0` when none |
+| `request_id` | The request id, as `x-request-id` |
+
+#### Router response headers
+
+On every data-plane answer — success or failure, stream or body (`dataplane/router-headers.ts`):
+
+| Header | Value | When |
+|---|---|---|
+| `x-router-request-id` | the request id (also `x-request-id`) | every answer, both planes |
+| `x-router-attempts` | upstream attempts this request made, `0` for none | every `/v1` inference answer and every rendered error |
+| `x-router-served-model` | the model the upstream was asked for, after the account's alias map | an account answered, including its own relayed error |
+| `x-router-provider` | that account's provider id | same |
+| `x-router-account` | that account, opaque (as in `error.router.accounts`) | same |
+
+A stream carries them on its headers, before its first byte; nothing waits on them.
 
 **A context overflow is always recognisable**, because it is the one failure a client recovers from
 on its own (compact the transcript, retry). An upstream code `context_length_exceeded` or a message

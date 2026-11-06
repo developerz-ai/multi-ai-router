@@ -7,8 +7,10 @@ import {
   notFoundResponse,
   toErrorResponse,
 } from "../errors/render"
+import { requestFactsOf, retryAfterHeaderSeconds } from "../errors/router-object"
 import type { Logger } from "../logging/logger"
 import { captureException } from "../observability"
+import { ROUTER_ATTEMPTS_HEADER } from "../services/dataplane/router-headers"
 import type { AppEnv } from "../types"
 import { failureContext } from "./logger"
 
@@ -21,7 +23,7 @@ import { failureContext } from "./logger"
  */
 export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
   return (err, c) => {
-    const response = toErrorResponse(err, dialectForPath(c.req.path))
+    const response = toErrorResponse(err, dialectForPath(c.req.path), c.get("requestId") ?? null)
     const log = c.get("log") ?? fallbackLog
 
     const fields = {
@@ -73,18 +75,18 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
       })
     }
 
+    const attempts = requestFactsOf(err)?.attempts
+    if (attempts !== undefined) c.header(ROUTER_ATTEMPTS_HEADER, String(attempts))
     return send(c, response)
   }
 }
 
 export function notFoundHandler(): NotFoundHandler<AppEnv> {
-  return (c) => send(c, notFoundResponse(dialectForPath(c.req.path)))
+  return (c) => send(c, notFoundResponse(dialectForPath(c.req.path), c.get("requestId") ?? null))
 }
 
 function send(c: Context<AppEnv>, response: ErrorResponse): Response {
-  if (response.retryAfterSeconds !== null) {
-    const seconds = response.retryAfterSeconds
-    c.header("Retry-After", String(Number.isFinite(seconds) ? Math.max(1, Math.ceil(seconds)) : 1))
-  }
+  if (response.retryAfterSeconds !== null)
+    c.header("Retry-After", String(retryAfterHeaderSeconds(response.retryAfterSeconds)))
   return c.json(response.body, response.status as ContentfulStatusCode)
 }

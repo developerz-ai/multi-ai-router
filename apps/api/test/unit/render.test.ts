@@ -10,6 +10,8 @@ import {
   ScopeViolationError,
   TranslationError,
   UpstreamTimeoutError,
+  type Wall,
+  type WallScope,
 } from "@multi-ai-router/core"
 import {
   dialectForPath,
@@ -17,6 +19,23 @@ import {
   renderErrorBody,
   toErrorResponse,
 } from "../../src/errors/render"
+
+/** `error.router` with nothing known beyond the class — the shape every body below carries. */
+function bare(wall: Wall, scope: WallScope, retryable: boolean) {
+  return {
+    wall,
+    scope,
+    retryable,
+    reset_at: null,
+    reset_source: null,
+    retry_after_s: null,
+    accounts: [],
+    pools: [],
+    signal: null,
+    attempts: 0,
+    request_id: null,
+  }
+}
 
 /** Every class in the hierarchy, with the status docs/idea promises for it. */
 const cases: ReadonlyArray<readonly [RouterError, number, string]> = [
@@ -76,7 +95,11 @@ describe("toErrorResponse", () => {
 
     expect(response.body).toEqual({
       type: "error",
-      error: { type: "authentication_error", message: "key revoked" },
+      error: {
+        type: "authentication_error",
+        message: "key revoked",
+        router: bare("human", "key", false),
+      },
     })
   })
 
@@ -89,6 +112,7 @@ describe("toErrorResponse", () => {
         type: "permission_error",
         param: null,
         code: "scope_violation",
+        router: bare("scope", "key", false),
       },
     })
   })
@@ -99,7 +123,13 @@ describe("toErrorResponse", () => {
     expect(response.status).toBe(500)
     expect(JSON.stringify(response.body)).not.toContain("hunter2")
     expect(response.body).toEqual({
-      error: { message: "Internal server error", type: "server_error", param: null, code: null },
+      error: {
+        message: "Internal server error",
+        type: "server_error",
+        param: null,
+        code: null,
+        router: bare("internal", "router", false),
+      },
     })
   })
 
@@ -126,6 +156,7 @@ describe("renderErrorBody — the message is a client-facing surface", () => {
       error: {
         type: "overloaded_error",
         message: "every attempt failed: upstream rejected [REDACTED]",
+        router: bare("capacity", "pool", true),
       },
     })
     expect(JSON.stringify(openai.body)).not.toContain("at_live_abcdef123456")
@@ -189,7 +220,11 @@ describe("notFoundResponse", () => {
   test("uses the ingress dialect's shape", () => {
     expect(notFoundResponse("anthropic").body).toEqual({
       type: "error",
-      error: { type: "not_found_error", message: "Not found" },
+      error: {
+        type: "not_found_error",
+        message: "Not found",
+        router: bare("request", "request", false),
+      },
     })
     expect(notFoundResponse(null).status).toBe(404)
   })
