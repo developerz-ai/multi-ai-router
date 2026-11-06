@@ -68,14 +68,27 @@ export function parseEpochMillis(value: string): Date | null {
  * duration that parked an account until 2083. Every value from 1e9 (2001) up to the epoch-millis
  * floor is an instant in seconds — no limiter resets in 31 years — so it is read as one. The unit is
  * our inference, not the provider's statement, so callers label the reset `estimated`.
+ *
+ * Checked against the response's own `Date`, the one clock a parser has: an instant more than
+ * {@link EPOCH_SECONDS_CEILING_MS} past it is capped there (`9999999999` is 2286 — a misread, not a
+ * window), and with no `Date` to check against the value is not trusted as a reset at all, so the
+ * breaker falls to its own backoff rather than a park nobody can bound.
  */
 const EPOCH_SECONDS_FLOOR = 1_000_000_000
 
-export function parseEpochSeconds(value: string): Date | null {
+/** No limiter documents a window longer than a week; past it, an inferred instant is a misread. */
+const EPOCH_SECONDS_CEILING_MS = 7 * 86_400_000
+
+export function parseEpochSeconds(value: string, reference: Date | null): Date | null {
+  if (!isEpochSeconds(value) || reference === null) return null
+  const ceiling = reference.getTime() + EPOCH_SECONDS_CEILING_MS
+  return new Date(Math.min(Number(value.trim()) * 1000, ceiling))
+}
+
+/** Whether a value is in the epoch-seconds range at all, whatever it then resolves to. */
+export function isEpochSeconds(value: string): boolean {
   const trimmed = value.trim()
-  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) return null
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) return false
   const seconds = Number(trimmed)
-  if (!Number.isFinite(seconds) || seconds < EPOCH_SECONDS_FLOOR || seconds >= EPOCH_MILLIS_FLOOR)
-    return null
-  return new Date(seconds * 1000)
+  return seconds >= EPOCH_SECONDS_FLOOR && seconds < EPOCH_MILLIS_FLOOR
 }

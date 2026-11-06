@@ -81,7 +81,7 @@ function harness(
     quotaSpentThreshold: 1,
     intervalMs: HOUR,
     batchSize: 5,
-    recheckExhausted: async () => undefined,
+    recheckExhausted: async () => "rechecked" as const,
     exhaustedSchedule: { firstMs: HOUR, maxMs: 24 * HOUR },
   })
   const lines: Record<string, unknown>[] = []

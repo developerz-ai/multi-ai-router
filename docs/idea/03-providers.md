@@ -523,8 +523,10 @@ It is the weakest evidence there is, so it yields three ways (`drivers/compatibl
   On a `429` only balance words count ("insufficient credits/balance", "out of credits"), because
   "quota exceeded" on the throttle status is how per-minute limits are worded, and read as a balance
   it parked a healthy account `exhausted`.
-- **A stated reset wins.** A response with a `retry-after` or a depleted limiter's reset is
-  describing a clock, and wording beside it is not read as a balance.
+- **A stated reset wins over quota wording.** A response with a `retry-after` or a depleted
+  limiter's reset is describing a clock, and "quota exceeded" beside it is not read as a balance.
+  Balance words ("insufficient balance") still stand: they name no window, and limiter headers ride
+  every response, a drained balance's included.
 
 ## API-key providers — z.ai, Kimi, MiniMax, OpenRouter, Gemini, and the OpenAI-shaped fleet
 

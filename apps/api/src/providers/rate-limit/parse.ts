@@ -1,5 +1,11 @@
 import type { RateLimitSignal, RateLimitWindow, UpstreamResponse } from "../types"
-import { parseDurationSeconds, parseEpochMillis, parseEpochSeconds, parseInstant } from "./duration"
+import {
+  isEpochSeconds,
+  parseDurationSeconds,
+  parseEpochMillis,
+  parseEpochSeconds,
+  parseInstant,
+} from "./duration"
 
 /**
  * Rate-limit headers, normalized. Two families cover every HTTP provider in the registry and they
@@ -46,7 +52,13 @@ function parseCount(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
 }
 
-function applyField(draft: Draft, field: string, value: string, absoluteReset: boolean): void {
+function applyField(
+  draft: Draft,
+  field: string,
+  value: string,
+  absoluteReset: boolean,
+  reference: Date | null,
+): void {
   if (field === "limit") {
     draft.limit = parseCount(value)
     return
@@ -64,10 +76,13 @@ function applyField(draft: Draft, field: string, value: string, absoluteReset: b
     draft.resetsAt = epoch
     return
   }
-  const epochSeconds = parseEpochSeconds(value)
-  if (epochSeconds) {
-    draft.resetsAt = epochSeconds
-    draft.inferredUnit = true
+  if (isEpochSeconds(value)) {
+    // Never a duration: unchecked against a `Date`, it is no reset at all (`duration.ts`).
+    const at = parseEpochSeconds(value, reference)
+    if (at !== null) {
+      draft.resetsAt = at
+      draft.inferredUnit = true
+    }
     return
   }
   draft.resetAfterSeconds = parseDurationSeconds(value) ?? undefined
@@ -75,16 +90,19 @@ function applyField(draft: Draft, field: string, value: string, absoluteReset: b
 
 function collect(headers: Headers): Map<string, Draft> {
   const drafts = new Map<string, Draft>()
+  // The response's own clock: the only one a parser has to check an inferred instant against.
+  const date = headers.get("date")
+  const reference = date === null ? null : parseInstant(date)
 
   headers.forEach((value, name) => {
     const anthropic = ANTHROPIC_HEADER.exec(name)
     if (anthropic?.[1] && anthropic[2]) {
-      applyField(draftFor(drafts, anthropic[1]), anthropic[2], value, true)
+      applyField(draftFor(drafts, anthropic[1]), anthropic[2], value, true, reference)
       return
     }
     const openai = OPENAI_HEADER.exec(name)
     if (openai?.[1]) {
-      applyField(draftFor(drafts, openai[2] ?? DEFAULT_LIMITER), openai[1], value, false)
+      applyField(draftFor(drafts, openai[2] ?? DEFAULT_LIMITER), openai[1], value, false, reference)
     }
   })
 

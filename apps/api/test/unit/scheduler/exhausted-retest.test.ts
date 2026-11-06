@@ -80,12 +80,14 @@ function routable(id: string, status: AccountStatus = "exhausted"): RoutableAcco
 
 function lane(accounts: readonly RoutableAccount[]) {
   const rechecked: string[] = []
+  const refuse = new Set<string>()
   const lines: Record<string, unknown>[] = []
   const logger = createLogger({ level: "info", write: (line) => void lines.push(JSON.parse(line)) })
   const statuses = new Map(accounts.map((held) => [held.id, held.snapshot.status]))
   const retest = createExhaustedRetest({
     recheck: async (accountId) => {
       rechecked.push(accountId)
+      return refuse.has(accountId) ? ("refused" as const) : ("rechecked" as const)
     },
     schedule: SCHEDULE,
   })
@@ -101,7 +103,7 @@ function lane(accounts: readonly RoutableAccount[]) {
       logger,
       signal: new AbortController().signal,
     })
-  return { rechecked, lines, statuses, tick }
+  return { rechecked, lines, statuses, tick, refuse }
 }
 
 describe("the exhausted re-test lane", () => {
@@ -141,10 +143,28 @@ describe("the exhausted re-test lane", () => {
     expect(l.rechecked).toEqual(["topped-up"])
   })
 
+  test("a refused claim (an operator's check holds the lease) is no re-test: no count, no alert, retried next tick", async () => {
+    const l = lane([routable("drained")])
+    l.refuse.add("drained")
+    await l.tick(T0)
+    await l.tick(T0 + HOUR)
+    expect(l.lines.filter((line) => line.msg === "exhausted account re-tested")).toHaveLength(0)
+
+    l.refuse.delete("drained")
+    await l.tick(T0 + 2 * HOUR)
+
+    expect(l.rechecked).toEqual(["drained", "drained"])
+    const alerts = l.lines.filter((line) => line.msg === "exhausted account re-tested")
+    // The first re-test that ran is re-test 1, and the next waits the first doubling: 2 h.
+    expect(alerts).toEqual([
+      expect.objectContaining({ retest: 1, nextRetestAt: new Date(T0 + 4 * HOUR).toISOString() }),
+    ])
+  })
+
   test("a failed re-test is logged and the clock still advances", async () => {
     const lines: Record<string, unknown>[] = []
     const retest = createExhaustedRetest({
-      recheck: async () => {
+      recheck: async (): Promise<"rechecked"> => {
         throw new Error("recovery repository unavailable")
       },
       schedule: SCHEDULE,

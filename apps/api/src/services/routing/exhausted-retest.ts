@@ -10,7 +10,11 @@
  * is truly drained costs one failed probe per `maxMs`; a misread one is back within `firstMs`.
  *
  * Per replica, in memory: a restart starts the clock again at `firstMs`, which errs toward looking
- * sooner, and the recheck service's durable cooldown keeps replicas from re-testing together.
+ * sooner, and each replica may re-test once per wait. The recheck service's durable cooldown
+ * (`ACCOUNT_RECHECK_COOLDOWN_SECONDS`, 60 s by default) only stops two re-tests landing in the same
+ * window; it does not merge the replicas' clocks. The task notices an account on its first tick
+ * after it went `exhausted`, so the first re-test lands between `firstMs` and `firstMs` plus one
+ * task interval later — 1 to 2 h at the defaults.
  */
 
 export interface ExhaustedRetestSchedule {

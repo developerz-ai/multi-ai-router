@@ -152,7 +152,10 @@ function harness(
     quotaSpentThreshold: 1,
     intervalMs: HOUR,
     batchSize: options.batchSize ?? 5,
-    recheckExhausted: async (accountId) => void rechecked.push(accountId),
+    recheckExhausted: async (accountId) => {
+      rechecked.push(accountId)
+      return "rechecked" as const
+    },
     exhaustedSchedule: { firstMs: HOUR, maxMs: DAY },
   })
   const run = (signal = new AbortController().signal) =>
@@ -326,7 +329,7 @@ describe("the cooldown_recheck task", () => {
       quotaSpentThreshold: 1,
       intervalMs: HOUR,
       batchSize: 5,
-      recheckExhausted: async () => undefined,
+      recheckExhausted: async () => "rechecked" as const,
       exhaustedSchedule: { firstMs: HOUR, maxMs: DAY },
     })
 

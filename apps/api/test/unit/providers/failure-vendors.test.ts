@@ -949,11 +949,26 @@ describe("the shared credits rules: codes first, status guard, stated reset wins
     expect(result?.kind).toBe("rate-limited")
   })
 
-  test("credits wording beside a stated reset is a clock, and the reset rides along", () => {
+  test.each([400, 403])(
+    "balance wording on a %d stays a dead balance beside a depleted limiter's reset",
+    (status) => {
+      // Only quota wording yields to a stated reset: "insufficient balance" names no window.
+      const result = compatible?.classifyFailure(
+        response(status, {
+          headers: { "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "30s" },
+          body: { error: { message: "Insufficient balance" } },
+        }),
+      )
+
+      expect(result?.kind).toBe("credits-exhausted")
+    },
+  )
+
+  test("quota wording beside a stated reset is a clock, not a balance", () => {
     const result = compatible?.classifyFailure(
       response(403, {
         headers: { "retry-after": "120" },
-        body: { error: { message: "Insufficient balance for this window" } },
+        body: { error: { message: "Quota exceeded for this window" } },
       }),
     )
 

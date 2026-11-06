@@ -35,7 +35,9 @@ function namesCreditCode(facts: UpstreamErrorFacts): boolean {
  * - **to the status**: only a `4xx` — a `5xx` naming a quota is the server's trouble — and on a `429`
  *   only balance words, because "quota exceeded" on the throttle status is how per-minute limits
  *   are worded (Gemini, most gateways) and parked a healthy account `exhausted` for good;
- * - **to a stated reset**: a response naming when its limit lifts is describing a clock.
+ * - **to a stated reset**, for quota words only: a response naming when its limit lifts is
+ *   describing a clock. Balance words name no window, and limiter headers ride every response —
+ *   a drained balance often arrives beside `x-ratelimit-remaining: 0` — so they stand.
  *
  * Guarded by an error status, so a completion that happens to contain the word "quota" is never
  * read as a billing stop. The signal it records names the *rule*, not a provider, which is the
@@ -44,8 +46,11 @@ function namesCreditCode(facts: UpstreamErrorFacts): boolean {
 const BALANCE_WORDING = /insufficient (?:credits?|balance)|out of credits|balance is insufficient/i
 const QUOTA_WORDING = /insufficient quota|quota (?:exceeded|exhausted)/i
 
-function wordsDeadBalance(message: string, status: number): boolean {
-  return BALANCE_WORDING.test(message) || (status !== 429 && QUOTA_WORDING.test(message))
+/** Balance words name no window, so they stand beside a reset; quota words may name one. */
+function wordsDeadBalance(message: string, status: number, statedReset: boolean): boolean {
+  return (
+    BALANCE_WORDING.test(message) || (status !== 429 && !statedReset && QUOTA_WORDING.test(message))
+  )
 }
 
 export const genericCreditsRule: ClassificationRule = {
@@ -54,7 +59,7 @@ export const genericCreditsRule: ClassificationRule = {
   when: (facts, status, stated) =>
     status >= 400 &&
     (namesCreditCode(facts) ||
-      (status < 500 && !stated.reset && wordsDeadBalance(facts.message ?? "", status))),
+      (status < 500 && wordsDeadBalance(facts.message ?? "", status, stated.reset))),
 }
 
 /**
