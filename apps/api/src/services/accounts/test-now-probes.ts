@@ -2,6 +2,7 @@ import { type Dialect, isRouterError, type OpenAiChatCeiling } from "@multi-ai-r
 import type { AccountRow } from "@multi-ai-router/db"
 import {
   type DriverAccount,
+  type FailureClassification,
   httpDriver,
   type RateLimitSignal,
   type UpstreamFailureKind,
@@ -14,6 +15,7 @@ import {
   collectResponsesStream,
   type ResponsesEgressRules,
 } from "../translate"
+import { createResponseObserver } from "../usage"
 import type { TestNowServiceDeps } from "./test-now"
 
 const NO_SDK_PROBE = "this router has no Agent-SDK test probe configured"
@@ -167,6 +169,10 @@ export async function runHttpProbe(
     const streamed =
       forcedStream ||
       outcome.response.headers.get("content-type")?.includes("text/event-stream") === true
+    // A refusal can ride a 200, in a Codex stream or a MiniMax envelope. The relay's own observer
+    // and the driver's hook read it, so a probe and a client's request reach one verdict.
+    const refusal = raw === null ? null : refusalIn(raw, dialect, driver, streamed)
+    if (refusal !== null) return refusedProbe(deps, refusal)
     if (streamed && dialect === "openai-responses") {
       // A forced stream (`ResponsesEgressRules.requireStream`) answers 200 before it has answered
       // anything; only its terminal event says whether the turn actually completed.
@@ -205,6 +211,35 @@ export async function runHttpProbe(
     ...(upstreamMessage === undefined || upstreamMessage.length === 0
       ? {}
       : { detail: upstreamMessage }),
+  }
+}
+
+/** The whole body is already in hand, so the observation bound is its own length. */
+function refusalIn(
+  raw: ArrayBuffer,
+  dialect: Dialect,
+  driver: NonNullable<ReturnType<typeof httpDriver>>,
+  streamed: boolean,
+): FailureClassification | null {
+  const observer = createResponseObserver({
+    dialect,
+    operation: "messages",
+    contentType: streamed ? "text/event-stream" : "application/json",
+    maximumObservationBytes: raw.byteLength + 1,
+    ...(driver.responseObservation === undefined ? {} : { descriptor: driver.responseObservation }),
+  })
+  observer.observe(new Uint8Array(raw))
+  return observer.finish().provider
+}
+
+function refusedProbe(deps: TestNowServiceDeps, refusal: FailureClassification): ProbeOutcome {
+  const detail =
+    deps.reasonMaxChars === undefined ? undefined : bounded(refusal.message, deps.reasonMaxChars)
+  return {
+    ok: false,
+    message: refusal.signal,
+    failureKind: refusal.kind,
+    ...(detail === undefined || detail.length === 0 ? {} : { detail }),
   }
 }
 

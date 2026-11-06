@@ -55,7 +55,8 @@ export function createRefreshSettle(deps: {
   ): Promise<RefreshOutcome> => {
     if (outcome.kind === "success") {
       if (!abandoned()) await barrier()
-      // A committed revival is audited even past the drain: the row did change.
+      // Audited even past the drain, since the row did change. It is outside the revive
+      // transaction, so a crash between that commit and this line leaves no audit row.
       if (outcome.revived) {
         await auditRevival(deps, outcome.row)
         deps.logger.info("refresh returned a parked account to service", {
