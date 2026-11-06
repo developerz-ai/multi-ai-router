@@ -2,6 +2,7 @@ import {
   isStandingBlock,
   type ModelContextSource,
   type ModelDescriptor,
+  type ModelReasoning,
   type ProviderId,
 } from "@multi-ai-router/core"
 import type { RateCard } from "../cost"
@@ -61,6 +62,8 @@ export interface CatalogModel {
   readonly pricing: RateCard | null
   /** Each in-scope provider's own answer, in the enum's order. Additive to the fields above. */
   readonly offers: readonly CatalogOffer[]
+  /** The upstream listing's word on thinking modes. Absent when no serving account stated one. */
+  readonly reasoning?: ModelReasoning
 }
 
 export interface CatalogListingDeps {
@@ -195,6 +198,8 @@ interface Sizes {
 interface Mutable extends Sizes {
   readonly id: string
   readonly offers: Map<ProviderId, Sizes>
+  /** First known answer wins: a thinking mode is a property of the model, not a size. */
+  reasoning?: ModelReasoning
 }
 
 /**
@@ -217,6 +222,9 @@ function absorb(
   const offer = row.offers.get(provider) ?? emptySizes()
   for (const sizes of [row, offer]) fold(sizes, described, pricing)
   row.offers.set(provider, offer)
+  if (row.reasoning === undefined && described?.reasoning !== undefined) {
+    row.reasoning = described.reasoning
+  }
   merged.set(id, row)
 }
 
@@ -258,5 +266,6 @@ function finish(row: Mutable): CatalogModel {
     contextSource: row.contextSource,
     pricing: row.pricing,
     offers,
+    ...(row.reasoning === undefined ? {} : { reasoning: row.reasoning }),
   }
 }
