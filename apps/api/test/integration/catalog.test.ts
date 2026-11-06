@@ -27,6 +27,7 @@ function models(
       contextSource: entry.contextSource ?? null,
       listingSource: entry.listingSource ?? "upstream",
       resolvedModel: entry.resolvedModel ?? null,
+      ...(entry.reasoning === undefined ? {} : { reasoning: entry.reasoning }),
     }
   }
   return {
@@ -89,6 +90,21 @@ describe("GET /v1/catalog", () => {
     // The shipped table's own date rides the response: a `shipped` window is only as current as
     // this, and a listing that could not age visibly is one nobody can judge.
     expect(body.context_table_as_of).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  test("states the thinking modes a listing gave, and nothing where none was given", async () => {
+    const reasoning = { supported: true, effort: ["low", "high", "max"] }
+    const { app } = harness({
+      accounts: [zaiAccount()],
+      responses: [() => jsonResponse(200, {})],
+      models: models({ "acct-zai": { "glm-4.6": { reasoning }, "glm-4.5": {} } }),
+    })
+
+    const res = await app.request("/v1/catalog", { headers: bearer() })
+    const body = (await res.json()) as { data: { id: string }[] }
+
+    expect(body.data.find((row) => row.id === "glm-4.6")).toMatchObject({ reasoning })
+    expect(body.data.find((row) => row.id === "glm-4.5")).not.toHaveProperty("reasoning")
   })
 
   /**

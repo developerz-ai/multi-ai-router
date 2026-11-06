@@ -1,3 +1,4 @@
+import type { ModelReasoning } from "@multi-ai-router/core"
 import type { Context } from "hono"
 import type { RouterKeyEnv } from "../../middleware/routerKeyAuth"
 import type { CatalogModel, CatalogProvider } from "../../services/dataplane"
@@ -44,6 +45,11 @@ interface CatalogEntry {
   /** `upstream` (the provider's own listing) or `shipped` (this image's table). Null with no size. */
   readonly context_source: string | null
   readonly pricing: PricingBody | null
+  /**
+   * The upstream listing's own `{supported, toggle?, effort?}`. Absent when unstated, so a reader
+   * tells "this model does not think" (`supported: false`) from "nobody said".
+   */
+  readonly reasoning?: ModelReasoning
 }
 
 /** US dollars per million tokens. The unit every price in this system is stated in. */
@@ -96,5 +102,6 @@ function toEntry(model: CatalogModel): CatalogEntry {
             cache_read_per_mtok: model.pricing.cacheReadPerMtok,
             cache_write_per_mtok: model.pricing.cacheWritePerMtok,
           },
+    ...(model.reasoning === undefined ? {} : { reasoning: model.reasoning }),
   }
 }
