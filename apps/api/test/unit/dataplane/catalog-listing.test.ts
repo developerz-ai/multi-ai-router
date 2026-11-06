@@ -45,6 +45,7 @@ function models(
       contextSource: entry.contextSource ?? null,
       listingSource: entry.listingSource ?? "upstream",
       resolvedModel: entry.resolvedModel ?? null,
+      ...(entry.reasoning === undefined ? {} : { reasoning: entry.reasoning }),
     }
   }
   return {
@@ -57,6 +58,29 @@ function models(
 const noPrices: CatalogListingDeps["prices"] = () => null
 
 describe("the rich catalog listing", () => {
+  test("thinking modes a listing states are published, and an unstated one stays absent", () => {
+    const reasoning = { supported: true, effort: ["low", "high", "max"] }
+    const list = catalogListing(
+      {
+        catalog: catalog([
+          account("a", { provider: "opencode-go" }),
+          account("b", { provider: "opencode-go" }),
+        ]),
+        health: health(),
+        models: models({
+          a: { "deepseek-v4.1-flash": {}, "glm-5.3-flash": {} },
+          b: { "deepseek-v4.1-flash": { reasoning } },
+        }),
+        prices: noPrices,
+      },
+      fullScope(),
+      NOW,
+    )
+
+    expect(list.find((row) => row.id === "deepseek-v4.1-flash")?.reasoning).toEqual(reasoning)
+    expect(list.find((row) => row.id === "glm-5.3-flash")).not.toHaveProperty("reasoning")
+  })
+
   test("a passthrough account publishes what its upstream listed, not nothing", () => {
     // No `supportedModels`, no aliases: `/v1/models` would show an empty router here.
     const list = catalogListing(

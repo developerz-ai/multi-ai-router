@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.48.1] — 2026-11-06
+
+### Fixed
+
+- **`GET /v1/catalog` states thinking modes too.** 2.48.0 published `reasoning` only on `/v1/models`, but developerz.ai reads `/v1/catalog`, so it never saw them. The same `{supported, toggle?, effort?}` object now rides each catalog row beside the price, absent when no serving account stated one.
+
 ## [2.48.0] — 2026-11-06
 
 ### Added
@@ -1944,3 +1950,4 @@ your tooling config.
 [2.46.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.46.0
 [2.47.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.47.0
 [2.48.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.0
+[2.48.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.1

@@ -2,6 +2,7 @@ import {
   isStandingBlock,
   type ModelContextSource,
   type ModelDescriptor,
+  type ModelReasoning,
   type ProviderId,
 } from "@multi-ai-router/core"
 import type { RateCard } from "../cost"
@@ -43,6 +44,8 @@ export interface CatalogModel {
    * Null is **unknown**, never free — the same rule the usage reports follow.
    */
   readonly pricing: RateCard | null
+  /** The upstream listing's word on thinking modes. Absent when no serving account stated one. */
+  readonly reasoning?: ModelReasoning
 }
 
 export interface CatalogListingDeps {
@@ -174,6 +177,7 @@ interface Mutable {
   maxOutputTokens: number | null
   contextSource: ModelContextSource | null
   pricing: RateCard | null
+  reasoning?: ModelReasoning
 }
 
 /**
@@ -214,6 +218,9 @@ function absorb(
   }
   row.maxOutputTokens ??= described?.maxOutputTokens ?? null
   row.pricing ??= pricing
+  if (row.reasoning === undefined && described?.reasoning !== undefined) {
+    row.reasoning = described.reasoning
+  }
 
   merged.set(id, row)
 }
@@ -227,5 +234,6 @@ function finish(row: Mutable): CatalogModel {
     maxOutputTokens: row.maxOutputTokens,
     contextSource: row.contextSource,
     pricing: row.pricing,
+    ...(row.reasoning === undefined ? {} : { reasoning: row.reasoning }),
   }
 }

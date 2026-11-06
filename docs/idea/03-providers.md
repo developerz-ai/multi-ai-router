@@ -670,7 +670,7 @@ spelling), labels the row `upstream`, and falls back to the shipped table (`serv
 
 `opencode-go` also states thinking modes, kept on the same row (`ListedModel.reasoning`, optional, so
 no other driver changes). `GET /v1/models` publishes them as `reasoning` on both wire shapes, an extra
-field like `resolved_model`. Information only: nothing validates a requested effort against it.
+field like `resolved_model`, and `GET /v1/catalog` carries the same object beside the price. Information only: nothing validates a requested effort against it.
 
 `GET /v1/models` then publishes the numbers from the warm store — Anthropic shape `max_input_tokens`
 / `max_tokens`, OpenAI shape `context_length` / `max_completion_tokens`
