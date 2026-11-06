@@ -909,3 +909,62 @@ describe("the generic escape hatches", () => {
     expect(result?.retryable).toBe(false)
   })
 })
+
+/**
+ * Codes first, a status guard, and a stated reset wins. The wording backstop read transient
+ * phrasing as a dead balance — parked `exhausted` with no clock — and a 429 that carried OpenAI's own
+ * `insufficient_quota` code fell to the status and cooled for one second, then was retried forever.
+ */
+describe("the shared credits rules: codes first, status guard, stated reset wins", () => {
+  const compatible = httpDriver("openai-compatible")
+  const OPENAI_QUOTA = {
+    error: {
+      code: "insufficient_quota",
+      type: "insufficient_quota",
+      message: "You exceeded your current quota, please check your plan and billing details.",
+    },
+  }
+
+  test("an escape hatch's 429 carrying insufficient_quota is a dead balance, not a 1s cooldown", () => {
+    const result = compatible?.classifyFailure(response(429, { body: OPENAI_QUOTA }))
+
+    expect(result?.kind).toBe("credits-exhausted")
+  })
+
+  test("a pinned vendor's 429 carrying insufficient_quota is a dead balance too", () => {
+    for (const vendor of [groq, xai, mistral, together, cerebras]) {
+      expect(vendor?.classifyFailure(response(429, { body: OPENAI_QUOTA }))?.kind).toBe(
+        "credits-exhausted",
+      )
+    }
+  })
+
+  test("quota wording on a 429 is a throttle, not a dead balance", () => {
+    const result = compatible?.classifyFailure(
+      response(429, {
+        body: { error: { message: "Quota exceeded for quota metric 'Requests per minute'" } },
+      }),
+    )
+
+    expect(result?.kind).toBe("rate-limited")
+  })
+
+  test("credits wording beside a stated reset is a clock, and the reset rides along", () => {
+    const result = compatible?.classifyFailure(
+      response(403, {
+        headers: { "retry-after": "120" },
+        body: { error: { message: "Insufficient balance for this window" } },
+      }),
+    )
+
+    expect(result?.kind).not.toBe("credits-exhausted")
+  })
+
+  test("credits wording on a 5xx is the server's trouble, not a balance", () => {
+    const result = compatible?.classifyFailure(
+      response(503, { body: { error: { message: "upstream quota exceeded, try again" } } }),
+    )
+
+    expect(result?.kind).toBe("server-error")
+  })
+})

@@ -38,7 +38,7 @@ import { bearer, CRYPTOR, KEY, post, settle } from "./harness"
  * not pass — the assertion is the regression gate for the fix.
  */
 function wire(accounts: readonly RoutableAccount[], thinkingDefaultModels: readonly string[]) {
-  const upstream = mockUpstream([() => REPLY])
+  const upstream = mockUpstream([reply])
   const usage = usageSink()
   const health = createHealthStore({ jitter: () => 0 })
   const testClock = clock()
@@ -83,24 +83,26 @@ function wire(accounts: readonly RoutableAccount[], thinkingDefaultModels: reado
   return { app, upstream, usage }
 }
 
-const REPLY = jsonResponse(200, {
-  id: "chatcmpl-1",
-  model: "qwen3.8-max",
-  choices: [
-    {
-      index: 0,
-      message: {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          { id: "call_1", type: "function", function: { name: "json", arguments: "{}" } },
-        ],
+// A fresh Response per call: a body reads once, and the shared one was spent by the first test.
+const reply = () =>
+  jsonResponse(200, {
+    id: "chatcmpl-1",
+    model: "qwen3.8-max",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "json", arguments: "{}" } },
+          ],
+        },
+        finish_reason: "tool_calls",
       },
-      finish_reason: "tool_calls",
-    },
-  ],
-  usage: { prompt_tokens: 5, completion_tokens: 3 },
-})
+    ],
+    usage: { prompt_tokens: 5, completion_tokens: 3 },
+  })
 
 function forcedBody(model: string) {
   return JSON.stringify({

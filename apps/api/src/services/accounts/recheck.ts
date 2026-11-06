@@ -19,8 +19,14 @@ export interface RecheckResult {
   readonly clearedStatus?: "exhausted"
   readonly auth?: ClaudeAuthReport
 }
+/**
+ * Who pressed the button, recorded on the audit row: the operator, or `exhausted_recheck` — the
+ * bounded re-test an `exhausted` account gets on a clock (`scheduler/tasks/exhausted-retest.ts`).
+ */
+export type RecheckSource = "operator_recovery" | "exhausted_recheck"
+
 export interface RecheckService {
-  recheck(accountId: string): Promise<AdminResult<RecheckResult>>
+  recheck(accountId: string, source?: RecheckSource): Promise<AdminResult<RecheckResult>>
   recheckAll(): Promise<AdminResult<readonly RecheckResult[]>>
 }
 /** Runtime's atomic repository supplies database time and durable cooldown. */
@@ -82,7 +88,10 @@ export interface RecheckServiceDeps {
 }
 
 export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
-  const attempt = async (accountId: string): Promise<AdminResult<RecheckResult>> => {
+  const attempt = async (
+    accountId: string,
+    source: RecheckSource,
+  ): Promise<AdminResult<RecheckResult>> => {
     const claimToken = crypto.randomUUID()
     const claim = await deps.recovery.reserveOperatorCheck({
       accountId,
@@ -125,7 +134,7 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
           subjectId: accountId,
           detail: {
             provider: committed.account.provider,
-            source: "operator_recovery",
+            source,
             ...(committed.clearedStatus === null ? {} : { clearedStatus: committed.clearedStatus }),
             ...(auth === undefined
               ? {}
@@ -140,10 +149,13 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
     }
   }
   const flights = new Map<string, Promise<AdminResult<RecheckResult>>>()
-  const recheck = (accountId: string): Promise<AdminResult<RecheckResult>> => {
+  const recheck = (
+    accountId: string,
+    source: RecheckSource = "operator_recovery",
+  ): Promise<AdminResult<RecheckResult>> => {
     const held = flights.get(accountId)
     if (held !== undefined) return held
-    const flight = attempt(accountId).finally(() => {
+    const flight = attempt(accountId, source).finally(() => {
       if (flights.get(accountId) === flight) flights.delete(accountId)
     })
     flights.set(accountId, flight)

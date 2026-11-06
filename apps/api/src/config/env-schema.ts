@@ -148,6 +148,8 @@ export const ENV_FIELDS = {
   OAUTH_STATE_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
   QUOTA_FLOOR_INTERVAL_MINUTES: atLeastOne.optional(),
   COOLDOWN_RECHECK_INTERVAL_MINUTES: atLeastOne.optional(),
+  EXHAUSTED_RECHECK_FIRST_MINUTES: atLeastOne.optional(),
+  EXHAUSTED_RECHECK_MAX_MINUTES: atLeastOne.optional(),
   PLAN_QUOTA_READ_INTERVAL_MINUTES: atLeastOne.optional(),
   PLAN_QUOTA_READ_BATCH_SIZE: atLeastOne.optional(),
   CONFIG_DIR_REAP_INTERVAL_MINUTES: atLeastOne.optional(),

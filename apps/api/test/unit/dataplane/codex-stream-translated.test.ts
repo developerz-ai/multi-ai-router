@@ -64,9 +64,14 @@ async function translated(frame: unknown, health = createHealthStore({ jitter: (
     },
     options: { log: { reasonMaxChars: REASON_MAX_CHARS } },
     fetch: async () =>
-      new Response(`event: response.failed\ndata: ${JSON.stringify(frame)}\n\n`, {
-        headers: { "content-type": "text/event-stream" },
-      }),
+      // The keepalive comment commits the response (`success-wall.ts`): these cases pin the
+      // in-stream path. A refusal before any committing byte is a pre-commit wall instead.
+      new Response(
+        chunks(": open\n\n", `event: response.failed\ndata: ${JSON.stringify(frame)}\n\n`),
+        {
+          headers: { "content-type": "text/event-stream" },
+        },
+      ),
   })
   const response = await dispatcher.dispatch({
     ingress: "anthropic",
@@ -93,6 +98,16 @@ async function translated(frame: unknown, health = createHealthStore({ jitter: (
   await Promise.resolve()
   expect(rows).toHaveLength(1)
   return { row: rows[0], lines, health }
+}
+
+/** Separate reads, as the wire delivers them: the comment commits before the frame arrives. */
+function chunks(...parts: readonly string[]): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const part of parts) controller.enqueue(new TextEncoder().encode(part))
+      controller.close()
+    },
+  })
 }
 
 function failed(error: Record<string, unknown>, echoed: Record<string, unknown> = {}) {

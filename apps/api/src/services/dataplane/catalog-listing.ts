@@ -27,6 +27,16 @@ import type { RoutingCatalog } from "./types"
  * wrong in the direction of *publishing a catalog of models the presenting key cannot use*.
  */
 
+/** One provider's answer for a model: what its in-scope accounts serving the name can take. */
+export interface CatalogOffer {
+  readonly provider: ProviderId
+  readonly accounts: number
+  readonly contextTokens: number | null
+  readonly maxOutputTokens: number | null
+  readonly contextSource: ModelContextSource | null
+  readonly pricing: RateCard | null
+}
+
 /** One model, as this router can describe it, unioned across every in-scope account serving it. */
 export interface CatalogModel {
   /** Requested-side name: what a client sends. */
@@ -35,14 +45,22 @@ export interface CatalogModel {
   readonly providers: readonly ProviderId[]
   /** How many in-scope accounts serve it — the pooling depth behind this name. */
   readonly accounts: number
+  /**
+   * The smallest known size among the accounts behind the name, because the router may send a
+   * request to any of them: a client sizing a prompt from this number fits every one. Unknown
+   * (null) only when no account states one.
+   */
   readonly contextTokens: number | null
   readonly maxOutputTokens: number | null
+  /** Where {@link contextTokens} came from: the label of the account whose number it is. */
   readonly contextSource: ModelContextSource | null
   /**
    * US dollars per million tokens, or null where this image ships no price and no operator set one.
    * Null is **unknown**, never free — the same rule the usage reports follow.
    */
   readonly pricing: RateCard | null
+  /** Each in-scope provider's own answer, in the enum's order. Additive to the fields above. */
+  readonly offers: readonly CatalogOffer[]
 }
 
 export interface CatalogListingDeps {
@@ -166,9 +184,7 @@ function requestableNames(
   return [...names]
 }
 
-interface Mutable {
-  readonly id: string
-  readonly providers: Set<ProviderId>
+interface Sizes {
   accounts: number
   contextTokens: number | null
   maxOutputTokens: number | null
@@ -176,14 +192,19 @@ interface Mutable {
   pricing: RateCard | null
 }
 
+interface Mutable extends Sizes {
+  readonly id: string
+  readonly offers: Map<ProviderId, Sizes>
+}
+
 /**
- * Fold one account's answer into the merged row.
+ * Fold one account's answer into the merged row and into its provider's offer.
  *
- * **First known answer wins, and a known answer beats an unknown one.** Two accounts of the same
- * provider serve the same model at the same size, so the common case is agreement; where they
- * disagree it is because one has been swept and the other has not, and the swept one is the one
- * worth showing. Later accounts never overwrite an established number — a stable listing matters
- * more than an arbitrary tie-break, and there is no basis for preferring the second answer.
+ * **The smallest known size wins, and a known answer beats an unknown one.** Selection may place
+ * the request on any account behind the name, so the size a client can rely on is the one every
+ * account can take; first-answer-wins published the first account's number and a prompt sized from
+ * it failed on a smaller sibling. An unknown size says nothing about the account, so it never
+ * shrinks a known one. A price is not a size: the first known one stands, as before.
  */
 function absorb(
   merged: Map<string, Mutable>,
@@ -192,40 +213,50 @@ function absorb(
   described: ModelDescriptor | null,
   pricing: RateCard | null,
 ): void {
-  const row =
-    merged.get(id) ??
-    ({
-      id,
-      providers: new Set<ProviderId>(),
-      accounts: 0,
-      contextTokens: null,
-      maxOutputTokens: null,
-      contextSource: null,
-      pricing: null,
-    } satisfies Mutable)
-
-  row.providers.add(provider)
-  row.accounts += 1
-  if (row.contextTokens === null && described?.contextTokens != null) {
-    row.contextTokens = described.contextTokens
-    // The label travels with the number it describes. Taking it from a different account's row
-    // would be the mixed-provenance row `services/models/entries.ts` refuses to build.
-    row.contextSource = described.contextSource
-  }
-  row.maxOutputTokens ??= described?.maxOutputTokens ?? null
-  row.pricing ??= pricing
-
+  const row = merged.get(id) ?? { id, offers: new Map<ProviderId, Sizes>(), ...emptySizes() }
+  const offer = row.offers.get(provider) ?? emptySizes()
+  for (const sizes of [row, offer]) fold(sizes, described, pricing)
+  row.offers.set(provider, offer)
   merged.set(id, row)
 }
 
+function emptySizes(): Sizes {
+  return {
+    accounts: 0,
+    contextTokens: null,
+    maxOutputTokens: null,
+    contextSource: null,
+    pricing: null,
+  }
+}
+
+function fold(sizes: Sizes, described: ModelDescriptor | null, pricing: RateCard | null): void {
+  sizes.accounts += 1
+  const context = described?.contextTokens ?? null
+  if (context !== null && (sizes.contextTokens === null || context < sizes.contextTokens)) {
+    sizes.contextTokens = context
+    // The label travels with the number it describes. Taking it from a different account's row
+    // would be the mixed-provenance row `services/models/entries.ts` refuses to build.
+    sizes.contextSource = described?.contextSource ?? null
+  }
+  const output = described?.maxOutputTokens ?? null
+  if (output !== null && (sizes.maxOutputTokens === null || output < sizes.maxOutputTokens))
+    sizes.maxOutputTokens = output
+  sizes.pricing ??= pricing
+}
+
 function finish(row: Mutable): CatalogModel {
+  const offers = [...row.offers]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([provider, sizes]) => ({ provider, ...sizes }))
   return {
     id: row.id,
-    providers: [...row.providers].sort(),
+    providers: offers.map((offer) => offer.provider),
     accounts: row.accounts,
     contextTokens: row.contextTokens,
     maxOutputTokens: row.maxOutputTokens,
     contextSource: row.contextSource,
     pricing: row.pricing,
+    offers,
   }
 }

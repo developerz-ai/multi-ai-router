@@ -513,6 +513,19 @@ out loud that the verdict came from phrasing rather than from a vocabulary the v
 That rule is always ordered **behind** a guard that reads any `429` as a cooldown, because the one
 thing worse than not recognizing a dead balance is inventing one out of a throttle message.
 
+It is the weakest evidence there is, so it yields three ways (`drivers/compatible-rules.ts`):
+
+- **Codes first.** OpenAI's published credits codes, `insufficient_quota` and
+  `billing_hard_limit_reached`, decide on any error status, ahead of the `429` guard and of the
+  wording. Behind a pinned vendor or an escape hatch, a `429` carrying one read as a throttle with no
+  reset — a one-second cooldown, retried forever.
+- **A status guard.** Wording counts only on a `4xx`: a `5xx` naming a quota is the server's trouble.
+  On a `429` only balance words count ("insufficient credits/balance", "out of credits"), because
+  "quota exceeded" on the throttle status is how per-minute limits are worded, and read as a balance
+  it parked a healthy account `exhausted`.
+- **A stated reset wins.** A response with a `retry-after` or a depleted limiter's reset is
+  describing a clock, and wording beside it is not read as a balance.
+
 ## API-key providers — z.ai, Kimi, MiniMax, OpenRouter, Gemini, and the OpenAI-shaped fleet
 
 No refresh, no expiry, no OAuth state. An Account is a base URL, a key, and an alias map.

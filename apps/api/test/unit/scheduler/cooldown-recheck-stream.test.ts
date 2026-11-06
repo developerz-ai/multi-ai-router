@@ -81,6 +81,8 @@ function harness(
     quotaSpentThreshold: 1,
     intervalMs: HOUR,
     batchSize: 5,
+    recheckExhausted: async () => undefined,
+    exhaustedSchedule: { firstMs: HOUR, maxMs: 24 * HOUR },
   })
   const lines: Record<string, unknown>[] = []
   const logger = createLogger({

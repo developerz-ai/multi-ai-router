@@ -1,5 +1,5 @@
 import type { RateLimitSignal, RateLimitWindow, UpstreamResponse } from "../types"
-import { parseDurationSeconds, parseEpochMillis, parseInstant } from "./duration"
+import { parseDurationSeconds, parseEpochMillis, parseEpochSeconds, parseInstant } from "./duration"
 
 /**
  * Rate-limit headers, normalized. Two families cover every HTTP provider in the registry and they
@@ -27,6 +27,8 @@ interface Draft {
   remaining?: number
   resetsAt?: Date
   resetAfterSeconds?: number
+  /** The reset was epoch seconds on a header documented as a duration: the unit is inferred. */
+  inferredUnit?: boolean
 }
 
 function draftFor(drafts: Map<string, Draft>, limiter: string): Draft {
@@ -60,6 +62,12 @@ function applyField(draft: Draft, field: string, value: string, absoluteReset: b
   const epoch = parseEpochMillis(value)
   if (epoch) {
     draft.resetsAt = epoch
+    return
+  }
+  const epochSeconds = parseEpochSeconds(value)
+  if (epochSeconds) {
+    draft.resetsAt = epochSeconds
+    draft.inferredUnit = true
     return
   }
   draft.resetAfterSeconds = parseDurationSeconds(value) ?? undefined
@@ -99,7 +107,7 @@ function toWindow(limiter: string, draft: Draft): RateLimitWindow {
     utilizationSource: measurable ? "continuous" : "none",
     resetsAt: draft.resetsAt,
     resetAfterSeconds: draft.resetAfterSeconds,
-    resetSource: reported ? "provider-reported" : "unknown",
+    resetSource: !reported ? "unknown" : draft.inferredUnit ? "estimated" : "provider-reported",
   }
 }
 
@@ -127,16 +135,20 @@ function parseRetryAfter(headers: Headers): RetryAfter {
   return at ? { at } : {}
 }
 
-function depletedReset(windows: readonly RateLimitWindow[]): RetryAfter {
+function depletedReset(windows: readonly RateLimitWindow[]): RetryAfter & { estimated: boolean } {
   let at: Date | undefined
   let seconds: number | undefined
+  let estimated = false
   for (const window of windows) {
     if (window.remaining === undefined || window.remaining > 0) continue
-    if (window.resetsAt && (!at || window.resetsAt > at)) at = window.resetsAt
+    if (window.resetsAt && (!at || window.resetsAt > at)) {
+      at = window.resetsAt
+      estimated = window.resetSource === "estimated"
+    }
     if (window.resetAfterSeconds !== undefined && window.resetAfterSeconds > 0)
       seconds = Math.max(seconds ?? 0, window.resetAfterSeconds)
   }
-  return { at, seconds }
+  return { at, seconds, estimated }
 }
 
 export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSignal | null {
@@ -153,7 +165,9 @@ export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSign
   }
 
   const effective =
-    retryAfter.at || retryAfter.seconds !== undefined ? retryAfter : depletedReset(windows)
+    retryAfter.at || retryAfter.seconds !== undefined
+      ? { ...retryAfter, estimated: false }
+      : depletedReset(windows)
   const resetsAt = effective.at
   const reported = resetsAt !== undefined || effective.seconds !== undefined
 
@@ -161,7 +175,7 @@ export function parseRateLimitHeaders(response: UpstreamResponse): RateLimitSign
     limited: limitedByStatus || windows.some((window) => window.remaining === 0),
     retryAfterSeconds: effective.seconds,
     resetsAt,
-    resetSource: reported ? "provider-reported" : "unknown",
+    resetSource: !reported ? "unknown" : effective.estimated ? "estimated" : "provider-reported",
     windows,
   }
 }

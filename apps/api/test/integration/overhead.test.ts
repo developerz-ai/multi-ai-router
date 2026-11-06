@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { account, jsonResponse, slowStream } from "../unit/dataplane/fixtures"
-import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
+import { bearer, CRYPTOR, harness, MESSAGE, post, STREAMED_MESSAGE, settle } from "./harness"
 
 /**
  * `router_overhead_seconds` and its per-row twin `routerOverheadMs` measure **time in the router,
@@ -62,7 +62,7 @@ describe("router overhead excludes upstream time", () => {
     })
     advance = bench.clock.advance
 
-    const response = await bench.app.request("/v1/messages", post(MESSAGE, bearer()))
+    const response = await bench.app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     slow.release(0)
     // The client is reading while the upstream is still generating — the long tail of every real
     // stream, and the part that would swamp the budget if it were counted as router time.

@@ -265,6 +265,10 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
     ...createCooldownRecheckTasks(deps.cooldownRecheck, {
       intervalMs: intervals.cooldown_recheck,
       batchSize: env.scheduler.idleAccountProbeBatchSize,
+      exhaustedSchedule: {
+        firstMs: env.scheduler.exhaustedRecheckFirstMinutes * 60_000,
+        maxMs: env.scheduler.exhaustedRecheckMaxMinutes * 60_000,
+      },
     }),
     // Free plain GETs, so a batch of their own rather than the billed sweeps' small one.
     ...createPlanQuotaReadTasks(deps.planQuotaRead, {

@@ -68,6 +68,15 @@ behind half of it. So: per-million-token prices, the unit every price in this sy
 provider *list* rather than a winner, because pooling is the product; and no field this router cannot
 source. `null` means **unknown** in every numeric field — never zero, never unlimited.
 
+**`/v1/catalog` sizes are the smallest known across the accounts behind a name.** Selection may
+send a request to any of them, so the size a client can size a prompt against is the one every
+account can take: `contextTokens` and `maxOutputTokens` are each the minimum *known* value, and
+`contextSource` labels the account whose number it is. Through 2.48.0 the first account's answer
+won, and a prompt sized from a 204,800-token listing failed on the 128,000-token sibling. Each
+provider's own answer rides in **`offers[]`** — `{ provider, accounts, contextTokens,
+maxOutputTokens, contextSource, pricing }`, in provider order — an additive field, so a client that
+wants the largest window can see which provider holds it.
+
 Both take the same router key and the same scope intersection as everything else on `/v1`. The model
 set comes from the same implementation `GET /v1/models` uses, because a second opinion about what a
 key can reach would be wrong in the direction of publishing a catalog the key cannot use.

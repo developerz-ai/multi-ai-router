@@ -5,6 +5,7 @@ import type { UsageRecord } from "../../../src/services/usage"
 import { account, catalog, cipher } from "./fixtures"
 
 const encoder = new TextEncoder()
+const OPEN = ": open\n\n"
 const usage =
   'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n'
 const failure =
@@ -51,6 +52,9 @@ async function fixture() {
         new ReadableStream<Uint8Array>({
           start(controller) {
             source = controller
+            // A keepalive comment commits the response (`success-wall.ts`), so these tests reach
+            // the relay with the stream still open — the post-commit phase they pin.
+            controller.enqueue(encoder.encode(OPEN))
           },
         }),
         { headers: { "content-type": "text/event-stream" } },
@@ -80,6 +84,7 @@ async function fixture() {
   })
   if (source === undefined || response.body === null) throw new Error("missing stream")
   const reader = response.body.getReader()
+  expect(new TextDecoder().decode((await reader.read()).value)).toBe(OPEN)
   return { source, reader, response, rows, health, registry, requestAbort, finished }
 }
 

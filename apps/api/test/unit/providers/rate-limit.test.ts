@@ -87,6 +87,43 @@ describe("OpenRouter's unsuffixed budget headers", () => {
   })
 })
 
+describe("an epoch-seconds reset on an x-ratelimit header", () => {
+  // Read as a duration, `1784000000` seconds parked the account until 2083. A value in the epoch
+  // seconds range is an instant; the unit is our inference, so the label says `estimated`.
+  const signal = parseRateLimitHeaders(
+    response(429, {
+      headers: {
+        "x-ratelimit-limit": "100",
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": "1784000000",
+      },
+    }),
+  )
+
+  test("is read as an instant, not as fifty-six years", () => {
+    const requests = windowNamed(signal?.windows ?? [], "requests")
+
+    expect(requests.resetsAt?.getTime()).toBe(1784000000000)
+    expect(requests.resetAfterSeconds).toBeUndefined()
+    expect(signal?.resetsAt?.getTime()).toBe(1784000000000)
+    expect(signal?.retryAfterSeconds).toBeUndefined()
+  })
+
+  test("is labeled estimated, because the unit was inferred", () => {
+    expect(windowNamed(signal?.windows ?? [], "requests").resetSource).toBe("estimated")
+    expect(signal?.resetSource).toBe("estimated")
+  })
+
+  test("a short duration is still a duration", () => {
+    const short = parseRateLimitHeaders(response(429, { headers: { "x-ratelimit-reset": "60" } }))
+
+    const requests = windowNamed(short?.windows ?? [], "requests")
+
+    expect(requests.resetAfterSeconds).toBe(60)
+    expect(requests.resetSource).toBe("provider-reported")
+  })
+})
+
 describe("what a driver refuses to invent", () => {
   test("a 429 with no headers is still a signal, but with an unknown reset", () => {
     const signal = parseRateLimitHeaders(response(429))

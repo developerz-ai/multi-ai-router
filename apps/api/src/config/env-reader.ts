@@ -75,6 +75,22 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     return z.NEVER
   }
 
+  // An hour, then doubling to a day: a drained balance costs one failed probe a day, a misread wall
+  // is back within the hour (rule 7, amended: developerz.ai#7868).
+  const exhaustedRecheckFirstMinutes = raw.EXHAUSTED_RECHECK_FIRST_MINUTES ?? 60
+  const exhaustedRecheckMaxMinutes = raw.EXHAUSTED_RECHECK_MAX_MINUTES ?? 1_440
+  if (exhaustedRecheckMaxMinutes < exhaustedRecheckFirstMinutes) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["EXHAUSTED_RECHECK_MAX_MINUTES"],
+      message:
+        `must be at least EXHAUSTED_RECHECK_FIRST_MINUTES (${exhaustedRecheckFirstMinutes}): ` +
+        `it caps a wait that starts there and doubles, so a smaller cap would make the first ` +
+        `re-test the latest one`,
+    })
+    return z.NEVER
+  }
+
   const claudeLogin = readClaudeLoginEnv(raw, ctx)
   if (claudeLogin === undefined) return z.NEVER
 
@@ -197,6 +213,8 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
       quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
       cooldownRecheckIntervalMinutes: raw.COOLDOWN_RECHECK_INTERVAL_MINUTES ?? 60,
+      exhaustedRecheckFirstMinutes,
+      exhaustedRecheckMaxMinutes,
       // A quarter hour: a five-hour window moves little in that, and each read is one free GET.
       planQuotaReadIntervalMinutes: raw.PLAN_QUOTA_READ_INTERVAL_MINUTES ?? 15,
       planQuotaReadBatchSize: raw.PLAN_QUOTA_READ_BATCH_SIZE ?? 25,

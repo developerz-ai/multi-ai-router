@@ -79,6 +79,16 @@ describe("the rich catalog listing", () => {
         maxOutputTokens: null,
         contextSource: "shipped",
         pricing: null,
+        offers: [
+          {
+            provider: "zai",
+            accounts: 1,
+            contextTokens: 204_800,
+            maxOutputTokens: null,
+            contextSource: "shipped",
+            pricing: null,
+          },
+        ],
       },
     ])
   })
@@ -193,6 +203,59 @@ describe("the rich catalog listing", () => {
 
     // Disagreement here means one account has been swept and the other has not.
     expect(list[0]).toMatchObject({ contextTokens: 128_000, contextSource: "upstream" })
+  })
+
+  /**
+   * The catalog is read to size a prompt, and the router may send that prompt to any account behind
+   * the name. First-answer-wins published the first account's 204,800 while the request could land
+   * on the 128,000 one — a prompt sized from the catalog then failed on the smaller account. The
+   * headline is the size every account can take; `offers` keeps each provider's own answer.
+   */
+  test("the size published is the one every account behind the name can take", () => {
+    const list = catalogListing(
+      {
+        catalog: catalog([
+          account("big", { provider: "zai" }),
+          account("small", { provider: "openai-compatible" }),
+        ]),
+        health: health(),
+        models: models({
+          big: {
+            shared: { contextTokens: 204_800, maxOutputTokens: 131_072, contextSource: "shipped" },
+          },
+          small: {
+            shared: { contextTokens: 128_000, maxOutputTokens: 32_768, contextSource: "upstream" },
+          },
+        }),
+        prices: noPrices,
+      },
+      fullScope(),
+      NOW,
+    )
+
+    expect(list[0]).toMatchObject({
+      contextTokens: 128_000,
+      maxOutputTokens: 32_768,
+      contextSource: "upstream",
+    })
+    expect(list[0]?.offers).toEqual([
+      {
+        provider: "openai-compatible",
+        accounts: 1,
+        contextTokens: 128_000,
+        maxOutputTokens: 32_768,
+        contextSource: "upstream",
+        pricing: null,
+      },
+      {
+        provider: "zai",
+        accounts: 1,
+        contextTokens: 204_800,
+        maxOutputTokens: 131_072,
+        contextSource: "shipped",
+        pricing: null,
+      },
+    ])
   })
 
   test("the price comes from the same book a usage report is priced against", () => {

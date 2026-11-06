@@ -62,3 +62,20 @@ export function parseEpochMillis(value: string): Date | null {
   if (!Number.isFinite(millis) || millis < EPOCH_MILLIS_FLOOR) return null
   return new Date(millis)
 }
+
+/**
+ * Epoch **seconds** where a duration was expected: `x-ratelimit-reset: 1784000000`. Read as a
+ * duration that parked an account until 2083. Every value from 1e9 (2001) up to the epoch-millis
+ * floor is an instant in seconds — no limiter resets in 31 years — so it is read as one. The unit is
+ * our inference, not the provider's statement, so callers label the reset `estimated`.
+ */
+const EPOCH_SECONDS_FLOOR = 1_000_000_000
+
+export function parseEpochSeconds(value: string): Date | null {
+  const trimmed = value.trim()
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) return null
+  const seconds = Number(trimmed)
+  if (!Number.isFinite(seconds) || seconds < EPOCH_SECONDS_FLOOR || seconds >= EPOCH_MILLIS_FLOOR)
+    return null
+  return new Date(seconds * 1000)
+}

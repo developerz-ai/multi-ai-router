@@ -45,8 +45,13 @@ for (const terminal of ["protocol", "transport", "caller", "shutdown"] as const)
     const registry = createActiveRequestRegistry({ maximumEntries: 1 })
     const caller = new AbortController()
     const source = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>()
+    // A keepalive comment commits the 200 (`success-wall.ts`): an upstream that sent no event at
+    // all is still pre-commit, where a failure fails over instead of reaching this observer.
     const upstream = new ReadableStream<Uint8Array>({
-      start: (controller) => source.resolve(controller),
+      start: (controller) => {
+        controller.enqueue(new TextEncoder().encode(": open\n\n"))
+        source.resolve(controller)
+      },
     })
     const dispatcher = createDispatcher({
       health: createHealthStore(),
@@ -90,7 +95,8 @@ for (const terminal of ["protocol", "transport", "caller", "shutdown"] as const)
       durationMs: 100,
       requestedPoolIds: ["pool"],
       servedPoolId: "pool",
-      streamed: terminal === "protocol",
+      // The comment that committed the response reached the client in every case.
+      streamed: true,
     })
     expect(rows).toHaveLength(1)
     expect(facts).toHaveLength(1)

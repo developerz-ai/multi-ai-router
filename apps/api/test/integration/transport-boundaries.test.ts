@@ -3,7 +3,7 @@ import { createLogger } from "../../src/logging/logger"
 import { httpDriver } from "../../src/providers"
 import { runAttempt } from "../../src/services/dataplane/attempt"
 import { account, jsonResponse, slowStream } from "../unit/dataplane/fixtures"
-import { bearer, CRYPTOR, harness, MESSAGE, post, settle } from "./harness"
+import { bearer, CRYPTOR, harness, MESSAGE, post, STREAMED_MESSAGE, settle } from "./harness"
 
 describe("upstream trust boundary", () => {
   for (const provider of ["anthropic-api", "openai-api"] as const) {
@@ -186,7 +186,7 @@ describe("upstream trust boundary", () => {
   test("records a broken response stream as failed without retrying", async () => {
     const stream = slowStream(["data: hello\n\n"])
     const { app, usage, upstream } = harness({ responses: [() => stream.response] })
-    const response = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const response = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     const reader = response.body?.getReader()
     stream.release(0)
     expect((await reader?.read())?.done).toBe(false)
@@ -239,7 +239,7 @@ describe("upstream trust boundary", () => {
     const stream = slowStream(["data: hello\n\n"])
     const { app, usage, health } = harness({ responses: [() => stream.response] })
     const response = await app.request("/v1/messages", {
-      ...post(MESSAGE, bearer()),
+      ...post(STREAMED_MESSAGE, bearer()),
       signal: abort.signal,
     })
     const reader = response.body?.getReader()
@@ -256,7 +256,7 @@ describe("upstream trust boundary", () => {
   test("cancelling a response reader without aborting its request does not strike health", async () => {
     const stream = slowStream(["data: hello\n\n"])
     const { app, usage, health } = harness({ responses: [() => stream.response] })
-    const response = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const response = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     const reader = response.body?.getReader()
     stream.release(0)
     await reader?.read()

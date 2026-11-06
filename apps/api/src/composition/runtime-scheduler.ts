@@ -118,6 +118,15 @@ export function createRuntimeScheduler(
         }),
       models: IDLE_PROBE_MODELS,
       quotaSpentThreshold: DEFAULT_QUOTA_SPENT_THRESHOLD,
+      // The operator's "Re-check now", pressed on the bounded clock rule 7 gives `exhausted`. A
+      // refusal (an account deleted since the tick read the catalog) is no failure of the task.
+      recheckExhausted: async (accountId) => {
+        const result = await admin.recheck.recheck(accountId, "exhausted_recheck")
+        if (!result.ok && result.failure.status !== 404)
+          throw new Error(
+            `exhausted re-test of account ${accountId} was refused: ${result.failure.code} — ${result.failure.message}`,
+          )
+      },
     },
     // One free GET per account, through the catalog sweep's own credential and fetch seams.
     planQuotaRead: {

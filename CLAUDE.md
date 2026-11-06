@@ -25,7 +25,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 4. **The client picks the model. The router picks the account.** Never re-route a model, never substitute a cheaper one. Model names pass through unchanged except through an Account's explicit alias map.
 5. Router keys are **named and retrievable** — stored encrypted (AES-256-GCM, same `ENCRYPTION_KEY`), not hashed; verification decrypts by indexed prefix and compares in constant time. The admin can view and copy a key any time. No "shown once" flow anywhere in UI or docs.
 6. **Key scope is enforced as an intersection.** Scope is `all` | pools | explicit account list. Candidates = pool members ∩ key scope, always. Empty set → a specific error naming why. Never widen.
-7. **`cooling_down` ≠ `exhausted`.** Rate limited / window spent is temporary and clock-recoverable → `429` + `Retry-After`. Out of credits / billing dead is permanent until a human acts → `402`; never retried on a timer. Nothing in scope → `403`. Never a generic `500`.
+7. **`cooling_down` ≠ `exhausted`.** Rate limited / window spent is temporary and clock-recoverable → `429` + `Retry-After`. Out of credits / billing dead needs a human → `402`; no request is ever routed to it and it carries no reset. Its one exit besides the operator is a **bounded re-test** — the operator's own "Re-check now", run by `cooldown_recheck` first after `EXHAUSTED_RECHECK_FIRST_MINUTES` (1 h), doubling to `EXHAUSTED_RECHECK_MAX_MINUTES` (24 h), each one an alert line — because a wall is read from words and a misread park with no exit is worse than a cheap re-test (amended 2026-11-06, developerz.ai#7868). A wall never reaches the client as a `2xx`. Nothing in scope → `403`. Never a generic `500`.
 8. **Overhead is a budget: <5 ms added p99, zero added time-to-first-token.** Never buffer a stream. Never parse a passthrough body. Nothing touches Postgres on the critical path — warm in-memory caches, single indexed query on miss. Usage writes batch off-path. Connections pooled and warm. `router_overhead_seconds` is a first-class metric; a regression in it is a bug. The Agent-SDK path is the labeled exception.
 9. Routing selection, protocol translation, quota math are **pure functions**. Clocks, stores, health snapshots injected. No mocks needed to test them.
 10. Same-dialect requests are byte-passthrough — headers swapped, body untouched, streaming forwarded byte-for-byte. Translate only across dialects.
@@ -166,7 +166,7 @@ SolidJS SPA, `@solidjs/router`, TanStack Solid Query for server state. Vite buil
 - Substitute, downgrade, or "optimize" the model the client asked for.
 - Re-parse and re-serialize a same-dialect body, or buffer a stream before forwarding it.
 - Put a Postgres query, a usage insert, or any blocking I/O on the request-critical path.
-- Conflate rate-limited with out-of-credits, or retry an `exhausted` account on a timer.
+- Conflate rate-limited with out-of-credits, or re-test an `exhausted` account on any clock but the bounded one in rule 7 (and never by routing a request to it).
 - Retry a request onto another account after bytes are on the wire — fail honestly.
 - Hard-code a retention window, TTL, or interval.
 - Add Redis/Dragonfly, BullMQ, a worker container, or a cron entry for background work — see non-negotiable 13. Never schedule a refresh of our own for a Claude subscription account — the credential keepalive turn, which lets the CLI refresh, is the only exception.

@@ -15,8 +15,10 @@ for (const protocolErrorFirst of [false, true]) {
     let cancellations = 0,
       ends = 0,
       started = false
+    // The `ping` commits the response (`success-wall.ts`), so the error after it is in-stream.
     const payload =
       'data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n' +
+      'data: {"type":"ping"}\n\n' +
       (protocolErrorFirst
         ? 'data: {"type":"error","error":{"type":"api_error","message":"offline"}}\n\n'
         : "")

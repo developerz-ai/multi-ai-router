@@ -1,29 +1,31 @@
 import { randomUUID } from "node:crypto"
 import type { Dialect } from "@multi-ai-router/core"
-import type {
-  FailureClassification,
-  ProviderDriver,
-  RateLimitSignal,
-  UpstreamFailureKind,
-} from "../../providers"
+import type { FailureClassification, ProviderDriver, RateLimitSignal } from "../../providers"
 import {
   UpstreamAdmissionRefused,
   type UpstreamStartGuard,
 } from "../../providers/upstream-admission"
 import type { CredentialCipher } from "../crypto/cipher"
-import { type AttemptFailure, classifyStatus, type FailureKind } from "../routing"
+import type { AttemptFailure } from "../routing"
+import {
+  failoverKind,
+  redactClassification,
+  toAttemptFailure,
+  transportFailure,
+} from "./attempt-failure"
 import { accountCredential } from "./egress/credential"
 import { privateHeaderValues, upstreamHeaders } from "./egress/headers"
 import {
+  classifiableBody,
   DEFAULT_UPSTREAM_ERROR_MAX_BYTES,
   readErrorBody,
-  redactAttemptText,
   sanitizeErrorBody,
 } from "./error-body"
+import { peekSuccess } from "./success-wall"
 import type { FetchLike, RoutableAccount } from "./types"
 import { attemptDeadline, type StreamDeadlines, upstreamDeadline } from "./upstream-deadline"
 
-export { attemptDeadline }
+export { attemptDeadline, failoverKind }
 
 /**
  * One upstream attempt: address it, authenticate it, send it, and decide what came back.
@@ -62,6 +64,13 @@ export interface AttemptInput {
   readonly onUpstreamStarted?: () => void
   /** The client's own abort signal, so a client that goes away releases the upstream call. */
   readonly signal?: AbortSignal
+  /**
+   * The router abandoning the request (shutdown). Ends only the success peek: the upstream call
+   * itself is left to its own clocks, and the chain answers the shutdown.
+   */
+  readonly abandon?: AbortSignal
+  /** The client asked to stream: committed at the upstream's headers, with no peek (`success-wall.ts`). */
+  readonly clientStreams?: boolean
   /**
    * Replaces the client's `Accept`. Set only for a body the router rewrote to stream for a surface
    * that answers only as SSE: the client's own value describes the response *it* is owed, not the
@@ -141,15 +150,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   } catch (error) {
     deadline?.release()
     if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }
-    return {
-      kind: "failure",
-      failure: input.signal?.aborted
-        ? { kind: "client-error", status: 499, message: "client cancelled the request" }
-        : transportFailure(error),
-      classification: null,
-      rateLimit: null,
-      upstream: null,
-    }
+    return unanswered(input, error)
   }
 
   const rateLimit = plan.driver.parseRateLimit({
@@ -173,10 +174,6 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     }
   }
 
-  if (response.status < 400) {
-    return { kind: "success", response: deadline?.watch(response) ?? response, rateLimit }
-  }
-
   const secret =
     credential === null
       ? null
@@ -186,10 +183,52 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const secrets = [
     ...new Set([...privateHeaderValues(driverHeaders), ...(secret ? [secret] : [])]),
   ].sort((a, b) => b.length - a.length)
+  const errorMaxBytes = input.errorMaxBytes ?? DEFAULT_UPSTREAM_ERROR_MAX_BYTES
+
+  if (response.status < 400 && input.clientStreams === true)
+    return { kind: "success", response: deadline?.watch(response) ?? response, rateLimit }
+  if (response.status < 400) {
+    // Watched first, so the idle clock bounds the peek as it bounds the relay after it.
+    const watched = deadline?.watch(response) ?? response
+    let peeked: Awaited<ReturnType<typeof peekSuccess>>
+    try {
+      const signals = [request.signal, input.abandon].filter((signal) => signal !== undefined)
+      peeked = await peekSuccess(watched, {
+        ...plan,
+        maxBytes: errorMaxBytes,
+        signal: AbortSignal.any(signals),
+      })
+    } catch (error) {
+      deadline?.release()
+      // The client left or the router is shutting down: the upstream did answer, and the chain's
+      // own cancellation paths account for an answered attempt. The peek already cancelled the body.
+      if (input.signal?.aborted === true || input.abandon?.aborted === true) {
+        const answered = new Response(null, { status: response.status, headers: response.headers })
+        return { kind: "success", response: answered, rateLimit }
+      }
+      return { ...unanswered(input, error), rateLimit }
+    }
+    if (peeked.kind === "clear") return { kind: "success", response: peeked.response, rateLimit }
+    deadline?.release()
+    const classification = redactClassification(peeked.classification, secrets)
+    return {
+      kind: "failure",
+      failure: toAttemptFailure(peeked.status, classification, rateLimit),
+      classification,
+      rateLimit: classification.rateLimit ?? rateLimit,
+      upstream: {
+        status: peeked.status,
+        headers: response.headers,
+        bodyText: sanitizeErrorBody(peeked.bodyText, secrets),
+        contentType: "application/json",
+      },
+    }
+  }
+  // Watched like a success body: headers stopped the first-byte clock, so an unwatched error body
+  // that went silent held the attempt until the total deadline.
+  const errorBody = deadline?.watch(response) ?? response
   const bodyText = sanitizeErrorBody(
-    await readErrorBody(response, input.errorMaxBytes ?? DEFAULT_UPSTREAM_ERROR_MAX_BYTES).finally(
-      () => deadline?.release(),
-    ),
+    await readErrorBody(errorBody, errorMaxBytes).finally(() => deadline?.release()),
     secrets,
   )
   const classified = plan.driver.classifyFailure({
@@ -197,16 +236,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     headers: response.headers,
     body: classifiableBody(bodyText),
   })
-  const classification =
-    classified === null
-      ? null
-      : {
-          ...classified,
-          ...(classified.message === undefined
-            ? {}
-            : { message: redactAttemptText(classified.message, secrets) }),
-          signal: redactAttemptText(classified.signal, secrets),
-        }
+  const classification = classified === null ? null : redactClassification(classified, secrets)
 
   return {
     kind: "failure",
@@ -222,79 +252,18 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   }
 }
 
-/**
- * The driver's vocabulary mapped onto failover's. `unknown` falls back to what the status says.
- *
- * `busy-session` and `subprocess-crash` land on `server-error` deliberately: by the time either
- * reaches the failover chain the SDK transport has already spent its own recovery — the waits, the
- * fork — so what is left is one account that could not serve, which is what `server-error` means.
- * `stale-session` is the exception the planner reads by name, because its recovery is a replay on
- * that same account (docs/idea/11-anthropic-agent-sdk.md §9).
- */
-const FAILURE_KINDS: Readonly<Record<UpstreamFailureKind, FailureKind | null>> = {
-  "rate-limited": "rate-limited",
-  "credits-exhausted": "credits-exhausted",
-  auth: "auth",
-  "invalid-request": "client-error",
-  "model-unsupported": "model-unsupported",
-  "server-error": "server-error",
-  "stale-session": "stale-session",
-  // Not `server-error`: it is retryable — the SDK transport already spent its in-place fork — but
-  // it is a fact about the conversation's session rather than about this account, so it must not
-  // strike the breaker (`routing/breaker.ts`).
-  "busy-session": "busy-session",
-  "subprocess-crash": "server-error",
-  unknown: null,
-}
-
-/** Shared with the Agent-SDK transport, which classifies prose into the same vocabulary. */
-export function failoverKind(kind: UpstreamFailureKind | null, status: number): FailureKind {
-  const mapped = kind === null ? null : FAILURE_KINDS[kind]
-  return mapped ?? classifyStatus(status) ?? "server-error"
-}
-
-function toAttemptFailure(
-  status: number,
-  classification: FailureClassification | null,
-  rateLimit: RateLimitSignal | null,
-): AttemptFailure {
-  const kind = failoverKind(classification?.kind ?? null, status)
-  const signal = classification?.rateLimit ?? rateLimit
-
+/** The upstream never gave a verdict: the client left, or the transport broke or timed out. */
+function unanswered(
+  input: AttemptInput,
+  error: unknown,
+): Extract<AttemptOutcome, { kind: "failure" }> {
   return {
-    kind,
-    status,
-    resetsAt: signal?.resetsAt,
-    retryAfterSeconds: signal?.retryAfterSeconds,
-    resetSource: signal?.resetSource,
-    message: classification?.signal ?? `upstream returned ${status}`,
-  }
-}
-
-function transportFailure(error: unknown): AttemptFailure {
-  const name = error instanceof Error ? error.name : ""
-  const timedOut = name === "TimeoutError" || name === "AbortError"
-  return {
-    kind: timedOut ? "timeout" : "connection",
-    message: timedOut
-      ? "upstream did not answer within its deadline"
-      : "upstream connection failed",
-  }
-}
-
-/**
- * The already-sanitized error body in the shape the driver's classifier reads: a parsed object when
- * it is JSON, otherwise the raw (redacted) string. A gateway in front of a provider may answer with
- * plain text or HTML, and the classifier carries that as the upstream message
- * (`providers/failure/error-body.ts` accepts a string) — returning `undefined` here dropped it, so
- * four prod `400`s surfaced with no `upstreamMessage`. Empty stays `undefined`: no body, no facts.
- * The text has already passed `sanitizeErrorBody`, so this adds no credential exposure.
- */
-function classifiableBody(text: string): unknown {
-  if (text.length === 0) return undefined
-  try {
-    return JSON.parse(text)
-  } catch {
-    return text
+    kind: "failure",
+    failure: input.signal?.aborted
+      ? { kind: "client-error", status: 499, message: "client cancelled the request" }
+      : transportFailure(error),
+    classification: null,
+    rateLimit: null,
+    upstream: null,
   }
 }

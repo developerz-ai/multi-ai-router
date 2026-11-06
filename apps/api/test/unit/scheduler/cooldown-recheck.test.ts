@@ -121,6 +121,7 @@ function harness(
     },
   })
   const sent: { accountId: string; model: string; trigger?: string }[] = []
+  const rechecked: string[] = []
   const rows = new Map<string, AccountRow>(
     accounts.map((held) => [
       held.id,
@@ -151,6 +152,8 @@ function harness(
     quotaSpentThreshold: 1,
     intervalMs: HOUR,
     batchSize: options.batchSize ?? 5,
+    recheckExhausted: async (accountId) => void rechecked.push(accountId),
+    exhaustedSchedule: { firstMs: HOUR, maxMs: DAY },
   })
   const run = (signal = new AbortController().signal) =>
     task.run({
@@ -160,7 +163,7 @@ function harness(
     })
   const cool = (id: string, resetsAt = at(3 * DAY)) =>
     store.recordFailure(id, { kind: "rate-limited", resetsAt, message: "limit" }, NOW)
-  return { store, sent, blocked, run, cool, hooks }
+  return { store, sent, blocked, run, cool, hooks, rechecked }
 }
 
 describe("the cooldown_recheck task", () => {
@@ -240,13 +243,15 @@ describe("the cooldown_recheck task", () => {
       message: "upstream refused",
     }) as const
 
-  test("an out-of-credits answer is exhausted, and no timer ever asks again", async () => {
+  test("an out-of-credits answer is exhausted, and leaves this lane for the bounded re-test", async () => {
     const h = harness([routable("a", "openai-oauth")], refused("credits-exhausted"))
     h.cool("a")
 
     for (let tick = 0; tick < 4; tick++) await h.run()
 
+    // No request of this lane's own, ever; the re-test is "Re-check now", an hour on at the soonest.
     expect(h.sent).toHaveLength(1)
+    expect(h.rechecked).toEqual([])
     expect(h.store.stateOf("a").breaker.status).toBe("exhausted")
     expect(h.store.stateOf("a").breaker.cooldownUntil).toBeUndefined()
     expect(h.blocked).toEqual([{ accountId: "a", status: "exhausted" }])
@@ -321,6 +326,8 @@ describe("the cooldown_recheck task", () => {
       quotaSpentThreshold: 1,
       intervalMs: HOUR,
       batchSize: 5,
+      recheckExhausted: async () => undefined,
+      exhaustedSchedule: { firstMs: HOUR, maxMs: DAY },
     })
 
     await task.run({

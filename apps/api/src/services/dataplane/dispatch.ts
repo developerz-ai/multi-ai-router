@@ -69,6 +69,8 @@ export function dispatch(
     timeoutMs: runtime.timeoutMs,
     ...(runtime.errorMaxBytes === undefined ? {} : { errorMaxBytes: runtime.errorMaxBytes }),
     signal: ctx.request.signal,
+    ...(runtime.activeRequest === undefined ? {} : { abandon: runtime.activeRequest.signal }),
+    clientStreams: ctx.streamRequested === true,
     ...(forcesUpstreamStream(servable) ? { accept: "text/event-stream" } : {}),
     ...(cacheKey === undefined ? {} : { cacheKey }),
     ...(namesConversation

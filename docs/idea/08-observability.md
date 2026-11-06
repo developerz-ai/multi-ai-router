@@ -1193,6 +1193,22 @@ Four properties of the redactor are load-bearing enough to state:
   credential and leave its tail. `LOG_REASON_MAX_CHARS` bounds how much of a described chain a
   `reason` field quotes.
 
+### `exhausted` re-test
+
+An `exhausted` account is capacity only a human restores, and the router re-tests it on the bounded
+clock rule 7 gives it ([05-routing-and-failover.md](05-routing-and-failover.md#the-bounded-exhausted-re-test)):
+first after `EXHAUSTED_RECHECK_FIRST_MINUTES`, then doubling to `EXHAUSTED_RECHECK_MAX_MINUTES`.
+Every re-test writes **one `warn` line, `exhausted account re-tested`**; a re-test that could not run
+writes `exhausted account re-test failed` at `error`. Alert on the first: a line that keeps coming
+back for the same `accountId` is a balance still waiting on a top-up.
+
+| Field | Meaning |
+|---|---|
+| `accountId` | The account re-tested |
+| `provider` | Its provider |
+| `retest` | How many re-tests this replica has spent on it since it went `exhausted` |
+| `nextRetestAt` | ISO instant of the next re-test if this one does not bring it back |
+
 ### Subscription login renewal
 
 A Claude subscription's login (its refresh token) dies roughly four weeks after the last

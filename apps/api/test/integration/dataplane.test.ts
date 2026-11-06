@@ -11,7 +11,7 @@ import {
   slowStream,
   subscriptionAccount,
 } from "../unit/dataplane/fixtures"
-import { bearer, CRYPTOR, harness, KEY, MESSAGE, post, settle } from "./harness"
+import { bearer, CRYPTOR, harness, KEY, MESSAGE, post, STREAMED_MESSAGE, settle } from "./harness"
 
 /**
  * The data plane end to end: real Hono, real middleware, real routing, **mocked upstreams**.
@@ -141,7 +141,7 @@ describe("same-dialect passthrough", () => {
     const slow = slowStream(["data: one\n\n", "data: two\n\n"])
     const { app } = harness({ responses: [() => slow.response] })
 
-    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
@@ -289,7 +289,7 @@ describe("failover", () => {
       responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
     })
 
-    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
@@ -316,7 +316,7 @@ describe("failover", () => {
       responses: [() => slow.response, () => jsonResponse(200, { shouldNotBeReached: true })],
     })
 
-    const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+    const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
@@ -390,7 +390,7 @@ describe("failover", () => {
 
     const client = new AbortController()
     const res = await app.request("/v1/messages", {
-      ...post(MESSAGE, bearer()),
+      ...post(STREAMED_MESSAGE, bearer()),
       signal: client.signal,
     })
     if (res.body === null) throw new Error("expected a body")
