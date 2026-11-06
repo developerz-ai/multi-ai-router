@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.46.0] — 2026-11-06
+
+### Added
+
+- **An account on a long cooldown is rechecked hourly instead of only when its stated reset passes.** Providers do reset windows early, and a weekly window meant days with no look. New `cooldown_recheck` task, `COOLDOWN_RECHECK_INTERVAL_MINUTES` (default 60), advisory-locked, at most `IDLE_ACCOUNT_PROBE_BATCH_SIZE` accounts per tick, oldest look first. It never touches `exhausted`, `needs_reauth`, `disabled` or a `credential-rejected` key, and it skips a block that clears before the next tick. A Claude subscription gets the turn-free usage read and is never sent a request. Every HTTP account gets one minimal real request per interval through "Test now", audited `trigger: cooldown_recheck`; that request is billed only if the provider serves it, which is what ends the cooldown. A `429` keeps its window readings and moves nothing else, so the stated reset, its source and the failure streak stand. Regression: `apps/api/test/unit/scheduler/cooldown-recheck.test.ts`. Documentation: `docs/idea/05-routing-and-failover.md` § The hourly cooldown recheck.
+
+### Fixed
+
+- **A `401` saying the token expired now runs a refresh before `needs_reauth` sticks.** Prod, 2026-11-06 13:28:24Z: an openai-oauth account answered `401` "Your authentication token has expired. Please try refreshing it." with a stored expiry a week out, and was parked with no refresh attempted. A committed `needs_reauth` now starts the single-flighted refresh off the request path. Success replaces the grant and ends the park in one transaction, audited `account.reauthorized`; failure stays `needs_reauth`, audited. One attempt per credential generation: `accounts.auth_refresh_spent_on` (migration 0040) records the credential whose attempt is used, and a credential a parked refresh produced is born spent, so a provider refusing every token cannot loop. An account already parked gets one attempt at the next boot, and **Re-check now** buys one more. `anthropic-oauth` stays out: the SDK owns those refresh tokens. Regression: `apps/api/test/unit/accounts/refresh-auth-failure.test.ts`. Documentation: `docs/idea/01-architecture.md` § Credential refresh is not a cron job.
+
 ## [2.45.9] — 2026-11-05
 
 ### Fixed
@@ -1912,3 +1922,4 @@ your tooling config.
 [2.45.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.7
 [2.45.8]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.8
 [2.45.9]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.9
+[2.46.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.46.0

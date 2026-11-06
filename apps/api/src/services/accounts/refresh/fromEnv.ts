@@ -25,7 +25,13 @@ import { type CredentialRefresher, createCredentialRefresher } from "./refresher
 export interface RefresherFromEnvDeps {
   readonly accounts: Pick<
     AccountRepository,
-    "list" | "findById" | "saveRefreshedCredential" | "transitionObservedStatus"
+    | "list"
+    | "findById"
+    | "saveRefreshedCredential"
+    | "reviveRefreshedCredential"
+    | "spendAuthRefresh"
+    | "releaseAuthRefresh"
+    | "transitionObservedStatus"
   >
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
   readonly audit: AuditRecorder

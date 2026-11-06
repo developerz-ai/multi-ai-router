@@ -7,7 +7,11 @@ import type { RoutingCatalog } from "../services/dataplane/types"
 import { findSpentWindow } from "../services/routing"
 import { recoveryBlocksBackground } from "../services/routing/recovery-filter"
 
-/** Background turns use ordinary eligibility and never spend a designated recovery permit. */
+/**
+ * Background turns use ordinary eligibility and never spend a designated recovery permit.
+ * `admitCooling` is the hourly recheck's one difference: a cooldown or a spent window is what it came
+ * to look at. Every standing block still refuses, at this final boundary, whatever selected it.
+ */
 export function createWarmBackgroundStartGuard(
   deps: {
     accounts: Pick<AccountRepository, "readEligibleBackgroundAccount">
@@ -17,6 +21,7 @@ export function createWarmBackgroundStartGuard(
     quotaSpentThreshold: number
     logger?: Pick<Logger, "warn">
     accepting?: () => boolean
+    admitCooling?: boolean
   },
   expected: BackgroundAccountSubject & { readonly id: string },
   signal?: AbortSignal,
@@ -37,9 +42,11 @@ export function createWarmBackgroundStartGuard(
           account.authMaterial !== subject.authMaterial ||
           account.driver.provider !== subject.provider ||
           account.configDir !== subject.configDir ||
-          live.status !== "active" ||
+          (live.status !== "active" &&
+            !(deps.admitCooling === true && live.status === "cooling_down")) ||
           recoveryBlocksBackground(live, deps.now()) ||
-          findSpentWindow(live, deps.now(), deps.quotaSpentThreshold) !== null
+          (deps.admitCooling !== true &&
+            findSpentWindow(live, deps.now(), deps.quotaSpentThreshold) !== null)
         )
           throw new UpstreamAdmissionRefused("background account is not ordinarily eligible")
       },

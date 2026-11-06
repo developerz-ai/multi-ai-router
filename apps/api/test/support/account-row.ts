@@ -11,6 +11,7 @@ export function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     authMaterial: null,
     configDir: null,
     tokenExpiresAt: null,
+    authRefreshSpentOn: null,
     lifecycleVersion: 0,
     healthRecoveryVersion: 0,
     authRecoveryVersion: 0,

@@ -1339,6 +1339,7 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Subscription credential keepalive (`credential_keepalive`) | `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_INTERVAL_SECONDS` (3 min); one small turn per subscription whose access token the CLI would refresh now — see [11-anthropic-agent-sdk.md §3](11-anthropic-agent-sdk.md) |
 | Subscription login lifetime watch (`login_lifetime_watch`) | `LOGIN_LIFETIME_WATCH_INTERVAL_MINUTES` (daily); one `warn` per subscription inside the renewal window — see below |
 | Weekly usage report (`usage_weekly_report`) | `USAGE_REPORT_INTERVAL_MINUTES` (hourly check); one report per UTC week once its anchor has passed — see [Weekly usage report](#weekly-usage-report) |
+| Cooldown recheck (`cooldown_recheck`) | `COOLDOWN_RECHECK_INTERVAL_MINUTES` (hourly) |
 
 ### The catalog refresh is not a scheduled task
 

@@ -1,4 +1,4 @@
-import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import { type AccountRow, credentialFingerprint } from "@multi-ai-router/db"
 import { createLogger } from "../../../src/logging/logger"
 import {
   type CredentialRefresherDeps,
@@ -46,6 +46,11 @@ export function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     ...overrides,
   })
 }
+/** Parked, with this credential's one refresh already used. */
+export function spentParked(overrides: Partial<AccountRow> = {}): AccountRow {
+  const row = accountRow({ status: "needs_reauth", ...overrides })
+  return { ...row, authRefreshSpentOn: credentialFingerprint(row.authMaterial) }
+}
 export function fakeAccounts(rows: AccountRow[]): CredentialRefresherDeps["accounts"] {
   return {
     list: async () => [...rows],
@@ -65,6 +70,49 @@ export function fakeAccounts(rows: AccountRow[]): CredentialRefresherDeps["accou
       rows[index] = next
       return next
     },
+    reviveRefreshedCredential: async (input) => {
+      const index = rows.findIndex(
+        (r) => r.id === input.id && r.authMaterial === input.expectedAuthMaterial,
+      )
+      const held = rows[index]
+      if (held === undefined) return undefined
+      const next = {
+        ...held,
+        authMaterial: input.authMaterial,
+        tokenExpiresAt: input.tokenExpiresAt,
+        authRefreshSpentOn: credentialFingerprint(input.authMaterial),
+        lifecycleVersion: held.lifecycleVersion + 1,
+        authRecoveryVersion: held.authRecoveryVersion + 1,
+        status: held.status === "needs_reauth" ? ("active" as const) : held.status,
+        updatedAt: input.now,
+      }
+      rows[index] = next
+      return next
+    },
+    spendAuthRefresh: async (input) => {
+      const index = rows.findIndex(
+        (r) => r.id === input.id && r.authMaterial === input.expectedAuthMaterial,
+      )
+      const held = rows[index]
+      if (held === undefined) return undefined
+      const next = {
+        ...held,
+        authRefreshSpentOn: credentialFingerprint(input.expectedAuthMaterial),
+        updatedAt: input.now,
+      }
+      rows[index] = next
+      return next
+    },
+    releaseAuthRefresh: async (input) => {
+      const index = rows.findIndex(
+        (r) => r.id === input.id && r.authMaterial === input.expectedAuthMaterial,
+      )
+      const held = rows[index]
+      if (held === undefined) return undefined
+      const next = { ...held, authRefreshSpentOn: null, updatedAt: input.now }
+      rows[index] = next
+      return next
+    },
     transitionObservedStatus: async (input) => {
       const index = rows.findIndex(
         (r) =>
@@ -79,10 +127,7 @@ export function fakeAccounts(rows: AccountRow[]): CredentialRefresherDeps["accou
       rows[index] = next
       return next
     },
-  } satisfies Pick<
-    AccountRepository,
-    "list" | "findById" | "saveRefreshedCredential" | "transitionObservedStatus"
-  >
+  } satisfies CredentialRefresherDeps["accounts"]
 }
 export function deferred<T>() {
   let resolve!: (value: T) => void

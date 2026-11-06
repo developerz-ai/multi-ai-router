@@ -1,3 +1,4 @@
+import { refreshErrorLogger } from "../services/accounts"
 import { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
 import { createAdminPlane } from "./admin"
 import { createCliResources } from "./cli-resources"
@@ -116,6 +117,15 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   // The recovery probe's transport is the admin plane's "Test now", built just above; until this
   // line no permit can issue (the coordinator starts with the lifecycle), so nothing waits on it.
   recoveryComponents.probe.attach(recoveryProbeSender(admin.testNow))
+
+  // A credential the provider refused may only have needed refreshing, whatever its stored expiry
+  // says (prod, 2026-11-06). Off the request path: the writer's own flush, then a detached refresh.
+  const refreshFailed = refreshErrorLogger(logger)
+  statusWriter.attachParked((accountId) => {
+    refresher
+      .refreshNow(accountId)
+      .catch((error) => refreshFailed("refresh of a parked account raised", error, accountId))
+  })
 
   const { scheduler } = createRuntimeScheduler(
     deps,

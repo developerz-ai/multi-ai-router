@@ -281,6 +281,13 @@
       "when": 1793742942674,
       "tag": "0039_catalog_refresh_attempts",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793972931448,
+      "tag": "0040_auth_refresh_and_cooldown_recheck",
+      "breakpoints": true
     }
   ]
 }

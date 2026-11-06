@@ -705,7 +705,7 @@ disabled)` while the stored row said `active` — the operator's word, minted by
 - `disabled` is said only of an account whose stored status is `disabled`. The admin view shows
   `cooling_down` with `availability.cooldownReason: "credential-rejected"`, and the console says
   "credential rejected upstream — check the key".
-- OAuth is unchanged: `needs_reauth`, stored, ended by a completed login.
+- OAuth: `needs_reauth`, stored, ended by a completed login or by the one refresh a credential earns ([01-architecture.md](01-architecture.md)).
 
 The cost, stated: a key the provider genuinely revoked is re-tried once per cooldown — about ten
 times in its first day at the defaults, then at most six a day — and that one request fails over to the next
@@ -740,7 +740,7 @@ limits it again before it has answered any of them.
 | Rate-limit headers and reset instants | `parseRateLimit` on every upstream response. A *reading*, not a verdict — see the precedence rule below |
 | Subscription quota windows and utilization | Two kinds, never conflated. **Threshold-triggered**: the SDK's `rate_limit_event` events for Claude subs — fires only near the limit, so it is what trips the breaker but cannot rank headroom. **Continuous**: HTTP limiter headers on every response, and provider usage endpoints (Anthropic's OAuth usage endpoint for Claude subs, equivalents elsewhere) — a real percentage at any time, and the only thing `quota-aware` can rank on. Short-TTL cached, deduped per account |
 | Consecutive failure streak | attempt outcomes |
-| Auth failures | `401`/`403` → `needs_reauth` (OAuth), or a `credential-rejected` cooldown re-tested on `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, doubling to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (API key / no auth) — never `disabled` |
+| Auth failures | `401`/`403` → `needs_reauth` (OAuth; one refresh per credential generation runs off-path before it sticks), or a `credential-rejected` cooldown re-tested on `ROUTING_AUTH_FAILURE_COOLDOWN_MS`, doubling to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS` (API key / no auth) — never `disabled` |
 | Balance / credit signals | `402` and provider-specific out-of-credits bodies → `exhausted` |
 | Latency and error rate | `UsageRecord` rollups — see [08-observability.md](08-observability.md) |
 
@@ -978,7 +978,7 @@ installs the resulting account state in the local warm catalog before completing
 | Last checked | The database records requestedAt for the durable generation, including automatic recovery; cooldown refusal returns its held timestamps. |
 | **Claude authentication** | Before the recovery commit, a reserved local `claude auth status` check receives the captured account facts; no database lock crosses the subprocess. Only a confirmed check against the exact observed `needs_reauth` may recover authentication. The check itself bills no turn. |
 | **The probe** | The pending generation is demanded at once; its permit is spent by a client request or, after `RECOVERY_REQUEST_WAIT_MS`, by the router's own probe (*The router sends the recovery probe itself*). The response returns before that probe is sent and does not report its verdict; the account's recovery state does. |
-| **Stored status authority** | Recheck preserves `disabled` and `needs_reauth`. It clears only current `exhausted`; a successful guarded Claude auth check recovers `needs_reauth` before the atomic recovery request captures current intent. The catalog barrier precedes audit and response work. |
+| **Stored status authority** | Recheck preserves `disabled` and `needs_reauth`, and a committed recheck of a parked refreshable OAuth account buys one more refresh attempt, off-path. It clears only current `exhausted`; a successful guarded Claude auth check recovers `needs_reauth` before the atomic recovery request captures current intent. The catalog barrier precedes audit and response work. |
 | **Recovery admission** | A durable generation reserves at most one designated attempt across replicas. Pending/issued state gates further starts; only its captured old quota revisions may be bypassed. Success supersedes that captured blocking authority without changing provider utilization/reset, while a newer provider reading remains authoritative. PR147 is reviewed and merged; release/deployment remain pending. |
 
 Reset instants and utilization are also exposed on the API so an operator can alert on them
@@ -1104,6 +1104,17 @@ Recovery ownership and pending preparation leases are durable; an issued permit 
 A client that cancels a stream after the upstream has produced model output — a content, thinking, or tool-argument delta, not an envelope frame such as `message_start` or `ping` — settles the recovery attempt as `succeeded` and records health success: the account demonstrably served. A cancel before any model output proves nothing and settles `uncertain`. Either way the usage row is `client_error` / `client_cancelled`, and a cancel never strikes the account.
 
 A recovery generation captures, as bypassable evidence, only quota windows that are not provider-reported with a future reset. A window whose reset the provider itself reported and which has not arrived is the provider's answer, not stale guesswork; only an operator Re-check captures it. Automatic generations capturing it spent a certain-429 probe every cooldown for days (prod, 2026-10-06: two spent `seven_day` windows reset 2 days out).
+
+### The hourly cooldown recheck
+
+The rule above is about the recovery permit, which retries every cooldown. `cooldown_recheck` is the owner-requested exception on a slower clock: it looks at an account whose provider-reported reset is still ahead, once per `COOLDOWN_RECHECK_INTERVAL_MINUTES`, because providers do reset windows early and a weekly window otherwise means days with no look. It holds no permit and clears no recovery state; its start guard admits `cooling_down` and spent windows and refuses every standing block.
+
+| Transport | Signal | Cost per account per interval |
+|---|---|---|
+| Agent SDK (`anthropic-oauth`) | Turn-free usage read. A window re-read below the threshold ends the cooldown; a cold credential is skipped | No turn, no billed usage. One `claude` subprocess |
+| HTTP, any other provider | One minimal real request through "Test now", audited `trigger: cooldown_recheck` | One small request. Billed only if the provider serves it, which is the case that ends the cooldown |
+
+A still-limited answer records its window readings and moves nothing else. A cooldown held only in another replica's memory is not visible to the replica that won the advisory lock, and runs to its own reset. Spent windows are durable and visible from any replica.
 
 Successful CLI/browser authorization, guarded passive authentication recovery, manual credential replacement and explicit enable publish their recovery generation in the same account transaction, already settled (`cancelled`, outcome now, `nextAllowedAt` after `RECOVERY_COOLDOWN_MS`): the generation bump fences stale observations and supersedes any open probe, but routing is never gated on a probe after a credential was just verified or an operator just enabled the account. Through v2.22.0 these published `pending`, and the first requests after a reconnect were refused as `probe-in-flight` until a permit was issued on demand (prod, 2026-10-06). Routine refresh preserves operator intent.
 

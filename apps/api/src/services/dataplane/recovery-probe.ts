@@ -48,6 +48,8 @@ export type RecoveryProbeSend = (input: {
   readonly startGuard: () => Promise<void>
   /** The probe's rate-limit reading, folded only after its verdict (`chain-recovery.ts` order). */
   readonly rateLimitSink: (signal: RateLimitSignal) => void
+  /** Absent is the permit's own probe; the hourly recheck names itself on the audit row. */
+  readonly trigger?: "cooldown_recheck"
 }) => Promise<RecoveryProbeResult>
 
 export interface RecoveryProbeDeps {
@@ -275,7 +277,7 @@ function settle(
   return "settled"
 }
 
-interface ProbeModel {
+export interface ProbeModel {
   readonly model: string
   readonly source: "declared" | "provider-default"
 }
@@ -285,7 +287,7 @@ interface ProbeModel {
  * only when it declares none: a shipped default goes stale when a vendor retires a model (prod
  * 2026-11-05: `MiniMax-M2`), while the declared list is what this account routes today.
  */
-function probeModel(
+export function probeModel(
   account: AccountSnapshot,
   models: Readonly<Record<string, string>>,
 ): ProbeModel | undefined {

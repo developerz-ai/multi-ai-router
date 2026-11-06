@@ -2,8 +2,10 @@ import { IDLE_PROBE_MODELS, schedulerFromEnv } from "../scheduler"
 import { createLastLoginLookup } from "../services/accounts/last-login"
 import { describeProvider } from "../services/accounts/providers"
 import { refreshAccountCatalog } from "../services/models"
+import { DEFAULT_QUOTA_SPENT_THRESHOLD } from "../services/routing"
 import type { AdminServices } from "../types"
 import type { createCliResources } from "./cli-resources"
+import { recoveryProbeSender } from "./recovery"
 import type { createRequestServices } from "./request-services"
 import type { createRuntimeRepositories } from "./runtime-repositories"
 import type { createRuntimeTelemetry } from "./runtime-telemetry"
@@ -33,10 +35,11 @@ export function createRuntimeScheduler(
     modelCatalog,
     schedulerLock,
   } = repositories
-  const { health } = warm
+  const { health, catalog, recoveryComponents } = warm
   const { configDirs, transcripts, credentialFreshness, credentialReader } = cli
   const { adminSessions, metrics } = telemetry
-  const { usageGaugeProbe, backgroundStartGuard, catalogRefreshDeps } = request
+  const { usageGaugeProbe, backgroundStartGuard, cooldownRecheckGuard, catalogRefreshDeps } =
+    request
   // Built AFTER the admin plane, not before: the keepalive sweep spends the admin plane's own
   // "Test now" rather than a second probe of its own, so a scheduled probe and an operator's button
   // press share one cooldown, one subprocess gate, and one audit kind. Nothing between the two
@@ -98,6 +101,24 @@ export function createRuntimeScheduler(
     // quota window, and nothing in routing reads what it writes. `supported_models` — which does
     // gate routing — stays the operator's, untouched by any timer.
     refreshCatalog: (account, at) => refreshAccountCatalog(catalogRefreshDeps, account, at),
+    // The same two seams the rest of the router's looks go through: "Test now" for a real request,
+    // and the turn-free gauge for a subscription. Only the start guard is its own.
+    cooldownRecheck: {
+      accounts: () => catalog.accounts(),
+      snapshot: (id) => recoveryComponents.access.currentSnapshot(id),
+      rows: accounts,
+      health,
+      send: recoveryProbeSender(admin.testNow),
+      startGuard: cooldownRecheckGuard,
+      usage: (account) =>
+        usageGaugeProbe.read({
+          accountId: account.id,
+          configDir: configDirs.pathFor(account.id),
+          beforeBackgroundUpstreamStart: cooldownRecheckGuard(account),
+        }),
+      models: IDLE_PROBE_MODELS,
+      quotaSpentThreshold: DEFAULT_QUOTA_SPENT_THRESHOLD,
+    },
     env,
     schedulerLock,
     logger,

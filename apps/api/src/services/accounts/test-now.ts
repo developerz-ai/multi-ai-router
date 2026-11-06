@@ -83,6 +83,8 @@ export interface TestNowService {
       readonly recovery?: {
         readonly startGuard: () => Promise<void>
         readonly rateLimitSink: (signal: RateLimitSignal) => void
+        /** The audit row's `trigger`, when the router's reason is not the permit's own probe. */
+        readonly trigger?: "cooldown_recheck"
       }
     },
   ): Promise<AdminResult<TestNowResult>>
@@ -238,7 +240,7 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
           outcome: outcome.ok ? "ok" : "failed",
           trigger:
             input.recovery !== undefined
-              ? "router_recovery"
+              ? (input.recovery.trigger ?? "router_recovery")
               : backgroundExpectedAccount !== undefined
                 ? "idle_probe"
                 : "operator",
