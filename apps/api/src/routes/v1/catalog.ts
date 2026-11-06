@@ -1,6 +1,7 @@
 import type { ModelReasoning } from "@multi-ai-router/core"
 import type { Context } from "hono"
 import type { RouterKeyEnv } from "../../middleware/routerKeyAuth"
+import type { RateCard } from "../../services/cost"
 import type { CatalogModel, CatalogProvider } from "../../services/dataplane"
 import { CONTEXT_TABLE_AS_OF } from "../../services/models"
 
@@ -68,8 +69,17 @@ interface OfferBody {
 }
 
 /** US dollars per million tokens. The unit every price in this system is stated in. */
-interface PricingBody {
+interface PricingBody extends CardBody {
   readonly currency: "USD"
+  /**
+   * The card that replaces this one, every token direction, once a request's total prompt
+   * (input + cache read + cache write) reaches `from_prompt_tokens`. Absent: one price whatever the
+   * prompt. The same rule the router prices its own usage records by (`services/cost/rates.ts`).
+   */
+  readonly long_context?: CardBody & { readonly from_prompt_tokens: number }
+}
+
+interface CardBody {
   readonly input_per_mtok: number
   readonly output_per_mtok: number
   readonly cache_read_per_mtok: number
@@ -121,13 +131,22 @@ function toEntry(model: CatalogModel): CatalogEntry {
 }
 
 function toPricing(pricing: CatalogModel["pricing"]): PricingBody | null {
-  return pricing === null
-    ? null
-    : {
-        currency: "USD",
-        input_per_mtok: pricing.inputPerMtok,
-        output_per_mtok: pricing.outputPerMtok,
-        cache_read_per_mtok: pricing.cacheReadPerMtok,
-        cache_write_per_mtok: pricing.cacheWritePerMtok,
-      }
+  if (pricing === null) return null
+  const long = pricing.longContext
+  return {
+    currency: "USD",
+    ...toCard(pricing),
+    ...(long === undefined
+      ? {}
+      : { long_context: { from_prompt_tokens: long.fromPromptTokens, ...toCard(long) } }),
+  }
+}
+
+function toCard(card: RateCard): CardBody {
+  return {
+    input_per_mtok: card.inputPerMtok,
+    output_per_mtok: card.outputPerMtok,
+    cache_read_per_mtok: card.cacheReadPerMtok,
+    cache_write_per_mtok: card.cacheWritePerMtok,
+  }
 }

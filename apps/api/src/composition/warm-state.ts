@@ -63,6 +63,8 @@ export function createWarmState(
     authFailureCooldownMs: env.failover.authFailureCooldownMs,
     authFailureMaxCooldownMs: env.failover.authFailureMaxCooldownMs,
     probeHoldMs: env.failover.halfOpenHoldMs,
+    // Two read intervals: one missed `plan_quota_read` tick is tolerated, a dead endpoint is not.
+    planReadingMaxAgeMs: 2 * env.scheduler.planQuotaReadIntervalMinutes * 60_000,
     // Both transports fold a reading in here and nowhere else, which is what makes one hook enough
     // to make every observed window durable.
     onQuotaWindows: (accountId, windows, observation) =>

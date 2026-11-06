@@ -1,6 +1,5 @@
 import type { RateLimitSignal } from "../../providers"
 import {
-  type AttemptFailure,
   type BreakerOptions,
   type BreakerState,
   lengthenRefusal,
@@ -8,6 +7,7 @@ import {
   phase,
   recordFailure,
   refusalStands,
+  withPlanReset,
 } from "../routing"
 import type { AccountHealthState } from "./health"
 
@@ -43,6 +43,7 @@ export function foldRateLimit(
   signal: RateLimitSignal,
   now: Date,
   breaker: BreakerOptions,
+  planReadingMaxAgeMs = 0,
 ): AccountHealthState {
   const recorded: AccountHealthState = {
     ...state,
@@ -54,13 +55,19 @@ export function foldRateLimit(
   if (!signal.limited) return recorded
   if (phase(state.breaker, now) === "blocked") return recorded
 
-  const reading: AttemptFailure = {
-    kind: "rate-limited",
-    resetsAt: signal.resetsAt,
-    retryAfterSeconds: signal.retryAfterSeconds,
-    resetSource: signal.resetSource,
-    message: "upstream reported the limit was reached",
-  }
+  // A reading that names no reset borrows a spent plan window's (`routing/plan-reset.ts`).
+  const reading = withPlanReset(
+    {
+      kind: "rate-limited",
+      resetsAt: signal.resetsAt,
+      retryAfterSeconds: signal.retryAfterSeconds,
+      resetSource: signal.resetSource,
+      message: "upstream reported the limit was reached",
+    },
+    recorded.quotaWindows,
+    now,
+    planReadingMaxAgeMs,
+  )
   const tripped = refusalStands(state.breaker, now)
     ? lengthenRefusal(state.breaker, reading, now)
     : recordFailure(state.breaker, reading, now, breaker)

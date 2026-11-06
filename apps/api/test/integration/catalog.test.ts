@@ -47,7 +47,7 @@ interface CatalogBody {
     readonly context_length: number | null
     readonly max_output_tokens: number | null
     readonly context_source: string | null
-    readonly pricing: Record<string, number | string> | null
+    readonly pricing: Record<string, unknown> | null
     readonly offers: readonly Record<string, unknown>[]
   }[]
 }
@@ -107,6 +107,32 @@ describe("GET /v1/catalog", () => {
     // The shipped table's own date rides the response: a `shipped` window is only as current as
     // this, and a listing that could not age visibly is one nobody can judge.
     expect(body.context_table_as_of).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  test("a tiered price states the long-context card and where it takes over", async () => {
+    const { app } = harness({
+      accounts: [account("acct-mm", { apiKey: "sk-mm", cipher: CRYPTOR, provider: "minimax" })],
+      responses: [() => jsonResponse(200, {})],
+      models: models({ "acct-mm": { "minimax-m3": { contextTokens: 1_000_000 } } }),
+    })
+
+    const res = await app.request("/v1/catalog", { headers: bearer() })
+    const body = (await res.json()) as CatalogBody
+
+    expect(body.data[0]?.pricing).toEqual({
+      currency: "USD",
+      input_per_mtok: 0.3,
+      output_per_mtok: 1.2,
+      cache_read_per_mtok: 0.06,
+      cache_write_per_mtok: 0,
+      long_context: {
+        from_prompt_tokens: 512_000,
+        input_per_mtok: 0.6,
+        output_per_mtok: 2.4,
+        cache_read_per_mtok: 0.12,
+        cache_write_per_mtok: 0,
+      },
+    })
   })
 
   test("publishes the size every account can take, and each provider's own answer in offers", async () => {

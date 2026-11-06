@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.51.0] — 2026-11-06
+
+### Added
+
+- **MiniMax, z.ai and Kimi plans show their quota windows.** `plan_quota_read` now reads three more usage endpoints, one sibling file per driver: MiniMax `GET /v1/token_plan/remains` (`general` bucket: interval → `five_hour`, weekly → `seven_day`; status `2` reads spent), z.ai `GET /api/monitor/usage/quota/limit` (`TOKENS_LIMIT` 5 h / 1 week; the MCP `TIME_LIMIT` is not read), Kimi `GET /coding/v1/usages` (`limit_5h`, `limit_7d`). Every window is advisory with the provider's own reset. Shapes are the live replies the production router got on 2026-11-06; z.ai's weekly `nextResetTime` matched its `1310` stamp read as UTC+8 to the second. Regression: `apps/api/test/unit/providers/plan-quota-readers.test.ts`. Documentation: `docs/idea/03-providers.md` § MiniMax, z.ai and Kimi plans.
+- **`GET /v1/catalog` pricing states a long-context tier.** A tiered model's `pricing` (and each offer's) carries `long_context: { from_prompt_tokens, input_per_mtok, output_per_mtok, cache_read_per_mtok, cache_write_per_mtok }`; absent means one price. Additive. Documentation: `docs/idea/06-protocol-translation.md`.
+
+### Fixed
+
+- **A limit refusal that names no reset cools until the plan says it lifts, not for five minutes.** MiniMax's `429 … Token Plan usage limit reached … (2056)` carries no reset and Kimi's limit `403` only an estimated re-test, so a spent weekly window was walked into every five minutes for days (prod, 2026-11-06: 92 consecutive failures on `minimax`, `resetSource: estimated`). A `rate-limited` failure without a stated reset now borrows the latest future `provider-reported` reset among the account's spent quota windows, labeled `provider-reported`. A reading alone still cools nothing, a stated reset is never replaced, and only a reading younger than two `PLAN_QUOTA_READ_INTERVAL_MINUTES` lends. The `2056` body classifies as `minimax:token-plan-limit`. Regression: `apps/api/test/unit/routing/plan-reset.test.ts`, `apps/api/test/unit/dataplane/health-plan-reset.test.ts`. Documentation: `docs/idea/05-routing-and-failover.md` backoff table.
+
 ## [2.50.0] — 2026-11-06
 
 ### Added
@@ -1983,3 +1994,4 @@ your tooling config.
 [2.48.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.48.1
 [2.49.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.49.0
 [2.50.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.50.0
+[2.51.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.51.0

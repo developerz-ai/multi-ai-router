@@ -1,3 +1,4 @@
+import type { QuotaWindowKind, QuotaWindowState } from "@multi-ai-router/core"
 import type { DriverAccount, RateLimitSignal } from "./types"
 
 /**
@@ -24,4 +25,35 @@ export interface ProviderQuotaRead {
    * Account on the router's own say-so. `at` is when the reading was taken — this member has no clock.
    */
   read(body: unknown, at: Date): RateLimitSignal | null
+}
+
+/**
+ * One named window as every plan reader reports it: a continuous reading, advisory, its reset the
+ * provider's own or unknown. Advisory because a background read is not a verdict — the upstream's
+ * own `429` is what takes an Account out of rotation; this reading only says how long that lasts
+ * (`routing/quota.ts`, `spentPlanReset`) and ranks headroom for `quota-aware`.
+ */
+export function advisoryWindow(
+  window: QuotaWindowKind,
+  utilization: number,
+  resetsAt: Date | undefined,
+  at: Date,
+): QuotaWindowState {
+  return {
+    window,
+    utilization: Math.min(Math.max(utilization, 0), 1),
+    utilizationSource: "continuous",
+    ...(resetsAt === undefined
+      ? { resetSource: "unknown" as const }
+      : { resetsAt, resetSource: "provider-reported" as const }),
+    lastCheckedAt: at,
+    advisory: true,
+  }
+}
+
+/** An epoch-milliseconds instant, or `undefined` for zero, negative or unrepresentable. */
+export function epochMillis(value: number | undefined): Date | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date
 }

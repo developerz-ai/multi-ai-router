@@ -76,6 +76,7 @@ export {
   type NoCandidatesInput,
   noCandidatesError,
 } from "./no-candidates"
+export { spentPlanReset, withPlanReset } from "./plan-reset"
 export {
   leastUsed,
   POLICIES,

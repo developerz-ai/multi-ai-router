@@ -6,6 +6,8 @@ import {
   typeRule,
   withResetEstimate,
 } from "../failure/classify"
+import type { ProviderDriver } from "../types"
+import { kimiQuotaRead } from "./kimi-quota"
 
 /**
  * `kimi` — Anthropic-shaped coding surface, prepaid balance, own model ids (`k3`). An Account
@@ -138,43 +140,46 @@ const accountTakenAway: ClassificationRule = {
 const FIVE_HOUR_RETEST_SECONDS = 15 * 60
 const LONG_WINDOW_RETEST_SECONDS = 60 * 60
 
-export const kimiDriver = createHttpDriver({
-  id: "kimi",
-  surfaces: [
-    {
-      dialect: "anthropic",
-      baseUrl: BASE_URL,
-      anthropicAuth: "vendor-bearer",
-      thinkingOnByDefault: true,
-    },
-  ],
-  rules: [
-    typeRule("credits-exhausted", "kimi:exceeded_current_quota_error", QUOTA_TYPES),
-    messageRule("credits-exhausted", "kimi:insufficient-balance", INSUFFICIENT_BALANCE),
-    // Ahead of every limit rule: a suspension that also mentions a limit is still a suspension.
-    // Auth statuses only — on a 429 or a 5xx the same words describe a throttle or a fault.
-    onStatus(AUTH_STATUSES, accountTakenAway),
-    // Ahead of the auth rules below: these arrive as a 403 and must never be read as one. The
-    // specific windows first, so each carries its own signal and re-test cadence; the family last,
-    // for a window Kimi has not shipped yet.
-    withResetEstimate(
-      messageRule("rate-limited", "kimi:billing-cycle-limit", CYCLE_LIMIT),
-      LONG_WINDOW_RETEST_SECONDS,
-    ),
-    withResetEstimate(
-      messageRule("rate-limited", "kimi:usage-limit-weekly", WEEKLY_LIMIT),
-      LONG_WINDOW_RETEST_SECONDS,
-    ),
-    withResetEstimate(
-      messageRule("rate-limited", "kimi:usage-limit-5-hour", FIVE_HOUR_LIMIT),
-      FIVE_HOUR_RETEST_SECONDS,
-    ),
-    withResetEstimate(
-      messageRule("rate-limited", "kimi:usage-limit", ANY_USAGE_LIMIT),
-      FIVE_HOUR_RETEST_SECONDS,
-    ),
-    typeRule("rate-limited", "kimi:rate_limit_reached_error", RATE_LIMIT_TYPES),
-    typeRule("auth", "kimi:invalid_authentication_error", AUTH_TYPES),
-    typeRule("server-error", "kimi:engine_overloaded_error", OVERLOAD_TYPES),
-  ],
-})
+export const kimiDriver: ProviderDriver = {
+  ...createHttpDriver({
+    id: "kimi",
+    surfaces: [
+      {
+        dialect: "anthropic",
+        baseUrl: BASE_URL,
+        anthropicAuth: "vendor-bearer",
+        thinkingOnByDefault: true,
+      },
+    ],
+    rules: [
+      typeRule("credits-exhausted", "kimi:exceeded_current_quota_error", QUOTA_TYPES),
+      messageRule("credits-exhausted", "kimi:insufficient-balance", INSUFFICIENT_BALANCE),
+      // Ahead of every limit rule: a suspension that also mentions a limit is still a suspension.
+      // Auth statuses only — on a 429 or a 5xx the same words describe a throttle or a fault.
+      onStatus(AUTH_STATUSES, accountTakenAway),
+      // Ahead of the auth rules below: these arrive as a 403 and must never be read as one. The
+      // specific windows first, so each carries its own signal and re-test cadence; the family last,
+      // for a window Kimi has not shipped yet.
+      withResetEstimate(
+        messageRule("rate-limited", "kimi:billing-cycle-limit", CYCLE_LIMIT),
+        LONG_WINDOW_RETEST_SECONDS,
+      ),
+      withResetEstimate(
+        messageRule("rate-limited", "kimi:usage-limit-weekly", WEEKLY_LIMIT),
+        LONG_WINDOW_RETEST_SECONDS,
+      ),
+      withResetEstimate(
+        messageRule("rate-limited", "kimi:usage-limit-5-hour", FIVE_HOUR_LIMIT),
+        FIVE_HOUR_RETEST_SECONDS,
+      ),
+      withResetEstimate(
+        messageRule("rate-limited", "kimi:usage-limit", ANY_USAGE_LIMIT),
+        FIVE_HOUR_RETEST_SECONDS,
+      ),
+      typeRule("rate-limited", "kimi:rate_limit_reached_error", RATE_LIMIT_TYPES),
+      typeRule("auth", "kimi:invalid_authentication_error", AUTH_TYPES),
+      typeRule("server-error", "kimi:engine_overloaded_error", OVERLOAD_TYPES),
+    ],
+  }),
+  quotaRead: kimiQuotaRead,
+}

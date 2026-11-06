@@ -8,6 +8,7 @@ import {
   phase,
   recordFailure,
   recordSuccess,
+  withPlanReset,
 } from "../routing"
 import { mergeQuotaWindows } from "../routing/quota"
 import {
@@ -48,6 +49,11 @@ export interface HealthStoreOptions {
   readonly authFailureMaxCooldownMs?: number
   readonly jitter?: () => number
   readonly probeHoldMs?: number
+  /**
+   * How old a plan reading may be and still lend its reset to a reset-less limit refusal
+   * (`routing/plan-reset.ts`). Absent: no reading lends, the breaker's own backoff stands.
+   */
+  readonly planReadingMaxAgeMs?: number
   readonly onQuotaWindows?: (
     accountId: string,
     windows: readonly QuotaWindowState[],
@@ -108,6 +114,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
   let nextProbeToken = 0
   const jitter = options.jitter ?? Math.random
   const probeHoldMs = options.probeHoldMs ?? DEFAULT_PROBE_HOLD_MS
+  const planReadingMaxAgeMs = options.planReadingMaxAgeMs ?? 0
   let probeAdmitted = 0
   let probeRefused = 0
 
@@ -179,7 +186,9 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (!observations.accepts(accountId, observation)) return
       const before = read(accountId).breaker
       if (phase(before, now) === "blocked") return
-      const after = recordFailure(before, failure, now, breakerOptions(caller))
+      // A limit refusal with no reset of its own lasts until the plan's reading says it lifts.
+      const planned = withPlanReset(failure, read(accountId).quotaWindows, now, planReadingMaxAgeMs)
+      const after = recordFailure(before, planned, now, breakerOptions(caller))
       if (after !== before) observations.advanceVerdict(accountId)
       write(accountId, { breaker: after })
       if (after.status !== before.status && phase(after, now) === "blocked") {
@@ -194,7 +203,13 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     applyRateLimit(accountId, signal, now, observation) {
       if (signal === null || !observations.accepts(accountId, observation)) return
-      const folded = foldRateLimit(read(accountId), signal, now, breakerOptions())
+      const folded = foldRateLimit(
+        read(accountId),
+        signal,
+        now,
+        breakerOptions(),
+        planReadingMaxAgeMs,
+      )
       if (folded.breaker !== read(accountId).breaker) observations.advanceVerdict(accountId)
       states.set(accountId, folded)
       if (signal.quotaWindows !== undefined) {
