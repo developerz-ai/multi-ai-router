@@ -96,12 +96,15 @@ export function relaySuccess(
           ctx.request?.signal,
         )
   const upstreamStreams = forcesUpstreamStream(servable)
+  // Whether the body is SSE whatever its `content-type` says: the driver declares a surface that
+  // answers only as a stream (Codex sends one with no `content-type` at all), translated or not.
+  const sendsSse = servable.responsesEgress.requireStream
   let modelOutput = false
   const observation = createResponseObserver({
     dialect: servable.dialect,
     operation: ctx.runtime.operation,
     // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
-    contentType: upstreamStreams ? "text/event-stream" : response.headers.get("content-type"),
+    contentType: sendsSse ? "text/event-stream" : response.headers.get("content-type"),
     maximumObservationBytes: ctx.runtime.responseObservationMaxBytes ?? 65_536,
     descriptor: observingModelOutput(servable.dialect, servable.driver.responseObservation, () => {
       modelOutput = true
@@ -232,7 +235,7 @@ export function relaySuccess(
     // restamped passthrough keeps the upstream's framing, so it is never collected.
     collectStream:
       servable.translation !== null && upstreamStreams && ctx.translated?.clientStreams() !== true,
-    upstreamStreams,
+    upstreamStreams: sendsSse,
     ...(priced ? { cost } : {}),
     observer,
     ...(relaySignal === undefined ? {} : { signal: relaySignal }),

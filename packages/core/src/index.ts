@@ -55,7 +55,14 @@ export {
   usageOutcomeForErrorCode,
 } from "./domain/usage"
 export { UsageReportDeliveryStatus } from "./domain/usage-report"
-export type { AdminAuthInit, QuotaExhaustedInit, RetryableInit, RouterErrorCode } from "./errors"
+export type {
+  AdminAuthInit,
+  NoHealthyAccountInit,
+  NoHealthyAccountWall,
+  QuotaExhaustedInit,
+  RetryableInit,
+  RouterErrorCode,
+} from "./errors"
 export {
   AdminAuthError,
   CredentialDecryptError,
@@ -104,4 +111,5 @@ export {
   type Wall,
   type WallScope,
   wallOf,
+  wallOfError,
 } from "./wall"

@@ -384,10 +384,9 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           lifetime,
         )
         accounting.respond(response)
-        // A chain that answered stamped its own count; one that never reached an upstream did not.
-        return response.headers.has(ROUTER_ATTEMPTS_HEADER)
-          ? response
-          : withHeaders(response, { [ROUTER_ATTEMPTS_HEADER]: String(accounting.facts().attempts) })
+        return withHeaders(response, {
+          [ROUTER_ATTEMPTS_HEADER]: String(accounting.answeredAttempts(response)),
+        })
       } catch (error) {
         const { error: failure } = lifetime.fail(error)
         noteRequestFacts(failure, { ...accounting.facts(), pools: progress.pools ?? [] })

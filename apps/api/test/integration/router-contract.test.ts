@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { opaqueAccountRef } from "../../src/errors/account-ref"
 import type { RouterErrorObject } from "../../src/errors/router-object"
-import { account, jsonResponse, slowStream } from "../unit/dataplane/fixtures"
+import { account, jsonResponse, slowStream, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, MESSAGE, post, STREAMED_MESSAGE, settle } from "./harness"
 
 /**
@@ -157,6 +157,8 @@ describe("error.router — every ingress dialect", () => {
         const router = await routerOf(res)
         expect(router).toMatchObject({ wall: "human", scope: "key", retryable: false })
         expect(router.request_id).toBe(res.headers.get("x-router-request-id"))
+        // Refused before the dispatcher: still counted, as zero.
+        expect(res.headers.get("x-router-attempts")).toBe("0")
       })
     })
   }
@@ -173,6 +175,16 @@ describe("error.router — every ingress dialect", () => {
 })
 
 describe("x-router-* headers on every answer", () => {
+  test("an unknown route counts zero attempts too", async () => {
+    const { app } = harness({ responses: [] })
+
+    const res = await app.request("/v1/nope")
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get("x-router-attempts")).toBe("0")
+    expect(res.headers.get("x-router-request-id")).not.toBeNull()
+  })
+
   test("a served answer names its model, provider, account and attempts", async () => {
     const { app } = harness({ responses: [() => jsonResponse(200, { ok: true })] })
 
@@ -264,5 +276,75 @@ describe("x-router-* headers on every answer", () => {
     expect(res.status).toBe(429)
     expect(res.headers.get("x-router-account")).toBeNull()
     expect(res.headers.get("x-router-attempts")).toBe("1")
+  })
+
+  describe("x-router-attempts counts upstream attempts, one source on success and failure", () => {
+    const STALE = "No conversation found with session ID: sdk-1"
+    const sdkAnswer = () =>
+      new Response(
+        JSON.stringify({
+          id: "msg_01",
+          type: "message",
+          role: "assistant",
+          model: "claude-opus-5",
+          content: [{ type: "text", text: "hi" }],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 7, output_tokens: 3 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+
+    test("a stale session replayed in place, then served, is two attempts", async () => {
+      let calls = 0
+      const { app, usage } = harness({
+        accounts: [subscriptionAccount("sub")],
+        responses: [],
+        invokeSdk: (invocation) => {
+          invocation.onUpstreamStarted?.()
+          calls += 1
+          return calls === 1 ? Promise.reject(new Error(STALE)) : Promise.resolve(sdkAnswer())
+        },
+      })
+
+      const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+      await res.text()
+      await settle()
+
+      expect(res.status).toBe(200)
+      expect(usage.rows).toHaveLength(2)
+      expect(res.headers.get("x-router-attempts")).toBe("2")
+    })
+
+    test("an answer the router wrote itself, with no upstream asked, is zero", async () => {
+      const { app } = harness({ accounts: [subscriptionAccount("sub")], responses: [] })
+
+      const res = await app.request(
+        "/v1/messages/count_tokens",
+        post(JSON.stringify({ model: "claude-opus-5", messages: [] }), bearer()),
+      )
+
+      expect(res.status).toBe(200)
+      expect(res.headers.get("x-router-attempts")).toBe("0")
+    })
+
+    test("the same replay, failing again, is also two attempts", async () => {
+      const { app, usage } = harness({
+        accounts: [subscriptionAccount("sub")],
+        responses: [],
+        invokeSdk: (invocation) => {
+          invocation.onUpstreamStarted?.()
+          return Promise.reject(new Error(STALE))
+        },
+      })
+
+      const res = await app.request("/v1/messages", post(MESSAGE, bearer()))
+      await res.text()
+      await settle()
+
+      // The SDK's own failure, relayed (502): no `error.router`, but the header still counts.
+      expect(res.status).toBe(502)
+      expect(usage.rows).toHaveLength(2)
+      expect(res.headers.get("x-router-attempts")).toBe("2")
+    })
   })
 })

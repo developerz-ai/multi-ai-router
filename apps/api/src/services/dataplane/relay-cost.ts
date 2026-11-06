@@ -51,12 +51,29 @@ export function usageCostFields(facts: CountFacts, estimate: CostEstimate): Usag
   }
 }
 
-/** Compact JSON, so `usage: null` on a content chunk never reads as a usage frame. */
-const USAGE_OBJECT = '"usage":{'
+/**
+ * The chunk `stream_options.include_usage` adds at the end: a `usage` object and `choices: []`.
+ * Parsed, not matched: a relayed upstream's own spacing must not hide it, and a provider that
+ * puts usage on every content chunk must not have each one stamped — only the final one.
+ */
+function isOpenAiChatUsageChunk(data: string): boolean {
+  // A cheap pre-check, so a content chunk is not parsed a second time just to be ruled out.
+  if (!data.includes('"usage"')) return false
+  try {
+    const chunk = responseObject(JSON.parse(data))
+    return (
+      responseObject(chunk?.usage) !== undefined &&
+      Array.isArray(chunk?.choices) &&
+      chunk.choices.length === 0
+    )
+  } catch {
+    return false
+  }
+}
 
 function isUsageFrame(ingress: Dialect, event: SseEvent): boolean {
   if (ingress === "anthropic") return event.event === "message_delta"
-  if (ingress === "openai-chat") return event.data.includes(USAGE_OBJECT)
+  if (ingress === "openai-chat") return isOpenAiChatUsageChunk(event.data)
   return event.event === "response.completed" || event.event === "response.incomplete"
 }
 

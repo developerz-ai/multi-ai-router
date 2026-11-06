@@ -7,8 +7,9 @@ import {
   type Wall,
   type WalledAccount,
   type WallScope,
-  wallOf,
+  wallOfError,
 } from "@multi-ai-router/core"
+import { redactValue } from "../logging/redact"
 import {
   RequestAdmissionUnavailableError,
   RouterShutdownError,
@@ -96,8 +97,10 @@ export function routerErrorObject(
       state: entry.state,
       reset_at: entry.resetsAt?.toISOString() ?? null,
     })),
-    pools: detail.pools ?? facts?.pools ?? [],
-    signal: detail.signal ?? null,
+    // Router-held text, but an operator names pools and an upstream shapes a signal: both pass the
+    // same scrub as the sentence (`render.ts`).
+    pools: (detail.pools ?? facts?.pools ?? []).map((name) => redactValue(name)),
+    signal: detail.signal === undefined ? null : redactValue(detail.signal),
     attempts: facts?.attempts ?? 0,
     request_id: requestId,
   }
@@ -105,7 +108,7 @@ export function routerErrorObject(
 
 /** The router's own failures that are not `RouterError`s, each with the wall it means. */
 function classify(error: unknown): { wall: Wall; scope: WallScope } {
-  if (isRouterError(error)) return { wall: wallOf(error.code), scope: defaultWallScope(error.code) }
+  if (isRouterError(error)) return { wall: wallOfError(error), scope: defaultWallScope(error.code) }
   if (error instanceof ClientCancelledError) return { wall: "request", scope: "request" }
   if (error instanceof RouterShutdownError || error instanceof RequestAdmissionUnavailableError)
     return { wall: "capacity", scope: "router" }

@@ -725,8 +725,10 @@ A response **the router writes** states what the attempt cost, in its `usage`, O
 | `cost_basis` | `metered`, or `notional` on a subscription account: what the call would have cost on the API, an attribution and not a spend ([08](08-observability.md#cost-estimation)) |
 
 Where it rides: the body's `usage` on a whole response; on a stream, the one final usage frame.
-That frame is `message_delta` toward `anthropic`, the usage-only chunk toward `openai-chat` (which
-exists only when the client set `stream_options.include_usage`; the router adds no frame of its own),
+That frame is `message_delta` toward `anthropic`, the usage-only chunk toward `openai-chat` — found
+by parsing: a `usage` object beside `choices: []`, so a content chunk that also carries usage is not
+stamped (it exists only when the client set `stream_options.include_usage`; the router adds no frame
+of its own),
 and `response.completed` / `response.incomplete` toward `openai-responses`, under `response.usage`.
 
 **Which responses carry it.** Every translated inference response, including a Claude subscription
@@ -784,14 +786,14 @@ error event after a `200`; the `x-router-*` headers below name the account in bo
 
 | Field | Meaning |
 |---|---|
-| `wall` | What clears it, one value per error code (`packages/core/src/wall.ts`): `clock` (`429`: wait `retry_after_s`), `capacity` (`503`/`504`: retry later, no instant), `human` (`402` top-up, `502` re-auth, `500` stored credential, `401` revoked key), `scope` (`403`, `404` model: another key or model), `request` (`400`/`413`/`415`, `499`: change the request), `internal` (an unknown `500`) |
+| `wall` | What clears it, fixed per error code (`packages/core/src/wall.ts`): `clock` (`429`: wait `retry_after_s`), `capacity` (`503`/`504`: retry later, no instant), `human` (`402` top-up, `502` re-auth, `500` stored credential, `401` revoked key), `scope` (`403`, `404` model: another key or model), `request` (`400`/`413`/`415`, `499`: change the request), `internal` (an unknown `500`). One code is typed to three: a `503` `no_healthy_account` is `capacity` unless its throw site names `human` (only disabled / needs-re-auth / credential-rejected members; a missing base URL or config directory) or `scope` (no account serves the model; none performs the operation) |
 | `scope` | Who the verdict is about: `pool` (selection judged every account the key reaches), `account` (one upstream account's own answer, the most actionable the chain held), `session` (a bound session's account), `key`, `request`, `router` |
 | `retryable` | `true` exactly when `wall` is `clock` or `capacity` |
 | `reset_at`, `reset_source` | A `429`'s refill instant and its provenance (`provider-reported` / `estimated` / `unknown`); `null` otherwise. A `402` never carries one |
 | `retry_after_s` | Equal to the `Retry-After` header, `null` when none is sent |
-| `accounts` | The accounts the verdict names, as `{account, state, reset_at}`: on a `pool` verdict every member by its filter reason (`cooling-down`, `quota-window-spent`, `probe-in-flight`, `exhausted`, `needs-reauth`, `model-unsupported`, …), otherwise each attempted account by its usage outcome. `account` is opaque: `acct_` + 16 hex of SHA-256 of the router id (`errors/account-ref.ts`), the same value as `x-router-account` |
+| `accounts` | The accounts the verdict names, as `{account, state, reset_at}`: on a `pool` verdict every member by its filter reason (`cooling-down`, `quota-window-spent`, `probe-in-flight`, `exhausted`, `needs-reauth`, `model-unsupported`, …), otherwise each attempted account by its usage outcome. `account` is opaque: `acct_` + 16 hex of SHA-256 of the router id (`errors/account-ref.ts`), the same value as `x-router-account`. Opacity holds only once a caller stops reading sentences: the frozen session-bound one prints the raw router id |
 | `pools` | Names of the pools selection drew from |
-| `signal` | The machine token that decided it: a classifier signal (`anthropic:rate_limit_error`, `openai:insufficient_quota`), a filter reason, `no-account-in-scope`, `timeout`; `null` when none |
+| `signal` | Scrubbed like the message. The machine token that decided it: a classifier signal (`anthropic:rate_limit_error`, `openai:insufficient_quota`), a filter reason, `no-account-in-scope`, `timeout`; `null` when none |
 | `attempts` | Upstream attempts made before the router answered; `0` when none |
 | `request_id` | The request id, as `x-request-id` |
 
@@ -802,7 +804,7 @@ On every data-plane answer — success or failure, stream or body (`dataplane/ro
 | Header | Value | When |
 |---|---|---|
 | `x-router-request-id` | the request id (also `x-request-id`) | every answer, both planes |
-| `x-router-attempts` | upstream attempts this request made, `0` for none | every `/v1` inference answer and every rendered error |
+| `x-router-attempts` | upstream attempts this request made, every usage row an account wrote — a stale-session replay counts twice, success or failure; `0` for none | every `/v1` inference answer and every rendered error (`0` for one refused before the dispatcher) |
 | `x-router-served-model` | the model the upstream was asked for, after the account's alias map | an account answered, including its own relayed error |
 | `x-router-provider` | that account's provider id | same |
 | `x-router-account` | that account, opaque (as in `error.router.accounts`) | same |

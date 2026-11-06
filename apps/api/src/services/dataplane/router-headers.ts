@@ -9,7 +9,7 @@ import { opaqueAccountRef } from "../../errors/account-ref"
  * | Header | Value | When |
  * |---|---|---|
  * | `x-router-request-id` | the request id (`middleware/requestId.ts`) | always |
- * | `x-router-attempts` | upstream attempts this request made, `0` for none | always on `/v1` inference |
+ * | `x-router-attempts` | upstream attempts this request made, `0` for none | every `/v1` inference answer, and every error the transport renders (`0` for one refused before the dispatcher) |
  * | `x-router-served-model` | the model name the upstream was asked for, after the account's alias map | an account answered |
  * | `x-router-provider` | that account's provider id | an account answered |
  * | `x-router-account` | that account, opaque (`errors/account-ref.ts`) | an account answered |

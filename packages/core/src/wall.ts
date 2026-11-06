@@ -1,5 +1,5 @@
 import type { ResetSource } from "./domain/account"
-import type { RouterErrorCode } from "./errors"
+import { NoHealthyAccountError, type RouterError, type RouterErrorCode } from "./errors"
 
 /**
  * The machine-readable half of a router-authored error: what kind of wall the caller hit, how wide
@@ -9,8 +9,11 @@ import type { RouterErrorCode } from "./errors"
  */
 
 /**
- * What clears the wall — one value per error code, never negotiated per throw, so the status and
- * the wall can never disagree (`429` clock, `402` human, `403` scope, `503` capacity).
+ * What clears the wall — one value per error code, so the status and the wall can never disagree
+ * (`429` clock, `402` human, `403` scope, `503` capacity). One exception, typed rather than
+ * negotiated: a `NoHealthyAccountError` (`503`) names `capacity`, `human` or `scope`, because an
+ * empty pool, a pool of switched-off accounts and a pool serving other models are all `503`s that
+ * a retry does not clear alike.
  *
  * - `clock`: a stated wait clears it; the same request succeeds after `retry_after_s`.
  * - `capacity`: nothing in scope can serve right now; retrying later may succeed, with no instant.
@@ -58,6 +61,11 @@ const WALL_OF: Readonly<Record<RouterErrorCode, { wall: Wall; scope: WallScope }
 
 export function wallOf(code: RouterErrorCode): Wall {
   return WALL_OF[code].wall
+}
+
+/** The wall a thrown error names: its code's, or the one its class let the throw site choose. */
+export function wallOfError(error: RouterError): Wall {
+  return error instanceof NoHealthyAccountError ? error.wall : wallOf(error.code)
 }
 
 export function defaultWallScope(code: RouterErrorCode): WallScope {

@@ -7,7 +7,7 @@ import {
   notFoundResponse,
   toErrorResponse,
 } from "../errors/render"
-import { requestFactsOf, retryAfterHeaderSeconds } from "../errors/router-object"
+import { retryAfterHeaderSeconds } from "../errors/router-object"
 import type { Logger } from "../logging/logger"
 import { captureException } from "../observability"
 import { ROUTER_ATTEMPTS_HEADER } from "../services/dataplane/router-headers"
@@ -75,8 +75,6 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
       })
     }
 
-    const attempts = requestFactsOf(err)?.attempts
-    if (attempts !== undefined) c.header(ROUTER_ATTEMPTS_HEADER, String(attempts))
     return send(c, response)
   }
 }
@@ -86,6 +84,8 @@ export function notFoundHandler(): NotFoundHandler<AppEnv> {
 }
 
 function send(c: Context<AppEnv>, response: ErrorResponse): Response {
+  // Every rendered error counts its upstream attempts — `0` for one refused before the dispatcher.
+  c.header(ROUTER_ATTEMPTS_HEADER, String(response.body.error.router?.attempts ?? 0))
   if (response.retryAfterSeconds !== null)
     c.header("Retry-After", String(retryAfterHeaderSeconds(response.retryAfterSeconds)))
   return c.json(response.body, response.status as ContentfulStatusCode)

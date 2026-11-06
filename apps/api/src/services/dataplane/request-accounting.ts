@@ -102,6 +102,11 @@ export function createRequestAccounting(
       attempts,
       accounts: [...attempted].map(([accountId, state]) => ({ accountId, state })),
     }),
+    /**
+     * Upstream attempts behind an answer about to leave. A success settles its usage row when its
+     * body ends — after its headers — so an unsettled `2xx` counts the attempt it is still relaying.
+     */
+    answeredAttempts: (response: Response) => attempts + (response.ok && !finalized ? 1 : 0),
     selectTerminal(event: UsageRecord | undefined) {
       winner = event
       winnerSelected = true

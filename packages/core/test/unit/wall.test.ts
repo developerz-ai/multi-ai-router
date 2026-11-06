@@ -10,6 +10,7 @@ import {
   WALL_SCOPES,
   WALLS,
   wallOf,
+  wallOfError,
 } from "../../src/index"
 
 /**
@@ -48,5 +49,17 @@ describe("RouterError.detail", () => {
     const detail = { scope: "account", signal: "http-status:429" } as const
     expect(new QuotaExhaustedError("x", { retryAfterSeconds: 1, detail }).detail).toEqual(detail)
     expect(new CreditsExhaustedError("x", { detail }).detail).toEqual(detail)
+  })
+})
+
+describe("wallOfError", () => {
+  test("a NoHealthyAccountError names the wall its throw site chose, capacity by default", () => {
+    expect(wallOfError(new NoHealthyAccountError("x"))).toBe("capacity")
+    expect(wallOfError(new NoHealthyAccountError("x", { wall: "human" }))).toBe("human")
+    expect(wallOfError(new NoHealthyAccountError("x", { wall: "scope" }))).toBe("scope")
+  })
+
+  test("every other class names its code's wall", () => {
+    expect(wallOfError(new QuotaExhaustedError("x"))).toBe("clock")
   })
 })

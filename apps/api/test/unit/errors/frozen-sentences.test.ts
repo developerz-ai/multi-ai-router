@@ -6,13 +6,15 @@
  * a change to any string below breaks a consumer in production: edit one only in the same release
  * that tells developerz.ai, and delete this file once it reads `router` alone.
  *
- * One case per producer of a client-facing wall sentence: `routing/no-candidates.ts` and
- * `providers/failure/router-error.ts`. Each also pins the detail it now carries beside the words.
+ * One case per producer of a client-facing wall sentence: `routing/no-candidates.ts`,
+ * `providers/failure/router-error.ts` and `dataplane/chain-finish.ts`. Each also pins the detail it now carries beside the words.
  */
 
 import { describe, expect, test } from "bun:test"
 import type { RouterError } from "@multi-ai-router/core"
+import { routerErrorObject } from "../../../src/errors/router-object"
 import { toRouterError } from "../../../src/providers/failure/router-error"
+import { finishChain } from "../../../src/services/dataplane/chain-finish"
 import type { RejectedCandidate } from "../../../src/services/routing"
 import { noCandidatesError } from "../../../src/services/routing"
 import { at, NOW } from "../routing/fixtures"
@@ -92,12 +94,15 @@ describe("routing/no-candidates.ts — the pool's own verdict", () => {
       'no account in pool cn serves model "glm-5" — a client change (1 account in scope: a)',
     )
     expect(error.detail.signal).toBe("model-unsupported")
+    // A 503 a retry never clears: another model or key, not a wait.
+    expect(routerErrorObject(error, null, null)).toMatchObject({ wall: "scope", retryable: false })
   })
 
   test("nothing eligible for another reason", () => {
-    expect(pool([rejected("a", "disabled"), rejected("b", "needs-reauth")]).message).toBe(
-      "no eligible account in pool cn: a disabled, b needs re-auth",
-    )
+    const error = pool([rejected("a", "disabled"), rejected("b", "needs-reauth")])
+    expect(error.message).toBe("no eligible account in pool cn: a disabled, b needs re-auth")
+    // Only an operator brings these back: a 503, but a person's wall.
+    expect(routerErrorObject(error, null, null)).toMatchObject({ wall: "human", retryable: false })
   })
 
   test("a bound session's account is cooling", () => {
@@ -158,6 +163,15 @@ describe("providers/failure/router-error.ts — one account's answer", () => {
     })
   })
 
+  test("rate limited, with the transport's own router-authored sentence", () => {
+    const error = toRouterError(classification("rate-limited", "sdk:five_hour"), {
+      signal: null,
+      now: NOW,
+      clientMessage: "Claude subscription usage limit reached",
+    })
+    expect(error?.message).toBe("Claude subscription usage limit reached (sdk:five_hour)")
+  })
+
   test("out of credits", () => {
     const error = toRouterError(classification("credits-exhausted", "openai:insufficient_quota"))
     expect(error?.message).toBe(
@@ -170,5 +184,26 @@ describe("providers/failure/router-error.ts — one account's answer", () => {
     expect(toRouterError(classification("auth", "http-status:401"))?.message).toBe(
       "upstream rejected the account's credential (http-status:401) — the account needs re-authenticating, the presented router key was fine",
     )
+  })
+})
+
+describe("dataplane/chain-finish.ts — a chain that ran out of candidates", () => {
+  const thrown = (lastFailure: { kind: "client-error"; message: string } | null): string => {
+    try {
+      finishChain(null, lastFailure, () => undefined)
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+    throw new Error("finishChain answered instead of refusing")
+  }
+
+  test("every attempt failed", () => {
+    expect(thrown({ kind: "client-error", message: "upstream timed out" })).toBe(
+      "every attempt failed: upstream timed out",
+    )
+  })
+
+  test("nothing could be attempted", () => {
+    expect(thrown(null)).toBe("no candidate account could be attempted")
   })
 })

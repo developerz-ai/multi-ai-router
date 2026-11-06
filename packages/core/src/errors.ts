@@ -55,12 +55,25 @@ export abstract class RouterError extends Error {
 /**
  * Candidate filtering produced nothing, for a reason that is neither "rate limited",
  * "out of credits", nor "out of scope" — no account configured, or none supporting the
- * requested model. `503`, because the pool may become serviceable without the caller changing
- * anything.
+ * requested model. `503`. One status, three walls (`wall.ts`): `capacity` by default, `human`
+ * when only an operator brings an account back, `scope` when no account here serves what was
+ * asked. The throw site says which; the type admits no other.
  */
 export class NoHealthyAccountError extends RouterError {
   readonly code = "no_healthy_account"
   readonly status = 503
+  readonly wall: NoHealthyAccountWall
+
+  constructor(message: string, init: NoHealthyAccountInit = {}) {
+    super(message, init)
+    this.wall = init.wall ?? "capacity"
+  }
+}
+
+export type NoHealthyAccountWall = "capacity" | "human" | "scope"
+
+export interface NoHealthyAccountInit extends RouterErrorInit {
+  readonly wall?: NoHealthyAccountWall
 }
 
 export interface RetryableInit extends RouterErrorInit {

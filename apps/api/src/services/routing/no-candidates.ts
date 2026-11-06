@@ -130,13 +130,15 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
     const named = input.model === undefined ? "this model" : `model "${input.model}"`
     return new NoHealthyAccountError(
       `no account${where(input.groups)} serves ${named} — a client change (${total} ${accountWord(total)} in scope: ${labels(input.rejected)})`,
-      { detail: pool("model-unsupported") },
+      { wall: "scope", detail: pool("model-unsupported") },
     )
   }
 
+  // Every recoverable and exhausted member returned above, so what is left — disabled, needs
+  // re-auth, credential rejected, beside any that serve other models — waits on a person.
   return new NoHealthyAccountError(
     `no eligible account${where(input.groups)}: ${input.rejected.map(describe).join(", ")}`,
-    { detail: pool(input.rejected[0]?.reason) },
+    { ...(total > 0 ? { wall: "human" } : {}), detail: pool(input.rejected[0]?.reason) },
   )
 }
 
