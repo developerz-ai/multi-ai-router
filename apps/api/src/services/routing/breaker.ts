@@ -4,7 +4,7 @@
  * | State | Meaning | Exit |
  * |---|---|---|
  * | `active` | Eligible for selection. | — |
- * | `cooling_down` | Excluded. **Temporary — a clock will fix it.** | Reset instant passes, then a half-open probe. |
+ * | `cooling_down` | Excluded. **Temporary — a clock will fix it.** | Reset instant passes, then a half-open probe; or the hourly `cooldown_recheck` finds it open early. |
  * | half-open | One request through as a probe. | Success -> `active`. Failure -> `cooling_down` at the next backoff step. |
  * | `exhausted` | Excluded. **Permanent until a human acts.** The breaker never schedules a retry. | An operator tops up, then a re-check or a successful probe. |
  * | `cooling_down` + `credential-rejected` | An API key the provider refused. Excluded, reported as needing a human — and still re-tested on a long clock that doubles per refused re-test, up to a cap. Nothing else in flight moves it (`credential-rejection.ts`). | Cooldown passes, then a half-open probe. A fixed key (or a misread limit) serves; a dead one cools again, for longer. |

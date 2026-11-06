@@ -1,11 +1,11 @@
 import type { Logger } from "../../logging/logger"
 import type { RateLimitSignal, UpstreamFailureKind } from "../../providers"
-import { describeProvider } from "../accounts/providers"
 import { type AccountSnapshot, type Candidate, resolveModel } from "../routing"
 import { recoveryAwaitsProbe } from "../routing/recovery-filter"
 import { failoverKind } from "./attempt"
-import { breakerOptionsFor, type HealthStore } from "./health"
+import type { HealthStore } from "./health"
 import { accountHealthFacts, type HealthObservation } from "./health-observation"
+import { strikeProbeFailure } from "./probe-verdict"
 import type { RecoveryAccess, RecoveryAttempt } from "./recovery-access"
 import type { RecoveryCapability } from "./recovery-capability"
 import type { Reach } from "./recovery-reach"
@@ -48,6 +48,8 @@ export type RecoveryProbeSend = (input: {
   readonly startGuard: () => Promise<void>
   /** The probe's rate-limit reading, folded only after its verdict (`chain-recovery.ts` order). */
   readonly rateLimitSink: (signal: RateLimitSignal) => void
+  /** Absent is the permit's own probe; the hourly recheck names itself on the audit row. */
+  readonly trigger?: "cooldown_recheck"
 }) => Promise<RecoveryProbeResult>
 
 export interface RecoveryProbeDeps {
@@ -264,18 +266,17 @@ function settle(
     return "settled"
   }
   attempt.finish("failed")
-  const authKind = describeProvider(account.driver.provider).authKind
-  deps.health.recordFailure(
-    account.id,
+  strikeProbeFailure(
+    deps.health,
+    account,
     { kind, message: "router recovery probe failed" },
     deps.now(),
-    { ...(authKind === null ? {} : breakerOptionsFor(authKind)), recoveryProbe: true },
     observation,
   )
   return "settled"
 }
 
-interface ProbeModel {
+export interface ProbeModel {
   readonly model: string
   readonly source: "declared" | "provider-default"
 }
@@ -285,7 +286,7 @@ interface ProbeModel {
  * only when it declares none: a shipped default goes stale when a vendor retires a model (prod
  * 2026-11-05: `MiniMax-M2`), while the declared list is what this account routes today.
  */
-function probeModel(
+export function probeModel(
   account: AccountSnapshot,
   models: Readonly<Record<string, string>>,
 ): ProbeModel | undefined {

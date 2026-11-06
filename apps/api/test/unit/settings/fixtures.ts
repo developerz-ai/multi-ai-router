@@ -66,6 +66,7 @@ export const INTERVALS: Readonly<Record<ScheduledTaskName, number>> = {
   credential_keepalive: 180 * 1_000,
   login_lifetime_watch: 1440 * MINUTE_MS,
   usage_weekly_report: 60 * MINUTE_MS,
+  cooldown_recheck: 60 * MINUTE_MS,
 }
 
 export interface MemoryPrices {

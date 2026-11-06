@@ -20,6 +20,7 @@ import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask } from "../types"
 import { type AdminSessionStoreForPurge, createAdminSessionPurgeTask } from "./admin-session-purge"
 import { createConfigDirReapTask } from "./config-dir-reap"
+import { type CooldownRecheckPorts, createCooldownRecheckTasks } from "./cooldown-recheck"
 import { type CredentialTaskDeps, createCredentialTasks } from "./credential-tasks"
 import { createIdleAccountProbeTask, type IdleAccountProbeDeps } from "./idle-account-probe"
 import { createJanitorTask } from "./janitor"
@@ -137,6 +138,8 @@ export interface ScheduledTaskDeps
    * does nothing.
    */
   readonly refreshCatalog?: ModelCatalogRefreshDeps["refresh"]
+  /** The hourly look at accounts on a long cooldown. Absent means no task is built. */
+  readonly cooldownRecheck?: CooldownRecheckPorts
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<Env, "retention" | "janitorIntervalMinutes"> &
     CredentialTaskDeps["env"] &
@@ -172,6 +175,7 @@ export function scheduledTaskIntervals(
     credential_keepalive: env.claudeLogin.keepaliveIntervalSeconds * 1_000,
     login_lifetime_watch: env.claudeLogin.watchIntervalMinutes * MINUTE_MS,
     usage_weekly_report: env.scheduler.usageReportIntervalMinutes * MINUTE_MS,
+    cooldown_recheck: env.scheduler.cooldownRecheckIntervalMinutes * MINUTE_MS,
   }
 }
 
@@ -284,6 +288,11 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
     ...createCredentialTasks(deps, intervals),
     // The weekly usage report, once per UTC week — `report-tasks.ts`.
     ...createReportTasks(deps, intervals),
+    // Same bound as the idle sweep, for the same reason: each item may bill or spawn.
+    ...createCooldownRecheckTasks(deps.cooldownRecheck, {
+      intervalMs: intervals.cooldown_recheck,
+      batchSize: env.scheduler.idleAccountProbeBatchSize,
+    }),
   ]
 }
 

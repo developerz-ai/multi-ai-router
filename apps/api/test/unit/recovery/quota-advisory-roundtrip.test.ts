@@ -33,6 +33,7 @@ function accountRow(): AccountRow {
     authMaterial: null,
     configDir: null,
     tokenExpiresAt: null,
+    authRefreshSpentOn: null,
     lastUsedAt: null,
     baseUrl: null,
     dialect: null,

@@ -6,6 +6,7 @@ import {
   createCredentialRefreshLockPool,
   createDatabase,
   createOauthStateRepository,
+  credentialFingerprint,
   type DatabaseHandle,
   defaultMigrationsFolder,
   runMigrations,
@@ -110,6 +111,104 @@ function refresher(fetch: (request: Request) => Promise<Response>, lock = locks)
   refreshers.push(instance)
   return instance
 }
+
+describe.skipIf(!url)("a parked account's refresh against real rows", () => {
+  const park = async () => {
+    const row = await seed()
+    const parked = await accounts.transitionObservedStatus({
+      id: row.id,
+      expected: {
+        lifecycleVersion: row.lifecycleVersion,
+        authMaterial: row.authMaterial,
+        status: row.status,
+      },
+      status: "needs_reauth",
+      now: NOW,
+    })
+    if (parked === undefined) throw new Error("seed row did not park")
+    return parked
+  }
+
+  test("a working refresh ends the park and bumps the auth epoch in one write", async () => {
+    const row = await park()
+    let exchanges = 0
+    const instance = refresher(async () => {
+      exchanges++
+      return response()
+    })
+
+    expect((await instance.refreshNow(row.id)).kind).toBe("success")
+
+    const after = await accounts.findById(row.id)
+    expect(after?.status).toBe("active")
+    expect(after?.authMaterial).not.toBe(row.authMaterial)
+    expect(after?.authRecoveryVersion).toBe(row.authRecoveryVersion + 1)
+    expect(after?.lifecycleVersion).toBe(row.lifecycleVersion + 1)
+    expect(after?.authRefreshSpentOn).toBe(credentialFingerprint(after?.authMaterial ?? null))
+    expect(exchanges).toBe(1)
+  })
+
+  test("the credential a refresh produced gets no second one when it is refused too", async () => {
+    const row = await park()
+    let exchanges = 0
+    const instance = refresher(async () => {
+      exchanges++
+      return response()
+    })
+    await instance.refreshNow(row.id)
+    const revived = await accounts.findById(row.id)
+    if (revived === undefined) throw new Error("row vanished")
+    await accounts.transitionObservedStatus({
+      id: row.id,
+      expected: {
+        lifecycleVersion: revived.lifecycleVersion,
+        authMaterial: revived.authMaterial,
+        status: revived.status,
+      },
+      status: "needs_reauth",
+      now: NOW,
+    })
+
+    expect(await instance.refreshNow(row.id)).toMatchObject({ reason: "not-refreshable" })
+    expect(exchanges).toBe(1)
+  })
+
+  test("a refusal is durable across a new process, and a re-check releases it", async () => {
+    const row = await park()
+    const refused = async () => new Response("{}", { status: 400 })
+    await refresher(refused).refreshNow(row.id)
+
+    const nextBoot = refresher(async () => response())
+    expect(await nextBoot.refreshNow(row.id)).toMatchObject({ reason: "not-refreshable" })
+    expect((await accounts.findById(row.id))?.status).toBe("needs_reauth")
+
+    expect((await nextBoot.retryParked(row.id)).kind).toBe("success")
+    expect((await accounts.findById(row.id))?.status).toBe("active")
+  })
+
+  test("an operator's disable survives a refresh that lands behind it", async () => {
+    const row = await seed()
+    await accounts.reviveRefreshedCredential({
+      id: row.id,
+      expectedAuthMaterial: row.authMaterial as string,
+      authMaterial: "v1.rotated",
+      tokenExpiresAt: null,
+      now: NOW,
+    })
+    await accounts.updateOperatorAccount({ id: row.id, patch: { status: "disabled" }, now: NOW })
+
+    const after = await accounts.reviveRefreshedCredential({
+      id: row.id,
+      expectedAuthMaterial: "v1.rotated",
+      authMaterial: "v1.rotated-again",
+      tokenExpiresAt: null,
+      now: NOW,
+    })
+
+    expect(after?.status).toBe("disabled")
+    expect(after?.authMaterial).toBe("v1.rotated-again")
+  })
+})
 
 describe.skipIf(!url)("OAuth services with real CAS and dedicated pool (main max1)", () => {
   test("two instances spend one rotating grant under contention", async () => {

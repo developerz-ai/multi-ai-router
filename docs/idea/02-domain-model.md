@@ -72,7 +72,8 @@ account per provider. The `label` is what distinguishes them to a human.
 | `provider` | enum | Provider id |
 | `authMaterial` | encrypted blob | API key, or OAuth access + refresh token. AES-256-GCM. Never returned by any endpoint, so the console's **Edit** dialog carries a write-only box: an empty one leaves the stored value alone and typing into it rotates. That box is absent entirely for a provider with a connect flow — pasting a token by hand is not how a subscription or an OAuth account is authorized. **Empty for Claude subscription accounts** — those hold a `CLAUDE_CONFIG_DIR` path instead, and the SDK owns the credentials inside it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)). Also legitimately empty for an `authKind: none` provider (`ollama`), whose upstream authenticates nobody; the request then carries no auth header, and every other provider's empty account is refused at write time |
 | `configDir` | path, optional | Claude subscription accounts only. One isolated `CLAUDE_CONFIG_DIR` per Account so N subscriptions coexist without cross-contamination. Its contents are live credential material. **Assigned by the router, never by the operator**: `<CLAUDE_CONFIG_ROOT>/<id>`, created `0700` with the row; account deletion revokes ownership admission before deferred, exclusive cleanup. Keyed on `id` because a `label` is renameable and a rename would strand a logged-in directory; a unique index on the column makes "two Accounts, one directory" a write that cannot land |
-| `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime, never on a `401`, and is re-scheduled each time a new token lands |
+| `tokenExpiresAt` | timestamp, optional | OAuth accounts only. Drives the per-account refresh schedule; refresh fires at a fraction of the remaining lifetime and is re-scheduled each time a new token lands. A `401` never refreshes inside the request that took it; it reaches the refresher afterwards, off-path, once its `needs_reauth` is committed |
+| `authRefreshSpentOn` | fingerprint, optional | Refreshable OAuth accounts only. The credential whose one parked refresh is used: a failed attempt spends the credential it ran on, and a credential a parked refresh produced is born spent, so a provider refusing every token cannot loop. A parked account earns a refresh only while this does not name its current `authMaterial`, so any other credential write ends the spend. Re-check now clears it for one more attempt. A fingerprint of ciphertext, never credential material, and never returned by any endpoint |
 | `refreshState` | in-memory | This account's armed timer and its single-flight guard: every trigger for one account awaits one shared promise, never N racing writes. Plus the backoff counter for failed refreshes. A *request* is never a trigger — it neither starts nor waits on a refresh |
 | `status` | enum | `active` \| `disabled` \| `cooling_down` \| `exhausted` \| `needs_reauth`. Two kinds of writer share the column, which is why every observed write is guarded — see below |
 | `billing` | enum | `metered` \| `subscription`. **How this Account is billed, which decides how its usage is priced and nothing else** — see below. Defaults to the provider's own answer; fixed where that answer is `subscription` |
@@ -98,8 +99,8 @@ upstream answered.
 Only two of the router's three are stored, and the split is the `cooling_down` ≠ `exhausted` rule
 made durable. A cooldown is clock-recoverable, so it stays in memory: re-deriving it after a restart
 costs one failed request, and a stored countdown is stale the moment the process holding it dies.
-`exhausted` and `needs_reauth` end only when a human buys something or logs in, so they are written
-through to the row by the replica that observed them (`ACCOUNT_STATUS_WRITE_INTERVAL_MS`, off the
+`exhausted` ends only when a human buys something, and `needs_reauth` only by a login or by the one
+refresh a refreshable credential earns, and no clock does either, so they are written through to the row by the replica that observed them (`ACCOUNT_STATUS_WRITE_INTERVAL_MS`, off the
 request path, coalesced per account) — otherwise the verdict lives in one replica's memory, vanishes
 on the next deploy, and the dashboard's red "needs top-up" banner has no source.
 
@@ -114,7 +115,9 @@ Every observed write is a **guarded** statement (`updateStatusWhen`), never an u
 
 Clearing is the mirror image and belongs to whoever owns the remedy: `exhausted` is lifted by the
 operator's **Re-check now** (guarded to `exhausted` alone, then the warm catalog is refreshed), and
-`needs_reauth` only by a completed login or by `claude auth status` reporting the account logged in.
+`needs_reauth` only by a completed login, by `claude auth status` reporting the account logged in, or
+by a successful refresh of a parked OAuth credential, one per credential generation
+(`authRefreshSpentOn`, [01-architecture.md](01-architecture.md#credential-refresh-is-not-a-cron-job)).
 
 **Which accounts have a refresh lifecycle at all.** `tokenExpiresAt` and `refreshState` exist only
 for accounts the router refreshes: non-Anthropic OAuth subscriptions (ChatGPT/Codex today).
@@ -417,12 +420,12 @@ wedged or a process died holding the lock, and it is also the one row with no me
 | Transition | Trigger | Effect on routing |
 |---|---|---|
 | `active` → `cooling_down` | Upstream `429` for a spent rate-limit window, or circuit breaker trips on repeated failures | Filtered out of candidates until the cooldown expires. The window refills on a clock |
-| `cooling_down` → `active` | Reported reset time passes, else exponential backoff elapses; a half-open probe (or the operator's "Re-check now") confirms | Eligible again; no operator action needed |
+| `cooling_down` → `active` | Reported reset time passes, else exponential backoff elapses; a half-open probe (or the operator's "Re-check now") confirms. Or the hourly `cooldown_recheck` finds the account open before its stated reset | Eligible again; no operator action needed |
 | `active` → `exhausted` | Driver classifies the upstream signal as a drained prepaid balance, an expired plan, or failed billing — **not** a refilling window | Removed from every candidate set immediately and surfaced loudly in the UI, because it silently shrinks the pool. No reset timestamp exists and the router never retries it on a timer |
-| `cooling_down` → `exhausted` | A retry after the cooldown returns an out-of-credits signal instead of success | Same as above |
+| `cooling_down` → `exhausted` | A retry after the cooldown, or the hourly `cooldown_recheck` during it, returns an out-of-credits signal instead of success | Same as above. The recheck stops: it never selects `exhausted` |
 | `exhausted` → `active` | **Human action only** — top up, fix billing, or replace the credential, then "Re-check now" confirms against the provider's live signal | Eligible again. No clock and no backoff can make this transition |
-| `active` → `needs_reauth` | Background OAuth refresh fails | Excluded from routing rather than failing requests; surfaced in the admin UI |
-| `needs_reauth` → `active` | Operator completes Reconnect (same OAuth flow, existing row) | Eligible again, keeping id, pool membership, and usage history |
+| `active` / `cooling_down` → `needs_reauth` | Background OAuth refresh fails, or the upstream refuses the credential on a request, a recovery probe or the hourly `cooldown_recheck` | Excluded from routing rather than failing requests; surfaced in the admin UI. A refused refreshable credential gets its one refresh, off-path |
+| `needs_reauth` → `active` | Operator completes Reconnect (same OAuth flow, existing row), or a refreshable credential's one refresh succeeds, including the extra attempt Re-check now buys | Eligible again, keeping id, pool membership, and usage history |
 | `active` → `disabled` | Operator disables it | Filtered out indefinitely; no automatic return |
 | `disabled` → `active` | Operator re-enables it | Eligible again |
 

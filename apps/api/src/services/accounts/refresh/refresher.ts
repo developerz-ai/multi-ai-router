@@ -14,8 +14,8 @@ import {
   type RefreshTimerState as Timing,
 } from "./identity"
 import { createRefreshSafety, refreshErrorLogger } from "./safety"
-import { refreshDueAt, retryDelayMs } from "./schedule"
-import { parkForReauth, sameObservation } from "./status"
+import { refreshDueAt } from "./schedule"
+import { createRefreshSettle } from "./settle"
 import { createRefreshTimers } from "./timers"
 
 export type { CredentialRefreshConfig, CredentialRefresher } from "./types"
@@ -24,7 +24,13 @@ import type { CredentialRefreshConfig, CredentialRefresher } from "./types"
 export interface CredentialRefresherDeps extends Omit<RefreshExchangeDeps, "timeoutMs"> {
   readonly accounts: Pick<
     AccountRepository,
-    "list" | "findById" | "saveRefreshedCredential" | "transitionObservedStatus"
+    | "list"
+    | "findById"
+    | "saveRefreshedCredential"
+    | "reviveRefreshedCredential"
+    | "spendAuthRefresh"
+    | "releaseAuthRefresh"
+    | "transitionObservedStatus"
   >
   readonly refreshLock: Pick<CredentialRefreshLock, "tryRun">
   readonly refreshCatalogAfterMutation: () => Promise<void>
@@ -78,8 +84,22 @@ export function createCredentialRefresher(deps: CredentialRefresherDeps): Creden
     barrier,
     abandoned: () => abandoned,
   })
+  const apply = createRefreshSettle({
+    ...deps,
+    timings,
+    barrier,
+    defer,
+    disarm,
+    abandoned: () => abandoned,
+  })
+  // A parked account's stored expiry is what failed it: its one attempt is due now, not then.
+  const dueAtMs = (row: AccountRow, expiresAt: Date): number =>
+    row.status === "needs_reauth"
+      ? deps.now().getTime() + deps.config.minDelayMs
+      : refreshDueAt(expiresAt, deps.now(), deps.config).getTime()
   const armFor = (row: AccountRow, settling = false): void => {
-    if (safety.blocked(row) || !eligible(row) || row.tokenExpiresAt === null) {
+    const expiresAt = row.tokenExpiresAt ?? (row.status === "needs_reauth" ? deps.now() : null)
+    if (safety.blocked(row) || !eligible(row) || expiresAt === null) {
       forget(row.id)
       return
     }
@@ -102,7 +122,7 @@ export function createCredentialRefresher(deps: CredentialRefresherDeps): Creden
       ...expectation(row),
       attempts: 0,
       lifecycleVersion: row.lifecycleVersion,
-      dueAtMs: refreshDueAt(row.tokenExpiresAt, deps.now(), deps.config).getTime(),
+      dueAtMs: dueAtMs(row, expiresAt),
     }
     timings.set(row.id, timing)
     armAt(row.id, timing)
@@ -123,67 +143,6 @@ export function createCredentialRefresher(deps: CredentialRefresherDeps): Creden
     } finally {
       if (reads.get(id) === version) reads.delete(id)
     }
-  }
-  const apply = async (
-    id: string,
-    outcome: RefreshOutcome,
-    expected: Expectation,
-    signal: AbortSignal,
-  ): Promise<RefreshOutcome> => {
-    if (abandoned) return outcome
-    if (outcome.kind === "success") {
-      await barrier()
-      return outcome
-    }
-    if (outcome.kind === "skipped") {
-      if (
-        outcome.reason === "busy" ||
-        outcome.reason === "superseded" ||
-        outcome.reason === "aborted"
-      ) {
-        defer(id, expected, deps.config.minDelayMs)
-      }
-      return outcome
-    }
-    if (signal.aborted) return { kind: "skipped", reason: "aborted", row: outcome.observed }
-    const latest = await deps.accounts.findById(id)
-    if (signal.aborted) return { kind: "skipped", reason: "aborted" }
-    if (latest === undefined || !sameObservation(latest, outcome.observed)) {
-      defer(id, expected, deps.config.minDelayMs)
-      return {
-        kind: "skipped",
-        reason: "superseded",
-        ...(latest === undefined ? {} : { row: latest }),
-      }
-    }
-    const timing = timings.get(id)
-    const tries = timing !== undefined && matches(timing, latest) ? ++timing.attempts : 1
-    if (outcome.reason === "unreachable" && tries < deps.config.maxAttempts) {
-      defer(id, expected, retryDelayMs(tries, deps.config.minDelayMs))
-      return outcome
-    }
-    if (latest.status === "exhausted") {
-      if (
-        timing === undefined ||
-        !matches(timing, latest) ||
-        !matches(expected, latest) ||
-        timing.lifecycleVersion !== latest.lifecycleVersion
-      )
-        return { kind: "skipped", reason: "superseded" }
-      timing.pausedLifecycleVersion = latest.lifecycleVersion
-      disarm(id)
-      return outcome
-    }
-    const committed = await parkForReauth(
-      { ...deps, refreshCatalogAfterMutation: barrier, canFinalize: () => !abandoned },
-      outcome.observed,
-      outcome.reason,
-    )
-    if (committed === undefined) {
-      defer(id, expected, deps.config.minDelayMs)
-      return { kind: "skipped", reason: "superseded" }
-    }
-    return outcome
   }
   const attempt = async (
     id: string,
@@ -293,5 +252,20 @@ export function createCredentialRefresher(deps: CredentialRefresherDeps): Creden
     },
     sync,
     refreshNow: (id) => run(id),
+    retryParked: async (id) => {
+      const row = await deps.accounts.findById(id)
+      if (
+        row?.status !== "needs_reauth" ||
+        row.authMaterial === null ||
+        httpDriver(row.provider)?.oauth === undefined
+      )
+        return { kind: "skipped", reason: "not-refreshable" }
+      await deps.accounts.releaseAuthRefresh({
+        id,
+        expectedAuthMaterial: row.authMaterial,
+        now: deps.now(),
+      })
+      return run(id)
+    },
   }
 }

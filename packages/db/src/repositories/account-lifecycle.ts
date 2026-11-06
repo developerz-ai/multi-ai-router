@@ -5,7 +5,7 @@ import { accountOperatorChecks } from "../schema/account-operator-checks"
 import { accountRecoveries } from "../schema/account-recoveries"
 import { accounts } from "../schema/accounts"
 import type { AccountLifecycleMethods, AccountObservation } from "./account-lifecycle-types"
-import { duration } from "./account-recovery-common"
+import { credentialFingerprint, duration } from "./account-recovery-common"
 import { publishAccountRecovery } from "./account-recovery-generation"
 import { createQuotaWindowMutations } from "./quota-window-mutations"
 
@@ -88,6 +88,43 @@ export function createAccountLifecycle(
       const rows = await db
         .update(accounts)
         .set({ authMaterial, tokenExpiresAt, updatedAt: now })
+        .where(and(eq(accounts.id, id), eq(accounts.authMaterial, expectedAuthMaterial)))
+        .returning()
+      return rows[0]
+    },
+    reviveRefreshedCredential: ({ id, expectedAuthMaterial, authMaterial, tokenExpiresAt, now }) =>
+      db.transaction(async (tx) => {
+        const rows = await tx
+          .update(accounts)
+          .set({
+            authMaterial,
+            tokenExpiresAt,
+            authRefreshSpentOn: credentialFingerprint(authMaterial),
+            lifecycleVersion: sql`${accounts.lifecycleVersion} + 1`,
+            authRecoveryVersion: sql`${accounts.authRecoveryVersion} + 1`,
+            // Only `needs_reauth` moves: an operator's `disabled` keeps the rotated grant and stays.
+            status: sql`case when ${accounts.status} = 'needs_reauth' then 'active'::account_status else ${accounts.status} end`,
+            updatedAt: now,
+          })
+          .where(and(eq(accounts.id, id), eq(accounts.authMaterial, expectedAuthMaterial)))
+          .returning()
+        const account = rows[0]
+        if (account !== undefined)
+          await publishAccountRecovery(tx, account, recoveryCooldownMs, "authentication-recovered")
+        return account
+      }),
+    spendAuthRefresh: async ({ id, expectedAuthMaterial, now }) => {
+      const rows = await db
+        .update(accounts)
+        .set({ authRefreshSpentOn: credentialFingerprint(expectedAuthMaterial), updatedAt: now })
+        .where(and(eq(accounts.id, id), eq(accounts.authMaterial, expectedAuthMaterial)))
+        .returning()
+      return rows[0]
+    },
+    releaseAuthRefresh: async ({ id, expectedAuthMaterial, now }) => {
+      const rows = await db
+        .update(accounts)
+        .set({ authRefreshSpentOn: null, updatedAt: now })
         .where(and(eq(accounts.id, id), eq(accounts.authMaterial, expectedAuthMaterial)))
         .returning()
       return rows[0]

@@ -77,6 +77,7 @@ export function createMemoryStore(): MemoryStore {
           authMaterial: input.authMaterial ?? null,
           configDir: input.configDir ?? null,
           tokenExpiresAt: input.tokenExpiresAt ?? null,
+          authRefreshSpentOn: null,
           billing: input.billing ?? "metered",
           lastUsedAt: null,
           windowTokenLimits: input.windowTokenLimits ?? null,

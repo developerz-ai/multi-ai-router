@@ -92,6 +92,7 @@ export const scheduledTask = pgEnum("scheduled_task", [
   "credential_keepalive",
   "login_lifetime_watch",
   "usage_weekly_report",
+  "cooldown_recheck",
 ])
 
 export const scheduledTaskOutcome = pgEnum("scheduled_task_outcome", [

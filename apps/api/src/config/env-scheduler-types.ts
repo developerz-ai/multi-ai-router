@@ -19,6 +19,8 @@ export interface SchedulerConfig {
   readonly oauthStatePurgeIntervalMinutes: number
   /** Account quota floor probe interval, in minutes. */
   readonly quotaFloorIntervalMinutes: number
+  /** `cooldown_recheck` cadence: how often a long cooldown gets a look before its stated reset. */
+  readonly cooldownRecheckIntervalMinutes: number
   /** Orphaned `CLAUDE_CONFIG_DIR` reap interval, in minutes. The window itself is `retention`. */
   readonly configDirReapIntervalMinutes: number
   /** Agent-SDK transcript sweep interval, in minutes. The window itself is `retention`. */

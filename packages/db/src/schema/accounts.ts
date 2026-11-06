@@ -83,6 +83,15 @@ export const accounts = pgTable(
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true, mode: "date" }),
 
     /**
+     * Refreshable OAuth accounts only: the fingerprint of the credential whose one parked refresh
+     * is already spent. A parked account earns a refresh only while this does not name its current
+     * `authMaterial`, so any later credential write ends the spend with no code of its own. A
+     * credential a parked refresh produced is born spent: rotating it mints new ciphertext, and a
+     * provider that refuses every token must not earn a refresh per `401`.
+     */
+    authRefreshSpentOn: text("auth_refresh_spent_on"),
+
+    /**
      * When this account last served a request. Written off the request path by the
      * usage recorder's batched drain, never on it (non-negotiable 8).
      *

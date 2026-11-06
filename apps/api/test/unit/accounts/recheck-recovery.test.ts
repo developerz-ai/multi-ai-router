@@ -64,6 +64,45 @@ function committed(account: AccountRow = accountRow()) {
   }
 }
 
+function parkedRecheck(begin: Pick<OperatorRecoveryRepository, "beginOperatorRecovery">) {
+  const retried: string[] = []
+  const service = createRecheckService({
+    accounts: { list: async () => [accountRow()], findById: async () => accountRow() },
+    recovery: operatorCheckRepository({
+      begin: begin.beginOperatorRecovery,
+      find: () => accountRow(),
+    }),
+    cooldownSeconds: 60,
+    refreshCatalog: async () => {},
+    audit: { record: async () => {} },
+    onParkedRecheck: (id) => retried.push(id),
+  })
+  return { service, retried }
+}
+
+test("a committed re-check of a parked account buys its refresh one more try", async () => {
+  const parked = accountRow({ status: "needs_reauth" })
+  const h = parkedRecheck({ beginOperatorRecovery: async () => committed(parked) })
+
+  await h.service.recheck(parked.id)
+
+  expect(h.retried).toEqual([parked.id])
+})
+
+test("a re-check inside its cooldown buys nothing, and a healthy account has nothing to buy", async () => {
+  const parked = accountRow({ status: "needs_reauth" })
+  const joined = parkedRecheck({
+    beginOperatorRecovery: async () => ({ ...committed(parked), rechecked: false }),
+  })
+  const healthy = parkedRecheck({ beginOperatorRecovery: async () => committed() })
+
+  await joined.service.recheck(parked.id)
+  await healthy.service.recheck(accountRow().id)
+
+  expect(joined.retried).toEqual([])
+  expect(healthy.retried).toEqual([])
+})
+
 test("service returns durable database times and pending progress, not a healthy verdict", async () => {
   let suppliedCooldown: number | undefined
   const h = composed({

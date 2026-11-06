@@ -1,4 +1,4 @@
-import type { AccountRow } from "@multi-ai-router/db"
+import { type AccountRow, credentialFingerprint } from "@multi-ai-router/db"
 import { httpDriver } from "../../../providers"
 
 export interface RefreshExpectation {
@@ -20,12 +20,14 @@ export function sameExpectation(a: RefreshExpectation, b: RefreshExpectation): b
 export function matches(expected: RefreshExpectation, row: AccountRow): boolean {
   return sameExpectation(expected, expectation(row))
 }
+/** A parked account keeps one refresh per credential; `auth_refresh_spent_on` records its use. */
 export function eligible(row: AccountRow): boolean {
   return (
     httpDriver(row.provider)?.oauth !== undefined &&
     row.authMaterial !== null &&
     row.status !== "disabled" &&
-    row.status !== "needs_reauth"
+    (row.status !== "needs_reauth" ||
+      row.authRefreshSpentOn !== credentialFingerprint(row.authMaterial))
   )
 }
 

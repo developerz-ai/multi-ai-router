@@ -138,11 +138,11 @@ export function createRecoveryComponents(deps: {
  * otherwise have spent.
  */
 export function recoveryProbeSender(testNow: Pick<TestNowService, "test">): RecoveryProbeSend {
-  return async ({ accountId, model, startGuard, rateLimitSink }) => {
+  return async ({ accountId, model, startGuard, rateLimitSink, trigger }) => {
     const result = await testNow.test(accountId, {
       model,
       confirmed: true,
-      recovery: { startGuard, rateLimitSink },
+      recovery: { startGuard, rateLimitSink, ...(trigger === undefined ? {} : { trigger }) },
     })
     if (!result.ok)
       // The permit's own guard refused (a client took it) versus a transport that cannot serve.

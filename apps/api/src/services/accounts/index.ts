@@ -78,6 +78,7 @@ export {
   readStoredOAuth,
   refreshCredential,
   refreshDueAt,
+  refreshErrorLogger,
   refresherFromEnv,
   retryDelayMs,
   timerDelayMs,

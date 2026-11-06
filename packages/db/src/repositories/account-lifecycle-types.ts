@@ -22,6 +22,29 @@ export interface AccountLifecycleMethods {
     tokenExpiresAt: Date | null
     now: Date
   }): Promise<AccountRow | undefined>
+  /**
+   * The refresh of a parked account: the grant lands and `needs_reauth` ends in one transaction, so
+   * a crash cannot leave a good token behind a parked row. The new credential is born spent.
+   */
+  reviveRefreshedCredential(input: {
+    id: string
+    expectedAuthMaterial: string
+    authMaterial: string
+    tokenExpiresAt: Date | null
+    now: Date
+  }): Promise<AccountRow | undefined>
+  /** Records that this credential's one parked refresh ran and did not bring it back. */
+  spendAuthRefresh(input: {
+    id: string
+    expectedAuthMaterial: string
+    now: Date
+  }): Promise<AccountRow | undefined>
+  /** An operator's re-check buys one more attempt on the credential already held. */
+  releaseAuthRefresh(input: {
+    id: string
+    expectedAuthMaterial: string
+    now: Date
+  }): Promise<AccountRow | undefined>
   transitionObservedStatus(input: {
     id: string
     expected: AccountObservation

@@ -17,6 +17,7 @@ export type {
   CredentialRefresherDeps,
 } from "./refresher"
 export { createCredentialRefresher } from "./refresher"
+export { refreshErrorLogger } from "./safety"
 export type { RefreshTiming } from "./schedule"
 export { MAX_TIMER_MS, refreshDueAt, retryDelayMs, timerDelayMs } from "./schedule"
 export type { RefreshStatusDeps } from "./status"
