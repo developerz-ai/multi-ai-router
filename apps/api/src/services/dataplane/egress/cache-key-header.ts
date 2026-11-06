@@ -36,6 +36,15 @@ export function sessionCacheKey(
   source: SessionKeySource,
 ): string | undefined {
   if (source === "unbound") return undefined
+  return conversationId(apiKeyId, sessionKey)
+}
+
+/**
+ * The opaque id a conversation goes upstream under: stable across its turns and across a failover,
+ * and carrying no client value or internal key. Unlike {@link sessionCacheKey} it answers for an
+ * unbound key too, because a surface that requires the header refuses a request without one.
+ */
+export function conversationId(apiKeyId: string, sessionKey: string): string {
   const hex = createHash("sha256").update(`${apiKeyId}\0${sessionKey}`, "utf8").digest("hex")
   // UUID-shaped, the form the Codex CLI's own conversation ids take.
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`

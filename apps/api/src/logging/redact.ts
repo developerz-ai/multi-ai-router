@@ -183,6 +183,8 @@ const SECRET_VALUE_PATTERNS: readonly ValuePattern[] = [
   // Cerebras. DeepSeek's keys are `sk-…` and are covered above; Mistral's and Together's carry no
   // prefix at all, so nothing here can recognize one — their field names are what protects them.
   { pattern: /\bcsk-[A-Za-z0-9-]{16,}/g, replacement: REDACTED },
+  // OpenCode Console keys: `oc_sk_<id>_<secret>`, with `-` and `_` in the secret.
+  { pattern: /\boc_sk_[A-Za-z0-9_-]{16,}/g, replacement: REDACTED },
 ]
 
 const MAX_DEPTH = 4

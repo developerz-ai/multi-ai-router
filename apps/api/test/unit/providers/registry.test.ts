@@ -23,6 +23,7 @@ const HTTP_PROVIDERS = [
   "mistral",
   "together",
   "cerebras",
+  "opencode-go",
   "ollama",
   "openai-compatible",
   "anthropic-compatible",

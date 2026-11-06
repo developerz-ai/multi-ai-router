@@ -337,6 +337,18 @@ describe("minimax — platform.minimax.io pricing, read 2026-11-03", () => {
   })
 })
 
+describe("opencode-go — opencode.ai Go price table, read 2026-11-06", () => {
+  test("the published cards", () => {
+    expectCard("opencode-go", "deepseek-v4.1-flash", [0.15, 0.6, 0.003, 0])
+    expectCard("opencode-go", "glm-5.3", [1.4, 4.4, 0.26, 0])
+    expectCard("opencode-go", "kimi-k3", [3, 15, 0.3, 3])
+  })
+
+  test("a free model has no row", () => {
+    expect(lookupRates("opencode-go", "beam-free")).toBeNull()
+  })
+})
+
 describe("cerebras — cerebras.ai pricing, read 2026-11-03", () => {
   test("the Developer Tier table", () => {
     expectCard("cerebras", "gpt-oss-120b", [0.35, 0.75, 0.35, 0])

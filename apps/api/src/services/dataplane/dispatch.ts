@@ -3,7 +3,7 @@ import { type AttemptOutcome, runAttempt } from "./attempt"
 import type { attemptQuota } from "./attempt-quota"
 import type { ChainContext } from "./chain"
 import { routerCacheKey } from "./chain-body"
-import { cacheKeyHeader, effectiveCacheKey } from "./egress/cache-key-header"
+import { cacheKeyHeader, conversationId, effectiveCacheKey } from "./egress/cache-key-header"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { runSdkAttempt } from "./sdk-attempt"
 
@@ -55,6 +55,7 @@ export function dispatch(
           key: effectiveCacheKey(ctx.translated.promptCacheKey(), routerCacheKey(ctx, servable)),
         },
   )
+  const namesConversation = servable.driver.sessionHeader?.(servable.account.driver) !== undefined
   const streamDeadlines = deadlinesFor(ctx, servable)
   return runAttempt({
     plan: servable,
@@ -70,6 +71,9 @@ export function dispatch(
     signal: ctx.request.signal,
     ...(forcesUpstreamStream(servable) ? { accept: "text/event-stream" } : {}),
     ...(cacheKey === undefined ? {} : { cacheKey }),
+    ...(namesConversation
+      ? { conversationId: conversationId(runtime.apiKeyId, runtime.sessionKey) }
+      : {}),
     ...(streamDeadlines === undefined ? {} : { stream: streamDeadlines }),
   })
 }

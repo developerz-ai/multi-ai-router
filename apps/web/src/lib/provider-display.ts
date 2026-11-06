@@ -21,6 +21,7 @@ const DISPLAY_NAME: Readonly<Record<ProviderId, string>> = {
   mistral: "Mistral",
   together: "Together",
   cerebras: "Cerebras",
+  "opencode-go": "OpenCode Go",
   ollama: "Ollama",
   "openai-compatible": "OpenAI-compatible endpoints",
   "anthropic-compatible": "Anthropic-compatible endpoints",

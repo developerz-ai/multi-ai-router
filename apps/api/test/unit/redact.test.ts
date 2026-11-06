@@ -668,3 +668,9 @@ describe("redactValue cost", () => {
     )
   })
 })
+
+test("an OpenCode key in free text is redacted whole", () => {
+  const key = `oc_sk_${"a".repeat(12)}_${"b-_".repeat(10)}`
+
+  expect(redactValue(`upstream refused ${key} today`)).toBe(`upstream refused ${REDACTED} today`)
+})

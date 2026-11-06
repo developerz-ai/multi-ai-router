@@ -55,6 +55,7 @@ admin UI, in usage breakdowns, and in logs; the credential itself never appears 
 | `mistral` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.mistral.ai/v1` | **Error body has no `error` wrapper** — `{object:"error", message, type, param, code}` at the top level. Keys on `type` (four published categories) and never on `code`, which is a numeric string the docs describe as symbolic. |
 | `together` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.together.ai/v1` | Namespaced model ids, so an alias map is usually required. **`403` means the prompt exceeded the context length, not a rejected credential**, and `503` is the platform's capacity rather than this account's budget. |
 | `cerebras` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.cerebras.ai/v1` | Shares Mistral's unwrapped error envelope. A spent free-tier **day** is a `429`, not a billing state — it refills on a clock. |
+| `opencode-go` | API key, `Authorization: Bearer` | OpenAI Chat Completions, Anthropic Messages, or OpenAI Responses — the Account picks | `https://opencode.ai/inference/go/openai/v1` (`/anthropic` for that surface) | OpenCode's flat-fee Go plan, one **personal** key per team member. Requires `x-opencode-session` on every request and states `user-agent: developerz.ai` — see [below](#opencode-go--a-flat-fee-plan-that-requires-the-conversation-named). |
 | `ollama` | **none** — a credential is optional, and sent as `Authorization: Bearer` when there is one | OpenAI Chat Completions | operator-supplied | A local or self-hosted Ollama. The only provider whose Account may hold **no credential at all**. No pinned endpoint on purpose: Ollama's own default is `http://localhost:11434`, and in a container that address is the *router*. |
 | `openai-compatible` | API key | OpenAI Chat Completions | operator-supplied | Escape hatch. Any vLLM / LiteLLM / vendor endpoint that speaks OpenAI and takes a key. |
 | `anthropic-compatible` | API key | Anthropic Messages | operator-supplied | Escape hatch for Anthropic-shaped endpoints. |
@@ -177,7 +178,7 @@ absent or stubbed into something that looks like it works:
 
 | Transport | Ids | Meaning |
 |---|---|---|
-| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `ollama`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
+| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `opencode-go`, `ollama`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
 | `agent-sdk` | `anthropic-oauth` | Served by `query()`. Its own driver interface in `providers/claude-sdk/driver.ts`, not a `ProviderDriver`: there is no base URL to resolve, no headers to build, and failures arrive as strings |
 | `unimplemented` | *(none today)* | Where an id declared in `packages/core` ahead of its driver lands. Selecting one is a configuration error, refused by name before any upstream call. Kept rather than deleted because that is the whole point of a total registry — the alternative is a new id compiling into a half-wired provider |
 
@@ -442,6 +443,26 @@ compatibility surface, and `INVALID_ARGUMENT` (400) with the message `API key no
 Generative Language API behind it. Classified on the status alone, the second reads as a client
 mistake — the operator then debugs the request instead of the credential.
 
+## `opencode-go` — a flat-fee plan that requires the conversation named
+
+OpenCode Go sold per member, reached with an ordinary API key. There is no login flow: the Console's
+device sign-in exists for OpenCode's own client, and the router does not present itself as that
+client. It says who it is (`user-agent: developerz.ai`) because the Go docs ask a client for its own
+user agent, and it was accepted on every surface.
+
+| Fact | Detail |
+|---|---|
+| Key | A member's **personal** key. A service-account key of the same workspace authenticates and is refused on every Go model: `403 permission_error`, "Go Teams covers workspace members, not service accounts". Status default reads it as `auth`, so the key is refused like any other |
+| Conversation | `400 MissingSessionID` without `x-opencode-session`, on all three surfaces. `ProviderSurface.sessionHeader` declares it; `runAttempt` sends `conversationId()` — a hash of router key and session key, stable across turns and failover, carrying no client value. A listing or account test is no conversation and goes under a one-off id. The client's own header of that name is stripped at the trust boundary like any other |
+| Billing | `subscription`. A response's `usage.opencode` states `billing_source: go-teams`, `cost: 0`, `list_cost`, and `allowance`, the plan spend it drew. `allowance` is not `list_cost`: the ratio varies by model |
+| Limits | The plan states 5-hour, weekly and monthly limits **per model**, and `GET /zen/go/v1/usage` reports three account-level windows as percentages. The router reads neither yet, and a `429` cools the whole Account, not the model. Tracked as follow-up: no spent-window `429` has been observed to key the fix on |
+| Catalog | `GET /openai/v1/models` states `limit.context`, `limit.output` and `capabilities.reasoning.effort` per model. Sizes are read; the effort list is not stored yet, so nothing validates a requested effort against it |
+| Failures | `429 FreeUsageLimitError` with `Retry-After` is `rate-limited`. `400 Model is unavailable` is `model-unsupported`: the plan does not serve that name, and the next account may |
+
+Pooling is one key per real member. OpenCode's terms forbid multiple accounts used to circumvent
+usage limits; a pool of member keys is the shape the plan is sold in, and buying extra workspaces to
+stack limits is not.
+
 ## The OpenAI-shaped fleet — Groq, DeepSeek, xAI, Mistral, Together, Cerebras
 
 Six vendors that all speak OpenAI Chat Completions and differ only in how each words a failure. Each
@@ -499,6 +520,7 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `deepseek` | HTTP `402`; message matches `insufficient balance` | The one vendor here that answers a spent balance with the status that means it. The wording rule exists for the relayed case and to record a signal better than `http-status:402` |
 | `together` | HTTP `402` — a monthly spending cap | Documented and unambiguous. What is *not* documented is the status a zero prepaid balance returns, and Together is fully prepaid, so the shared wording rule stands behind the status |
 | `cerebras` | HTTP `402`, and nothing else | Cerebras' error page lists statuses only. A spent free-tier **day**, by contrast, is a `429` — clock-recoverable, never `exhausted` |
+| `opencode-go` | HTTP `402`; message matches `insufficient account funds` | Observed live on a key with no pay-as-you-go balance. **Unobserved:** what a spent plan window answers with Extra Usage on and no balance; if it is this `402`, a clock-recoverable window lands in `exhausted` |
 | `xai`, `mistral` | one shared wording rule, behind a guard that reads any `429` as a cooldown | Neither publishes a status for a depleted balance or a spend-suspended workspace. Encoding a guess is how a healthy account gets parked at `402`, so neither driver encodes one; the shared phrasing is the whole of it, and the signal it records says so |
 | `ollama` | the same shared wording rule, behind the `429` throttle guard | A local endpoint has no balance to drain, so nothing here is Ollama's own vocabulary — but a hosted or proxied surface reached through this id can refuse one, and its limits are hourly and daily. The throttle guard leads so a spent hour can never read as a dead balance |
 | `openai-compatible`, `anthropic-compatible` | one shared wording rule — `insufficient quota/credits/balance`, `out of credits`, `quota exceeded/exhausted` — guarded by an error status | The endpoint behind these is unknown. Guessing at a vendor's error vocabulary produces confident misclassifications, so this is deliberately the *only* wording either matches. The status guard is what stops a completion containing the word "quota" reading as a billing stop. **No 429 guard here**, unlike the pinned vendors: behind an escape hatch may sit an OpenAI-shaped endpoint, where a `429` genuinely *is* a spent balance |
@@ -618,6 +640,7 @@ spelling), labels the row `upstream`, and falls back to the shipped table (`serv
 | `gemini` | OpenAI-compat `GET /models` | none — the compat surface omits the native `inputTokenLimit` | — |
 | `openai-api`, `zai`, `minimax` | `GET /models` | none (verified live) — shipped table | shipped table |
 | `kimi`, `deepseek`, `xai` | `GET /models` | any spelling above if stated (not verified live), else shipped table | same |
+| `opencode-go` | `GET /models` | `limit.context` (verified live) | `limit.output` (verified live) |
 | `cerebras`, `ollama`, `anthropic-compatible` | `GET /models` | whatever spelling above the endpoint uses, else `null` | same |
 
 `GET /v1/models` then publishes the numbers from the warm store — Anthropic shape `max_input_tokens`

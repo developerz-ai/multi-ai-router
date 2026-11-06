@@ -11,6 +11,7 @@ import { KIMI_CODING_REFERENCES } from "./tables/kimi-coding"
 import { MINIMAX_MODELS } from "./tables/minimax"
 import { MISTRAL_MODELS } from "./tables/mistral"
 import { OPENAI_MODELS } from "./tables/openai"
+import { OPENCODE_GO_MODELS } from "./tables/opencode-go"
 import { TOGETHER_MODELS } from "./tables/together"
 import { XAI_MODELS } from "./tables/xai"
 import { ZAI_MODELS } from "./tables/zai"
@@ -71,6 +72,7 @@ const PRICES: Partial<Record<ProviderId, ModelTable>> = {
   mistral: MISTRAL_MODELS,
   together: TOGETHER_MODELS,
   cerebras: CEREBRAS_MODELS,
+  "opencode-go": OPENCODE_GO_MODELS,
 }
 
 /** The rates for one upstream model, or null when this image ships no price for it. */

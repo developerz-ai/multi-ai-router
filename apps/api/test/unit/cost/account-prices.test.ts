@@ -176,7 +176,7 @@ test("a source with no verification date means its rows were not re-checked", ()
 test("every shipped table has a price source, and every source names a page", () => {
   // One source per shipped table: a table with no source is a table nobody can date, and a source
   // with no table is a date that promises nothing.
-  expect(PRICE_SOURCES.length).toBe(12)
+  expect(PRICE_SOURCES.length).toBe(13)
   for (const source of PRICE_SOURCES) {
     expect(source.id.length, source.id).toBeGreaterThan(0)
     expect(source.url.startsWith("https://"), source.id).toBe(true)
@@ -194,6 +194,7 @@ test("every shipped table has a price source, and every source names a page", ()
     "minimax",
     "mistral",
     "openai",
+    "opencode-go",
     "together",
     "xai",
     "zai",
