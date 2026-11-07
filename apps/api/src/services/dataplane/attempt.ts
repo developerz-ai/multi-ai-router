@@ -70,7 +70,10 @@ export interface AttemptInput {
    * itself is left to its own clocks, and the chain answers the shutdown.
    */
   readonly abandon?: AbortSignal
-  /** The client asked to stream: committed at the upstream's headers, with no peek (`success-wall.ts`). */
+  /**
+   * The client asked to stream: its peek is bounded by `stream.wallHoldMs` and then commits
+   * (`success-wall.ts`). A client that is not streaming is peeked until the first event decides.
+   */
   readonly clientStreams?: boolean
   /**
    * Replaces the client's `Accept`. Set only for a body the router rewrote to stream for a surface
@@ -186,8 +189,6 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   ].sort((a, b) => b.length - a.length)
   const errorMaxBytes = input.errorMaxBytes ?? DEFAULT_UPSTREAM_ERROR_MAX_BYTES
 
-  if (response.status < 400 && input.clientStreams === true)
-    return { kind: "success", response: deadline?.watch(response) ?? response, rateLimit }
   if (response.status < 400) {
     // Watched first, so the idle clock bounds the peek as it bounds the relay after it.
     const watched = deadline?.watch(response) ?? response
@@ -198,6 +199,9 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
         ...plan,
         maxBytes: errorMaxBytes,
         signal: AbortSignal.any(signals),
+        ...(input.clientStreams === true && input.stream !== undefined
+          ? { hold: { ms: input.stream.wallHoldMs } }
+          : {}),
       })
     } catch (error) {
       deadline?.release()

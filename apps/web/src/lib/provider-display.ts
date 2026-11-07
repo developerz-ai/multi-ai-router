@@ -23,6 +23,7 @@ const DISPLAY_NAME: Readonly<Record<ProviderId, string>> = {
   together: "Together",
   cerebras: "Cerebras",
   "opencode-go": "OpenCode Go",
+  "opencode-oauth": "OpenCode Console login",
   ollama: "Ollama",
   "openai-compatible": "OpenAI-compatible endpoints",
   "anthropic-compatible": "Anthropic-compatible endpoints",

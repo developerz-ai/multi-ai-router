@@ -199,26 +199,27 @@ describe("a wall inside a 2xx, with a healthy sibling", () => {
     expect(result.health.stateOf(result.calls[0] as string).breaker.status).toBe("cooling_down")
   })
 
-  test("a streaming client is committed at headers: even a first-event error stays in-stream", async () => {
-    // Holding its status line until a first event would trip the server's idle timeout on an
-    // upstream that thinks for minutes before speaking (`success-wall.ts`).
+  test("a streaming client is failed over too: a first-event error never reaches it", async () => {
+    // Its status line is held only until the first event decides, bounded by
+    // `UPSTREAM_STREAM_WALL_HOLD_MS` (`success-wall.ts`); a wall decides at once.
     const overloaded =
       'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'
     const result = await run("anthropic-api", ["a", "b"], [sse(overloaded), sse(STREAM)], true)
 
-    expect(result.calls).toHaveLength(1)
+    expect(result.calls).toHaveLength(2)
     expect(result.status).toBe(200)
-    expect(result.body).toBe(overloaded)
+    expect(result.body).toBe(STREAM)
   })
 
-  test("a streaming client gets message_start at once: an error after it is in-stream, not retried", async () => {
+  test("a streaming client is failed over on an error right after message_start", async () => {
     const opened = `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { ...MESSAGE, content: [] } })}\n\n`
     const limited = `${opened}event: error\ndata: {"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}\n\n`
     const result = await run("anthropic-api", ["a", "b"], [sse(limited), sse(STREAM)], true)
 
-    expect(result.calls).toHaveLength(1)
+    expect(result.calls).toHaveLength(2)
     expect(result.status).toBe(200)
-    expect(result.body).toBe(limited)
+    expect(result.body).toBe(STREAM)
+    expect(result.health.stateOf(result.calls[0] as string).breaker.status).toBe("cooling_down")
   })
 
   test("a Codex response.failed after response.created is a wall for a client that is not streaming", async () => {

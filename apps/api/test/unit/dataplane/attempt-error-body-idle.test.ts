@@ -41,7 +41,7 @@ test("an error body that goes silent ends at the idle deadline, not the total on
     clientHeaders: new Headers(),
     body: null,
     timeoutMs: TOTAL_MS,
-    stream: { firstByteMs: 1_000, idleMs: IDLE_MS, totalMs: TOTAL_MS },
+    stream: { firstByteMs: 1_000, idleMs: IDLE_MS, totalMs: TOTAL_MS, wallHoldMs: 5_000 },
     cipher: { decrypt: (value) => cryptor.decrypt(value) },
     fetch: async () =>
       new Response(hung, { status: 503, headers: { "content-type": "application/json" } }),

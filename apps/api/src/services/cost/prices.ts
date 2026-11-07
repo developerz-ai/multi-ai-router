@@ -46,12 +46,13 @@ export const PRICE_TABLE_AS_OF = PRICE_SOURCES.map((source) => source.snapshotAs
  * deliberately: a subscription has no per-token price, so those rows are valued at what the same
  * tokens would have cost on that vendor's API and marked `notional` — see `estimateCost`.
  *
- * Four providers are absent and stay absent, because for each of them a shipped number would be a
+ * Five providers are absent and stay absent, because for each of them a shipped number would be a
  * fiction rather than a stale fact:
  *
  * - `openrouter` — the price is whichever upstream it routed to, decided per request. It reports
  *   the figure itself in the response body; reading that is a separate change, and inventing a
  *   table meanwhile would price every route as one.
+ * - `opencode-oauth` — Console prices change with its live catalog; no static card is shipped.
  * - `ollama` — the operator's own hardware. There is no per-token price to state, and `0` would
  *   claim electricity is free rather than that nobody billed for tokens.
  * - `openai-compatible` / `anthropic-compatible` — the operator's own contract with whatever is

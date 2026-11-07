@@ -3,7 +3,8 @@ import { type Context, Hono } from "hono"
 import { getConnInfo } from "hono/bun"
 import { deleteCookie, setCookie } from "hono/cookie"
 import { z } from "zod"
-import { renderErrorBody } from "../../errors/render"
+import { REQUEST_WALL, refusalBody } from "../../errors/render"
+import type { RouterVerdict } from "../../errors/router-object"
 import { type AdminAuthEnv, adminAuth } from "../../middleware/adminAuth"
 import { readJsonBody } from "../../services/admin"
 import {
@@ -76,7 +77,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     if (!parsed.success) {
       // A malformed body is not a credential verdict, so it gets a 400 — but a
       // 400 that says nothing about what the verdict would have been.
-      return c.json(renderErrorBody(null, 400, "Invalid request body", "invalid_request"), 400)
+      return refuse(c, 400, "Invalid request body", "invalid_request")
     }
 
     try {
@@ -97,14 +98,11 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     } catch (error) {
       if (error instanceof AdminLoginThrottledError) {
         c.header("Retry-After", String(error.retryAfterSeconds))
-        return c.json(renderErrorBody(null, 429, ADMIN_LOGIN_FAILED_MESSAGE, null), 429)
+        return refuse(c, 429, ADMIN_LOGIN_FAILED_MESSAGE, null, lockout(error.retryAfterSeconds))
       }
       // Wrong password, no credential configured, anything else: one wording,
       // byte-identical to the OIDC callback's — see the service.
-      return c.json(
-        renderErrorBody(null, 401, ADMIN_LOGIN_FAILED_MESSAGE, "admin_auth_failed"),
-        401,
-      )
+      return refuse(c, 401, ADMIN_LOGIN_FAILED_MESSAGE, "admin_auth_failed")
     }
   })
 
@@ -116,7 +114,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     } catch (error) {
       if (!(error instanceof AdminLoginThrottledError)) throw error
       c.header("Retry-After", String(error.retryAfterSeconds))
-      return c.json(renderErrorBody(null, 429, ADMIN_LOGIN_FAILED_MESSAGE, null), 429)
+      return refuse(c, 429, ADMIN_LOGIN_FAILED_MESSAGE, null, lockout(error.retryAfterSeconds))
     }
   })
 
@@ -173,14 +171,11 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     // go on holding a credential it believes it just surrendered. Revoking this one means changing
     // the variable and restarting the router.
     if (session.username === ADMIN_API_TOKEN_ACTOR) {
-      return c.json(
-        renderErrorBody(
-          null,
-          400,
-          "ADMIN_API_TOKEN is a static credential, not a session — it is revoked by changing the variable and restarting the router",
-          "invalid_request",
-        ),
+      return refuse(
+        c,
         400,
+        "ADMIN_API_TOKEN is a static credential, not a session — it is revoked by changing the variable and restarting the router",
+        "invalid_request",
       )
     }
 
@@ -257,7 +252,26 @@ const localLoginBody = z.object({
 
 /** OIDC absent is not an error — the door simply does not exist on this router. */
 function oidcNotConfigured(c: Context<AdminAuthEnv>): Response {
-  return c.json(renderErrorBody(null, 404, "Not found", "not_found"), 404)
+  return refuse(c, 404, "Not found", "not_found")
+}
+
+/** A refusal: the sentence and code as before, `error.router` beside them. */
+function refuse(
+  c: Context<AdminAuthEnv>,
+  status: 400 | 401 | 404 | 429,
+  message: string,
+  code: string | null,
+  verdict: RouterVerdict = REQUEST_WALL,
+): Response {
+  return c.json(
+    refusalBody(null, status, message, code, verdict, c.get("requestId") ?? null),
+    status,
+  )
+}
+
+/** The per-IP sign-in lockout: a clock clears it, at the `Retry-After` the response carries. */
+function lockout(retryAfterSeconds: number): RouterVerdict {
+  return { wall: "clock", scope: "request", retryAfterSeconds }
 }
 
 /**

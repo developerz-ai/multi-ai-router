@@ -66,7 +66,7 @@ export async function completeAuthorization(
 ): Promise<AdminResult<OAuthConnectCompleted>> {
   const tokens = await redeemCode(deps, input)
   if (!tokens.ok) return tokens
-  return store(deps, input, tokens.value)
+  return commitOAuthTokens(deps, input, tokens.value)
 }
 
 async function redeemCode(
@@ -128,9 +128,9 @@ async function redeemCode(
 }
 
 /** The consumed attempt plus lifecycle fences writeback; routine refresh is compatible. */
-async function store(
+export async function commitOAuthTokens(
   deps: OAuthExchangeDeps,
-  input: AuthorizedCode,
+  input: Pick<AuthorizedCode, "row" | "capture" | "attemptId" | "expectedLifecycleVersion">,
   tokens: OAuthTokens,
 ): Promise<AdminResult<OAuthConnectCompleted>> {
   const { row, capture } = input

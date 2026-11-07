@@ -25,6 +25,11 @@ export interface StreamDeadlines {
   readonly idleMs: number
   /** `UPSTREAM_STREAM_TIMEOUT_MS`: the whole streamed attempt, headers to last byte. */
   readonly totalMs: number
+  /**
+   * `UPSTREAM_STREAM_WALL_HOLD_MS`: how long a streaming client's status line may wait, after the
+   * upstream's headers, for the first event that decides wall or content (`success-wall.ts`).
+   */
+  readonly wallHoldMs: number
 }
 
 /** Timers plus a monotonic clock. Injected in tests; `systemTicker` (unref'd timers) otherwise. */
@@ -54,7 +59,7 @@ const MESSAGES: Readonly<Record<DeadlineKind, string>> = {
   total: "upstream stream outlived its total deadline",
 }
 
-const SYSTEM_CLOCK: DeadlineClock = {
+export const SYSTEM_CLOCK: DeadlineClock = {
   after: systemTicker.after,
   now: () => performance.now(),
 }

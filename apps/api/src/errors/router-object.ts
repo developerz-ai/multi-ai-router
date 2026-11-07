@@ -106,6 +106,43 @@ export function routerErrorObject(
   }
 }
 
+/**
+ * A router-authored answer no thrown `RouterError` describes — an admin refusal, a missing route,
+ * a stream the router ended after its first byte — stated as the same object.
+ */
+export interface RouterVerdict {
+  readonly wall: Wall
+  readonly scope: WallScope
+  readonly signal?: string
+  readonly accounts?: readonly WalledAccount[]
+  readonly attempts?: number
+  /** The `Retry-After` the answer carries, if any. */
+  readonly retryAfterSeconds?: number
+}
+
+export function verdictObject(verdict: RouterVerdict, requestId: string | null): RouterErrorObject {
+  return {
+    wall: verdict.wall,
+    scope: verdict.scope,
+    retryable: isRetryableWall(verdict.wall),
+    reset_at: null,
+    reset_source: null,
+    retry_after_s:
+      verdict.retryAfterSeconds === undefined
+        ? null
+        : retryAfterHeaderSeconds(verdict.retryAfterSeconds),
+    accounts: (verdict.accounts ?? []).map((entry) => ({
+      account: opaqueAccountRef(entry.accountId),
+      state: entry.state,
+      reset_at: entry.resetsAt?.toISOString() ?? null,
+    })),
+    pools: [],
+    signal: verdict.signal === undefined ? null : redactValue(verdict.signal),
+    attempts: verdict.attempts ?? 0,
+    request_id: requestId,
+  }
+}
+
 /** The router's own failures that are not `RouterError`s, each with the wall it means. */
 function classify(error: unknown): { wall: Wall; scope: WallScope } {
   if (isRouterError(error)) return { wall: wallOfError(error), scope: defaultWallScope(error.code) }

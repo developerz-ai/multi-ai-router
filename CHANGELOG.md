@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.53.0] — 2026-11-07
+## [2.54.0] — 2026-11-07
+
+### Added
+
+- **OpenCode Console device login** (`opencode-oauth`), alongside existing Go API-key accounts. Enter the short code on OpenCode’s site; the router stores and refreshes the workspace-scoped OAuth token, sends `x-opencode-org-id` and a stable conversation id, and uses the current `/inference/openai/v1` endpoint. Catalog sizes and thinking modes share Go’s reader. Migration 0043 adds the provider id. Free limits retain their upstream `Retry-After`; a Console login does not unlock extra free quota.
+- **Opt-in OpenCode MITM diagnostics**, `bin/opencode-trace`: isolated config and standalone client, pinned loopback mitmproxy, process-local CA trust, streaming capture, redacted auth/identifiers and optional private inference bodies. Device initiation and pending polls, anonymous Big Pickle/DeepSeek and saved-login Big Pickle were captured on CLI 2.2.5. All free inference attempts returned the upstream free quota limit; no successful free inference is claimed.
 
 ### Changed
 
@@ -30,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unreadable-tools-used-before-summary` sentinel. Fast mode derives it from `tool_use` blocks and
   reports the native `X-Stainless-Runtime-Version` (`v26.12.1`). The collector now records that
   bounded tool-name header instead of redacting it.
+
+## [2.53.0] — 2026-11-07
+
+### Fixed
+
+- **A wall in a streaming client's `2xx` fails over to a healthy sibling in the same call.** 2.49.0 read the front of a `2xx` only for a client that was not streaming; a streaming client was committed at the upstream's headers, so an `event: error` (rate limit, overload), a Codex `response.failed` or a MiniMax `base_resp` reached it under a `200` while a sibling went unasked. Its status line is now held until the first event that decides, at most `UPSTREAM_STREAM_WALL_HOLD_MS` (new, default 5000): a wall fails over, and with nobody left the client hears `429` / `402` / `503` with `error.router`, never a `200`. The first content event ends the hold at once, so time to first token is unchanged; an upstream still silent at expiry is committed with the read in flight carried, nothing lost. Anthropic's `ping` is now read past as a preamble. Regression: `apps/api/test/unit/dataplane/stream-wall.test.ts`, `apps/api/test/unit/dataplane/success-wall.test.ts` (the two cases that pinned commit-at-headers now assert the failover).
+- **A stream the upstream breaks after its first byte ends with a router error event, not a cut connection.** An upstream reset, its idle deadline or the router shutting down used to error the client's stream mid-body. It now ends with one event in the ingress dialect carrying `router` (`wall: capacity`, `signal: upstream_error | upstream_timeout | router_shutdown`, the serving account, `attempts`, `request_id`) and closes cleanly (`services/dataplane/relay-stream-end.ts`). Not retried: bytes were already sent. Regression: `apps/api/test/unit/dataplane/stream-wall.test.ts`.
+
+### Added
+
+- **Every router-authored error carries `error.router`, admin plane included.** Admin service refusals (`400`/`404`/`409`), the sign-in routes (`400`, `401`, `404`, and the lockout `429` as `wall: clock` with `retry_after_s`) and the `/metrics` `401` now carry it; sentences unchanged. `refusalBody` in `errors/render.ts` is the one seam. Sentences frozen in `apps/api/test/unit/errors/frozen-sentences.test.ts` (admin and stream-end cases added); wire checks in `apps/api/test/integration/admin-local-auth.test.ts` and `composition.test.ts`.
+- Tests: the integration harness now passes the production stream clocks with a 20 ms wall hold (`HARNESS_STREAM_DEADLINES`), so a stream a test has not released yet commits as in prod. Tests that pinned a cut connection after bytes, a `ping` committing, or a streaming client committed at headers now assert the new rule (`transport-boundaries`, `dataplane`, `idle-clock`, `upstream-stream-deadlines`, `overhead`, `hung-relay-cancellation`).
+- Docs: 05 (*A wall inside a 2xx*), 06 (*The router error object*: coverage, the stream-end event per dialect), 09 and `.env.example` (`UPSTREAM_STREAM_WALL_HOLD_MS`).
 
 ## [2.52.2] — 2026-11-07
 
@@ -2050,3 +2068,5 @@ your tooling config.
 [2.52.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.1
 [2.52.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.2
 [2.53.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.53.0
+
+[2.54.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.0

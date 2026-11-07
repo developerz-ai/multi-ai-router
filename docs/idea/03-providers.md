@@ -836,3 +836,30 @@ OpenAI OAuth credentials retain normalized provider account identity inside the 
 Refresh runs off the request path under a dedicated PostgreSQL advisory-lock session and rereads current credentials before exchange. A successful rotation saves with exact old-ciphertext CAS, preserving concurrent disabled/exhausted status and operator epochs. A superseded grant is not exchanged again immediately. Unknown upstream rotation after a lost response remains an issuer/transport limitation; the lock does not establish remote exactly-once execution. Claude tokens stay exclusively owned by the Agent SDK/CLI.
 
 Successful Claude CLI login confirms the original lifecycle and ciphertext atomically. Background status observations during login do not supersede operator authorization: current `needs_reauth` becomes active, while current disabled, exhausted, or cooling status is preserved. A newer operator lifecycle or credential replacement rejects confirmation. Passive auth probes still require the exact observed status. Login audits name the status when login began and the committed status rather than implying a status transition that was not observed.
+
+## OpenCode Console device login
+
+`opencode-oauth` connects an OpenCode Console member through the native device-code flow.
+Create an account, click Connect, and enter the short code at OpenCode’s Console device page.
+This is separate from `opencode-go`, whose existing personal API keys remain valid.
+Console login uses `/console/auth/device/code` and `/console/auth/device/token`, client
+`opencode-cli`, and asks for workspace scoping. Approved polls issue tokens directly; the
+router commits them through the same one-shot attempt and lifecycle fences used by other
+OAuth accounts. Tokens and device handles are encrypted; refresh rotation is owned by the
+existing expiry-driven scheduler. The issuer’s device expiry caps the router’s configured TTL.
+A fresh token without a workspace id is refused, and refresh preserves a prior workspace
+when the issuer omits it. No CLI subprocess is used for production inference.
+
+The provider uses the captured `/inference/openai/v1` Chat Completions surface, with OAuth
+Bearer auth, `x-opencode-org-id` and the router’s opaque `x-opencode-session`. It names itself
+as `developerz.ai`; arbitrary client identity and authentication headers are discarded. Other
+client dialects translate normally. Catalog sizes and reasoning modes share Go’s reader. Only models declaring a Chat Completions route are listed for Console accounts.
+Console’s free and paid model names pass through as selected by the client; no substitution
+is made. A Console login does not add free quota: `FreeUsageLimitError` retains `Retry-After`
+and cools, while an overloaded upstream is retried without cooling. Paid models may incur
+Console charges; no Console price table ships in this release.
+
+The [wire record](../research/opencode-wire.md) separates live MITM observations from source
+inspection: device initiation and pending polls were captured; Big Pickle and DeepSeek free
+calls, including the selected signed-in account, returned the upstream free limit. Successful
+fresh login, refresh, inference and tool/cache behavior still require a live canary.

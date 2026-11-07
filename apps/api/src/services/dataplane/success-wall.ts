@@ -2,6 +2,7 @@ import type { Dialect } from "@multi-ai-router/core"
 import type { FailureClassification, ProviderDriver, UpstreamFailureKind } from "../../providers"
 import { createResponseFraming } from "../usage/response-framing"
 import { protocolFailure, readResponseTerminal } from "../usage/response-terminal"
+import { type DeadlineClock, SYSTEM_CLOCK } from "./upstream-deadline"
 
 /**
  * A wall inside a `2xx`, read **before** the response is committed to the client.
@@ -13,11 +14,13 @@ import { protocolFailure, readResponseTerminal } from "../usage/response-termina
  * a healthy sibling was never asked. Until a byte reaches the client failover is still open, so the
  * front of the body is read here and a wall becomes the failure it is.
  *
- * **Only for a client that is not streaming.** That client sees nothing before the whole answer
- * exists, so holding the status line until the front of the body is read costs it nothing. A
- * streaming client is committed at the upstream's headers, as before: holding its status line
- * until a first event — which a reasoning upstream may not send for minutes — would trip the
- * server's idle timeout and a client's header timeout, so a wall in its stream stays in-stream.
+ * **A streaming client is held too, but briefly.** Its status line waits for the first event that
+ * decides, and no longer than `hold` (`UPSTREAM_STREAM_WALL_HOLD_MS`): an upstream still silent
+ * then is committed with whatever it sent, so a reasoning upstream that thinks for minutes before
+ * speaking cannot run a client's header timeout down. A wall inside the hold fails over in the same
+ * call; a wall after it is in-stream, and a stream that breaks after content ends with the router's
+ * own error event (`relay-stream-end.ts`). The server's idle clock is off while the handler runs
+ * (`middleware/idleClock.ts`), so the hold never trips it.
  *
  * **What is read, and no more.** A stream is read to its first event that is not a preamble
  * (`message_start`, `response.created`, `response.in_progress` — they open a response and carry no
@@ -29,7 +32,7 @@ import { protocolFailure, readResponseTerminal } from "../usage/response-termina
  *
  * **Nothing is changed.** A committed response replays the bytes read, then the rest, pulled on
  * demand: byte for byte, unbuffered past the peek (non-negotiable 10). It adds no time to first
- * token: the bytes held are bytes that precede it.
+ * token: the bytes held are bytes that precede it, and the first content event ends the hold.
  */
 
 export type SuccessPeek =
@@ -52,11 +55,17 @@ export interface SuccessPeekInput {
    * request at shutdown. The upstream body is cancelled and the reason thrown.
    */
   readonly signal?: AbortSignal
+  /**
+   * A streaming client's bound on the peek (`UPSTREAM_STREAM_WALL_HOLD_MS`). Expiry commits: the
+   * bytes read so far are replayed and the read still in flight is carried, never dropped. Absent
+   * for a client that is not streaming, which sees nothing before the whole answer anyway.
+   */
+  readonly hold?: { readonly ms: number; readonly clock?: DeadlineClock }
 }
 
 /** Opens a response and carries no output: read past, so the event after it can still decide. */
 const PREAMBLE: Readonly<Record<Dialect, readonly string[]>> = {
-  anthropic: ["message_start"],
+  anthropic: ["message_start", "ping"],
   "openai-chat": [],
   "openai-responses": ["response.created", "response.in_progress"],
 }
@@ -81,9 +90,13 @@ const WALL_STATUS: Readonly<Record<UpstreamFailureKind, number>> = {
 
 /** The two calls the peek makes on a body reader, so both runtimes' reader types satisfy it. */
 interface BodyReader {
-  read(): Promise<{ done: true; value?: undefined } | { done: false; value: Uint8Array }>
+  read(): Promise<ReadResult>
   cancel(reason?: unknown): Promise<void>
 }
+
+type ReadResult = { done: true; value?: undefined } | { done: false; value: Uint8Array }
+
+const HELD = Symbol("held")
 
 type Verdict = "commit" | { readonly payload: unknown; readonly wall: FailureClassification }
 
@@ -119,9 +132,25 @@ export async function peekSuccess(
   let partial = ""
   let read = 0
   let ended = false
+  /** A read the hold outlasted: the replay takes it first, so no chunk is lost. */
+  let pending: Promise<ReadResult> | undefined
+  let releaseHold = (): void => {}
+  const { hold } = input
+  const holdExpired =
+    hold === undefined
+      ? undefined
+      : new Promise<typeof HELD>((resolve) => {
+          releaseHold = (hold.clock ?? SYSTEM_CLOCK).after(hold.ms, () => resolve(HELD))
+        })
   try {
     while (verdict === undefined) {
-      const next = await readOrAbort(reader, input.signal)
+      pending ??= reader.read()
+      const next = await readOrAbort(
+        holdExpired === undefined ? pending : Promise.race([pending, holdExpired]),
+        input.signal,
+      )
+      if (next === HELD) break
+      pending = undefined
       if (next.done) {
         ended = true
         framing.finish()
@@ -144,6 +173,8 @@ export async function peekSuccess(
     // relayed, so the attempt fails as a transport fault would and the chain decides what follows.
     void reader.cancel(error).catch(() => {})
     throw error
+  } finally {
+    releaseHold()
   }
 
   if (verdict !== undefined && verdict !== "commit") {
@@ -157,7 +188,7 @@ export async function peekSuccess(
   }
   return {
     kind: "clear",
-    response: new Response(replay(held, reader, ended), {
+    response: new Response(replay(held, pending, reader, ended), {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -194,29 +225,25 @@ function isPreamble(dialect: Dialect, payload: unknown, event: string | undefine
   return typeof type === "string" && PREAMBLE[dialect].includes(type)
 }
 
-function readOrAbort(
-  reader: BodyReader,
-  signal: AbortSignal | undefined,
-): ReturnType<BodyReader["read"]> {
-  if (signal === undefined) return reader.read()
+function readOrAbort<T>(read: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return read
   signal.throwIfAborted()
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason)
     signal.addEventListener("abort", abort, { once: true })
-    reader
-      .read()
-      .then(resolve, reject)
-      .finally(() => signal.removeEventListener("abort", abort))
+    read.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
   })
 }
 
 /** The bytes the peek read, then the rest of the upstream, pulled only as the client reads. */
 function replay(
   held: readonly Uint8Array[],
+  pending: Promise<ReadResult> | undefined,
   reader: BodyReader,
   ended: boolean,
 ): ReadableStream<Uint8Array> {
   let index = 0
+  let carried = pending
   return new ReadableStream<Uint8Array>(
     {
       async pull(controller) {
@@ -230,7 +257,9 @@ function replay(
           controller.close()
           return
         }
-        const next = await reader.read()
+        const read = carried ?? reader.read()
+        carried = undefined
+        const next = await read
         if (next.done) controller.close()
         else controller.enqueue(next.value)
       },

@@ -24,13 +24,14 @@ const HTTP_PROVIDERS = [
   "together",
   "cerebras",
   "opencode-go",
+  "opencode-oauth",
   "ollama",
   "openai-compatible",
   "anthropic-compatible",
 ] as const
 
 /** Every HTTP provider is a key except the ChatGPT/Codex subscription, which is a refreshed token. */
-const OAUTH_PROVIDERS: readonly string[] = ["openai-oauth"]
+const OAUTH_PROVIDERS: readonly string[] = ["openai-oauth", "opencode-oauth"]
 
 /** …and the local endpoint, which authenticates nobody. */
 const NO_AUTH_PROVIDERS: readonly string[] = ["ollama"]
@@ -150,9 +151,9 @@ describe("PROVIDER_REGISTRY", () => {
  */
 describe("the openai-chat output ceiling", () => {
   /** OpenAI deprecated `max_tokens` and its reasoning models refuse it outright. Nobody else has. */
-  const NEW_NAME: readonly ProviderId[] = ["openai-api"]
+  const NEW_NAME: readonly ProviderId[] = ["openai-api", "opencode-oauth"]
 
-  test("only OpenAI's own platform states max_completion_tokens", () => {
+  test("OpenAI and the captured OpenCode Console surface state max_completion_tokens", () => {
     const renamed = HTTP_DRIVERS.filter(
       (driver) =>
         driver.resolveChatCeiling({ id: "probe", provider: driver.id, dialect: "openai-chat" }) ===

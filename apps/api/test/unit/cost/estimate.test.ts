@@ -520,12 +520,13 @@ describe("listing the shipped table", () => {
     const priced = new Set(listShippedRates().map((row) => row.provider))
 
     // The coverage claim, kept honest by naming the exceptions rather than counting rows: anything
-    // not in this set must be one of the four that deliberately ship none.
+    // not in this set must be one of the five that deliberately ship none.
     const unpriced = ProviderId.options.filter((id) => !priced.has(id))
     expect(unpriced.sort()).toEqual([
       "anthropic-compatible",
       "ollama",
       "openai-compatible",
+      "opencode-oauth",
       "openrouter",
     ])
   })

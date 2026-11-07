@@ -71,6 +71,8 @@ export interface RuntimeInput {
   readonly selectTerminal?: (winner: UsageRecord | undefined) => void
   /** Correlation id shared by every attempt of this request. */
   readonly correlationId: string
+  /** The transport's id (`x-router-request-id`), echoed as `router.request_id` in a stream's end. */
+  readonly requestId?: string
   readonly apiKeyId: string
   readonly sessionKey: string
   /** Exactly what the client asked for. Never substituted. */

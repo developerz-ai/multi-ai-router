@@ -15,13 +15,15 @@ for (const protocolErrorFirst of [false, true]) {
     let cancellations = 0,
       ends = 0,
       started = false
-    // The `ping` commits the response (`success-wall.ts`), so the error after it is in-stream.
-    const payload =
-      'data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n' +
-      'data: {"type":"ping"}\n\n' +
-      (protocolErrorFirst
-        ? 'data: {"type":"error","error":{"type":"api_error","message":"offline"}}\n\n'
-        : "")
+    // The keepalive comment, a chunk of its own, commits the response (`success-wall.ts`; a `ping`
+    // is a preamble since 2.53.0), so the error in the next chunk is in-stream.
+    const chunks = [
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":7}}}\n\n: keepalive\n\n',
+      ...(protocolErrorFirst
+        ? ['data: {"type":"error","error":{"type":"api_error","message":"offline"}}\n\n']
+        : []),
+    ]
+    const payload = chunks.join("")
     const dispatcher = createDispatcher({
       activeRequests: registry,
       catalog: routing,
@@ -60,7 +62,7 @@ for (const protocolErrorFirst of [false, true]) {
         new Response(
           new ReadableStream<Uint8Array>({
             start(controller) {
-              controller.enqueue(new TextEncoder().encode(payload))
+              for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk))
             },
             cancel() {
               cancellations++
@@ -90,7 +92,10 @@ for (const protocolErrorFirst of [false, true]) {
     })
     if (!response.body) throw new Error("missing response body")
     const reader = response.body.getReader()
-    expect(new TextDecoder().decode((await reader.read()).value)).toBe(payload)
+    let received = ""
+    while (received.length < payload.length)
+      received += new TextDecoder().decode((await reader.read()).value)
+    expect(received).toBe(payload)
     abort.abort()
     // Settlement is synchronous at abort observation, not deferred until cancellation resolves.
     expect(rows).toHaveLength(1)

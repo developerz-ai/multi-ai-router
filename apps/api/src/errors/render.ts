@@ -10,7 +10,12 @@ import {
   RouterShutdownError,
 } from "../services/dataplane/active-requests"
 import { ClientCancelledError } from "../services/dataplane/relay-cancellation"
-import { type RouterErrorObject, routerErrorObject } from "./router-object"
+import {
+  type RouterErrorObject,
+  type RouterVerdict,
+  routerErrorObject,
+  verdictObject,
+} from "./router-object"
 
 /**
  * Turns a thrown value into the HTTP status and the dialect-appropriate JSON body the client
@@ -195,19 +200,35 @@ function renderFailure(error: unknown, dialect: Dialect | null): ErrorResponse {
   }
 }
 
+/**
+ * A router-authored refusal that is not a thrown `RouterError` — the admin plane's, a missing route,
+ * the metrics door — rendered with `error.router` like every other (`router-object.ts`). The
+ * sentence and code are the caller's, unchanged.
+ */
+export function refusalBody(
+  dialect: Dialect | null,
+  status: number,
+  message: string,
+  code: string | null,
+  verdict: RouterVerdict,
+  requestId: string | null,
+): ErrorBody {
+  return withRouter(
+    renderErrorBody(dialect, status, message, code),
+    verdictObject(verdict, requestId),
+  )
+}
+
+/** The wall of a refusal whose request itself is wrong: sending it again unchanged fails alike. */
+export const REQUEST_WALL: RouterVerdict = { wall: "request", scope: "request" }
+
 export function notFoundResponse(
   dialect: Dialect | null,
   requestId: string | null = null,
 ): ErrorResponse {
-  const router: RouterErrorObject = {
-    ...routerErrorObject(null, null, requestId),
-    wall: "request",
-    scope: "request",
-    retryable: false,
-  }
   return {
     status: 404,
-    body: withRouter(renderErrorBody(dialect, 404, "Not found", "not_found"), router),
+    body: refusalBody(dialect, 404, "Not found", "not_found", REQUEST_WALL, requestId),
     retryAfterSeconds: null,
   }
 }

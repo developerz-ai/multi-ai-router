@@ -51,6 +51,7 @@ describe("runAttempt against a real socket", () => {
       firstByteMs: 150,
       idleMs: 5_000,
       totalMs: 60_000,
+      wallHoldMs: 5_000,
     })
     expect(outcome.kind).toBe("failure")
     expect(outcome.kind === "failure" && outcome.failure.kind).toBe("timeout")
@@ -74,6 +75,7 @@ describe("runAttempt against a real socket", () => {
       firstByteMs: 5_000,
       idleMs: 150,
       totalMs: 60_000,
+      wallHoldMs: 5_000,
     })
     expect(outcome.kind).toBe("success")
     if (outcome.kind !== "success") return
@@ -128,7 +130,7 @@ describe("the chain: a hung upstream fails over, a stalled stream fails honestly
         account("b", { apiKey: "sk-b", cipher: CRYPTOR }),
       ],
       responses: [hung, sse],
-      upstreamStream: { firstByteMs: 100, idleMs: 5_000, totalMs: 60_000 },
+      upstreamStream: { firstByteMs: 100, idleMs: 5_000, totalMs: 60_000, wallHoldMs: 5_000 },
     })
     setup.upstream = built.upstream
     const res = await built.app.request("/v1/messages", post(STREAM, bearer()))
@@ -145,7 +147,9 @@ describe("the chain: a hung upstream fails over, a stalled stream fails honestly
           start(controller) {
             controller.enqueue(
               new TextEncoder().encode(
-                'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
+                'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n' +
+                  // Content, so the stream is committed before it stalls (`success-wall.ts`).
+                  'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
               ),
             )
           },
@@ -158,7 +162,7 @@ describe("the chain: a hung upstream fails over, a stalled stream fails honestly
         account("b", { apiKey: "sk-b", cipher: CRYPTOR }),
       ],
       responses: [stalled, sse],
-      upstreamStream: { firstByteMs: 5_000, idleMs: 100, totalMs: 60_000 },
+      upstreamStream: { firstByteMs: 5_000, idleMs: 100, totalMs: 60_000, wallHoldMs: 5_000 },
     })
     const res = await built.app.request("/v1/messages", post(STREAM, bearer()))
     expect(res.status).toBe(200)
@@ -201,7 +205,7 @@ describe("a stalled Codex stream ends on the idle clock", () => {
       const built = harness({
         accounts: [codex],
         responses: [stalled],
-        upstreamStream: { firstByteMs: 5_000, idleMs: 100, totalMs: 60_000 },
+        upstreamStream: { firstByteMs: 5_000, idleMs: 100, totalMs: 60_000, wallHoldMs: 5_000 },
       })
       const started = performance.now()
       const res = await built.app.request(
@@ -219,15 +223,16 @@ describe("a stalled Codex stream ends on the idle clock", () => {
       await Bun.sleep(20)
       expect(performance.now() - started).toBeLessThan(5_000)
       expect(built.upstream.calls).toHaveLength(1)
-      // A streaming client was committed at headers, so its stream ends on the clock. One that is
-      // not streaming is still inside the success peek (`success-wall.ts`): nothing was sent, and
-      // it hears an honest 504 instead of a 200 that breaks.
-      expect(built.usage.rows.at(-1)).toMatchObject(
-        stream
-          ? { outcome: "upstream_timeout", errorClass: "upstream_timeout", tokensOut: 0 }
-          : { outcome: "upstream_timeout", responseStatus: 504, streamed: false, tokensOut: 0 },
-      )
-      if (!stream) expect(res.status).toBe(504)
+      // Only a preamble arrived, so either client is still inside the success peek
+      // (`success-wall.ts`; a streaming one since 2.53.0): nothing was sent, and it hears an
+      // honest 504 instead of a 200 that breaks.
+      expect(built.usage.rows.at(-1)).toMatchObject({
+        outcome: "upstream_timeout",
+        responseStatus: 504,
+        streamed: false,
+        tokensOut: 0,
+      })
+      expect(res.status).toBe(504)
     })
   }
 })

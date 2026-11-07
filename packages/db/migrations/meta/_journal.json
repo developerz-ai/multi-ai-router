@@ -302,6 +302,13 @@
       "when": 1793980570272,
       "tag": "0042_fuzzy_exodus",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1794057396593,
+      "tag": "0043_fantastic_norrin_radd",
+      "breakpoints": true
     }
   ]
 }

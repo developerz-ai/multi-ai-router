@@ -208,6 +208,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       // request's attempts, while the client's own id is a trace label a caller may repeat or
       // forge. Using the latter as the join key would merge two clients' chains.
       correlationId: input.identity.correlationId,
+      requestId: input.requestId,
       clientRequestId: input.identity.clientRequestId,
       apiKeyId: input.key.id,
       sessionKey: session.key,
