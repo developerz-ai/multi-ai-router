@@ -7,6 +7,7 @@ import {
   type FailoverOptions,
   markStreamed,
   NO_ATTEMPTS,
+  noteOverload,
   planNextAttempt,
   recordAttempt,
 } from "../routing"
@@ -296,6 +297,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     upstreamMs += runtime.clock.elapsed() - upstreamStarted
 
     lastFailure = outcome.failure
+    progress = noteOverload(progress, accountId, outcome.failure.kind)
     held = finishFailedAttempt(
       ctx,
       servable,

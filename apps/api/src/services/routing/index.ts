@@ -58,6 +58,7 @@ export {
   markStreamed,
   maxAttempts,
   NO_ATTEMPTS,
+  noteOverload,
   planNextAttempt,
   RETRYABLE_FAILURE_KINDS,
   recordAttempt,

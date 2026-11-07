@@ -5,6 +5,7 @@ import {
   type BreakerState,
   HEALTHY,
   NO_ATTEMPTS,
+  noteOverload,
   planNextAttempt,
   recordAttempt,
   recordFailure,
@@ -100,6 +101,31 @@ describe("planning after overloaded", () => {
   test("a rate limit is never retried in place", () => {
     const progress = recordAttempt(recordAttempt(NO_ATTEMPTS, "a"), "b")
     const limited: AttemptFailure = { kind: "rate-limited", message: "429" }
+    expect(
+      planNextAttempt(chain, progress, limited, { overloadRetries: 2, overloadRetryBaseMs: 1 }),
+    ).toMatchObject({ action: "stop" })
+  })
+
+  // Post-merge review of #361: whether the busy seat was waited out hung on candidate order. Seat
+  // `a` overloaded, seat `b` then answered its own real limit: the chain stopped and the client
+  // heard `b`'s `429 quota_exhausted` while `a`, never cooled, would have served after the wait.
+  test("an overloaded seat earlier in the chain is waited out even when the last said rate-limited", () => {
+    const limited: AttemptFailure = { kind: "rate-limited", message: "Go usage limit exceeded" }
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "a"), "a", "overloaded")
+    progress = noteOverload(recordAttempt(progress, "b"), "b", "rate-limited")
+    const decision = planNextAttempt(chain, progress, limited, {
+      overloadRetries: 1,
+      overloadRetryBaseMs: 1_000,
+    })
+    expect(decision).toMatchObject({ action: "retry-in-place", delayMs: 1_000 })
+    expect(decision.action === "retry-in-place" && decision.candidate.account.id).toBe("a")
+  })
+
+  test("the waited-out seat answering anything but overloaded is not asked again", () => {
+    const limited: AttemptFailure = { kind: "rate-limited", message: "Go usage limit exceeded" }
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "a"), "a", "overloaded")
+    progress = noteOverload(recordAttempt(progress, "b"), "b", "rate-limited")
+    progress = noteOverload(recordAttempt(progress, "a", true), "a", "rate-limited")
     expect(
       planNextAttempt(chain, progress, limited, { overloadRetries: 2, overloadRetryBaseMs: 1 }),
     ).toMatchObject({ action: "stop" })

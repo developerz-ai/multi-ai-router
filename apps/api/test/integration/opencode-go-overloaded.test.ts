@@ -124,4 +124,34 @@ describe("opencode-go overloaded: the provider is busy, no seat is out of anythi
     expect(res.status).toBe(429)
     expect(health.stateOf("dz1").breaker.status).toBe("cooling_down")
   })
+
+  // Post-merge review of #361: the busy seat was waited out only when it happened to be asked last.
+  test("one seat overloaded, the other at its own limit: the busy seat is asked again and serves", async () => {
+    let calls = 0
+    const goLimit = () =>
+      Response.json(
+        { type: "error", error: { type: "rate_limit_error", message: "Go usage limit exceeded" } },
+        { status: 429 },
+      )
+    const { app, upstream } = harness({
+      accounts: [seat("dz1"), seat("dz2")],
+      responses: [
+        () => {
+          calls += 1
+          return calls === 1 ? overloaded() : calls === 2 ? goLimit() : served()
+        },
+      ],
+      failover: { overloadRetries: 1, overloadRetryBaseMs: 1 },
+    })
+
+    const res = await app.request("/v1/chat/completions", post(CHAT, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(upstream.calls).toHaveLength(3)
+    expect(upstream.calls[2]?.headers.get("authorization")).toBe(
+      upstream.calls[0]?.headers.get("authorization") ?? "missing",
+    )
+  })
 })

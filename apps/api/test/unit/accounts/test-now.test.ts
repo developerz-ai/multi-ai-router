@@ -412,3 +412,31 @@ describe("createTestNowService — what a Claude subscription's turn reports bac
     expect(warnings).toHaveLength(0)
   })
 })
+
+/**
+ * Post-merge review of #361: OpenCode Go's `[overloaded]` answer is a `429`, and the stock header
+ * parser reads any `429` as `limited: true`. The chain skipped that reading, but Test now, the idle
+ * probe and the router's recovery probe fold the attempt's reading as-is, so a probe landing in
+ * Go's busy spell cooled a seat that was out of nothing — the 2026-11-07 fingerprint again.
+ */
+describe("createTestNowService — a provider's busy backend", () => {
+  test("Go's overloaded 429 folds no limited reading: the seat is not cooled", async () => {
+    const { service, folded } = harness({
+      row: accountRow({ provider: "opencode-go", dialect: "openai-chat" }),
+      fetch: async () =>
+        jsonResponse(429, {
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message:
+              "Upstream request failed: [overloaded] the server is overloaded; retry shortly",
+          },
+        }),
+    })
+
+    const result = await service.test("acc-1", { model: "glm-5.3-flash" })
+
+    expect(result.ok && result.value.failureKind).toBe("overloaded")
+    expect(folded.filter((entry) => entry.signal?.limited === true)).toHaveLength(0)
+  })
+})

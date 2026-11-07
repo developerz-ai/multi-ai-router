@@ -142,6 +142,12 @@ export interface FailoverProgress {
   readonly inPlaceRetries: number
   /** Set the instant the first byte reaches the client. Never unset. */
   readonly bytesStreamed: boolean
+  /**
+   * The account that last answered `overloaded` and has answered nothing else since
+   * ({@link noteOverload}). Once the walk runs out it is the one waited out, whatever the last
+   * account said: a later seat's own limit must not decide whether a busy one is asked again.
+   */
+  readonly overloadedAccountId?: string
 }
 
 export const NO_ATTEMPTS: FailoverProgress = {
@@ -195,25 +201,21 @@ export function planNextAttempt(
   if (
     progress.attemptedAccountIds.length >= attemptCeiling(plannedCount(ordered, progress), options)
   ) {
-    return lastFailure.kind === "overloaded"
-      ? waitOutOverload(ordered, progress, options, "attempts-exhausted")
-      : { action: "stop", reason: "attempts-exhausted" }
+    return waitOutOverload(ordered, progress, lastFailure, options, "attempts-exhausted")
   }
 
   const attempted = new Set(progress.attemptedAccountIds)
   const next = ordered.find((candidate) => !attempted.has(candidate.account.id))
   if (next === undefined) {
-    return lastFailure.kind === "overloaded"
-      ? waitOutOverload(ordered, progress, options, "candidates-exhausted")
-      : { action: "stop", reason: "candidates-exhausted" }
+    return waitOutOverload(ordered, progress, lastFailure, options, "candidates-exhausted")
   }
 
   return attemptOn(next, ordered, progress, options)
 }
 
 /**
- * Every account was asked and the last said `overloaded`: the provider's shared backend is busy,
- * which a short wait fixes and another account does not. So the last account is asked again after
+ * Every account was asked and one said `overloaded`: the provider's shared backend is busy, which a
+ * short wait fixes and another account does not. So that account is asked again after
  * `overloadRetryBaseMs`, doubling per retry, `overloadRetries` times — before any byte is on the
  * wire, as every retry here. Then the chain stops and the client hears `503` + `Retry-After`
  * (`UpstreamOverloadedError`), never a router-made `429`.
@@ -221,13 +223,18 @@ export function planNextAttempt(
 function waitOutOverload(
   ordered: readonly Candidate[],
   progress: FailoverProgress,
+  lastFailure: AttemptFailure,
   options: FailoverOptions,
   exhausted: FailoverStopReason,
 ): FailoverDecision {
+  const busyId =
+    lastFailure.kind === "overloaded"
+      ? progress.attemptedAccountIds[progress.attemptedAccountIds.length - 1]
+      : progress.overloadedAccountId
+  if (busyId === undefined) return { action: "stop", reason: exhausted }
   const cap = Math.max(0, Math.trunc(options.overloadRetries ?? 0))
   if (progress.inPlaceRetries >= cap) return { action: "stop", reason: exhausted }
-  const lastId = progress.attemptedAccountIds[progress.attemptedAccountIds.length - 1]
-  const candidate = ordered.find((entry) => entry.account.id === lastId)
+  const candidate = ordered.find((entry) => entry.account.id === busyId)
   if (candidate === undefined) return { action: "stop", reason: exhausted }
   const base = Math.max(0, options.overloadRetryBaseMs ?? 0)
   return {
@@ -283,12 +290,28 @@ export function recordAttempt(
   inPlace = false,
 ): FailoverProgress {
   return {
+    ...progress,
     attemptedAccountIds: inPlace
       ? progress.attemptedAccountIds
       : [...progress.attemptedAccountIds, accountId],
     inPlaceRetries: inPlace ? progress.inPlaceRetries + 1 : progress.inPlaceRetries,
     bytesStreamed: progress.bytesStreamed,
   }
+}
+
+/**
+ * Folds one failed attempt's kind into the progress: `overloaded` names the account to wait out,
+ * anything else from that same account forgets it. Pure; returns a new value.
+ */
+export function noteOverload(
+  progress: FailoverProgress,
+  accountId: string,
+  kind: FailureKind,
+): FailoverProgress {
+  if (kind === "overloaded") return { ...progress, overloadedAccountId: accountId }
+  if (progress.overloadedAccountId !== accountId) return progress
+  const { overloadedAccountId: _forgotten, ...rest } = progress
+  return rest
 }
 
 /** Called the instant the first byte reaches the client. From here nothing may be retried. */

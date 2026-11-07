@@ -8,6 +8,7 @@ import {
 import type { CredentialCipher } from "../crypto/cipher"
 import type { AttemptFailure } from "../routing"
 import {
+  attemptReading,
   failoverKind,
   redactClassification,
   toAttemptFailure,
@@ -215,7 +216,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
       kind: "failure",
       failure: toAttemptFailure(peeked.status, classification, rateLimit),
       classification,
-      rateLimit: classification.rateLimit ?? rateLimit,
+      rateLimit: attemptReading(classification, rateLimit),
       upstream: {
         status: peeked.status,
         headers: response.headers,
@@ -242,7 +243,7 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     kind: "failure",
     failure: toAttemptFailure(response.status, classification, rateLimit),
     classification,
-    rateLimit: classification?.rateLimit ?? rateLimit,
+    rateLimit: attemptReading(classification, rateLimit),
     upstream: {
       status: response.status,
       headers: response.headers,
