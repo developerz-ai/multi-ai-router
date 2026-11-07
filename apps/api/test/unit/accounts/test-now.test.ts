@@ -420,27 +420,31 @@ describe("createTestNowService — what a Claude subscription's turn reports bac
  * Go's busy spell cooled a seat that was out of nothing — the 2026-11-07 fingerprint again.
  */
 describe("createTestNowService — a provider's busy backend", () => {
-  test("Go's overloaded 429 folds no limited reading: the seat is not cooled", async () => {
-    const { service, folded } = harness({
-      row: accountRow({ provider: "opencode-go", dialect: "openai-chat" }),
-      fetch: async () =>
-        jsonResponse(429, {
-          type: "error",
-          error: {
-            type: "rate_limit_error",
-            message:
-              "Upstream request failed: [overloaded] the server is overloaded; retry shortly",
-          },
-        }),
+  for (const message of [
+    "Upstream request failed: [overloaded] the server is overloaded; retry shortly",
+    "Upstream request failed: [prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)",
+  ]) {
+    test(`Go busy response folds an unlimited reading (${message})`, async () => {
+      const { service, folded } = harness({
+        row: accountRow({ provider: "opencode-go", dialect: "openai-chat" }),
+        fetch: async () =>
+          jsonResponse(429, {
+            type: "error",
+            error: {
+              type: "rate_limit_error",
+              message,
+            },
+          }),
+      })
+
+      const result = await service.test("acc-1", { model: "glm-5.3-flash" })
+
+      expect(result.ok && result.value.failureKind).toBe("overloaded")
+      // Exactly the one reading, carried unlimited: a service that folded nothing would pass a
+      // "no limited reading" check while the Retry-After the reading carries went missing.
+      expect(folded).toHaveLength(1)
+      expect(folded[0]?.accountId).toBe("acc-1")
+      expect(folded[0]?.signal?.limited).toBe(false)
     })
-
-    const result = await service.test("acc-1", { model: "glm-5.3-flash" })
-
-    expect(result.ok && result.value.failureKind).toBe("overloaded")
-    // Exactly the one reading, carried unlimited: a service that folded nothing would pass a
-    // "no limited reading" check while the Retry-After the reading carries went missing.
-    expect(folded).toHaveLength(1)
-    expect(folded[0]?.accountId).toBe("acc-1")
-    expect(folded[0]?.signal?.limited).toBe(false)
-  })
+  }
 })

@@ -651,7 +651,7 @@ attempt cap apply identically to both paths.
 ### `overloaded` — the provider is busy, no account is out of anything
 
 A provider's shared backend answering "busy" — OpenCode Go's `429 … [overloaded] the server is
-overloaded; retry shortly`, Anthropic's `overloaded_error` (`529`), Kimi's `engine_overloaded_error`
+overloaded; retry shortly` or `429 … [prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)`, Anthropic's `overloaded_error` (`529`), Kimi's `engine_overloaded_error`
 — is its own failure kind, `overloaded`, decided by the provider's rules. It is **retryable and
 blameless**: the breaker never strikes for it, the reading on the same response is carried
 `limited: false` (a `429` is otherwise a limit to the header parser) so no path that folds it — the
@@ -667,6 +667,9 @@ byte is on the wire. Still overloaded: the client hears **`503 upstream_overload
 `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), never a router-made `429 quota_exhausted`. Prod,
 2026-11-07 00:22..01:56Z: Go's overload read as `rate-limited` cooled both Go seats, spent their
 recovery permits and answered 199 requests `429` while neither seat was out of anything.
+The prefill tag was observed later the same day at 14:56 / 15:06 / 15:07Z and had the same
+wrong cooldown effect. Both OpenCode lanes share the matcher so these explicit backend tags
+cannot drift between their drivers; generic words such as "limit" or "capacity" are not matched.
 
 `ROUTING_FAILURE_THRESHOLD`, `ROUTING_BASE_BACKOFF_MS`, and `ROUTING_MAX_BACKOFF_MS` are the
 operator's numbers for the two tables above, and the health store supplies them on **every**
