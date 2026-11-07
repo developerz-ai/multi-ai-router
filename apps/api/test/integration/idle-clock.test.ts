@@ -121,7 +121,10 @@ describe("the server's idle clock still governs everything else", () => {
   test(
     "a stream that goes silent past the idle timeout is still cut by the server's clock",
     async () => {
-      const first = new TextEncoder().encode("event: ping\ndata: {}\n\n")
+      // A content event commits the stream (`success-wall.ts`; a `ping` is a preamble since 2.53.0).
+      const first = new TextEncoder().encode(
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      )
       const base = serve([
         () =>
           new Response(

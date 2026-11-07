@@ -19,6 +19,7 @@ import { relayResponse } from "./relay"
 import { ClientCancelledError } from "./relay-cancellation"
 import { type CostReport, usageCostFields } from "./relay-cost"
 import { costRequested, restampingPair } from "./relay-cost-optin"
+import { endsWithRouterError } from "./relay-stream-end"
 import { createRelayTerminal } from "./relay-terminal"
 import { relayTranslatedResponse } from "./relay-translate"
 import type { DispatchRuntime } from "./runtime"
@@ -211,8 +212,23 @@ export function relaySuccess(
     priced &&
     ctx.request !== undefined &&
     costRequested(ctx.request.headers)
+  // A client stream that breaks after its first byte ends with the router's error event.
+  const ended = (relayed: Response): Response =>
+    relayed.headers.get("content-type")?.includes("text/event-stream") === true ||
+    (sendsSse && servable.translation === null)
+      ? endsWithRouterError(
+          relayed,
+          ctx.runtime.ingressDialect,
+          {
+            requestId: ctx.runtime.requestId ?? null,
+            attempt,
+            accountId: servable.account.id,
+          },
+          ctx.request?.signal,
+        )
+      : relayed
   if (servable.translation === null && !restamp)
-    return relayResponse(response, observer, relaySignal)
+    return ended(relayResponse(response, observer, relaySignal))
   const cost: CostReport = {
     ingress: ctx.runtime.ingressDialect,
     fields: (whole) => {
@@ -222,30 +238,34 @@ export function relaySuccess(
       return usageCostFields(facts, attemptCost({ ...attribution, tokens: facts.counts }))
     },
   }
-  return relayTranslatedResponse({
-    upstream: response,
-    pair: servable.translation ?? restampingPair(servable.dialect),
-    // The same account's seal the request was converted under, so reasoning this upstream issues
-    // is sealed to it and only it.
-    context: withReasoningSeal(
-      { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
-      reasoningSealFor(ctx, servable),
-    ),
-    // Only for a client that did not ask to stream; one that did is forwarded event by event. A
-    // restamped passthrough keeps the upstream's framing, so it is never collected.
-    collectStream:
-      servable.translation !== null && upstreamStreams && ctx.translated?.clientStreams() !== true,
-    upstreamStreams: sendsSse,
-    ...(priced ? { cost } : {}),
-    observer,
-    ...(relaySignal === undefined ? {} : { signal: relaySignal }),
-    onUnrecognizedStopReason: (reason) =>
-      ctx.log?.warn("upstream reported an unrecognized stop reason", {
-        accountId: servable.account.id,
-        provider: servable.account.driver.provider,
-        stopReason: reason,
-      }),
-  })
+  return ended(
+    relayTranslatedResponse({
+      upstream: response,
+      pair: servable.translation ?? restampingPair(servable.dialect),
+      // The same account's seal the request was converted under, so reasoning this upstream issues
+      // is sealed to it and only it.
+      context: withReasoningSeal(
+        { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
+        reasoningSealFor(ctx, servable),
+      ),
+      // Only for a client that did not ask to stream; one that did is forwarded event by event. A
+      // restamped passthrough keeps the upstream's framing, so it is never collected.
+      collectStream:
+        servable.translation !== null &&
+        upstreamStreams &&
+        ctx.translated?.clientStreams() !== true,
+      upstreamStreams: sendsSse,
+      ...(priced ? { cost } : {}),
+      observer,
+      ...(relaySignal === undefined ? {} : { signal: relaySignal }),
+      onUnrecognizedStopReason: (reason) =>
+        ctx.log?.warn("upstream reported an unrecognized stop reason", {
+          accountId: servable.account.id,
+          provider: servable.account.driver.provider,
+          stopReason: reason,
+        }),
+    }),
+  )
 }
 
 export function recordAttemptFailure(

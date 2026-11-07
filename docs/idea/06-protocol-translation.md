@@ -783,14 +783,36 @@ sentence and as an opaque reference in `error.router` — never a row id or a pr
 
 #### The router error object
 
-Every error the transport renders (`errorHandler` / `notFoundHandler` → `toErrorResponse` /
+Every error the router authors carries **`error.router`** beside the sentence, in every dialect:
+inside the `error` member, so an SDK that hands the caller only that member (the OpenAI SDKs do)
+still shows it. That is everything `errorHandler` / `notFoundHandler` render (`toErrorResponse` /
 `notFoundResponse`: every thrown `RouterError` on the data and admin planes, a cancelled, shut-down
-or unadmitted request, an unknown `500`, a `404`) carries **`error.router`** beside the sentence, in
-every dialect: inside the `error` member, so an SDK that hands the caller only that member (the
-OpenAI SDKs do) still shows it. Additive: the sentence is unchanged and frozen by
+or unadmitted request, an unknown `500`, a `404`), every admin-plane refusal (`failureBody`, the
+sign-in routes; `refusalBody` in `errors/render.ts` — `wall: request`, or `clock` with
+`retry_after_s` for the sign-in lockout), the `/metrics` `401`, and the event that ends a stream the
+upstream broke after its first byte (below). Additive: the sentence is unchanged and frozen by
 `test/unit/errors/frozen-sentences.test.ts` until developerz.ai reads this object alone. Not on an
-upstream's own error the router relays — those are the provider's words — and not on an in-stream
-error event after a `200`; the `x-router-*` headers below name the account in both cases.
+upstream's own error the router relays — those are the provider's words, in-stream or not — nor on
+a translator's rendering of one, nor on the HTML sign-in callback pages; the `x-router-*` headers
+below name the account.
+
+**A stream that broke after its first byte** (an upstream reset, its idle deadline, the router
+shutting down) cannot fail over, so it ends with one router event and a clean close
+(`services/dataplane/relay-stream-end.ts`), opened by a blank line so a fragment the upstream left
+half-written cannot swallow it:
+
+| Ingress | Event |
+|---|---|
+| `anthropic` | `event: error` · `{"type":"error","error":{"type":"api_error","message":…,"router":{…}}}` (`overloaded_error` on shutdown) |
+| `openai-chat` | `data: {"error":{"message":…,"type":"server_error","param":null,"code":<signal>,"router":{…}}}` then `data: [DONE]` |
+| `openai-responses` | `event: error` · `{"type":"error","code":<signal>,"message":…,"param":null,"router":{…}}` — the Responses error event is flat, so `router` sits at its top level |
+
+`router` there is `wall: capacity`, `retryable: true`, `scope: account` (`router` on shutdown),
+`signal` one of `upstream_error` / `upstream_timeout` / `router_shutdown`, `accounts` the one
+account that served (`state` = the signal), `attempts` the attempt that served, `request_id` the
+request id. The message: `the upstream stream failed after the response began (<signal>); not
+retried, bytes were already sent`, or `the router shut down after the response began; not retried,
+bytes were already sent`.
 
 ```json
 {"type":"error","error":{"type":"rate_limit_error","message":"…","router":{

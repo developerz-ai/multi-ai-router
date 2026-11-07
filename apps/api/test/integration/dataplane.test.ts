@@ -325,11 +325,13 @@ describe("failover", () => {
     slow.release(1)
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("two")
 
-    // The upstream errors after two frames are already on the wire. The client gets a truncated
-    // stream — the honest answer — never a silent restart on the account behind it.
+    // The upstream errors after two frames are already on the wire. The client's stream ends with
+    // the router's error event carrying `router` — never a silent restart on the account behind it.
     slow.abort()
-    const tail = await reader.read().catch(() => undefined)
-    expect(tail === undefined || tail.done).toBe(true)
+    const tail = new TextDecoder().decode((await reader.read()).value)
+    expect(tail).toStartWith("\n\nevent: error\ndata: ")
+    expect(tail).toContain('"wall":"capacity"')
+    expect((await reader.read()).done).toBe(true)
     await settle()
 
     expect(upstream.calls).toHaveLength(1)

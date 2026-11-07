@@ -1,4 +1,6 @@
 import { Hono } from "hono"
+import { REQUEST_WALL } from "../errors/render"
+import { verdictObject } from "../errors/router-object"
 import type { RouterMetrics } from "../observability"
 import { timingSafeEqualStrings } from "../services/admin-auth"
 import { bearerToken } from "../services/dataplane"
@@ -37,7 +39,8 @@ export function metricsRoutes(deps: MetricsRouteDeps): Hono<AppEnv> {
 
   routes.get(METRICS_PATH, (c) => {
     if (!authorized(deps.token, c.req.header("authorization"))) {
-      return c.json({ error: { type: "unauthorized", message: UNAUTHORIZED } }, 401, {
+      const router = verdictObject(REQUEST_WALL, c.get("requestId") ?? null)
+      return c.json({ error: { type: "unauthorized", message: UNAUTHORIZED, router } }, 401, {
         "www-authenticate": 'Bearer realm="metrics"',
       })
     }

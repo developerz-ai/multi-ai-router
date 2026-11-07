@@ -28,11 +28,12 @@ function refusal(raw: Record<string, string>): string {
 }
 
 describe("streamed upstream deadlines", () => {
-  test("defaults: 5 min to first byte, 55 s idle, 1 h total", () => {
+  test("defaults: 5 min to first byte, 55 s idle, 1 h total, 5 s wall hold", () => {
     expect(parseEnv(base).upstreamStream).toEqual({
       firstByteMs: 300_000,
       idleMs: 55_000,
       totalMs: 3_600_000,
+      wallHoldMs: 5_000,
     })
   })
 
@@ -42,8 +43,14 @@ describe("streamed upstream deadlines", () => {
       UPSTREAM_FIRST_BYTE_TIMEOUT_MS: "60000",
       UPSTREAM_IDLE_TIMEOUT_MS: "30000",
       UPSTREAM_STREAM_TIMEOUT_MS: "7200000",
+      UPSTREAM_STREAM_WALL_HOLD_MS: "2000",
     })
-    expect(env.upstreamStream).toEqual({ firstByteMs: 60_000, idleMs: 30_000, totalMs: 7_200_000 })
+    expect(env.upstreamStream).toEqual({
+      firstByteMs: 60_000,
+      idleMs: 30_000,
+      totalMs: 7_200_000,
+      wallHoldMs: 2_000,
+    })
     expect(dispatchOptionsFromEnv(env).upstreamStream).toEqual(env.upstreamStream)
   })
 

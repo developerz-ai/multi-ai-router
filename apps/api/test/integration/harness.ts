@@ -98,6 +98,18 @@ export interface HarnessOptions {
   readonly serverIdleTimeoutSeconds?: number
 }
 
+/**
+ * The production clocks, as the composition root always passes them, with a short wall hold: a
+ * stream whose first event a test has not released yet is committed after it, as in prod after
+ * `UPSTREAM_STREAM_WALL_HOLD_MS` (`success-wall.ts`), without spending the test's own timeout.
+ */
+export const HARNESS_STREAM_DEADLINES: StreamDeadlines = {
+  firstByteMs: 300_000,
+  idleMs: 55_000,
+  totalMs: 3_600_000,
+  wallHoldMs: 20,
+}
+
 export function harness(options: HarnessOptions) {
   const accounts = options.accounts ?? [account("acct-1", { apiKey: "sk-one", cipher: CRYPTOR })]
   const upstream = mockUpstream(options.responses)
@@ -169,9 +181,7 @@ export function harness(options: HarnessOptions) {
             ? {}
             : { upstreamErrorMaxBytes: options.upstreamErrorMaxBytes }),
           failover: { maxAttempts: options.maxAttempts ?? 3, ...options.failover },
-          ...(options.upstreamStream === undefined
-            ? {}
-            : { upstreamStream: options.upstreamStream }),
+          upstreamStream: options.upstreamStream ?? HARNESS_STREAM_DEADLINES,
           ...(options.selection === undefined ? {} : { selection: options.selection }),
           ...(options.maxBodyBytes === undefined
             ? {}

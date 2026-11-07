@@ -11,6 +11,7 @@ export const UPSTREAM_STREAM_ENV_FIELDS = {
   UPSTREAM_FIRST_BYTE_TIMEOUT_MS: timerMs.optional(),
   UPSTREAM_IDLE_TIMEOUT_MS: timerMs.optional(),
   UPSTREAM_STREAM_TIMEOUT_MS: timerMs.optional(),
+  UPSTREAM_STREAM_WALL_HOLD_MS: timerMs.optional(),
 }
 
 type UpstreamStreamEnv = { readonly [K in keyof typeof UPSTREAM_STREAM_ENV_FIELDS]?: number }
@@ -20,6 +21,7 @@ export function readUpstreamStreamEnv(raw: UpstreamStreamEnv, ctx: z.RefinementC
     firstByteMs: raw.UPSTREAM_FIRST_BYTE_TIMEOUT_MS ?? 300_000,
     idleMs: raw.UPSTREAM_IDLE_TIMEOUT_MS ?? 55_000,
     totalMs: raw.UPSTREAM_STREAM_TIMEOUT_MS ?? 3_600_000,
+    wallHoldMs: raw.UPSTREAM_STREAM_WALL_HOLD_MS ?? 5_000,
   }
   for (const [name, value] of [
     ["UPSTREAM_FIRST_BYTE_TIMEOUT_MS", upstreamStream.firstByteMs],

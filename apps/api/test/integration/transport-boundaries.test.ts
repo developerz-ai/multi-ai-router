@@ -191,7 +191,10 @@ describe("upstream trust boundary", () => {
     stream.release(0)
     expect((await reader?.read())?.done).toBe(false)
     stream.abort()
-    await expect(reader?.read()).rejects.toThrow()
+    // Bytes were out, so no retry: the stream ends with the router's own error event (2.53.0).
+    const end = await reader?.read()
+    expect(new TextDecoder().decode(end?.value)).toContain('"signal":"upstream_error"')
+    expect((await reader?.read())?.done).toBe(true)
     await settle()
     expect(upstream.calls).toHaveLength(1)
     expect(usage.rows).toHaveLength(1)
