@@ -15,6 +15,7 @@ import { openAiApiDriver } from "./drivers/openai-api"
 import { openAiCompatibleDriver } from "./drivers/openai-compatible"
 import { openAiOAuthDriver } from "./drivers/openai-oauth"
 import { opencodeGoDriver } from "./drivers/opencode-go"
+import { opencodeOAuthDriver } from "./drivers/opencode-oauth"
 import { openRouterDriver } from "./drivers/openrouter"
 import { togetherDriver } from "./drivers/together"
 import { xaiDriver } from "./drivers/xai"
@@ -75,6 +76,7 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
   // A flat-fee plan behind an API key: one key per team member, three wire surfaces, and an endpoint
   // that refuses any request not naming its conversation (`ProviderSurface.sessionHeader`).
   "opencode-go": http(opencodeGoDriver),
+  "opencode-oauth": http(opencodeOAuthDriver),
   // The local one: an operator-supplied endpoint and no credential required, which is what makes an
   // Account on somebody's own machine expressible without inventing a key to satisfy a form.
   ollama: http(ollamaDriver),
@@ -85,7 +87,7 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
     transport: "agent-sdk",
     driver: claudeSdkDriver,
     reason:
-      "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. Default inference uses SDK; opt-in CLAUDE_FAST_MODE uses selected-account credentials for direct HTTP — docs/idea/claude-fast-mode.md.",
+      "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. Default inference uses calibrated direct HTTP with SDK fallback; CLAUDE_FAST_MODE=false forces SDK inference — docs/idea/claude-fast-mode.md.",
   },
 }
 

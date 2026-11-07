@@ -81,6 +81,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
           requestClass: input.clientHeaders?.get("x-claude-code-request-class"),
           agentType: input.clientHeaders?.get("x-claude-code-agent-type"),
           subagent: prepared.subagent,
+          toolNames: prepared.toolNames,
         }),
         body: prepared.text,
       })

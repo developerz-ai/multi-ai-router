@@ -1,10 +1,8 @@
-import { ModelReasoning } from "@multi-ai-router/core"
-import { z } from "zod"
 import { createHttpDriver } from "../driver"
 import { messageRule, typeRule } from "../failure/classify"
-import type { ListedModel, ProviderModelListing } from "../model-listing"
 import type { ProviderDriver } from "../types"
 import { opencodeGoQuotaRead } from "./opencode-go-quota"
+import { opencodeModelListing } from "./opencode-models"
 
 /**
  * `opencode-go` — OpenCode's flat-fee Go plan, one API key per team member. An ordinary key: no
@@ -66,47 +64,6 @@ const OVERLOADED = /\[overloaded\]|server is overloaded/i
  */
 const THINKING_REQUIRED_MODELS = /^minimax-m3\.1-flash(?:-|$)/i
 
-const size = z
-  .unknown()
-  .transform((value) =>
-    typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null,
-  )
-
-// Loose: a catalog row carries dozens of fields this router never reads, and a new one must never
-// fail the listing. `capabilities.reasoning` is shaped `{supported, toggle?, effort?}`; a reshaped
-// block costs that one fact, not the row. Provenance: `GET /openai/v1/models`, read live 2026-11-06.
-const Listing = z.object({
-  data: z.array(
-    z.looseObject({
-      id: z.string().trim().min(1),
-      limit: z.looseObject({ context: size.optional(), output: size.optional() }).optional(),
-      capabilities: z
-        .looseObject({ reasoning: ModelReasoning.optional().catch(undefined) })
-        .optional()
-        .catch(undefined),
-    }),
-  ),
-})
-
-/** The sizes sit under `limit` and thinking under `capabilities`; the stock reader knows neither. */
-const listing: ProviderModelListing = {
-  // Whatever surface the seat serves on: only the OpenAI listing states sizes and thinking modes.
-  dialect: "openai-chat",
-  query: () => ({}),
-  read: (body): readonly ListedModel[] | null => {
-    const parsed = Listing.safeParse(body)
-    if (!parsed.success) return null
-    return parsed.data.data.map((model) => ({
-      id: model.id,
-      contextTokens: model.limit?.context ?? null,
-      maxOutputTokens: model.limit?.output ?? null,
-      ...(model.capabilities?.reasoning === undefined
-        ? {}
-        : { reasoning: model.capabilities.reasoning }),
-    }))
-  },
-}
-
 const driver = createHttpDriver({
   id: "opencode-go",
   billing: "subscription",
@@ -135,7 +92,7 @@ const driver = createHttpDriver({
 
 export const opencodeGoDriver: ProviderDriver = {
   ...driver,
-  modelListing: listing,
+  modelListing: opencodeModelListing,
   quotaRead: opencodeGoQuotaRead,
   buildHeaders: (account, credential) => {
     const headers = driver.buildHeaders(account, credential)

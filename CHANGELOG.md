@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.54.0] — 2026-11-07
+
+### Added
+
+- **OpenCode Console device login** (`opencode-oauth`), alongside existing Go API-key accounts. Enter the short code on OpenCode’s site; the router stores and refreshes the workspace-scoped OAuth token, sends `x-opencode-org-id` and a stable conversation id, and uses the current `/inference/openai/v1` endpoint. Catalog sizes and thinking modes share Go’s reader. Migration 0043 adds the provider id. Free limits retain their upstream `Retry-After`; a Console login does not unlock extra free quota.
+- **Opt-in OpenCode MITM diagnostics**, `bin/opencode-trace`: isolated config and standalone client, pinned loopback mitmproxy, process-local CA trust, streaming capture, redacted auth/identifiers and optional private inference bodies. Device initiation and pending polls, anonymous Big Pickle/DeepSeek and saved-login Big Pickle were captured on CLI 2.2.5. All free inference attempts returned the upstream free quota limit; no successful free inference is claimed.
+
+### Changed
+
+- **Claude fast mode is on by default.** `CLAUDE_FAST_MODE` now defaults to `true`; set it to
+  `false` to force every Claude subscription request through the Agent SDK. The SDK still owns
+  login and refresh, and fast inference falls back to the SDK *before* the upstream call for cold
+  credentials, unresolved aliases, uncalibrated profiles and native requests whose `cc_version`
+  is not the calibrated one, so a deployment without the verified profile keeps the SDK path.
+  `.env.example`, the deployment table and the fast-mode/security docs state the new default.
+- **Claude calibration moves to CLI `2.1.319` / SDK `0.3.319` / Bun `1.4.4`.** The SDK pin stays
+  exact (no range) and its Linux x64 CLI checksum is
+  `dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed`
+  (`@anthropic-ai/claude-agent-sdk@0.3.319`, manifest CLI `2.1.319`). The per-version xxHash64
+  seed and the three-hex version suffix are unchanged: **15/15** private `2.1.319` captures
+  (print, sdk, conversation, subagent, autocompact) reproduced their `cch` and suffix. The
+  `2.1.301` seed remains in the table for verifying older artifacts.
+- **New native wire fields are mirrored.** `2.1.319` adds the `tool-provenance-2026-10-26` beta and
+  the `x-claude-code-sandy-plover` header — a JSON array of tools already used in the history,
+  client tools first, capped at 64 entries/7168 bytes with the
+  `unreadable-tools-used-before-summary` sentinel. Fast mode derives it from `tool_use` blocks and
+  reports the native `X-Stainless-Runtime-Version` (`v26.12.1`). The collector now records that
+  bounded tool-name header instead of redacting it.
+
 ## [2.53.0] — 2026-11-07
 
 ### Fixed
@@ -2039,3 +2068,5 @@ your tooling config.
 [2.52.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.1
 [2.52.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.2
 [2.53.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.53.0
+
+[2.54.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.0

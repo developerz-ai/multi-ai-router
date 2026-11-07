@@ -1,8 +1,9 @@
 # Claude wire research and repeatable MITM workflow
 
-Observed 2026-10-16. This is a research record, not a claim that a replacement transport
-is indistinguishable from Claude Code or immune to account enforcement. The opt-in router
-transport is described in [fast mode](../idea/claude-fast-mode.md); both deployments start disabled.
+Observed 2026-10-16, extended 2026-11-07. This is a research record, not a claim that a replacement
+transport is indistinguishable from Claude Code or immune to account enforcement. The router
+transport is described in [fast mode](../idea/claude-fast-mode.md); `CLAUDE_FAST_MODE` defaults to
+`true`, while every deployment still configures it explicitly.
 
 ## Versions and evidence
 
@@ -21,6 +22,10 @@ transport is described in [fast mode](../idea/claude-fast-mode.md); both deploym
   files contain private prompts/identifiers and must not be committed or shared.
 - New reproducible runs use `tmp/claude-http/runs/<timestamp>-<mode>/manifest.json`,
   `flows.jsonl`, `proxy.log`, and optionally `private-bodies.jsonl`.
+
+The pins in this section record the 2026-10-16 observation. The
+[2026-11-07 recalibration](#fast-mode-recalibration-2026-11-07) supersedes them with CLI `2.1.319`
+and SDK `0.3.319`.
 
 The first capture buffered responses in the debugging proxy. It establishes request and
 response shape, not native timing. The committed capture addon forwards each response chunk
@@ -272,8 +277,8 @@ TLS/header-order parity or safe deployment of a reconstructed transport.
 6. Keep SDK login/refresh ownership, single-flight refresh fencing and per-account config-directory
    lifecycle. Do not independently rotate refresh tokens from the inference path.
 7. Measure RAM and time to first token with concurrent histories on one and multiple accounts.
-8. Keep the router fast flag disabled by default; both infrastructure ConfigMaps now explicitly
-   disable it. The live direct tool/cache canary and remaining rollout limits are recorded in
+8. The router flag now defaults on. Both infrastructure ConfigMaps still configure it explicitly.
+   The live direct tool/cache canary and remaining rollout limits are recorded in
    [fast mode](../idea/claude-fast-mode.md#live-direct-canary-2026-10-16).
 
 ## Upgrade and transport checks
@@ -366,3 +371,46 @@ transport failure. Anthropic documents this shape in
 [refusals and fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
 The ordinary calculator task passed without changing the requested model, transport headers,
 identity profile or refusal handling.
+
+## Fast-mode recalibration, 2026-11-07
+
+The workstation and the SDK moved again: CLI `2.1.319` (from `2.1.301`), SDK `0.3.319` (from
+`0.3.301`). The SDK's `0.3.319` manifest names CLI `2.1.319` and the Linux x64 binary checksum
+`dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed` (`340226576` bytes). The
+router's staged binary was re-resolved through its own ladder and its SHA-256 matched that value;
+no binary modification was performed.
+
+Five `--private-wire` runs with the explicit model `claude-opus-5-5` recorded print, sdk,
+conversation, subagent and autocompact request classes:
+`tmp/claude-http/runs/2026-11-07T12-48-04.022Z-print` and the `12-50-*` sdk/conversation/
+subagents/autocompact runs. **15/15** captured bodies reproduced their `cch` under the same
+xxHash64 seed (`0x4d659218e32a3268`) and the canonical projection, and **15/15** reproduced their
+three-hex version suffix. The `2.1.301` seed therefore carries forward to `2.1.319`; the table
+keeps both versions so older artifacts remain verifiable.
+
+The suffix still samples the original user prompt block at offsets 4, 7 and 20, not the injected
+`<system-reminder>` block that precedes it. Sampling the wrong block yields a plausible but wrong
+suffix, which is why the rule is asserted with a second, version-pinned vector.
+
+Wire changes observed in `2.1.319`:
+
+- `anthropic-beta` adds `tool-provenance-2026-10-26`, ordered after
+  `mid-conversation-tool-changes-2026-07-01` and before `thinking-token-count-2026-05-13`.
+- A new `x-claude-code-sandy-plover` header accompanies it: a JSON array of descriptors for tools
+  **already used in the history**, for example `[]` on a first turn and `[{"name":"Agent"}]` on the
+  subagent follow-up. It is derived from assistant `tool_use` blocks, not the available tool
+  schema. The binary caps it at 64 entries and 7168 bytes, client tools before built-ins, with the
+  sentinel `unreadable-tools-used-before-summary` first when the list is truncated.
+- `X-Stainless-Runtime-Version` moved from `v26.3.0` to `v26.12.1`. The Stainless package version
+  remains `0.128.0`.
+- The request envelope, system blocks, cache controls, thinking/effort/output config,
+  context management, diagnostics and quota response headers were unchanged across the same
+  request classes.
+
+The collector now records `x-claude-code-sandy-plover`; it contains tool names only and no prompt,
+credential, account or session value. Everything else about the capture workflow — loopback proxy,
+per-process CA trust, redaction defaults, explicit model selection — is unchanged.
+
+These are local invoker and CLI observations, not evidence of deployed-router behavior,
+cross-account concurrency safety or account-enforcement outcomes. Live captures remain opt-in,
+billed and absent from CI.

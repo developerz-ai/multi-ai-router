@@ -30,7 +30,7 @@ function native(extra: string) {
     system: [
       {
         type: "text",
-        text: `x-anthropic-billing-header: cc_version=2.1.301.abc; cc_entrypoint=cli; cch=12345; ${extra}`,
+        text: `x-anthropic-billing-header: cc_version=2.1.319.abc; cc_entrypoint=cli; cch=12345; ${extra}`,
       },
       { type: "text", text: HUMAN_IDENTITY },
     ],
@@ -89,6 +89,7 @@ describe("Claude fast request", () => {
     expect(output.thinking).toEqual(body.thinking)
     expect(output.output_config).toEqual(body.output_config)
     expect(output.system[1].cache_control).toBeUndefined()
+    expect(result.toolNames).toEqual(["client_shell"])
   })
   test("retains notification attribution and omits compact helper attribution", () => {
     expect(

@@ -102,7 +102,7 @@ describe("credentials versus config dirs", () => {
     expect(reason(result)).toStartWith("base_url_required:")
   })
 
-  test("the providers that may exist empty are exactly the three with a reason to", () => {
+  test("the providers that may exist empty are exactly those with a reason to", () => {
     // A subscription the SDK owns the credentials for, an account a login will fill in, and an
     // upstream that authenticates nobody. Any fourth id here would be an account quietly addressing
     // a paid upstream with no key, so the set is asserted whole rather than sampled.
@@ -118,7 +118,7 @@ describe("credentials versus config dirs", () => {
         ).ok,
     )
 
-    expect(mayBeEmpty).toEqual(["anthropic-oauth", "openai-oauth", "ollama"])
+    expect(mayBeEmpty).toEqual(["anthropic-oauth", "openai-oauth", "opencode-oauth", "ollama"])
   })
 
   test("a Claude subscription must never be handed a router-held credential", () => {

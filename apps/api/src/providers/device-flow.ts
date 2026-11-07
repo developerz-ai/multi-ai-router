@@ -1,4 +1,4 @@
-import type { OAuthTokenRequest } from "./types"
+import type { OAuthTokenRequest, OAuthTokens } from "./types"
 
 /**
  * A device-code sign-in, as a provider's OAuth flow declares it: the router asks the issuer for a
@@ -21,6 +21,8 @@ export interface ProviderDeviceFlow {
   readonly redirectUri: string
   /** Fallback poll cadence when the issuer states none it can be held to. */
   readonly defaultIntervalSeconds: number
+  /** RFC 8628 issuers require waiting an interval before the first token poll too. */
+  readonly waitBeforeFirstPoll?: boolean
   userCodeRequest(): OAuthTokenRequest
   /** Zod at the boundary: `null` for a reshaped answer, never half a code. */
   readUserCode(body: unknown): DeviceUserCode | null
@@ -37,13 +39,19 @@ export interface DeviceUserCode {
   readonly userCode: string
   /** `null` when the issuer stated none (or zero); the caller falls back to the declared default. */
   readonly intervalSeconds: number | null
+  /** Some issuers expire the device handle sooner than the router's configured TTL. */
+  readonly expiresInSeconds?: number
 }
 
 export type DevicePollResult =
   /** Not approved yet. Ask again after the interval. */
   | { readonly kind: "pending" }
+  /** RFC 8628 slow_down permanently increases the interval for this device attempt. */
+  | { readonly kind: "slow-down"; readonly increaseSeconds: number }
   /** Approved: an authorization code plus the PKCE verifier the issuer minted for it. */
   | { readonly kind: "authorized"; readonly code: string; readonly codeVerifier: string }
+  /** RFC 8628 issuers return the tokens directly, without a second code exchange. */
+  | { readonly kind: "tokens"; readonly tokens: OAuthTokens }
   /**
    * The issuer is overloaded or failing (429, 5xx): no answer about *this* attempt, so it stays
    * pending. `throttled` asks the caller to back off; `retryAfterSeconds` is the issuer's own

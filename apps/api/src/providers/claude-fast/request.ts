@@ -118,6 +118,14 @@ export function prepareFastRequest(input: {
         ? message.content
         : message.content.map((entry) => ({ ...entry })),
   }))
+  // The native tool-provenance header lists tools already used, not the available schema.
+  const toolNames = original.messages.flatMap((message) =>
+    message.role === "assistant" && Array.isArray(message.content)
+      ? message.content.flatMap((entry) =>
+          entry.type === "tool_use" && typeof entry.name === "string" ? [entry.name] : [],
+        )
+      : [],
+  )
   const tools = original.tools?.map((tool) => ({ ...tool })) ?? []
   const identityBlock = system.find(
     (entry) => entry.text === HUMAN_IDENTITY || entry.text === SDK_IDENTITY,
@@ -169,6 +177,7 @@ export function prepareFastRequest(input: {
     sessionId,
     promptId: origin || subagent ? promptId : undefined,
     subagent,
+    toolNames,
   }
 }
 

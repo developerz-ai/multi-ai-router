@@ -83,6 +83,7 @@ const enums = [
       "together",
       "cerebras",
       "opencode-go",
+      "opencode-oauth",
       "ollama",
       "openai-compatible",
       "anthropic-compatible",

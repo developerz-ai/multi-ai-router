@@ -65,6 +65,7 @@ bun-debug.log*
 .cache/
 .vite/
 .turbo/
+__pycache__/
 
 # Local agent / tooling state — machine-specific, not part of the project
 .claude-task-master/

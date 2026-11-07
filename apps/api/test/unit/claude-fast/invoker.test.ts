@@ -108,6 +108,8 @@ describe("Claude fast invoker", () => {
     expect(request?.url).toBe("https://api.anthropic.com/v1/messages?beta=true")
     expect(request?.headers.get("authorization")).toBe(`Bearer ${credential.accessToken}`)
     expect(request?.headers.has("x-api-key")).toBe(false)
+    expect(request?.headers.get("x-claude-code-sandy-plover")).toBe("[]")
+    expect(request?.headers.get("anthropic-beta")).toContain("tool-provenance-2026-10-26")
     expect(request?.redirect).toBe("manual")
   })
   test("nonstream folds usage and content, releases its permit", async () => {

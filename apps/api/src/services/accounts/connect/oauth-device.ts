@@ -1,13 +1,14 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
-import { z } from "zod"
 import type { Logger } from "../../../logging/logger"
 import type { OAuthTokenRequest, ProviderDeviceFlow } from "../../../providers"
 import { type AdminResult, invalid, ok } from "../../admin/result"
 import type { CredentialCipher } from "../../crypto/cipher"
 import { sendIssuerRequest } from "./issuer-request"
 import { bindConsumed, connectableAccount, STATE_REJECTED } from "./oauth-binding"
+import { type Handle, readDeviceHandle, started } from "./oauth-device-state"
 import {
+  commitOAuthTokens,
   completeAuthorization,
   type OAuthConnectCompleted,
   type OAuthExchangeDeps,
@@ -68,17 +69,10 @@ export interface DeviceConnectDeps extends OAuthExchangeDeps {
   readonly log?: Pick<Logger, "info">
 }
 
-/** What the encrypted `nonce` holds for a device attempt. */
-const Handle = z.object({
-  deviceAuthId: z.string().min(1),
-  userCode: z.string().min(1),
-  intervalSeconds: z.number().positive(),
-})
-type Handle = z.infer<typeof Handle>
-
 interface AttemptTrack {
   inFlight: Promise<AdminResult<DeviceConnectStatus>> | null
   nextPollAt: number
+  intervalSeconds: number
   /** Doubles on each throttled answer, up to {@link MAX_BACKOFF}; resets on any other answer. */
   backoff: number
   /**
@@ -153,7 +147,9 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
       intervalSeconds: code.intervalSeconds ?? device.defaultIntervalSeconds,
     }
     const now = deps.now()
-    const expiresAt = new Date(now.getTime() + ttlMs)
+    const expiresAt = new Date(
+      now.getTime() + Math.min(ttlMs, (code.expiresInSeconds ?? deps.stateMinutes * 60) * 1000),
+    )
     const begun = await deps.accounts.beginAccountAuthorization({
       id: accountId,
       expectedProvider: row.provider,
@@ -183,12 +179,15 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     if (finished != null) return finished
 
     const pending = attemptId === null ? undefined : await deps.states.findLive(attemptId, now)
-    const handle = pending?.nonce == null ? null : readHandle(pending.nonce)
+    const handle = pending?.nonce == null ? null : readDeviceHandle(pending.nonce, deps.cipher)
     if (pending === undefined || handle === null) return ok({ status: "expired", accountId })
 
     const track: AttemptTrack = tracks.get(pending.id) ?? {
       inFlight: null,
-      nextPollAt: 0,
+      nextPollAt: device.waitBeforeFirstPoll
+        ? pending.createdAt.getTime() + handle.intervalSeconds * 1000
+        : 0,
+      intervalSeconds: handle.intervalSeconds,
       backoff: 1,
       final: null,
       expiresAt: pending.expiresAt.getTime(),
@@ -203,7 +202,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     }
     if (now.getTime() < track.nextPollAt) return ok(waiting)
 
-    track.nextPollAt = now.getTime() + handle.intervalSeconds * 1_000
+    track.nextPollAt = now.getTime() + track.intervalSeconds * 1_000
     track.inFlight = poll(device, pending.state, handle, accountId, waiting, track).finally(() => {
       track.inFlight = null
     })
@@ -224,12 +223,17 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     // A transport blip is not an answer. The TTL bounds how long "waiting" can last.
     if (answer === null) return ok(waiting)
     const read = device.readPoll(answer.status, answer.body, answer.headers)
+    if (read.kind === "slow-down") {
+      track.intervalSeconds += read.increaseSeconds
+      track.nextPollAt = deps.now().getTime() + track.intervalSeconds * 1000
+      return ok(waiting)
+    }
     if (read.kind === "retry") {
       // Overloaded, not refused: keep waiting. Throttled means slow down — the issuer's own
       // Retry-After when it gave one, otherwise the interval doubled per answer, capped.
       if (read.throttled) {
         track.backoff = Math.min(track.backoff * 2, MAX_BACKOFF)
-        const delay = read.retryAfterSeconds ?? handle.intervalSeconds * track.backoff
+        const delay = read.retryAfterSeconds ?? track.intervalSeconds * track.backoff
         track.nextPollAt = deps.now().getTime() + delay * 1_000
       }
       return ok(waiting)
@@ -247,16 +251,28 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     const bound = await bindConsumed(deps.accounts, consumed, accountId)
     if (!bound.ok) return ok({ status: "expired", accountId })
     const { row, flow, pending, lifecycleVersion } = bound.value
-    const completed = await completeAuthorization(deps, {
-      row,
-      flow,
-      attemptId: pending.id,
-      expectedLifecycleVersion: lifecycleVersion,
-      code: read.code,
-      redirectUri: device.redirectUri,
-      codeVerifier: read.codeVerifier,
-      capture: "device",
-    })
+    const completed =
+      read.kind === "tokens"
+        ? await commitOAuthTokens(
+            deps,
+            {
+              row,
+              attemptId: pending.id,
+              expectedLifecycleVersion: lifecycleVersion,
+              capture: "device",
+            },
+            read.tokens,
+          )
+        : await completeAuthorization(deps, {
+            row,
+            flow,
+            attemptId: pending.id,
+            expectedLifecycleVersion: lifecycleVersion,
+            code: read.code,
+            redirectUri: device.redirectUri,
+            codeVerifier: read.codeVerifier,
+            capture: "device",
+          })
     if (!completed.ok) return completed
     deps.log?.info("device login completed", {
       component: "connect",
@@ -268,31 +284,5 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     return ok({ status: "connected", completed: completed.value })
   }
 
-  const readHandle = (sealed: string): Handle | null => {
-    try {
-      const parsed = Handle.safeParse(JSON.parse(deps.cipher.decrypt(sealed)))
-      return parsed.success ? parsed.data : null
-    } catch {
-      return null
-    }
-  }
-
   return { begin, status }
-}
-
-function started(
-  accountId: string,
-  mode: "connect" | "reconnect",
-  device: ProviderDeviceFlow,
-  handle: Handle,
-  expiresAt: Date,
-): DeviceConnectStarted {
-  return {
-    accountId,
-    mode,
-    verificationUrl: device.verificationUrl,
-    userCode: handle.userCode,
-    expiresAt: expiresAt.toISOString(),
-    intervalSeconds: handle.intervalSeconds,
-  }
 }

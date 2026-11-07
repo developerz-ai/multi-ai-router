@@ -4,7 +4,7 @@ Self-hosted API router. A team of developers and AI agents shares one pool of AI
 
 Pooling is the product: **many Accounts of the same Provider is the normal case** (five Claude subs side by side). Nothing in the schema, UI, or routing may assume one account per provider.
 
-Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 43 migrations (through 0042), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
+Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 44 migrations (through 0043), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
 
 ## Response Rules
 
@@ -19,7 +19,14 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 
 ## Non-negotiables (MUST)
 
-1. **Claude subscriptions use the Agent SDK by default.** `CLAUDE_FAST_MODE=false` keeps `query()` and one `CLAUDE_CONFIG_DIR` per Account. The explicitly requested opt-in fast transport may read the selected Account's access token and identity under its ownership fence for direct HTTP inference. SDK/CLI alone owns login and refresh; never read another Account or HOME credentials, rotate refresh tokens independently, or patch a binary. Unknown profiles fall back before inference. See `docs/idea/claude-fast-mode.md`. Anthropic API keys remain the normal HTTP driver.
+1. **Claude subscriptions use fast mode by default.** `CLAUDE_FAST_MODE=true` uses direct HTTP
+   inference with the calibrated profile and falls back to the Agent SDK before inference for cold
+   credentials, unknown aliases or uncalibrated profiles; set it to `false` to keep every request
+   on `query()` and one `CLAUDE_CONFIG_DIR` per Account. The fast transport may read the selected
+   Account's access token and identity under its ownership fence. SDK/CLI alone owns login and
+   refresh; never read another Account or HOME credentials, rotate refresh tokens independently,
+   or patch a binary. See `docs/idea/claude-fast-mode.md`. Anthropic API keys remain the normal
+   HTTP driver.
 2. **The SDK never executes a tool on this host. Passthrough-only, allowlisted by name.** The Agent SDK's built-ins (`bash`, `read`, `write`, `edit`, `glob`, `grep`, …) run *on the router*, so leaving them reachable is arbitrary command execution for anyone holding any router key — `ENCRYPTION_KEY`, the Postgres credentials, every Account's `CLAUDE_CONFIG_DIR`. Disable them with an **explicit allowlist that names the permitted tools** — never a blocklist, never a default. Tool calls are forwarded to the **client** to execute; the client owns the user's filesystem, which is what a router should do anyway. Launch with `settingSources: []` explicitly (omitting it slurps the host's `CLAUDE.md` and settings into the prompt — a cross-tenant leak, not clutter) and strip inherited `ANTHROPIC_*` env. **A test asserting a host-tool invocation is rejected is a security regression gate** — it fails the build; never skip, quarantine, or relax it. Rationale: `docs/idea/07-security.md`.
 3. Upstream credentials never leave the router. Not in responses, logs, errors, admin endpoints. Encrypted at rest (AES-256-GCM, `ENCRYPTION_KEY`). The log redactor is tested.
 4. **The client picks the model. The router picks the account.** Never re-route a model, never substitute a cheaper one. Model names pass through unchanged except through an Account's explicit alias map.
