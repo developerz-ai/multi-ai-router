@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.54.1] — 2026-11-07
+
+### Fixed
+
+- **OpenCode prefill capacity refusals no longer cool a healthy account.** Production returned `429 Upstream request failed: [prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)` on the Go lane at 14:56, 15:06 and 15:07 UTC. The unrecognized tag fell through to the HTTP 429 default, cooling the seat and causing later requests to fail without reaching upstream. Both OpenCode lanes now share the overload matcher: this body uses the existing bounded overload retry path, never strikes the breaker or folds a limited reading, and yields `503 upstream_overloaded` if the retries are spent. `Go usage limit exceeded` and `FreeUsageLimitError` remain real rate limits. Regression coverage includes retry/recovery, a limited sibling, the next request after overload, and Test now's quota reading.
+
 ## [2.54.0] — 2026-11-07
 
 ### Added
@@ -2070,3 +2076,5 @@ your tooling config.
 [2.53.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.53.0
 
 [2.54.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.0
+
+[2.54.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.1

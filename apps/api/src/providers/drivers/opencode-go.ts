@@ -1,6 +1,7 @@
 import { createHttpDriver } from "../driver"
 import { messageRule, typeRule } from "../failure/classify"
 import type { ProviderDriver } from "../types"
+import { OPENCODE_OVERLOADED } from "./opencode-failures"
 import { opencodeGoQuotaRead } from "./opencode-go-quota"
 import { opencodeModelListing } from "./opencode-models"
 
@@ -45,17 +46,6 @@ const NO_FUNDS = /insufficient account funds/i
 const MODEL_UNAVAILABLE = /model is unavailable/i
 
 /**
- * Provenance: prod 2026-11-07 00:22..01:56Z, 199 failed requests across both Go seats: `429` with
- * `Upstream request failed: [overloaded] the server is overloaded; retry shortly`. Go's shared
- * backend being busy, not this seat's limit — which Go words differently (`Go usage limit
- * exceeded`, `FreeUsageLimitError`). Read as `rate-limited` it cooled both seats, spent their
- * recovery permits and answered `429 quota_exhausted` with nobody out of anything. Matched first,
- * on the bracketed tag Go stamps on relayed upstream errors or the sentence itself. Blast radius:
- * a body matched here is retried with backoff and never cools the seat.
- */
-const OVERLOADED = /\[overloaded\]|server is overloaded/i
-
-/**
  * Provenance: Go relays MiniMax's own refusal, driven live on the anthropic surface 2026-11-06:
  * `thinking: {type: "disabled"}` answers `400 … model "minimax-m3.1-flash" requires adaptive
  * thinking … (2013)`; no `thinking`, `output_config.effort` `low` or `max`, and `adaptive` + `low`
@@ -83,7 +73,7 @@ const driver = createHttpDriver({
     },
   ],
   rules: [
-    messageRule("overloaded", "opencode-go:overloaded", OVERLOADED),
+    messageRule("overloaded", "opencode-go:overloaded", OPENCODE_OVERLOADED),
     typeRule("rate-limited", "opencode-go:free-usage-limit", FREE_LIMIT_TYPES),
     messageRule("credits-exhausted", "opencode-go:insufficient-funds", NO_FUNDS),
     messageRule("model-unsupported", "opencode-go:model-unavailable", MODEL_UNAVAILABLE),

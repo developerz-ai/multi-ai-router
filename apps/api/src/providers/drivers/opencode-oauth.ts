@@ -4,6 +4,7 @@ import type { ProviderDeviceFlow } from "../device-flow"
 import { createHttpDriver } from "../driver"
 import { messageRule, typeRule } from "../failure/classify"
 import type { OAuthTokenRequest, OAuthTokens, ProviderDriver } from "../types"
+import { OPENCODE_OVERLOADED } from "./opencode-failures"
 import { opencodeChatModelListing } from "./opencode-models"
 
 // Provenance: OpenCode 2.2.5 MITM, 2026-11-07; upstream source fe04656465,
@@ -110,7 +111,7 @@ const driver = createHttpDriver({
     },
   ],
   rules: [
-    messageRule("overloaded", "opencode:overloaded", /\[overloaded\]|server is overloaded/i),
+    messageRule("overloaded", "opencode:overloaded", OPENCODE_OVERLOADED),
     typeRule("rate-limited", "opencode:free-usage-limit", ["FreeUsageLimitError"]),
     messageRule("credits-exhausted", "opencode:insufficient-funds", /insufficient account funds/i),
     messageRule("model-unsupported", "opencode:model-unavailable", /model is unavailable/i),

@@ -128,6 +128,25 @@ describe("OpenCode Console OAuth", () => {
     expect(flow.readTokens({ ...tokens, refresh_token: "" })).toBeNull()
   })
 
+  test("a prefill capacity refusal is retryable overload for both OpenCode lanes", () => {
+    for (const provider of ["opencode-go", "opencode-oauth"] as const) {
+      expect(
+        httpDriver(provider)?.classifyFailure(
+          response(429, {
+            body: {
+              type: "error",
+              error: {
+                type: "rate_limit_error",
+                message:
+                  "Upstream request failed: [prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)",
+              },
+            },
+          }),
+        ),
+      ).toMatchObject({ kind: "overloaded", retryable: true })
+    }
+  })
+
   test("captured free limit cools to Retry-After; overloaded never consumes the account", () => {
     expect(
       driver.classifyFailure(
