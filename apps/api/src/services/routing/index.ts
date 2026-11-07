@@ -54,6 +54,8 @@ export {
   type FailoverProgress,
   type FailoverStopReason,
   type FailureKind,
+  type InPlaceReason,
+  inPlaceReason,
   isRetryable,
   markStreamed,
   maxAttempts,

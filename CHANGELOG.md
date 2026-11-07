@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.52.2] — 2026-11-07
+
+### Fixed
+
+- **Overload waits and stale-session replays have separate budgets.** Both counted `FailoverProgress.inPlaceRetries`: a request that replayed a stale session once entered the overload wait with `ROUTING_OVERLOAD_RETRIES` already part-spent (all of it at `1`) and answered `503` without waiting out the busy seat; an overload wait likewise spent the one replay a later stale session was owed, and doubled the backoff from the wrong count. Overload waits now count `overloadRetries`. Regression: `apps/api/test/unit/routing/overload.test.ts`.
+- Test: the Test-now overloaded case asserts exactly one folded reading, carried `limited: false` (it passed before on a service that folded nothing). `apps/api/test/unit/accounts/test-now.test.ts`.
+
 ## [2.52.1] — 2026-11-07
 
 ### Fixed
@@ -2017,3 +2024,4 @@ your tooling config.
 [2.51.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.51.0
 [2.52.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.0
 [2.52.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.1
+[2.52.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.2

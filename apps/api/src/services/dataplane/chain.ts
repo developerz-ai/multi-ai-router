@@ -5,6 +5,7 @@ import {
   type AttemptFailure,
   type Candidate,
   type FailoverOptions,
+  inPlaceReason,
   markStreamed,
   NO_ATTEMPTS,
   noteOverload,
@@ -145,7 +146,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       decision.candidate,
       runtime.quotaSpentThreshold,
     )
-    progress = recordAttempt(progress, accountId, decision.action === "retry-in-place")
+    progress = recordAttempt(progress, accountId, inPlaceReason(decision))
 
     const attemptStarted = runtime.clock.elapsed()
     const at = { startedAt: attemptStartedAt, started: attemptStarted, upstreamMs }
@@ -195,7 +196,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         servable,
         upstreamBody,
         // A session replay, not an overload wait: only the former resumes differently on the SDK.
-        decision.action === "retry-in-place" && decision.delayMs === undefined,
+        inPlaceReason(decision) === "replay",
         recovery?.beforeUpstreamStart,
         lifetime.onStarted,
         quota,

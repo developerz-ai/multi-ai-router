@@ -139,7 +139,13 @@ export interface FailoverOptions {
 export interface FailoverProgress {
   /** In attempt order. Its length is the attempt count that lands in the `UsageRecord`. */
   readonly attemptedAccountIds: readonly string[]
+  /** Stale-session replays on the same account ({@link replayInPlace}). */
   readonly inPlaceRetries: number
+  /**
+   * Waits on a busy provider ({@link waitOutOverload}). Its own budget: a replay earlier in the
+   * request must not spend `ROUTING_OVERLOAD_RETRIES`, nor an overload wait the replay.
+   */
+  readonly overloadRetries: number
   /** Set the instant the first byte reaches the client. Never unset. */
   readonly bytesStreamed: boolean
   /**
@@ -153,6 +159,7 @@ export interface FailoverProgress {
 export const NO_ATTEMPTS: FailoverProgress = {
   attemptedAccountIds: [],
   inPlaceRetries: 0,
+  overloadRetries: 0,
   bytesStreamed: false,
 }
 
@@ -233,7 +240,7 @@ function waitOutOverload(
       : progress.overloadedAccountId
   if (busyId === undefined) return { action: "stop", reason: exhausted }
   const cap = Math.max(0, Math.trunc(options.overloadRetries ?? 0))
-  if (progress.inPlaceRetries >= cap) return { action: "stop", reason: exhausted }
+  if (progress.overloadRetries >= cap) return { action: "stop", reason: exhausted }
   const candidate = ordered.find((entry) => entry.account.id === busyId)
   if (candidate === undefined) return { action: "stop", reason: exhausted }
   const base = Math.max(0, options.overloadRetryBaseMs ?? 0)
@@ -241,7 +248,7 @@ function waitOutOverload(
     action: "retry-in-place",
     candidate,
     attempt: progress.attemptedAccountIds.length,
-    delayMs: base * 2 ** progress.inPlaceRetries,
+    delayMs: base * 2 ** progress.overloadRetries,
   }
 }
 
@@ -283,20 +290,29 @@ function plannedCount(ordered: readonly Candidate[], progress: FailoverProgress)
   return ordered.length + dropped.size
 }
 
-/** Folds one dispatched attempt into the progress. Returns a new value; nothing mutates. */
+/** Why an attempt went to the same account again: a session replay, or a wait on a busy provider. */
+export type InPlaceReason = "replay" | "overload"
+
+/**
+ * Folds one dispatched attempt into the progress. Returns a new value; nothing mutates. `true` is a
+ * replay, as it was before the two in-place reasons had their own counters.
+ */
 export function recordAttempt(
   progress: FailoverProgress,
   accountId: string,
-  inPlace = false,
+  inPlace: boolean | InPlaceReason = false,
 ): FailoverProgress {
-  return {
-    ...progress,
-    attemptedAccountIds: inPlace
-      ? progress.attemptedAccountIds
-      : [...progress.attemptedAccountIds, accountId],
-    inPlaceRetries: inPlace ? progress.inPlaceRetries + 1 : progress.inPlaceRetries,
-    bytesStreamed: progress.bytesStreamed,
-  }
+  if (inPlace === false)
+    return { ...progress, attemptedAccountIds: [...progress.attemptedAccountIds, accountId] }
+  return inPlace === "overload"
+    ? { ...progress, overloadRetries: progress.overloadRetries + 1 }
+    : { ...progress, inPlaceRetries: progress.inPlaceRetries + 1 }
+}
+
+/** The in-place reason a planned retry carries: only an overload wait states a delay. */
+export function inPlaceReason(decision: FailoverDecision): InPlaceReason | false {
+  if (decision.action !== "retry-in-place") return false
+  return decision.delayMs === undefined ? "replay" : "overload"
 }
 
 /**

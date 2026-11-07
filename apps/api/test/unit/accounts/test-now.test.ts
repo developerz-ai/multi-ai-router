@@ -437,6 +437,10 @@ describe("createTestNowService — a provider's busy backend", () => {
     const result = await service.test("acc-1", { model: "glm-5.3-flash" })
 
     expect(result.ok && result.value.failureKind).toBe("overloaded")
-    expect(folded.filter((entry) => entry.signal?.limited === true)).toHaveLength(0)
+    // Exactly the one reading, carried unlimited: a service that folded nothing would pass a
+    // "no limited reading" check while the Retry-After the reading carries went missing.
+    expect(folded).toHaveLength(1)
+    expect(folded[0]?.accountId).toBe("acc-1")
+    expect(folded[0]?.signal?.limited).toBe(false)
   })
 })
