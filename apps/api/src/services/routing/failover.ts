@@ -48,6 +48,12 @@ export type FailureKind =
    * not the account — see {@link RETRYABLE_FAILURE_KINDS} and `breaker.ts`.
    */
   | "busy-session"
+  /**
+   * The provider's shared backend is busy (`UpstreamFailureKind` `overloaded`). Retryable — the next
+   * account, then the same one again after a backoff ({@link planNextAttempt}) — and blameless: the
+   * breaker never strikes for it, so no account cools or waits on a recovery permit over it.
+   */
+  | "overloaded"
 
 export interface AttemptFailure {
   readonly kind: FailureKind
@@ -84,6 +90,7 @@ export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
   "auth",
   "busy-session",
   "model-unsupported",
+  "overloaded",
 ]
 
 export function isRetryable(kind: FailureKind): boolean {
@@ -118,6 +125,13 @@ export interface FailoverOptions {
    */
   readonly maxAttempts?: number
   readonly maxInPlaceRetries?: number
+  /**
+   * `ROUTING_OVERLOAD_RETRIES`: once every candidate answered `overloaded`, how many more times the
+   * last one is asked, each after a doubling wait. Absent or `0`: none.
+   */
+  readonly overloadRetries?: number
+  /** `ROUTING_OVERLOAD_RETRY_BASE_MS`: the first of those waits. */
+  readonly overloadRetryBaseMs?: number
   /** The account this session is bound to, when it has a binding. */
   readonly boundAccountId?: string
 }
@@ -156,7 +170,13 @@ export type FailoverDecision =
        */
       readonly sessionRestart: boolean
     }
-  | { readonly action: "retry-in-place"; readonly candidate: Candidate; readonly attempt: number }
+  | {
+      readonly action: "retry-in-place"
+      readonly candidate: Candidate
+      readonly attempt: number
+      /** Wait this long before sending: set only on an `overloaded` retry. */
+      readonly delayMs?: number
+    }
   | { readonly action: "stop"; readonly reason: FailoverStopReason }
 
 export function planNextAttempt(
@@ -175,14 +195,47 @@ export function planNextAttempt(
   if (
     progress.attemptedAccountIds.length >= attemptCeiling(plannedCount(ordered, progress), options)
   ) {
-    return { action: "stop", reason: "attempts-exhausted" }
+    return lastFailure.kind === "overloaded"
+      ? waitOutOverload(ordered, progress, options, "attempts-exhausted")
+      : { action: "stop", reason: "attempts-exhausted" }
   }
 
   const attempted = new Set(progress.attemptedAccountIds)
   const next = ordered.find((candidate) => !attempted.has(candidate.account.id))
-  if (next === undefined) return { action: "stop", reason: "candidates-exhausted" }
+  if (next === undefined) {
+    return lastFailure.kind === "overloaded"
+      ? waitOutOverload(ordered, progress, options, "candidates-exhausted")
+      : { action: "stop", reason: "candidates-exhausted" }
+  }
 
   return attemptOn(next, ordered, progress, options)
+}
+
+/**
+ * Every account was asked and the last said `overloaded`: the provider's shared backend is busy,
+ * which a short wait fixes and another account does not. So the last account is asked again after
+ * `overloadRetryBaseMs`, doubling per retry, `overloadRetries` times — before any byte is on the
+ * wire, as every retry here. Then the chain stops and the client hears `503` + `Retry-After`
+ * (`UpstreamOverloadedError`), never a router-made `429`.
+ */
+function waitOutOverload(
+  ordered: readonly Candidate[],
+  progress: FailoverProgress,
+  options: FailoverOptions,
+  exhausted: FailoverStopReason,
+): FailoverDecision {
+  const cap = Math.max(0, Math.trunc(options.overloadRetries ?? 0))
+  if (progress.inPlaceRetries >= cap) return { action: "stop", reason: exhausted }
+  const lastId = progress.attemptedAccountIds[progress.attemptedAccountIds.length - 1]
+  const candidate = ordered.find((entry) => entry.account.id === lastId)
+  if (candidate === undefined) return { action: "stop", reason: exhausted }
+  const base = Math.max(0, options.overloadRetryBaseMs ?? 0)
+  return {
+    action: "retry-in-place",
+    candidate,
+    attempt: progress.attemptedAccountIds.length,
+    delayMs: base * 2 ** progress.inPlaceRetries,
+  }
 }
 
 /**

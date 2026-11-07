@@ -138,6 +138,7 @@ const OUTCOME_BY_ERROR_CODE: Readonly<Record<RouterErrorCode, UsageOutcome>> = {
   key_verification_unavailable: "router_error",
   upstream_auth_failed: "upstream_auth_failed",
   upstream_timeout: "upstream_timeout",
+  upstream_overloaded: "upstream_error",
   credential_decrypt_failed: "credential_decrypt_failed",
   translation_failed: "translation_failed",
   request_too_large: "request_too_large",

@@ -72,6 +72,7 @@ const WALL_STATUS: Readonly<Record<UpstreamFailureKind, number>> = {
   "invalid-request": 400,
   "model-unsupported": 404,
   "server-error": 503,
+  overloaded: 503,
   "stale-session": 503,
   "busy-session": 503,
   "subprocess-crash": 503,

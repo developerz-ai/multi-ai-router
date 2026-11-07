@@ -156,6 +156,10 @@ export const encryptionKey = z
  */
 export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
   ["PORT", "let the kernel pick an ephemeral port; the boot log names the one it bound"],
+  [
+    "ROUTING_OVERLOAD_RETRIES",
+    "answer an all-overloaded chain at once with 503 + Retry-After instead of asking again",
+  ],
   ["SHUTDOWN_DRAIN_MS", "close in-flight responses immediately instead of waiting for them"],
   [
     "SHUTDOWN_READY_GRACE_MS",

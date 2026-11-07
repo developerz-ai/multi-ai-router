@@ -218,7 +218,9 @@ async function byRequest(
   }
   // The verdict first, as every other path records it; the reading lands after it.
   const kind = failoverKind(result.failureKind ?? null, 0)
-  if (kind !== "rate-limited")
+  // A busy provider backend (`overloaded`) says nothing about this account: still cooling, no strike.
+  const stillCooling = kind === "rate-limited" || kind === "overloaded"
+  if (!stillCooling)
     strikeProbeFailure(
       deps.health,
       account,
@@ -227,5 +229,5 @@ async function byRequest(
       observation,
     )
   if (reading !== undefined) fold({ ...reading, limited: false })
-  return kind === "rate-limited" ? "still-cooling" : "failed"
+  return stillCooling ? "still-cooling" : "failed"
 }

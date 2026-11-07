@@ -151,11 +151,16 @@ export async function listUpstreamModels(
     dialect: account.dialect,
     modelAliases: account.modelAliases,
   }
-  const dialect = driver.resolveDialect(driverAccount)
+  // A driver may read its listing off another of its surfaces (`ProviderModelListing.dialect`): the
+  // URL, the headers and the parse are that surface's, and an operator's base URL still wins.
+  const listingDialect = driver.modelListing?.dialect
+  const listedAccount: DriverAccount =
+    listingDialect === undefined ? driverAccount : { ...driverAccount, dialect: listingDialect }
+  const dialect = driver.resolveDialect(listedAccount)
 
   let url: URL
   try {
-    url = upstreamModelsUrl(driver, driverAccount, dialect)
+    url = upstreamModelsUrl(driver, listedAccount, dialect)
   } catch (error) {
     return fail("endpoint_unresolved", messageOf(error))
   }
@@ -167,7 +172,7 @@ export async function listUpstreamModels(
 
   const outcome = await runAttempt({
     plan: {
-      account: routableStandIn(account, driverAccount),
+      account: routableStandIn(account, listedAccount),
       driver,
       dialect,
       url,

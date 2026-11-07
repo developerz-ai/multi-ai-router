@@ -456,8 +456,8 @@ user agent, and it was accepted on every surface.
 | Conversation | `400 MissingSessionID` without `x-opencode-session`, on all three surfaces. `ProviderSurface.sessionHeader` declares it; `runAttempt` sends `conversationId()` — a hash of router key and session key, stable across turns and failover, carrying no client value. A listing or account test is no conversation and goes under a one-off id. The client's own header of that name is stripped at the trust boundary like any other |
 | Billing | `subscription`. A response's `usage.opencode` states `billing_source: go-teams`, `cost: 0`, `list_cost`, and `allowance`, the plan spend it drew. `allowance` is not `list_cost`: the ratio varies by model |
 | Limits | The plan states 5-hour, weekly and monthly limits **per model**; `GET /zen/go/v1/usage` reports three account-level windows as percentages. `ProviderDriver.quotaRead` reads them off the request path (below). A `429` still cools the whole Account, not the model, and per-model cooldown is deliberately unbuilt: no spent-window `429` has been observed to key the fix on |
-| Catalog | `GET /openai/v1/models` states `limit.context`, `limit.output` and `capabilities.reasoning` (`{supported, toggle?, effort?}`) per model. All are read into `model_catalog`; `reasoning` is a `jsonb` column and a reshaped block costs that one fact, not the row. Information only: nothing validates or rewrites a client's requested effort against it |
-| Failures | `429 FreeUsageLimitError` with `Retry-After` is `rate-limited`. `400 Model is unavailable` is `model-unsupported`: the plan does not serve that name, and the next account may |
+| Catalog | `GET /openai/v1/models` states `limit.context`, `limit.output` and `capabilities.reasoning` (`{supported, toggle?, effort?}`) per model; `/anthropic/v1/models` names ids only. The listing is read off the OpenAI surface whatever surface the seat serves (`ProviderModelListing.dialect`; through 2.51.0 an anthropic seat read its own and stored no size and no thinking modes). All are read into `model_catalog`; `reasoning` is a `jsonb` column and a reshaped block costs that one fact, not the row. Information only: nothing validates or rewrites a client's requested effort against it |
+| Failures | `429 … [overloaded] the server is overloaded; retry shortly` is `overloaded` (`opencode-go:overloaded`): Go's shared backend is busy, not the seat — retried with backoff, never a cooldown (prod 2026-11-07: read as a rate limit it cooled both seats and the router answered 199 requests `429`). `429 Go usage limit exceeded` stays `rate-limited`. `429 FreeUsageLimitError` with `Retry-After` is `rate-limited`. `400 Model is unavailable` is `model-unsupported`: the plan does not serve that name, and the next account may |
 
 ### Plan quota, read off the request path
 
@@ -513,6 +513,10 @@ says *now*, the reading says *until when*, and the cooldown is labeled `provider
 reading alone still cools nothing — a plan with Credits behind it serves past a spent window — and
 a stated reset (a header, z.ai's message stamp) is never replaced. Only a fresh reading lends: one younger than two `PLAN_QUOTA_READ_INTERVAL_MINUTES`, so a plan whose endpoint stopped answering or was cancelled stops stretching throttles after one missed tick. The exits stay the reset itself
 and the hourly `cooldown_recheck` for a window reopened early.
+
+`minimax-m3.1-flash` is listed in the anthropic surface's `thinkingRequiredModels`: Go relays
+MiniMax's own `2013` refusal of `thinking: disabled`, so the same rule as the `minimax` driver
+applies ([06-protocol-translation.md](06-protocol-translation.md)).
 
 Pooling is one key per real member. OpenCode's terms forbid multiple accounts used to circumvent
 usage limits; a pool of member keys is the shape the plan is sold in, and buying extra workspaces to

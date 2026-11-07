@@ -20,6 +20,8 @@ const FAILURE_KINDS: Readonly<Record<UpstreamFailureKind, FailureKind | null>> =
   "invalid-request": "client-error",
   "model-unsupported": "model-unsupported",
   "server-error": "server-error",
+  // Its own kind on this side too: retryable, but never held against the account (`breaker.ts`).
+  overloaded: "overloaded",
   "stale-session": "stale-session",
   // Not `server-error`: it is retryable — the SDK transport already spent its in-place fork — but
   // it is a fact about the conversation's session rather than about this account, so it must not

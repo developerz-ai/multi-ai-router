@@ -143,6 +143,13 @@ export const UPSTREAM_FAILURE_KINDS = [
    */
   "model-unsupported",
   "server-error",
+  /**
+   * The provider's shared backend is busy — OpenCode Go's `[overloaded] the server is overloaded`
+   * (sent as a `429`), Anthropic's `overloaded_error`, Kimi's `engine_overloaded_error`. About the
+   * provider, not this credential: retried with backoff, never a breaker strike, a cooldown or a
+   * recovery permit, and never answered as `quota_exhausted` (`docs/idea/05-routing-and-failover.md`).
+   */
+  "overloaded",
   /** The SDK no longer holds the session we resumed. Evict the binding, replay once in place. */
   "stale-session",
   /** The SDK session is still running as a background agent. Bounded waits, then fork it. */

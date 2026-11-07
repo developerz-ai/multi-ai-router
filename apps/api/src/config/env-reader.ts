@@ -287,6 +287,8 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     },
     failover: {
       maxAttempts: raw.ROUTING_MAX_ATTEMPTS,
+      overloadRetries: raw.ROUTING_OVERLOAD_RETRIES ?? 2,
+      overloadRetryBaseMs: raw.ROUTING_OVERLOAD_RETRY_BASE_MS ?? 1_000,
       failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
       baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
       maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,

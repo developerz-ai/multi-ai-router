@@ -178,7 +178,7 @@ export const kimiDriver: ProviderDriver = {
       ),
       typeRule("rate-limited", "kimi:rate_limit_reached_error", RATE_LIMIT_TYPES),
       typeRule("auth", "kimi:invalid_authentication_error", AUTH_TYPES),
-      typeRule("server-error", "kimi:engine_overloaded_error", OVERLOAD_TYPES),
+      typeRule("overloaded", "kimi:engine_overloaded_error", OVERLOAD_TYPES),
     ],
   }),
   quotaRead: kimiQuotaRead,

@@ -51,6 +51,7 @@ const WALL_OF: Readonly<Record<RouterErrorCode, { wall: Wall; scope: WallScope }
   csrf_token_invalid: { wall: "request", scope: "request" },
   upstream_auth_failed: { wall: "human", scope: "account" },
   upstream_timeout: { wall: "capacity", scope: "account" },
+  upstream_overloaded: { wall: "clock", scope: "pool" },
   credential_decrypt_failed: { wall: "human", scope: "account" },
   translation_failed: { wall: "request", scope: "request" },
   model_not_found: { wall: "scope", scope: "key" },

@@ -21,6 +21,7 @@ import {
   TranslationError,
   UnsupportedContentEncodingError,
   UpstreamAuthError,
+  UpstreamOverloadedError,
   UpstreamTimeoutError,
 } from "../../src/index"
 
@@ -72,6 +73,12 @@ const cases: readonly ErrorCase[] = [
     ctor: UpstreamTimeoutError,
     code: "upstream_timeout",
     status: 504,
+  },
+  {
+    name: "UpstreamOverloadedError",
+    ctor: UpstreamOverloadedError,
+    code: "upstream_overloaded",
+    status: 503,
   },
   {
     name: "CredentialDecryptError",

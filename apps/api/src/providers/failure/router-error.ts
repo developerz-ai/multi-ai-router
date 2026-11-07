@@ -6,6 +6,7 @@ import {
   QuotaExhaustedError,
   type RouterError,
   UpstreamAuthError,
+  UpstreamOverloadedError,
 } from "@multi-ai-router/core"
 import type { FailureClassification, RateLimitSignal } from "../types"
 
@@ -87,6 +88,19 @@ export function toRouterError(
         },
       },
     )
+  }
+
+  // The provider's shared backend is busy. Never `quota_exhausted`: no account is out of anything,
+  // and none was cooled for it. `503` with the upstream's own wait when it stated one.
+  if (classification.kind === "overloaded") {
+    const stated = (classification.rateLimit ?? context?.signal ?? null)?.retryAfterSeconds
+    return new UpstreamOverloadedError(`upstream overloaded (${classification.signal})`, {
+      retryAfterSeconds:
+        stated !== undefined && Number.isFinite(stated) && stated > 0
+          ? Math.ceil(stated)
+          : (context?.unknownResetRetryAfterSeconds ?? DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS),
+      detail,
+    })
   }
 
   if (classification.kind === "invalid-request" && classification.status === 403) {

@@ -260,6 +260,11 @@ function settle(
     attempt.finish("uncertain")
     return "request-refused"
   }
+  // The provider's shared backend was busy: no verdict on this account either way.
+  if (kind === "overloaded") {
+    attempt.finish("uncertain")
+    return "settled"
+  }
   if (kind === null) {
     attempt.finish("succeeded")
     deps.health.recordSuccess(account.id, observation)

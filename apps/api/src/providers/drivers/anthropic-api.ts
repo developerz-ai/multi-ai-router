@@ -38,6 +38,8 @@ export const anthropicApiDriver = createHttpDriver({
     messageRule("credits-exhausted", "anthropic:credit-balance-too-low", CREDIT_BALANCE_TOO_LOW),
     typeRule("credits-exhausted", "anthropic:billing_error", ["billing_error"]),
     typeRule("rate-limited", "anthropic:rate_limit_error", ["rate_limit_error"]),
-    typeRule("server-error", "anthropic:overloaded_error", ["overloaded_error", "api_error"]),
+    // Anthropic's own busy backend (`529`): retried with backoff, never held against the key.
+    typeRule("overloaded", "anthropic:overloaded_error", ["overloaded_error"]),
+    typeRule("server-error", "anthropic:api_error", ["api_error"]),
   ],
 })

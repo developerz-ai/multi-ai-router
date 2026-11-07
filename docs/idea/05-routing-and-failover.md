@@ -648,6 +648,22 @@ attempt cap apply identically to both paths.
 | **A spent plan window's reset** | A `rate-limited` failure states no reset (or only the driver's `estimated` re-test cadence), and the account's held quota windows include one at utilization 1 with a future `provider-reported` reset — the latest such reset, labeled `provider-reported` (`routing/plan-reset.ts`). The refusal says *now*, the plan's own reading (`plan_quota_read`, [03-providers.md](03-providers.md)) says *until when*. The reading alone never cools an account, and only one younger than two plan-read intervals lends. |
 | **Exponential backoff** | Nothing is reported. Grows per consecutive failure, jittered, capped. Resets to the floor on the first success. |
 
+### `overloaded` — the provider is busy, no account is out of anything
+
+A provider's shared backend answering "busy" — OpenCode Go's `429 … [overloaded] the server is
+overloaded; retry shortly`, Anthropic's `overloaded_error` (`529`), Kimi's `engine_overloaded_error`
+— is its own failure kind, `overloaded`, decided by the provider's rules. It is **retryable and
+blameless**: the breaker never strikes for it, no limiter reading on the same response is folded in,
+a designated recovery probe that draws one settles `uncertain` (its permit is not spent), and the
+hourly recheck reads it as still cooling. The chain walks the remaining accounts first, with no wait;
+once every one was asked it asks the last again after `ROUTING_OVERLOAD_RETRY_BASE_MS` (default
+1000), doubling, `ROUTING_OVERLOAD_RETRIES` times (default 2; `0` asks no more) — always before a
+byte is on the wire. Still overloaded: the client hears **`503 upstream_overloaded`** with a
+`Retry-After` (the upstream's own when it stated one, else
+`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), never a router-made `429 quota_exhausted`. Prod,
+2026-11-07 00:22..01:56Z: Go's overload read as `rate-limited` cooled both Go seats, spent their
+recovery permits and answered 199 requests `429` while neither seat was out of anything.
+
 `ROUTING_FAILURE_THRESHOLD`, `ROUTING_BASE_BACKOFF_MS`, and `ROUTING_MAX_BACKOFF_MS` are the
 operator's numbers for the two tables above, and the health store supplies them on **every**
 transition it makes — including the one a rate-limit header folds in without any failure being

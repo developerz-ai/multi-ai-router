@@ -376,6 +376,28 @@ On `429`, a drained balance, `5xx`, or a connection failure, the router retries 
 |---|---|---|---|
 | **Rate limited / quota window hit** | Temporary. A subscription's 5-hour or 7-day window is spent; it refills on a clock. | `cooling_down` | Automatic at the reported reset time (exponential backoff when none is reported); a half-open probe confirms. |
 | **Out of credits / balance exhausted** | Hard stop. A prepaid balance hit zero, a plan expired, or billing failed. No clock will fix it. | `exhausted` | **Human action only** — top up, fix billing, replace the key. Never retried on a timer. |
+| **Provider overloaded** | The provider's shared backend is busy (OpenCode Go `[overloaded]`, Anthropic `overloaded_error`). Nothing about any account. | stays `active` | Retried on the next account, then on the last after a short doubling wait; still busy → **`503`** + `Retry-After`. Never a cooldown, never a `429`. |
+
+### Pooling several subscription accounts
+
+Many accounts of one provider is the normal case — five Claude subscriptions, or one OpenCode Go
+seat per team member, side by side.
+
+1. **One account per real seat.** Add each member's own key or login as its own Account on the console's
+   Accounts page. For OpenCode Go that is each member's **personal** key: a workspace service-account key is
+   refused on every Go model, and OpenCode's terms forbid buying extra workspaces to stack limits.
+   A pool of member seats is the shape the plan is sold in.
+2. **Put them in one Pool**, policy `sticky` for coding agents (a conversation stays on
+   the seat holding its prompt cache) or `quota-aware` to spend the seat with the most headroom first.
+   Plans whose usage the router can read (Claude, Codex, OpenCode Go, MiniMax, z.ai, Kimi) show their
+   5-hour and weekly windows on the Accounts page, with the provider's own reset.
+3. **Scope a router key to the Pool** (key scope `pools`). Clients use that one key; the router
+   picks the seat per request and fails over to the next before a byte is sent.
+4. **Optional overflow:** a metered API key as the Pool's member of last resort, engaged only once
+   every subscription seat is unavailable. Spending real money is opted into, never inferred.
+
+A seat whose window is spent cools until the provider's reset and the rest of the Pool serves; the
+response is `429` only when every seat in scope is out.
 
 An `exhausted` account leaves every candidate set immediately and gets a red banner on the dashboard, not a status buried on a detail page: it silently shrinks the pool. When every candidate is unavailable the router says which condition it hit — "all 4 accounts in pool `team` are rate limited, earliest reset 14:32Z" — and maps it to a distinct code: rate-limited → **`429`** with `Retry-After`, exhausted or billing → **`402`**, nothing in scope → **`403`**. Never a generic `500`, never a silent fallback outside the key's scope.
 

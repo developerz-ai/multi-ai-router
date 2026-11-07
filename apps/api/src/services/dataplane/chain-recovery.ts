@@ -31,6 +31,14 @@ export function recordChainFailure(
     return
   }
 
+  // The provider's shared backend was busy: nothing about this account either way. No strike, no
+  // limiter reading folded in (Go's overloaded `429` would otherwise cool the seat), and a
+  // designated probe settles `uncertain` so its permit is not spent on someone else's outage.
+  if (outcome.failure.kind === "overloaded") {
+    recovery?.finish("uncertain")
+    return
+  }
+
   ctx.runtime.health.recordFailure(
     servable.account.id,
     outcome.failure,

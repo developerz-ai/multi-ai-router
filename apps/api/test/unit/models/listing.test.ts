@@ -260,3 +260,223 @@ describe("reading a provider's model listing", () => {
     expect(result.code).toBe("endpoint_unresolved")
   })
 })
+
+/**
+ * OpenCode Go, prod 2026-11-07: both seats serve on the anthropic surface, whose `/v1/models` names
+ * ids only, so the catalog held 60 Go rows with no size and no `reasoning` — and `/v1/catalog`
+ * stated neither for any Go model. The OpenAI listing states both. The fixture is that live reply
+ * (2026-11-07), trimmed to five models and with `api`, `cost` and `modalities` dropped.
+ */
+const GO_OPENAI_LISTING = {
+  object: "list",
+  data: [
+    {
+      id: "deepseek-v4.1-flash",
+      object: "model",
+      created: 1794014354,
+      owned_by: "opencode",
+      name: "DeepSeek V4.1 Flash",
+      canonical_id: "deepseek/deepseek-v4.1-flash",
+      type: "chat",
+      description: "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+      family: "deepseek-flash",
+      open_weights: true,
+      knowledge: "2025-05",
+      release_date: "2026-09-10",
+      last_updated: "2026-09-10",
+      capabilities: {
+        tools: {
+          supported: true,
+        },
+        reasoning: {
+          supported: true,
+          effort: ["low", "high", "max"],
+        },
+        structured_output: true,
+        temperature: true,
+        top_p: true,
+        top_k: true,
+        system_updates: true,
+        effort_updates: false,
+      },
+      limit: {
+        context: 1000000,
+        output: 384000,
+      },
+    },
+    {
+      id: "glm-5.3-flash",
+      object: "model",
+      created: 1794014354,
+      owned_by: "opencode",
+      name: "GLM-5.3-Flash",
+      canonical_id: "zhipuai/glm-5.3-flash",
+      type: "chat",
+      description: "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
+      family: "glm-flash",
+      open_weights: true,
+      release_date: "2026-08-26",
+      last_updated: "2026-08-26",
+      capabilities: {
+        tools: {
+          supported: true,
+        },
+        reasoning: {
+          supported: true,
+          effort: ["low", "high", "max"],
+        },
+        structured_output: true,
+        temperature: true,
+        top_p: true,
+        top_k: true,
+        system_updates: true,
+        effort_updates: false,
+      },
+      limit: {
+        context: 1000000,
+        output: 131072,
+      },
+    },
+    {
+      id: "gpt-6-luna",
+      object: "model",
+      created: 1794014354,
+      owned_by: "opencode",
+      name: "GPT-6 Luna",
+      canonical_id: "openai/gpt-6-luna",
+      type: "chat",
+      description: "OpenAI's most efficient model for focused, high-volume tasks",
+      family: "gpt-luna",
+      open_weights: false,
+      knowledge: "2026-05-18",
+      release_date: "2026-09-22",
+      last_updated: "2026-09-22",
+      capabilities: {
+        tools: {
+          supported: true,
+        },
+        reasoning: {
+          supported: true,
+          effort: ["none", "low", "medium", "high", "xhigh", "max"],
+        },
+        structured_output: true,
+        temperature: false,
+        top_p: false,
+        top_k: false,
+        system_updates: true,
+        effort_updates: true,
+      },
+      limit: {
+        context: 1050000,
+        input: 922000,
+        output: 128000,
+      },
+    },
+    {
+      id: "minimax-m3.1-flash",
+      object: "model",
+      created: 1794014354,
+      owned_by: "opencode",
+      name: "MiniMax M3.1 Flash",
+      canonical_id: "minimax/MiniMax-M3.1-Flash",
+      type: "chat",
+      description:
+        "Frontier multimodal coding model with 1M context window and tunable thinking depth",
+      family: "minimax",
+      open_weights: true,
+      release_date: "2026-10-19",
+      last_updated: "2026-10-19",
+      capabilities: {
+        tools: {
+          supported: true,
+        },
+        reasoning: {
+          supported: true,
+          effort: ["low", "medium", "high", "xhigh", "max"],
+        },
+        temperature: true,
+        top_p: true,
+        top_k: false,
+        system_updates: true,
+        effort_updates: false,
+      },
+      limit: {
+        context: 1000000,
+        output: 512000,
+      },
+    },
+    {
+      id: "qwen3.8-flash",
+      object: "model",
+      created: 1794014354,
+      owned_by: "opencode",
+      name: "Qwen3.8 Flash",
+      canonical_id: "alibaba/qwen3.8-flash",
+      type: "chat",
+      description: "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+      family: "qwen",
+      open_weights: false,
+      release_date: "2026-08-26",
+      last_updated: "2026-08-26",
+      capabilities: {
+        tools: {
+          supported: true,
+        },
+        reasoning: {
+          supported: true,
+          toggle: true,
+          effort: ["low", "medium", "xhigh"],
+          budget: {},
+        },
+        structured_output: true,
+        temperature: true,
+        top_p: true,
+        top_k: true,
+        system_updates: true,
+        effort_updates: false,
+      },
+      limit: {
+        context: 1000000,
+        output: 131072,
+      },
+    },
+  ],
+}
+
+describe("opencode-go reads its listing off the OpenAI surface, whatever surface the seat serves", () => {
+  for (const dialect of ["anthropic", "openai-chat", "openai-responses"] as const) {
+    test(`a ${dialect} seat asks /openai/v1/models and keeps sizes and thinking modes`, async () => {
+      const asked: string[] = []
+      const result = await listUpstreamModels(
+        deps(async (input?: unknown) => {
+          asked.push(String(input instanceof Request ? input.url : input))
+          return new Response(JSON.stringify(GO_OPENAI_LISTING), {
+            headers: { "content-type": "application/json" },
+          })
+        }),
+        accountRow({ provider: "opencode-go", dialect, billing: "subscription" }),
+      )
+      if (!result.ok) throw new Error(result.message)
+
+      expect(asked[0]).toBe("https://opencode.ai/inference/go/openai/v1/models")
+      const byId = new Map(result.entries.map((entry) => [entry.id, entry]))
+      expect(byId.get("deepseek-v4.1-flash")).toEqual({
+        id: "deepseek-v4.1-flash",
+        contextTokens: 1_000_000,
+        maxOutputTokens: 384_000,
+        reasoning: { supported: true, effort: ["low", "high", "max"] },
+      })
+      expect(byId.get("glm-5.3-flash")?.contextTokens).toBe(1_000_000)
+      expect(byId.get("gpt-6-luna")?.reasoning?.effort).toContain("none")
+      expect(byId.get("qwen3.8-flash")?.reasoning).toEqual({
+        supported: true,
+        toggle: true,
+        effort: ["low", "medium", "xhigh"],
+      })
+      for (const entry of result.entries) {
+        expect(entry.contextTokens).not.toBeNull()
+        expect(entry.reasoning?.supported).toBe(true)
+      }
+    })
+  }
+})

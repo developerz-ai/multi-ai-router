@@ -352,7 +352,8 @@ describe("kimi", () => {
       503,
       "engine_overloaded_error",
       "Stream terminated: the engine is overloaded.",
-      "server-error",
+      // A busy engine is the provider's, not this key's: `overloaded`, never a strike (2.52.0).
+      "overloaded",
     ],
     [500, "server_error", "Upstream connection terminated.", "server-error"],
   ] as const)(
