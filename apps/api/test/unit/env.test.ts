@@ -562,6 +562,8 @@ describe("parseEnv", () => {
         // Undefined is the documented default and not a gap: the ceiling is "every eligible
         // account", which only the failover chain can count (`routing/failover.ts`).
         maxAttempts: undefined,
+        overloadRetries: 2,
+        overloadRetryBaseMs: 1_000,
         failureThreshold: 3,
         baseBackoffMs: 1_000,
         maxBackoffMs: 300_000,

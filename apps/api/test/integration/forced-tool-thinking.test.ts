@@ -142,7 +142,8 @@ describe("POST /v1/messages, forced tool, MiniMax model that requires adaptive t
     })
   }
 
-  test("a client's own disabled yields to the model's requirement: dropped, vendor default", async () => {
+  // Through 2.51.0 the client's `disabled` was dropped and MiniMax ran at its own default, `max`.
+  test("a client's own disabled yields to the model's requirement: adaptive at the lowest effort", async () => {
     const { app, upstream } = harness({ accounts: miniMax(), responses: [ok] })
     const body = { ...FORCED, model: "MiniMax-M3.1-Flash", thinking: { type: "disabled" } }
 
@@ -151,7 +152,26 @@ describe("POST /v1/messages, forced tool, MiniMax model that requires adaptive t
     await settle()
 
     expect(res.status).toBe(200)
-    expect(sent(upstream.calls[0]?.body).thinking).toBeUndefined()
+    expect(sent(upstream.calls[0]?.body).thinking).toEqual({ type: "adaptive" })
+    expect(sent(upstream.calls[0]?.body).output_config).toEqual({ effort: "low" })
+  })
+
+  test("a client's own effort beside disabled is the effort sent, not the vendor default", async () => {
+    const { app, upstream } = harness({ accounts: miniMax(), responses: [ok] })
+    const body = {
+      ...FORCED,
+      model: "MiniMax-M3.1-Flash",
+      thinking: { type: "disabled" },
+      output_config: { effort: "high" },
+    }
+
+    const res = await app.request("/v1/messages", post(JSON.stringify(body), bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(sent(upstream.calls[0]?.body).thinking).toEqual({ type: "adaptive" })
+    expect(sent(upstream.calls[0]?.body).output_config).toEqual({ effort: "high" })
   })
 
   test("an adaptive thinking the client stated is relayed beside the force", async () => {
@@ -196,7 +216,7 @@ describe("/v1/chat/completions over the anthropic translation, model that requir
     ],
     ["reasoning_effort none", { reasoning_effort: "none" }],
   ] as const) {
-    test(`${name}: the translator's disabled is not sent, served`, async () => {
+    test(`${name}: the translator's disabled becomes adaptive at the lowest effort, served`, async () => {
       const { app, upstream } = harness({
         accounts: miniMax(),
         responses: [
@@ -212,7 +232,24 @@ describe("/v1/chat/completions over the anthropic translation, model that requir
       await settle()
 
       expect(res.status).toBe(200)
-      expect(sent(upstream.calls[0]?.body).thinking).toBeUndefined()
+      expect(sent(upstream.calls[0]?.body).thinking).toEqual({ type: "adaptive" })
+      expect(sent(upstream.calls[0]?.body).output_config).toEqual({ effort: "low" })
     })
   }
+
+  test("a forced tool beside reasoning_effort high keeps high, never the vendor's max", async () => {
+    const { app, upstream } = harness({ accounts: miniMax(), responses: [ok] })
+    const body = chat({
+      tools: [{ type: "function", function: { name: "json", parameters: { type: "object" } } }],
+      tool_choice: "required",
+      reasoning_effort: "high",
+    })
+    const res = await app.request("/v1/chat/completions", post(body, bearer()))
+    await res.text()
+    await settle()
+
+    expect(res.status).toBe(200)
+    expect(sent(upstream.calls[0]?.body).thinking).toEqual({ type: "adaptive" })
+    expect(sent(upstream.calls[0]?.body).output_config).toEqual({ effort: "high" })
+  })
 })

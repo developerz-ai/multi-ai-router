@@ -69,6 +69,7 @@ const RETRYABLE: Readonly<Record<UpstreamFailureKind, boolean>> = {
   "invalid-request": false,
   "model-unsupported": true,
   "server-error": true,
+  overloaded: true,
   "stale-session": false,
   "busy-session": false,
   "subprocess-crash": true,

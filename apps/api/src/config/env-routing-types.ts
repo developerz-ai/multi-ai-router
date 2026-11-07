@@ -103,6 +103,13 @@ export interface FailoverConfig {
    * `ROUTING_MAX_ATTEMPTS` to fail faster than the pool allows.
    */
   readonly maxAttempts: number | undefined
+  /**
+   * Once every candidate answered `overloaded` (the provider's shared backend is busy), how many more
+   * times the last one is asked before the client hears `503`. `0` asks no more.
+   */
+  readonly overloadRetries: number
+  /** The first wait before such a retry; doubles per retry. */
+  readonly overloadRetryBaseMs: number
   /** Consecutive 5xx or connection failures before an account's breaker trips. */
   readonly failureThreshold: number
   /** First cooldown step. Doubles per consecutive failure. */

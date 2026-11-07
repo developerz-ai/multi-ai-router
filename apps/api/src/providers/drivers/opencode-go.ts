@@ -46,6 +46,26 @@ const FREE_LIMIT_TYPES = ["FreeUsageLimitError"]
 const NO_FUNDS = /insufficient account funds/i
 const MODEL_UNAVAILABLE = /model is unavailable/i
 
+/**
+ * Provenance: prod 2026-11-07 00:22..01:56Z, 199 failed requests across both Go seats: `429` with
+ * `Upstream request failed: [overloaded] the server is overloaded; retry shortly`. Go's shared
+ * backend being busy, not this seat's limit — which Go words differently (`Go usage limit
+ * exceeded`, `FreeUsageLimitError`). Read as `rate-limited` it cooled both seats, spent their
+ * recovery permits and answered `429 quota_exhausted` with nobody out of anything. Matched first,
+ * on the bracketed tag Go stamps on relayed upstream errors or the sentence itself. Blast radius:
+ * a body matched here is retried with backoff and never cools the seat.
+ */
+const OVERLOADED = /\[overloaded\]|server is overloaded/i
+
+/**
+ * Provenance: Go relays MiniMax's own refusal, driven live on the anthropic surface 2026-11-06:
+ * `thinking: {type: "disabled"}` answers `400 … model "minimax-m3.1-flash" requires adaptive
+ * thinking … (2013)`; no `thinking`, `output_config.effort` `low` or `max`, and `adaptive` + `low`
+ * all answer `200` with the forced tool. Go's listing states `effort: [low … max]` and no `toggle`
+ * for it. Blast radius: a forced tool or `reasoning_effort: none` on this model, translated or not.
+ */
+const THINKING_REQUIRED_MODELS = /^minimax-m3\.1-flash(?:-|$)/i
+
 const size = z
   .unknown()
   .transform((value) =>
@@ -70,6 +90,8 @@ const Listing = z.object({
 
 /** The sizes sit under `limit` and thinking under `capabilities`; the stock reader knows neither. */
 const listing: ProviderModelListing = {
+  // Whatever surface the seat serves on: only the OpenAI listing states sizes and thinking modes.
+  dialect: "openai-chat",
   query: () => ({}),
   read: (body): readonly ListedModel[] | null => {
     const parsed = Listing.safeParse(body)
@@ -95,6 +117,7 @@ const driver = createHttpDriver({
       baseUrl: `${BASE_URL}/anthropic`,
       anthropicAuth: "vendor-bearer",
       sessionHeader: SESSION_HEADER,
+      thinkingRequiredModels: THINKING_REQUIRED_MODELS,
     },
     {
       dialect: "openai-responses",
@@ -103,6 +126,7 @@ const driver = createHttpDriver({
     },
   ],
   rules: [
+    messageRule("overloaded", "opencode-go:overloaded", OVERLOADED),
     typeRule("rate-limited", "opencode-go:free-usage-limit", FREE_LIMIT_TYPES),
     messageRule("credits-exhausted", "opencode-go:insufficient-funds", NO_FUNDS),
     messageRule("model-unsupported", "opencode-go:model-unavailable", MODEL_UNAVAILABLE),

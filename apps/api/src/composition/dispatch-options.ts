@@ -28,7 +28,11 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     // Absent stays absent: the routing layer reads "no ceiling" as "every eligible account", which
     // is a bound only it can compute (`routing/failover.ts`, `maxAttempts`). Writing a number here
     // would be this file inventing a pool size.
-    failover: failover.maxAttempts === undefined ? {} : { maxAttempts: failover.maxAttempts },
+    failover: {
+      ...(failover.maxAttempts === undefined ? {} : { maxAttempts: failover.maxAttempts }),
+      overloadRetries: failover.overloadRetries,
+      overloadRetryBaseMs: failover.overloadRetryBaseMs,
+    },
     selection: {
       boundAccountCoolingDown: failover.boundAccountCoolingDown,
       // Waiting on a bound account only protects a transcript the carry would move anyway.

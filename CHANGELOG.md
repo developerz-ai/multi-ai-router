@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.52.0] — 2026-11-07
+
+### Fixed
+
+- **A provider's busy backend is `overloaded`, never a rate limit: retried, never cooled, `503` at worst.** OpenCode Go answers `429 … [overloaded] the server is overloaded; retry shortly` when its shared backend is busy; read as `rate-limited` it cooled both Go seats, spent their recovery permits and the router answered 199 requests `429 quota_exhausted` (prod 2026-11-07 00:22..01:56Z) with neither seat out of anything. New failure kind `overloaded` (Go `[overloaded]`, Anthropic `overloaded_error`, Kimi `engine_overloaded_error`): the breaker never strikes, no limiter reading is folded in, a recovery probe settles `uncertain`. The chain walks the other accounts, then asks the last again after `ROUTING_OVERLOAD_RETRY_BASE_MS` (1000) doubling, `ROUTING_OVERLOAD_RETRIES` (2) times; still busy, the client hears `503 upstream_overloaded` + `Retry-After`. `Go usage limit exceeded` stays a rate limit. Regression: `apps/api/test/integration/opencode-go-overloaded.test.ts`, `apps/api/test/unit/routing/overload.test.ts`.
+- **OpenCode Go's catalog carries sizes and thinking modes.** Both prod seats serve on the anthropic surface, whose `/v1/models` names ids only, so `model_catalog` held 60 Go rows with no context window and 0 of 148 rows had `reasoning`: `/v1/catalog` stated neither. The Go listing is now read off `/openai/v1/models` whatever surface the seat serves (`ProviderModelListing.dialect`). Regression: `apps/api/test/unit/models/listing.test.ts` (the live listing shape).
+- **A thinking-required model keeps the client's effort.** For MiniMax-M3.1-Flash a `thinking: disabled` (a forced tool, a structured output, `reasoning_effort: none`, or the client's own) was removed, so MiniMax ran at its default `max`. It now becomes `adaptive` at the client's `output_config.effort` when that is one the vendor names, else `low`. OpenCode Go's `minimax-m3.1-flash` is listed as thinking-required too (Go relays MiniMax's `2013`). Regression: `apps/api/test/unit/dataplane/forced-tool-thinking.test.ts`, `apps/api/test/integration/forced-tool-thinking.test.ts`.
+
+### Added
+
+- README: operator section on pooling several subscription seats (one key per real member). Docs: `overloaded` (05), catalog `reasoning` and the listing surface (06, 03), the thinking-required rule (06), the two new env vars (09, `.env.example`).
+- Investigated (no change needed): `x-opencode-session` is a pure function of router key and session key, so a large or concurrent prompt in one conversation always goes up under one id; a new client `x-session-id` is a new conversation by design. Regression: `apps/api/test/integration/opencode-go-session.test.ts`.
+
 ## [2.51.0] — 2026-11-06
 
 ### Added
@@ -1995,3 +2008,4 @@ your tooling config.
 [2.49.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.49.0
 [2.50.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.50.0
 [2.51.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.51.0
+[2.52.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.0

@@ -32,6 +32,7 @@ import { finishSuccessfulAttempt } from "./chain-success"
 import { dispatch } from "./dispatch"
 import { forcedToolOfBody } from "./forced-tool-coercion"
 import { accountHealthFacts } from "./health-observation"
+import { pause } from "./pause"
 import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
 import { attemptRecord } from "./records"
@@ -111,6 +112,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     }
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
     if (decision.action === "stop") break
+    // An `overloaded` retry waits out the provider's busy backend first (`routing/failover.ts`).
+    if (decision.action === "retry-in-place" && decision.delayMs !== undefined) {
+      await pause(decision.delayMs, ctx.request.signal)
+      if (ctx.request.signal.aborted) continue
+    }
 
     const servable = byId.get(decision.candidate.account.id)
     if (servable === undefined) break
@@ -187,7 +193,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         ctx,
         servable,
         upstreamBody,
-        decision.action === "retry-in-place",
+        // A session replay, not an overload wait: only the former resumes differently on the SDK.
+        decision.action === "retry-in-place" && decision.delayMs === undefined,
         recovery?.beforeUpstreamStart,
         lifetime.onStarted,
         quota,

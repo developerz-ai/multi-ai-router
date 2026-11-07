@@ -13,6 +13,7 @@
  */
 import { describe, expect, test } from "bun:test"
 import { miniMaxDriver } from "../../../src/providers/drivers/minimax"
+import { opencodeGoDriver } from "../../../src/providers/drivers/opencode-go"
 import {
   disableThinkingForForcedTool,
   keepThinkingForRequiredModel,
@@ -104,10 +105,44 @@ describe("everything else is the client's own bytes", () => {
 describe("a model that requires thinking keeps it on (prod 2026-11-05, MiniMax 2013)", () => {
   const forced = { ...base, model: "MiniMax-M3.1-Flash", tool_choice: { type: "any" } }
 
-  test("a stated disabled is removed; everything else, the force included, is kept", () => {
+  // Through 2.51.0 `disabled` was removed outright, so the vendor ran at its default effort (`max`
+  // on MiniMax) on every forced-tool call, and a client's own effort beside it did not matter.
+  test("a stated disabled becomes adaptive at the lowest effort; the force is kept", () => {
     expect(
       dec(keepThinkingForRequiredModel(enc({ ...forced, thinking: { type: "disabled" } }))),
-    ).toEqual(forced)
+    ).toEqual({ ...forced, thinking: { type: "adaptive" }, output_config: { effort: "low" } })
+  })
+
+  test("an effort the client stated beside disabled is kept, never replaced by the default", () => {
+    for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+      const body = { ...forced, thinking: { type: "disabled" }, output_config: { effort } }
+      expect(dec(keepThinkingForRequiredModel(enc(body)))).toEqual({
+        ...forced,
+        thinking: { type: "adaptive" },
+        output_config: { effort },
+      })
+    }
+  })
+
+  test("an effort the vendor does not name is replaced by the lowest; other config is kept", () => {
+    const body = {
+      ...forced,
+      thinking: { type: "disabled" },
+      output_config: { effort: "none", format: { type: "json_schema" } },
+    }
+    expect(dec(keepThinkingForRequiredModel(enc(body)))).toEqual({
+      ...forced,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "low", format: { type: "json_schema" } },
+    })
+  })
+
+  test("OpenCode Go names minimax-m3.1-flash too, on its anthropic surface (one-file rule)", () => {
+    const go = { id: "go", provider: "opencode-go" as const, dialect: "anthropic" as const }
+    const requires = (model: string) => opencodeGoDriver.requiresThinking?.(go as never, model)
+    expect(requires("minimax-m3.1-flash")).toBe(true)
+    expect(requires("minimax-m3")).toBe(false)
+    expect(requires("glm-5.3-flash")).toBe(false)
   })
 
   test("absent, adaptive or enabled thinking, and a body that is not an object, are the same bytes", () => {

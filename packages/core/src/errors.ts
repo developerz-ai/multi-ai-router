@@ -23,6 +23,7 @@ export const ROUTER_ERROR_CODES = [
   "csrf_token_invalid",
   "upstream_auth_failed",
   "upstream_timeout",
+  "upstream_overloaded",
   "credential_decrypt_failed",
   "translation_failed",
   "model_not_found",
@@ -238,6 +239,16 @@ export class UpstreamAuthError extends RouterError {
 export class UpstreamTimeoutError extends RouterError {
   readonly code = "upstream_timeout"
   readonly status = 504
+}
+
+/**
+ * Every account the request could use answered "overloaded" — the provider's shared backend is
+ * busy, not any one credential's window. `503` plus a `Retry-After`, never `quota_exhausted`: no
+ * account is out of anything, and none was cooled for it.
+ */
+export class UpstreamOverloadedError extends RetryableRouterError {
+  readonly code = "upstream_overloaded"
+  readonly status = 503
 }
 
 /**

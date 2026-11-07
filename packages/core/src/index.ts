@@ -84,6 +84,7 @@ export {
   TranslationError,
   UnsupportedContentEncodingError,
   UpstreamAuthError,
+  UpstreamOverloadedError,
   UpstreamTimeoutError,
 } from "./errors"
 export {

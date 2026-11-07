@@ -58,6 +58,8 @@ export interface HarnessOptions {
   readonly health?: HealthStoreOptions
   /** Overrides the default `sticky` policy, for a suite that needs a deterministic chain order. */
   readonly selection?: SelectionOptions
+  /** Extra failover knobs (overload retries); `maxAttempts` stays its own option. */
+  readonly failover?: { readonly overloadRetries?: number; readonly overloadRetryBaseMs?: number }
   /**
    * The Claude subscription transport, stubbed at the `SdkInvoker` boundary. Omitted means this
    * router serves no subscription account — no `claude` CLI is ever spawned either way.
@@ -166,7 +168,7 @@ export function harness(options: HarnessOptions) {
           ...(options.upstreamErrorMaxBytes === undefined
             ? {}
             : { upstreamErrorMaxBytes: options.upstreamErrorMaxBytes }),
-          failover: { maxAttempts: options.maxAttempts ?? 3 },
+          failover: { maxAttempts: options.maxAttempts ?? 3, ...options.failover },
           ...(options.upstreamStream === undefined
             ? {}
             : { upstreamStream: options.upstreamStream }),

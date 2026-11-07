@@ -207,6 +207,8 @@ export const ENV_FIELDS = {
     .refine((value) => value >= 2 && value <= 4096, "must be between 2 and 4096")
     .optional(),
   ROUTING_MAX_ATTEMPTS: atLeastOne.optional(),
+  ROUTING_OVERLOAD_RETRIES: wholeNumber.optional(),
+  ROUTING_OVERLOAD_RETRY_BASE_MS: atLeastOne.optional(),
   ROUTING_FAILURE_THRESHOLD: atLeastOne.optional(),
   ROUTING_BASE_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_MAX_BACKOFF_MS: atLeastOne.optional(),

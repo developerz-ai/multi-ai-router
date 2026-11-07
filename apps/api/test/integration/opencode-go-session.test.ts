@@ -111,4 +111,43 @@ describe("opencode-go: the router names the conversation", () => {
     expect(other).not.toBe(first as string)
     expect(first).not.toContain("one")
   })
+
+  // developerz.ai, 2026-11-07: an ~866K-token review prompt repeated 40-80 s later read no cache
+  // through the router. The id is a pure function of the router key and the session key, so size
+  // and concurrency cannot scatter one conversation across Go's backends; a different client
+  // `x-session-id` (a new review session) is a different conversation by design.
+  test("a multi-megabyte prompt sent twice at once goes up under one id", async () => {
+    const { app, upstream } = harness({
+      accounts: [goAccount("a")],
+      responses: [chatReply],
+      maxBodyBytes: 32 * 1024 * 1024,
+    })
+    const big = chat("x".repeat(3 * 1024 * 1024))
+
+    const [one, two] = await Promise.all([
+      app.request("/v1/chat/completions", post(big, bearer())),
+      app.request("/v1/chat/completions", post(big, bearer())),
+    ])
+    await one.text()
+    await two.text()
+
+    const ids = upstream.calls.map((call) => call.headers.get(HEADER))
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(ids[1]).toBe(ids[0])
+  })
+
+  test("the client's x-session-id names the conversation: same id kept, a new one is new", async () => {
+    const { app, upstream } = harness({ accounts: [goAccount("a")], responses: [chatReply] })
+    for (const session of ["review-1", "review-1", "review-2"]) {
+      const res = await app.request(
+        "/v1/chat/completions",
+        post(chat("same prompt"), { ...bearer(), "x-session-id": session }),
+      )
+      await res.text()
+    }
+    const ids = upstream.calls.map((call) => call.headers.get(HEADER))
+    expect(ids[1]).toBe(ids[0])
+    expect(ids[2]).not.toBe(ids[0])
+  })
 })

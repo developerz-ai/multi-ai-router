@@ -137,6 +137,10 @@ export function recordFailure(
     case "stale-session":
     case "busy-session":
     case "model-unsupported":
+    // `overloaded` is the provider's shared backend, not this account (prod 2026-11-07: OpenCode
+    // Go's `[overloaded]` `429` cooled both Go seats and the router answered 199 requests `429
+    // quota_exhausted` while neither account was out of anything).
+    case "overloaded":
       return state
 
     // No clock refills a drained balance. No reset instant is recorded, deliberately.
