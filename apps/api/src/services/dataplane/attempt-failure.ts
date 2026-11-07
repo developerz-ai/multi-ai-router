@@ -55,6 +55,21 @@ export function toAttemptFailure(
   }
 }
 
+/**
+ * The reading an attempt carries forward. A `429` is `limited: true` to the stock header parser, but
+ * an `overloaded` one (OpenCode Go's `[overloaded]`) is the provider's shared backend, not this
+ * account's limiter: carried unlimited, so no path that folds it — the chain, Test now, the idle and
+ * recovery probes — cools the account. Its stated wait still reaches the `Retry-After`.
+ */
+export function attemptReading(
+  classification: FailureClassification | null,
+  rateLimit: RateLimitSignal | null,
+): RateLimitSignal | null {
+  const signal = classification?.rateLimit ?? rateLimit
+  if (signal === null || classification?.kind !== "overloaded" || !signal.limited) return signal
+  return { ...signal, limited: false }
+}
+
 export function redactClassification(
   classified: FailureClassification,
   secrets: readonly string[],

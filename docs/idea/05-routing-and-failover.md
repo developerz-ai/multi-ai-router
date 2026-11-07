@@ -653,10 +653,13 @@ attempt cap apply identically to both paths.
 A provider's shared backend answering "busy" — OpenCode Go's `429 … [overloaded] the server is
 overloaded; retry shortly`, Anthropic's `overloaded_error` (`529`), Kimi's `engine_overloaded_error`
 — is its own failure kind, `overloaded`, decided by the provider's rules. It is **retryable and
-blameless**: the breaker never strikes for it, no limiter reading on the same response is folded in,
+blameless**: the breaker never strikes for it, the reading on the same response is carried
+`limited: false` (a `429` is otherwise a limit to the header parser) so no path that folds it — the
+chain, Test now, the idle and recovery probes — cools the account,
 a designated recovery probe that draws one settles `uncertain` (its permit is not spent), and the
 hourly recheck reads it as still cooling. The chain walks the remaining accounts first, with no wait;
-once every one was asked it asks the last again after `ROUTING_OVERLOAD_RETRY_BASE_MS` (default
+once every one was asked it asks the account that last answered `overloaded` again — whatever the
+final account said, so a later seat's own limit cannot decide it — after `ROUTING_OVERLOAD_RETRY_BASE_MS` (default
 1000), doubling, `ROUTING_OVERLOAD_RETRIES` times (default 2; `0` asks no more) — always before a
 byte is on the wire. Still overloaded: the client hears **`503 upstream_overloaded`** with a
 `Retry-After` (the upstream's own when it stated one, else

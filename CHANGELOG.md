@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.52.1] — 2026-11-07
+
+### Fixed
+
+- **A probe that draws Go's overloaded `429` no longer cools the seat.** 2.52.0 skipped the reading only in the chain; the stock header parser reads any `429` as `limited: true`, and Test now, the idle probe and the router's recovery probe fold an attempt's reading as-is, so a probe landing in Go's busy spell cooled a seat that was out of nothing. An `overloaded` attempt now carries its reading `limited: false` (its stated wait still reaches the `Retry-After`). Regression: `apps/api/test/unit/accounts/test-now.test.ts`.
+- **The busy seat is waited out whatever the last seat said.** The overload wait ran only when the *last* account asked answered `overloaded`: seat A overloaded then seat B at its own Go limit stopped the chain and answered `429 quota_exhausted` while A, never cooled, would have served after the wait. The planner now remembers the account that last answered `overloaded` (`FailoverProgress.overloadedAccountId`) and retries that one. Regression: `apps/api/test/integration/opencode-go-overloaded.test.ts`, `apps/api/test/unit/routing/overload.test.ts`.
+
 ## [2.52.0] — 2026-11-07
 
 ### Fixed
@@ -2009,3 +2016,4 @@ your tooling config.
 [2.50.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.50.0
 [2.51.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.51.0
 [2.52.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.0
+[2.52.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.52.1
