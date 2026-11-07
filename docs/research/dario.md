@@ -35,16 +35,19 @@ Source:
 `src/cch.ts` describes a canonical projection before xxHash64: zero the billing checksum,
 blank `model`, remove `max_tokens`, `fallbacks`, and `fallback_credit_token`, then compactly
 serialize. Its historical calibrated seed reproduced **22/22 current `2.1.301` captures**
-when used with that projection. The previous whole-body formula reproduced none.
+when used with that projection. The same seed and projection reproduced **15/15 `2.1.319`
+captures** on 2026-11-07 (print, sdk, conversation, subagent, autocompact). The previous
+whole-body formula reproduced none.
 
 The router diagnostic independently implements this small algorithm using Bun's built-in
 xxHash64; it does not import or execute Dario's implementation. The calibrated version table
-accepts only the current independently checked version. Unknown versions fail verification.
+accepts the independently checked versions `2.1.301` and `2.1.319`; an unknown version fails
+verification rather than guessing a seed.
 
 Dario's production table lists only `2.1.177`. Its comments and uncalibrated-version branch
 assume recent clients omit `cch`. Our current captures contradict that assumption: they carry
 nonzero checksums and the canonical projection reproduces them. Copying its current emission
-policy would therefore lose fidelity for `2.1.301`.
+policy would therefore lose fidelity for `2.1.301` and `2.1.319`.
 
 Source:
 [cch.ts](https://github.com/askalf/dario/blob/4b7482aef0912ae95305bb0e1e6db8f4dded3c8e/src/cch.ts),
@@ -55,8 +58,9 @@ Source:
 Dario's version-suffix helper deliberately uses a stable approximation based on its loaded
 template. That differs from the current CLI's first-user-text sampling. Our read-only inspection
 and private-body comparison reproduced the real suffix from one original user block in all
-17 later TTY/helper bodies checked. Injected system-reminder blocks must be skipped, and a
-compacted summary can become the first user text.
+17 later TTY/helper bodies checked, and again in **15/15 `2.1.319` bodies** on 2026-11-07.
+Injected system-reminder blocks must be skipped, and a compacted summary can become the first
+user text.
 
 Its synthesized billing entrypoint is `sdk-cli`; that is not keyboard TTY's `cli`. Current TTY
 captures also carry prompt/turn positions and conditional origin/linkage fields. Child calls
@@ -85,6 +89,12 @@ Dario also supports tool-name/schema transformation and platform-aware tool cata
 choices are not automatically this router's contract: caller-declared tools execute at the
 client. Copying the host CLI's full built-in catalog into every proxied request would advertise
 capabilities the router must never execute and alter prompt/cache costs.
+
+Do not confuse the schema with `2.1.319`'s `x-claude-code-sandy-plover` header. That header is a
+JSON list of tools **already used in the conversation history**, paired with the
+`tool-provenance-2026-10-26` beta; it is not the available catalog. We derive it from assistant
+`tool_use` blocks, client tools first, capped at 64 entries/7168 bytes, and never from the
+request's `tools` array.
 
 Source:
 [cc-template.ts](https://github.com/askalf/dario/blob/4b7482aef0912ae95305bb0e1e6db8f4dded3c8e/src/cc-template.ts),
@@ -125,6 +135,11 @@ Its streaming code distinguishes errors before a response starts from errors aft
 been sent, and supports cancellation versus optional draining. This router must retain its own
 rule: fail over only before client-visible bytes; promptly cancel a disconnected caller's
 upstream. Do not import a replay-after-stream-start policy or an unconditional drain.
+
+The `2.1.319` client reports `X-Stainless-Package-Version: 0.128.0` and
+`X-Stainless-Runtime-Version: v26.12.1` (up from `v26.3.0` in `2.1.301`). Fast mode sends the
+observed runtime value; it is part of the fingerprint, not a claim that the router runs that
+Node build.
 
 Its pacing/rotation/model-override features are independent behavior changes. Random delays,
 rotating IDs or substituting another model are not established by our successful traces as
