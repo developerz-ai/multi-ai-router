@@ -660,7 +660,8 @@ a designated recovery probe that draws one settles `uncertain` (its permit is no
 hourly recheck reads it as still cooling. The chain walks the remaining accounts first, with no wait;
 once every one was asked it asks the account that last answered `overloaded` again — whatever the
 final account said, so a later seat's own limit cannot decide it — after `ROUTING_OVERLOAD_RETRY_BASE_MS` (default
-1000), doubling, `ROUTING_OVERLOAD_RETRIES` times (default 2; `0` asks no more) — always before a
+1000), doubling, `ROUTING_OVERLOAD_RETRIES` times (default 2; `0` asks no more; its own budget,
+apart from the stale-session replay's, so neither spends the other) — always before a
 byte is on the wire. Still overloaded: the client hears **`503 upstream_overloaded`** with a
 `Retry-After` (the upstream's own when it stated one, else
 `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), never a router-made `429 quota_exhausted`. Prod,

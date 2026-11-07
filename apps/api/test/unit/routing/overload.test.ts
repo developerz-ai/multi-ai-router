@@ -86,10 +86,10 @@ describe("planning after overloaded", () => {
     let progress = recordAttempt(recordAttempt(NO_ATTEMPTS, "a"), "b")
     const first = planNextAttempt(chain, progress, overloaded, options)
     expect(first).toMatchObject({ action: "retry-in-place", delayMs: 1_000 })
-    progress = recordAttempt(progress, "b", true)
+    progress = recordAttempt(progress, "b", "overload")
     const second = planNextAttempt(chain, progress, overloaded, options)
     expect(second).toMatchObject({ action: "retry-in-place", delayMs: 2_000 })
-    progress = recordAttempt(progress, "b", true)
+    progress = recordAttempt(progress, "b", "overload")
     expect(planNextAttempt(chain, progress, overloaded, options)).toMatchObject({ action: "stop" })
   })
 
@@ -125,9 +125,40 @@ describe("planning after overloaded", () => {
     const limited: AttemptFailure = { kind: "rate-limited", message: "Go usage limit exceeded" }
     let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "a"), "a", "overloaded")
     progress = noteOverload(recordAttempt(progress, "b"), "b", "rate-limited")
-    progress = noteOverload(recordAttempt(progress, "a", true), "a", "rate-limited")
+    progress = noteOverload(recordAttempt(progress, "a", "overload"), "a", "rate-limited")
     expect(
       planNextAttempt(chain, progress, limited, { overloadRetries: 2, overloadRetryBaseMs: 1 }),
     ).toMatchObject({ action: "stop" })
+  })
+
+  // Review of #362: overload waits and stale-session replays shared one in-place counter.
+  test("a stale-session replay earlier in the request does not spend the overload budget", () => {
+    let progress = recordAttempt(NO_ATTEMPTS, "a")
+    progress = recordAttempt(progress, "a", "replay")
+    progress = noteOverload(progress, "a", "overloaded")
+    progress = noteOverload(recordAttempt(progress, "b"), "b", "overloaded")
+    const decision = planNextAttempt(chain, progress, overloaded, {
+      overloadRetries: 1,
+      overloadRetryBaseMs: 1_000,
+    })
+    expect(decision).toMatchObject({ action: "retry-in-place", delayMs: 1_000 })
+  })
+
+  test("an overload wait does not spend the stale-session replay", () => {
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "a"), "a", "overloaded")
+    progress = recordAttempt(progress, "a", "overload")
+    const stale: AttemptFailure = { kind: "stale-session", message: "session gone" }
+    expect(planNextAttempt(candidates(account("a")), progress, stale, {})).toMatchObject({
+      action: "retry-in-place",
+    })
+  })
+
+  test("the overload backoff doubles on overload waits only", () => {
+    const options = { overloadRetries: 3, overloadRetryBaseMs: 1_000 }
+    let progress = recordAttempt(recordAttempt(NO_ATTEMPTS, "a"), "a", "replay")
+    progress = recordAttempt(progress, "b")
+    expect(planNextAttempt(chain, progress, overloaded, options)).toMatchObject({ delayMs: 1_000 })
+    progress = recordAttempt(progress, "b", "overload")
+    expect(planNextAttempt(chain, progress, overloaded, options)).toMatchObject({ delayMs: 2_000 })
   })
 })
