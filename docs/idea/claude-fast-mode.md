@@ -1,6 +1,7 @@
 # Claude subscription fast mode
 
-`CLAUDE_FAST_MODE=false` is the default. Set it to `true` to use direct Messages HTTP
+`CLAUDE_FAST_MODE=true` is the default. Set it to `false` to force every Claude
+subscription request through the Agent SDK. Fast mode uses direct Messages HTTP
 for warm Claude subscription inference, avoiding a Claude subprocess for each request.
 This is a router transport setting; it does not select Anthropic's paid fast inference tier.
 
@@ -20,7 +21,7 @@ inference starts. SDK fallback answers that request; the following warm request 
 There is no SDK retry after direct inference begins. Normal router failover remains responsible
 for upstream failures and never retries after response bytes reach the client.
 
-The calibrated profile is CLI `2.1.301`, SDK `0.3.301`, Bun `1.4.4`. A custom CLI override,
+The calibrated profile is CLI `2.1.319`, SDK `0.3.319`, Bun `1.4.4`. A custom CLI override,
 a different Bun version or SDK manifest, or a binary SHA-256 differing from the captured Linux x64
 glibc build disables
 the direct transport at boot and emits a warning. The check accepts the image's staged PATH copy
@@ -61,8 +62,10 @@ Messages response with its refusal stop reason/details; it is not retried as a t
 
 The [wire record](../research/claude-wire.md) distinguishes observed TTY, print, SDK, tool,
 subagent, notification and compaction behavior from reconstruction. The checksum matched 22/22
-private captures. A local CLI/Bun comparison matched ClientHello fingerprints and header order.
-These results do not establish identical production behavior or account-enforcement outcomes.
+private captures for CLI `2.1.301` and 15/15 for CLI `2.1.319` on 2026-11-07, with the same
+per-version seed and suffix algorithm. A local CLI/Bun comparison matched ClientHello fingerprints
+and header order. These results do not establish identical production behavior or
+account-enforcement outcomes.
 The initial RSS observation was about 265 MiB for the CLI process; a controlled router memory/
 latency benchmark across accounts is still required before claiming a measured improvement.
 
@@ -70,8 +73,8 @@ Each infrastructure repository pins the released image and explicitly configures
 `CLAUDE_FAST_MODE`. Publish and verify the image using each repository's normal GitOps process,
 then validate the selected deployment's cache hits, quota headers, tool rounds, truncations and
 concurrent-history behavior. The local MITM/HTTP canary evidence is recorded in the
-[wire research](../research/claude-wire.md#follow-up-mitm-audit-2026-10-16); deployed health and
-inference checks remain necessary after enabling the flag.
+[wire research](../research/claude-wire.md#fast-mode-recalibration-2026-11-07); deployed health
+and inference checks remain necessary after enabling the flag.
 Rollback is `CLAUDE_FAST_MODE=false` and a normal rollout. No credentials need migration.
 
 ## Live direct canary, 2026-10-16

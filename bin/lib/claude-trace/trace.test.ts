@@ -119,6 +119,22 @@ describe("captured CLI integrity projection", () => {
       matches: true,
     })
   })
+  test("calibrates 2.1.319 with the same seed, verified independently in Python", () => {
+    const current = {
+      ...body,
+      system: [
+        {
+          type: "text",
+          text: "x-anthropic-billing-header: cc_version=2.1.319.123; cc_entrypoint=cli; cch=cc697; cc_turn_origin=human;",
+        },
+      ],
+    }
+    expect(inspectIntegrity(JSON.stringify(current))).toMatchObject({
+      expected: "cc697",
+      actual: "cc697",
+      matches: true,
+    })
+  })
   test("routing projection ignores model, output cap and fallback fields, but detects conversation changes", () => {
     expect(
       inspectIntegrity(
@@ -144,6 +160,9 @@ describe("captured CLI integrity projection", () => {
   })
   test("version suffix uses original user text, not inserted context", () => {
     expect(versionSuffix("Remember the marker ORCHID_42. Reply briefly.", "2.1.301")).toBe("e0b")
+    expect(versionSuffix("Remember marker TRACE_42. Reply with only TRACE_OK.", "2.1.319")).toBe(
+      "797",
+    )
   })
 })
 

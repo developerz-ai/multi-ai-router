@@ -11,7 +11,9 @@ from mitmproxy.net import encoding
 ROOT = Path(os.environ['CLAUDE_TRACE_DIR'])
 PRIVATE = os.environ.get('CLAUDE_TRACE_PRIVATE') == '1'
 SAFE_HEADERS = {'accept', 'content-type', 'user-agent', 'anthropic-version',
-                'anthropic-beta', 'x-app', 'anthropic-dangerous-direct-browser-access'}
+                'anthropic-beta', 'x-app', 'anthropic-dangerous-direct-browser-access',
+                # Tool names only: a bounded, comma-joined list used for tool provenance.
+                'x-claude-code-sandy-plover'}
 SAFE_VALUES = {'type', 'role', 'model', 'stop_reason', 'stop_sequence', 'ttl', 'scope',
                'effort', 'display', 'keep', 'service_tier', 'speed', 'status', 'clear_at'}
 LIMIT = 2 * 1024 * 1024

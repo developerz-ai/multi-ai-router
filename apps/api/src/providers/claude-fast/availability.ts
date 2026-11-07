@@ -7,8 +7,8 @@ import { createCliProbe } from "../claude-sdk/cli-probe"
 import { resolveClaudeCli } from "../claude-sdk/resolve-cli"
 import { CLAUDE_FAST_CLI_VERSION } from "./integrity"
 
-// Independently compared with native captures and the SDK manifest (Linux x64/glibc).
-const VERIFIED_BINARY = "bc1aad9982c7b59c7d889ff92595d61cf46e0a6eae074cb551d932a989bcd222"
+// Independently compared with native captures and the SDK 0.3.319 manifest (Linux x64/glibc).
+const VERIFIED_BINARY = "dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"
 
 /** Boot-only calibration check, including the image's staged PATH binary after dependency pruning. */
 export function fastProfileAvailable(cliOverride: string | null): boolean {

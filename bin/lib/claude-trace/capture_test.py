@@ -36,7 +36,8 @@ class CaptureTests(unittest.TestCase):
         request = types.SimpleNamespace(host='api.anthropic.com', method='POST',
             path='/v1/messages?beta=true', query={'beta': 'true'}, http_version='HTTP/1.1',
             headers={'Authorization': 'Bearer private-secret', 'User-Agent': 'claude-cli/test',
-                'X-Claude-Code-Session-Id': 'private-session', 'X-Unknown': 'private-secret'},
+                'X-Claude-Code-Session-Id': 'private-session', 'X-Unknown': 'private-secret',
+                'X-Claude-Code-Sandy-Plover': '[{"name":"Agent"}]'},
             content=json.dumps(body).encode())
         return types.SimpleNamespace(request=request, metadata={},
             response=types.SimpleNamespace(status_code=200, http_version='HTTP/2',
@@ -63,6 +64,7 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(record['chunks'], 3)
         self.assertEqual(record['headers']['x-claude-code-session-id'],
             record['body']['metadata']['user_id']['session_id'])
+        self.assertEqual(record['headers']['x-claude-code-sandy-plover'], '[{"name":"Agent"}]')
         self.assertEqual(record['events'][0]['message']['usage']['cache_read_input_tokens'], 123)
         self.assertNotIn('set-cookie', record['response_headers'])
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)

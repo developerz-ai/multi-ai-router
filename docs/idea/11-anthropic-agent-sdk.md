@@ -1195,7 +1195,7 @@ musl platform package exists (`@anthropic-ai/claude-code-linux-<arch>-musl`). Ei
 belongs on `PATH` as `claude` — a *symlink* or the real executable, never a shell wrapper, which the
 SDK's launcher rejects on some paths — so `claude auth status` and the SDK resolve the same file.
 
-**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned to the exact version `0.3.301` — no caret, no range — whose bundled CLI is 2.1.301; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
+**How our image actually does it, and why it differs.** `@anthropic-ai/claude-agent-sdk` (0.3.220+; pinned to the exact version `0.3.319` — no caret, no range — whose bundled CLI is 2.1.319; the resolution ladder, the security gates, and the `auth login` / `auth status` shapes were re-verified against it)
 ships the same binary as its *own* prebuilt optional dependency
 (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, glibc and musl variants), and its internal
 resolution says so: it fails with "Reinstall `@anthropic-ai/claude-agent-sdk` without

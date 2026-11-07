@@ -61,7 +61,7 @@ from the subprocess environment, which also prevents it from looping back throug
 Every SDK query also sets `verbatimPrompts: true`: client messages stay literal, without CLI
 slash-command dispatch or `@path` host-file expansion. On the shipped CLI this also skips turn-start
 attachments such as MCP resource mentions, nested `CLAUDE.md` files, and skill listings. This option
-requires Claude Code 2.1.248 or newer, including custom CLI overrides; the pinned SDK ships 2.1.301.
+requires Claude Code 2.1.248 or newer, including custom CLI overrides; the pinned SDK ships 2.1.319.
 It does not disable attachments between tool calls, so the independent tool-denial and
 environment-isolation gates remain required.
 The subprocess `cwd` is one **neutral workspace** — `<CLAUDE_CONFIG_ROOT>/workspace`, shared by
@@ -97,10 +97,11 @@ its backups, keep it out of the compose file if your environment offers a secret
 losing it as losing every credential in the router.
 
 **Claude subscriptions have no bearer-token database column.** The SDK owns login and refresh
-inside the selected Account's `CLAUDE_CONFIG_DIR`. By default it also owns inference. With
-`CLAUDE_FAST_MODE=true`, the router reads only that Account's access token, expiry and device/account
-identity under the metadata ownership fence, injects it into one fixed HTTPS Messages endpoint,
-and retains no credential cache. It never follows redirects or forwards client authentication.
+inside the selected Account's `CLAUDE_CONFIG_DIR`. Inference uses fast mode by default
+(`CLAUDE_FAST_MODE=true`); `false` returns inference to the SDK. In fast mode the router reads only
+that Account's access token, expiry and device/account identity under the metadata ownership fence,
+injects it into one fixed HTTPS Messages endpoint, and retains no credential cache. It never follows
+redirects or forwards client authentication.
 Missing/near-expiry credentials fall back to the SDK before inference; raw provider error prose is
 replaced with router-authored errors. Refresh tokens are never independently used or rotated.
 The config-directory volume remains live credential material. See [fast mode](claude-fast-mode.md).
