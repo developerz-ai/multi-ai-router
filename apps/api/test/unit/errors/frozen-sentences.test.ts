@@ -7,14 +7,18 @@
  * that tells developerz.ai, and delete this file once it reads `router` alone.
  *
  * One case per producer of a client-facing wall sentence: `routing/no-candidates.ts`,
- * `providers/failure/router-error.ts` and `dataplane/chain-finish.ts`. Each also pins the detail it now carries beside the words.
+ * `providers/failure/router-error.ts`, `dataplane/chain-finish.ts`, the admin plane
+ * (`services/admin/result.ts`) and the router event that ends a broken stream
+ * (`dataplane/relay-stream-end.ts`). Each also pins the detail it now carries beside the words.
  */
 
 import { describe, expect, test } from "bun:test"
 import type { RouterError } from "@multi-ai-router/core"
 import { routerErrorObject } from "../../../src/errors/router-object"
 import { toRouterError } from "../../../src/providers/failure/router-error"
+import { failureBody } from "../../../src/services/admin"
 import { finishChain } from "../../../src/services/dataplane/chain-finish"
+import { streamEndEvent } from "../../../src/services/dataplane/relay-stream-end"
 import type { RejectedCandidate } from "../../../src/services/routing"
 import { noCandidatesError } from "../../../src/services/routing"
 import { at, NOW } from "../routing/fixtures"
@@ -205,5 +209,81 @@ describe("dataplane/chain-finish.ts — a chain that ran out of candidates", () 
 
   test("nothing could be attempted", () => {
     expect(thrown(null)).toBe("no candidate account could be attempted")
+  })
+})
+
+describe("services/admin/result.ts — an admin refusal", () => {
+  test("keeps its sentence and code, and carries router beside them", () => {
+    expect(
+      failureBody({ status: 404, code: "not_found", message: "pool not found" }, "req-admin"),
+    ).toEqual({
+      error: {
+        message: "pool not found",
+        type: "invalid_request_error",
+        param: null,
+        code: "not_found",
+        router: {
+          wall: "request",
+          scope: "request",
+          retryable: false,
+          reset_at: null,
+          reset_source: null,
+          retry_after_s: null,
+          accounts: [],
+          pools: [],
+          signal: null,
+          attempts: 0,
+          request_id: "req-admin",
+        },
+      },
+    })
+  })
+})
+
+describe("dataplane/relay-stream-end.ts — a stream that broke after its first byte", () => {
+  const facts = { requestId: "req-1", attempt: 2, accountId: "acct-a" }
+
+  test("anthropic: an error event, the upstream's transport fault named", () => {
+    const event = streamEndEvent("anthropic", new Error("reset"), facts)
+    expect(event.startsWith("\n\nevent: error\ndata: ")).toBe(true)
+    const data = JSON.parse(event.slice("\n\nevent: error\ndata: ".length)) as {
+      error: { message: string; router: { wall: string; signal: string; attempts: number } }
+    }
+    expect(data.error.message).toBe(
+      "the upstream stream failed after the response began (upstream_error); not retried, bytes were already sent",
+    )
+    expect(data.error.router).toMatchObject({
+      wall: "capacity",
+      signal: "upstream_error",
+      attempts: 2,
+    })
+  })
+
+  test("openai-chat: an error chunk, then [DONE]", () => {
+    const timeout = new DOMException("silent", "TimeoutError")
+    const event = streamEndEvent("openai-chat", timeout, facts)
+    expect(event.endsWith("\n\ndata: [DONE]\n\n")).toBe(true)
+    const data = JSON.parse(event.slice("\n\ndata: ".length).split("\n")[0] as string) as {
+      error: { message: string; code: string; router: { signal: string } }
+    }
+    expect(data.error.message).toBe(
+      "the upstream stream failed after the response began (upstream_timeout); not retried, bytes were already sent",
+    )
+    expect(data.error.code).toBe("upstream_timeout")
+    expect(data.error.router.signal).toBe("upstream_timeout")
+  })
+
+  test("openai-responses: the Responses error event, router at its top level", () => {
+    const event = streamEndEvent("openai-responses", new Error("reset"), facts)
+    const data = JSON.parse(event.slice("\n\nevent: error\ndata: ".length)) as {
+      type: string
+      code: string
+      router: { wall: string }
+    }
+    expect(data).toMatchObject({
+      type: "error",
+      code: "upstream_error",
+      router: { wall: "capacity" },
+    })
   })
 })

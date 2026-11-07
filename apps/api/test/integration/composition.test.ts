@@ -432,7 +432,16 @@ describe("the build's identity reaches the exposition", () => {
       metrics: { metrics: runtime.metrics, token: env.metricsToken },
     })
 
-    expect((await app.request("/metrics")).status).toBe(401)
+    const refused = await app.request("/metrics")
+    expect(refused.status).toBe(401)
+    // The sentence is unchanged; the router object rides beside it like every other refusal.
+    expect(await refused.json()).toMatchObject({
+      error: {
+        type: "unauthorized",
+        message: "This endpoint requires the metrics token",
+        router: { wall: "request", scope: "request", retryable: false, attempts: 0 },
+      },
+    })
 
     const authorized = await app.request("/metrics", {
       headers: { authorization: "Bearer scrape-me" },

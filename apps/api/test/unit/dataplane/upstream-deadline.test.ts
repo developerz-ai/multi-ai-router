@@ -50,7 +50,12 @@ function manualClock() {
   }
 }
 
-const DEADLINES: StreamDeadlines = { firstByteMs: 1_000, idleMs: 500, totalMs: 10_000 }
+const DEADLINES: StreamDeadlines = {
+  firstByteMs: 1_000,
+  idleMs: 500,
+  totalMs: 10_000,
+  wallHoldMs: 5_000,
+}
 
 function controlledBody() {
   let control!: ReadableStreamDefaultController<Uint8Array>
@@ -89,7 +94,7 @@ describe("upstreamDeadline", () => {
   test("headers stop the first-byte clock; a steady stream outlives the old 600 s bound", async () => {
     const time = manualClock()
     const deadline = upstreamDeadline({
-      stream: { firstByteMs: 1_000, idleMs: 30_000, totalMs: 3_600_000 },
+      stream: { firstByteMs: 1_000, idleMs: 30_000, totalMs: 3_600_000, wallHoldMs: 5_000 },
       clock: time.clock,
     })
     time.advance(900)

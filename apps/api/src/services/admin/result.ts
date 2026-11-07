@@ -1,4 +1,4 @@
-import { type ErrorBody, renderErrorBody } from "../../errors/render"
+import { type ErrorBody, REQUEST_WALL, refusalBody } from "../../errors/render"
 
 /**
  * How an admin service reports a rejection.
@@ -48,8 +48,10 @@ export function conflict(message: string, code = "conflict"): AdminResult<never>
 
 /**
  * The admin plane speaks no provider dialect, so failures render in the OpenAI
- * shape — the same default `errors/render.ts` gives every non-`/v1` path.
+ * shape — the same default `errors/render.ts` gives every non-`/v1` path — with
+ * `error.router` beside the sentence. Every admin failure is a `400`/`404`/`409`:
+ * the request itself is wrong, so its wall is `request`.
  */
-export function failureBody(failure: AdminFailure): ErrorBody {
-  return renderErrorBody(null, failure.status, failure.message, failure.code)
+export function failureBody(failure: AdminFailure, requestId: string | null): ErrorBody {
+  return refusalBody(null, failure.status, failure.message, failure.code, REQUEST_WALL, requestId)
 }

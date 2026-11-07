@@ -62,8 +62,10 @@ describe("router overhead excludes upstream time", () => {
     })
     advance = bench.clock.advance
 
-    const response = await bench.app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
+    // The first event decides the wall peek (`success-wall.ts`), so it is out before the answer.
+    const answered = bench.app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     slow.release(0)
+    const response = await answered
     // The client is reading while the upstream is still generating — the long tail of every real
     // stream, and the part that would swamp the budget if it were counted as router time.
     bench.clock.advance(DRAIN_MS)

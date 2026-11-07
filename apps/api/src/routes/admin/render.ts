@@ -16,6 +16,7 @@ export function render(
   result: AdminResult<unknown>,
   status: ContentfulStatusCode = 200,
 ): Response {
-  if (!result.ok) return c.json(failureBody(result.failure), result.failure.status)
+  if (!result.ok)
+    return c.json(failureBody(result.failure, c.get("requestId") ?? null), result.failure.status)
   return c.json(result.value, status)
 }

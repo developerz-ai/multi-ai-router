@@ -223,7 +223,11 @@ describe("POST /api/admin/auth/login", () => {
     expect(res.status).toBe(401)
     expect(res.headers.get("set-cookie")).toBeNull()
     expect(await res.json()).toMatchObject({
-      error: { message: ADMIN_LOGIN_FAILED_MESSAGE },
+      error: {
+        message: ADMIN_LOGIN_FAILED_MESSAGE,
+        code: "admin_auth_failed",
+        router: { wall: "request", scope: "request", retryable: false, attempts: 0 },
+      },
     })
   })
 
@@ -239,7 +243,15 @@ describe("POST /api/admin/auth/login", () => {
 
   test("a malformed body is a 400 that says nothing about the verdict", async () => {
     const h = await harness({ oidc: false, password: PASSWORD })
-    expect((await postJson(h.app, LOGIN, {})).status).toBe(400)
+    const empty = await postJson(h.app, LOGIN, {})
+    expect(empty.status).toBe(400)
+    expect(await empty.json()).toMatchObject({
+      error: {
+        message: "Invalid request body",
+        code: "invalid_request",
+        router: { wall: "request", scope: "request", retryable: false },
+      },
+    })
     expect((await postJson(h.app, LOGIN, { password: "" })).status).toBe(400)
   })
 
@@ -269,7 +281,15 @@ describe("the per-IP throttle", () => {
     expect(locked.status).toBe(429)
     expect(locked.headers.get("retry-after")).not.toBeNull()
     expect(await locked.json()).toMatchObject({
-      error: { message: ADMIN_LOGIN_FAILED_MESSAGE },
+      error: {
+        message: ADMIN_LOGIN_FAILED_MESSAGE,
+        router: {
+          wall: "clock",
+          scope: "request",
+          retryable: true,
+          retry_after_s: Number(locked.headers.get("retry-after")),
+        },
+      },
     })
 
     // The lockout is clock-served, not a ban.
