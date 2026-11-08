@@ -12,18 +12,18 @@
   "dependencies": {
     "@multi-ai-router/core": "workspace:*",
     "@solidjs/router": "^1.0.0",
-    "@tanstack/solid-query": "^5.104.4",
+    "@tanstack/solid-query": "^5.104.5",
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
     "@babel/core": "^8.0.10",
     "@babel/plugin-syntax-jsx": "^8.0.1",
     "@babel/preset-typescript": "^8.0.7",
-    "@happy-dom/global-registrator": "^21.0.3",
+    "@happy-dom/global-registrator": "^21.0.4",
     "babel-preset-solid": "^1.9.16",
     "esbuild": "^0.28.2",
-    "sass-embedded": "^1.105.2",
-    "vite": "^8.3.4",
+    "sass-embedded": "^1.106.1",
+    "vite": "^8.3.5",
     "vite-plugin-solid": "^2.11.14"
   }
 }

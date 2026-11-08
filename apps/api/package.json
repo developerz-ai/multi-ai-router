@@ -15,7 +15,7 @@
     "@multi-ai-router/core": "workspace:*",
     "@multi-ai-router/db": "workspace:*",
     "@sentry/bun": "^11.10.0",
-    "hono": "^4.13.13",
+    "hono": "^4.13.14",
     "zod": "^4.6.7"
   },
   "devDependencies": {
