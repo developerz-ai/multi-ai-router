@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs"
 import { chmod, mkdir, open, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
+import { cliCommand } from "./cli-command"
 import { availablePort, parse, traceEnv } from "./options"
 
-const HELP = `Usage: bin/claude-trace <tty|print|sdk|conversation|subagents|autocompact|fast> [options]
+const HELP = `Usage: bin/claude-trace <pty|tty|print|sdk|conversation|subagents|autocompact|fast> [options]
        bin/claude-trace analyze <flows.jsonl>
        bin/claude-trace verify-bodies <private-bodies.jsonl>
        bin/claude-trace <versions|update-sdk>
@@ -15,13 +16,25 @@ Live diagnostics, using your Claude login. Never runs as part of CI.
   --private-wire     Also save exact request bodies (private prompts/IDs, never auth headers)
   --cli PATH         Claude executable (default: claude on PATH)
   --port PORT        Loopback proxy port (default: available ephemeral port)
+  --prompt-stdin     Read one prompt from stdin (pty only); otherwise uses a synthetic prompt
 
 Requires bun, python3, uv, and claude. Artifacts: tmp/claude-http/runs/<timestamp>-<mode>/
 TTY scenarios: normal turn, follow-up, /context, /usage, /compact, echo MCP, arithmetic Agent.
+PTY: automated interactive Claude, native system prompt, no -p/SDK, 120s deadline.
+Inherited entrypoint overrides are removed; PTY verifies cc_entrypoint=cli on the wire.
 Only Agent and the synthetic echo MCP are allowed; no shell/filesystem tools.
 See docs/research/claude-wire.md for exact scenarios and interpretation.
 `
-const MODES = ["tty", "print", "sdk", "conversation", "subagents", "autocompact", "fast"] as const
+const MODES = [
+  "pty",
+  "tty",
+  "print",
+  "sdk",
+  "conversation",
+  "subagents",
+  "autocompact",
+  "fast",
+] as const
 type Mode = (typeof MODES)[number]
 
 async function main(): Promise<void> {
@@ -60,10 +73,15 @@ async function main(): Promise<void> {
   }
   if (!MODES.includes(mode as Mode)) throw new Error(`unknown trace mode: ${mode}`)
   const options = parse(args)
+  if (options.promptStdin && mode !== "pty") throw new Error("--prompt-stdin requires pty mode")
   if (!options.model) throw new Error("live traces require --model MODEL")
   if (mode === "fast" && !options.configDir)
     throw new Error("fast requires an explicitly selected --config-dir")
   if (mode === "tty" && !process.stdin.isTTY) throw new Error("tty mode requires a terminal")
+  const prompt = options.promptStdin
+    ? await Bun.stdin.text()
+    : "Remember marker TRACE_42. Reply with only TRACE_OK."
+  if (mode === "pty" && !prompt.trim()) throw new Error("PTY prompt must not be empty")
   for (const binary of ["uv", "python3", options.cli])
     if (!Bun.which(binary)) throw new Error(`missing diagnostic prerequisite: ${binary}`)
   const root = resolve(
@@ -79,6 +97,8 @@ async function main(): Promise<void> {
     mode,
     model: options.model,
     privateWire: options.privateWire,
+    entrypointOverride: null,
+    ...(mode === "pty" ? { input: "interactive-initial-prompt", completion: "Stop-hook" } : {}),
     startedAt: new Date().toISOString(),
     cliVersion: await version([options.cli, "--version"], env),
     sdkVersion: (
@@ -140,14 +160,35 @@ async function main(): Promise<void> {
     env.CLAUDE_TRACE_DIR = root
     env.CLAUDE_TRACE_MODEL = options.model
     env.CLAUDE_TRACE_CLI = options.cli
+    env.CLAUDE_TRACE_PRIVATE = options.privateWire ? "1" : "0"
     const command =
-      mode === "tty" || mode === "print"
-        ? await cliCommand(mode, options.cli, options.model, root)
-        : [
-            "bun",
-            resolve(import.meta.dir, mode === "fast" ? "fast-scenarios.ts" : "sdk-scenarios.ts"),
-            mode,
+      mode === "pty"
+        ? [
+            "python3",
+            resolve(import.meta.dir, "interactive-pty.py"),
+            "--",
+            options.cli,
+            "--model",
+            options.model,
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "",
+            "--",
+            prompt,
           ]
+        : mode === "tty" || mode === "print"
+          ? await cliCommand(mode, options.cli, options.model, root)
+          : [
+              "bun",
+              resolve(import.meta.dir, mode === "fast" ? "fast-scenarios.ts" : "sdk-scenarios.ts"),
+              mode,
+            ]
     child = Bun.spawn(command, {
       cwd: resolve(root, "workspace"),
       env,
@@ -158,6 +199,11 @@ async function main(): Promise<void> {
     const code = await child.exited
     await Bun.sleep(150) // Let the proxy's final response hook flush before shutdown.
     if (code !== 0) throw new Error(`Claude trace exited ${code}; inspect local artifacts`)
+    if (mode === "pty") {
+      const { verifyInteractiveCapture } = await import("./summary")
+      const count = verifyInteractiveCapture(await Bun.file(resolve(root, "flows.jsonl")).text())
+      process.stderr.write(`Verified ${count} interactive Messages request(s): cc_entrypoint=cli\n`)
+    }
   } finally {
     stop()
     await mitm.exited
@@ -201,75 +247,6 @@ async function ready(
     await Bun.sleep(50)
   }
   throw new Error("MITM proxy did not become ready within 60 seconds")
-}
-async function cliCommand(
-  mode: "tty" | "print",
-  cli: string,
-  model: string,
-  root: string,
-): Promise<string[]> {
-  const mcp = resolve(root, "mcp.json")
-  await writeFile(
-    mcp,
-    JSON.stringify({
-      mcpServers: {
-        trace: {
-          command: "bun",
-          args: [resolve(import.meta.dir, "mcp.ts")],
-        },
-      },
-    }),
-    { mode: 0o600 },
-  )
-  const args = [
-    cli,
-    "--model",
-    model,
-    "--setting-sources",
-    "",
-    "--settings",
-    '{"disableAllHooks":true}',
-    "--strict-mcp-config",
-    "--permission-mode",
-    "dontAsk",
-    "--system-prompt",
-    "You are a helpful assistant for a synthetic HTTP trace. Answer briefly.",
-  ]
-  if (mode === "print")
-    return [
-      ...args,
-      "--tools",
-      "",
-      "--mcp-config",
-      '{"mcpServers":{}}',
-      "-p",
-      "Remember marker TRACE_42. Reply with only TRACE_OK.",
-      "--output-format",
-      "json",
-      "--max-turns",
-      "1",
-      "--no-session-persistence",
-    ]
-  return [
-    ...args,
-    "--tools",
-    "Agent",
-    "--allowedTools",
-    "Agent",
-    "mcp__trace__echo_marker",
-    "--mcp-config",
-    mcp,
-    "--agents",
-    JSON.stringify({
-      trace_worker: {
-        description: "Synthetic arithmetic worker with no tools",
-        prompt: "Compute arithmetic. No tools.",
-        tools: [],
-        model,
-        maxTurns: 1,
-      },
-    }),
-  ]
 }
 
 await main().catch((error: unknown) => {

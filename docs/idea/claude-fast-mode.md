@@ -60,6 +60,17 @@ Messages response with its refusal stop reason/details; it is not retried as a t
 
 ## Evidence and rollout
 
+Interactive wire calibration should use `bin/claude-trace pty --model <concrete-model>` or the
+manual `tty` scenario. PTY launches the native interactive CLI, retains its system prompt,
+removes inherited entrypoint overrides, and verifies `cc_entrypoint=cli` in captured requests.
+Use `--prompt-stdin` for a scripted one-turn prompt and `--private-wire` for exact private bodies.
+Print/SDK traces are separate comparison arms. Direct fast inference already emits `cli`;
+SDK fallback can still emit an SDK entrypoint. The entrypoint reports in
+[Claude Code #97074](https://github.com/anthropics/claude-code/issues/97074) motivate checking the
+actual wire label, but do not establish quota parity for this router. See the
+[capture procedure](../research/claude-wire.md#repeat-after-an-sdkcli-update) for startup
+requirements, completion checks and private artifact handling.
+
 The [wire record](../research/claude-wire.md) distinguishes observed TTY, print, SDK, tool,
 subagent, notification and compaction behavior from reconstruction. The checksum matched 22/22
 private captures for CLI `2.1.301` and 15/15 for CLI `2.1.319` on 2026-11-07, with the same

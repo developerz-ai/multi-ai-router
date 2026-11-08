@@ -7,8 +7,13 @@ export function parse(args: string[]) {
   let cli = "claude"
   let port: number | undefined
   let privateWire = false
+  let promptStdin = false
   for (let i = 0; i < args.length; i++) {
     const key = args[i]
+    if (key === "--prompt-stdin") {
+      promptStdin = true
+      continue
+    }
     if (key === "--private-wire") {
       privateWire = true
       continue
@@ -34,7 +39,7 @@ export function parse(args: string[]) {
         throw new Error(`unknown trace option: ${key}`)
     }
   }
-  return { configDir, model, cli, port, privateWire }
+  return { configDir, model, cli, port, privateWire, promptStdin }
 }
 
 export function availablePort(): number {
@@ -48,8 +53,9 @@ export function traceEnv(
   configDir: string | undefined,
   proxy: string,
   root: string,
+  inherited: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-  const env = subprocessEnv({ configDir: configDir ?? "" })
+  const env = subprocessEnv({ configDir: configDir ?? "", inherited })
   for (const key of Object.keys(env))
     if (
       key.startsWith("CLAUDE_") ||

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.54.2] — 2026-11-08
+
+### Added
+
+- **Interactive Claude request capture through a real PTY.** `bin/claude-trace pty --model <model>` starts native Claude without `-p` or the Agent SDK, keeps its system prompt and optionally reads one prompt with `--prompt-stdin`. A run-local Stop hook ends the turn with bounded process cleanup. Inherited entrypoint overrides are removed and captured Messages requests must report `cc_entrypoint=cli`; missing traffic or SDK attribution fails the run. HTTP capture remains redacted by default, with exact bodies and terminal output available only through `--private-wire`. Offline PTY fixtures cover terminal descriptors, hook completion, isolation and timeout cleanup. No production inference behavior changes.
+
 ## [2.54.1] — 2026-11-07
 
 ### Fixed
@@ -2078,3 +2084,5 @@ your tooling config.
 [2.54.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.0
 
 [2.54.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.1
+
+[2.54.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.2
