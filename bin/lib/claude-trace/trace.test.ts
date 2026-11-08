@@ -4,12 +4,38 @@ import { resolve } from "node:path"
 import { inspectIntegrity, versionSuffix } from "./integrity"
 import { parse, traceEnv } from "./options"
 import { sdkInstallCommand, sdkInstallSpec, sdkVersion } from "./sdk-version"
-import { summarizeFlow } from "./summary"
+import { summarizeFlow, verifyInteractiveCapture } from "./summary"
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..")
 const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk"
 
 describe("Claude wire diagnostics (offline)", () => {
+  test("PTY runs the interactive child with terminal descriptors and bounded cleanup", async () => {
+    const child = Bun.spawn(["python3", "-I", resolve(import.meta.dir, "pty_test.py")], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const error = await new Response(child.stderr).text()
+    expect(await child.exited, error).toBe(0)
+  })
+
+  test("interactive verification rejects SDK attribution and empty captures", () => {
+    const capture = (entrypoint: string) =>
+      JSON.stringify({
+        method: "POST",
+        path: "/v1/messages",
+        headers: {},
+        body: {
+          system: [
+            { type: "text", text: `x-anthropic-billing-header: cc_entrypoint=${entrypoint};` },
+          ],
+        },
+      })
+    expect(verifyInteractiveCapture(capture("cli"))).toBe(1)
+    expect(() => verifyInteractiveCapture(capture("sdk-ts"))).toThrow("did not use")
+    expect(() => verifyInteractiveCapture(capture("sdk-cli"))).toThrow("did not use")
+    expect(() => verifyInteractiveCapture("")).toThrow("no Messages")
+  })
   test("collector redacts secrets, excludes token exchange, and forwards streaming chunks unchanged", async () => {
     const child = Bun.spawn(["python3", "-I", resolve(import.meta.dir, "capture_test.py")], {
       stdout: "pipe",
@@ -72,6 +98,7 @@ describe("Claude wire diagnostics (offline)", () => {
     expect(() => parse(["--model"])).toThrow("missing value")
     expect(() => parse(["--unsupported", "x"])).toThrow("unknown trace option")
     expect(parse(["--model", "claude-test", "--private-wire"]).model).toBe("claude-test")
+    expect(parse(["--prompt-stdin"]).promptStdin).toBe(true)
   })
 
   test("trace environment keeps account isolation and does not leak router credentials", () => {
@@ -89,6 +116,13 @@ describe("Claude wire diagnostics (offline)", () => {
     expect(
       traceEnv(undefined, "http://127.0.0.1:18089", "/tmp/trace").CLAUDE_CONFIG_DIR,
     ).toBeUndefined()
+    const nested = traceEnv(undefined, "http://127.0.0.1:18089", "/tmp/trace", {
+      CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
+      CLAUDECODE: "1",
+      PATH: "/usr/bin",
+    })
+    expect(nested.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+    expect(nested.CLAUDECODE).toBeUndefined()
   })
 })
 

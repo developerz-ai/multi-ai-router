@@ -108,3 +108,17 @@ export async function analyze(path: string): Promise<void> {
     }
   }
 }
+
+/** Check observed attribution rather than assuming a PTY implies interactive billing. */
+export function verifyInteractiveCapture(text: string): number {
+  let count = 0
+  for (const line of text.split("\n").filter(Boolean)) {
+    const flow = summarizeFlow(JSON.parse(line))
+    if (flow.path !== "/v1/messages") continue
+    if (!flow.attribution || !/\bcc_entrypoint=cli;/.test(flow.attribution))
+      throw new Error("PTY capture did not use cc_entrypoint=cli; inspect redacted flows")
+    count++
+  }
+  if (!count) throw new Error("PTY capture contains no Messages requests")
+  return count
+}

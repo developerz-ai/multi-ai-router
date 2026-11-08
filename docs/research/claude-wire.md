@@ -44,6 +44,8 @@ never quietly selects a smaller model. Keep the account, tool catalog, settings,
 thinking/effort and cache TTL constant when testing an entrypoint hypothesis.
 
 ```sh
+bin/claude-trace pty --model claude-opus-5-5
+printf '%s\n' 'Remember TRACE_42. Reply briefly.' | bin/claude-trace pty --model claude-opus-5-5 --prompt-stdin
 bin/claude-trace print --model claude-opus-5-5
 bin/claude-trace sdk --model claude-opus-5-5
 bin/claude-trace conversation --model claude-opus-5-5
@@ -53,6 +55,39 @@ bin/claude-trace fast --config-dir /absolute/selected/debug-account --model clau
 bin/claude-trace tty --model claude-opus-5-5
 bin/claude-trace analyze tmp/claude-http/runs/<run>/flows.jsonl
 ```
+
+Prefer `pty` when reverse engineering interactive requests. It launches the regular `claude`
+inside a Python standard-library PTY with terminal stdin/stdout/stderr, using a positional initial
+prompt, never `-p`, `--print`, or the SDK. `--prompt-stdin` reads one complete prompt in the harness;
+Claude itself still sees a terminal. The default is one small synthetic marker prompt. It keeps
+Claude's native system prompt and disables model tools and MCP servers. Only a run-local Stop
+hook is installed to detect completion; no persistent settings are changed. The process group is
+terminated after that hook, or after a 120-second deadline, and reaped on interruption too.
+
+Inherited `CLAUDE_CODE_ENTRYPOINT` and nested-session variables are removed, rather than setting
+an interactive label on a headless process. Successful PTY captures must contain Messages requests
+with observed `cc_entrypoint=cli`; an SDK label or no Messages traffic fails the run. The existing
+`print`/SDK modes remain explicit comparison arms, not interactive calibration evidence.
+`pty-result.json` records completion and cleanup status. Terminal output is discarded by default;
+`--private-wire` additionally saves `private-terminal.log` (0600), which can contain prompts,
+replies, and login details. No login/trust dialog is automatically approved; a blocked startup
+times out with a failure. When launched from a terminal, the driver displays the TUI and forwards
+keyboard input so you can handle startup dialogs yourself (Ctrl-C aborts and restores the
+terminal). With piped stdin, inspect the private terminal log for blocked startup instead.
+
+Research references: [AgentPTY](https://github.com/quietforgelabs/AgentPTY) uses PTYs and hooks for
+turn completion; [claude-tmux](https://github.com/NoahHakansson/claude-tmux) drives the native TUI
+and documents paste/Enter timing; [cctty](https://github.com/Pyiner/cctty) bridges interactive PTY
+sessions to SDK-shaped output. This diagnostic takes the smaller one-turn path: a native initial
+prompt avoids simulated paste and Enter timing, while the MITM records HTTP rather than scraping
+answers from terminal rendering.
+
+The reports in [Claude Code #97074](https://github.com/anthropics/claude-code/issues/97074)
+associate SDK entrypoints with higher subscription quota consumption. Their measured ratios vary
+by account, workload and quota window; a `cli` capture alone does not establish quota parity or
+prove a particular multiplier. Compare token/cache usage and server quota readings on the same
+account and workload. Direct fast mode already emits `cc_entrypoint=cli`; SDK fallback remains
+a separate transport and may use an SDK entrypoint. This diagnostic does not change fallback.
 
 Use `--config-dir /absolute/path` to select one isolated account. Omit it to use the CLI's
 normal login; do not point it at a different directory and expect the same credential lookup.
