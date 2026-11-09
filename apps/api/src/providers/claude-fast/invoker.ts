@@ -7,7 +7,12 @@ import type { FastCredential } from "./credential"
 import { FAST_URL, fastHeaders } from "./profile"
 import { reportFastQuota } from "./quota"
 import { prepareFastRequest, readFastRequest } from "./request"
-import { collectFastResponse, sanitizeFastError, validateFastResponse } from "./response"
+import {
+  collectFastResponse,
+  FastForcedToolUnmet,
+  sanitizeFastError,
+  validateFastResponse,
+} from "./response"
 
 export interface FastInvokerDeps {
   readonly concurrency: SdkConcurrency
@@ -102,7 +107,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
       }
       if (!response.ok) {
         try {
-          return await sanitizeFastError(response, deps.errorMaxBytes)
+          return await sanitizeFastError(response, deps.errorMaxBytes, [credential.accessToken])
         } finally {
           release()
         }
@@ -114,7 +119,13 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
       }
       if (!prepared.streaming) {
         try {
-          return await collectFastResponse(response, input.signal)
+          // A relaxed force (`tool-choice.ts`) is checked on a non-streaming turn only, as on the
+          // Agent-SDK transport: a streaming answer is already the client's as it arrives.
+          return await collectFastResponse(
+            response,
+            input.signal,
+            prepared.forcedTool === "forced-tool",
+          )
         } finally {
           release()
         }
@@ -125,6 +136,8 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
       if (input.signal.aborted) throw input.signal.reason
       // Admission refusal is meaningful to the shared planner; never wrap it as a provider error.
       if (error instanceof UpstreamAdmissionRefused) throw error
+      // A classified refusal, not a transport failure: its sentence is what fails it over.
+      if (error instanceof FastForcedToolUnmet) throw error
       throw new Error("Claude direct HTTP request failed")
     }
   }

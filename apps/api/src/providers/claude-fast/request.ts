@@ -4,6 +4,7 @@ import { scrubSystemPrompt } from "../claude-sdk/scrub"
 import type { FastCredential } from "./credential"
 import { CLAUDE_FAST_CLI_VERSION, stableUuid, stampIntegrity, versionSuffix } from "./integrity"
 import { HUMAN_IDENTITY, SDK_IDENTITY } from "./profile"
+import { adaptFastToolChoice } from "./tool-choice"
 
 const block = z.looseObject({ type: z.string() })
 const request = z.looseObject({
@@ -135,7 +136,7 @@ export function prepareFastRequest(input: {
     { ...(identityBlock ?? { type: "text" }), text: subagent ? SDK_IDENTITY : HUMAN_IDENTITY },
     ...clientSystem,
   ]
-  const body: Record<string, unknown> = {
+  const copied: Record<string, unknown> = {
     model: input.model,
     messages,
     system: outputSystem,
@@ -151,10 +152,13 @@ export function prepareFastRequest(input: {
   }
   // Keep new protocol fields and per-turn instructions instead of flattening them into prose.
   for (const [key, value] of Object.entries(original))
-    if (!Object.hasOwn(body, key) && key !== "stream") body[key] = value
+    if (!Object.hasOwn(copied, key) && key !== "stream") copied[key] = value
+  // After the copy, where `tool_choice`, `thinking` and `output_config` arrive (`tool-choice.ts`).
+  const adaptation = adaptFastToolChoice(copied)
+  const body: Record<string, unknown> = { ...adaptation.body }
   if (
     body.cache_control === undefined &&
-    !hasCacheControl({ system: outputSystem, messages, tools })
+    !hasCacheControl({ system: outputSystem, messages, tools: body.tools })
   ) {
     const cache = { type: "ephemeral", ttl: "1h" }
     const identityEntry = outputSystem[1]
@@ -178,6 +182,8 @@ export function prepareFastRequest(input: {
     promptId: origin || subagent ? promptId : undefined,
     subagent,
     toolNames,
+    /** What the invoker must check on a non-streaming answer; `null` when nothing was adapted. */
+    forcedTool: adaptation.adapted,
   }
 }
 

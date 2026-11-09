@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.55.0] — 2026-11-09
+
+### Fixed
+
+- **Claude subscriptions on the fast transport now serve a forced tool choice** (#370). On 2026-11-08 and 2026-11-09 prod saw Anthropic answer `400` to `tool_choice {type:"tool"}` for `claude-opus-5-5` and `claude-sonnet-5-5` on `anthropic-oauth` fast mode, with or without `thinking`. That broke `/v1/chat/completions` `response_format` too, which travels as the forced `router_structured_output` tool. The same replay showed `tool_choice {type:"auto"}` and native `output_config.format` served on opus-5-5, sonnet-5 and sonnet-5-5. Fast mode now adapts a forced choice before sending (`claude-fast/tool-choice.ts`):
+  - **Forced tool.** `{type:"tool", name}` keeps only that tool, and `{type:"any"}` keeps the declared tools. Both are sent as `{type:"auto"}`, with `disable_parallel_tool_use` kept and the `thinking: disabled` that only permitted the force removed. An undeclared name or a tool-less `any` is still sent as-is and refused.
+  - **Unmet force.** A non-streaming answer that never makes the call fails as `claude-sdk:forced-tool-unmet`: a retryable `502`, with the same sentence and rule as the Agent-SDK transport. Streaming turns are not checked, matching the SDK path.
+  - **`response_format`.** It now travels as `output_config.format` json_schema, merged into any existing `output_config`, with no tools. The JSON comes back as `message.content` with `finish_reason: "stop"`, streaming or not. This happens in the fast transport, not the translator: translation runs before the invoker picks direct HTTP or its SDK fallback, and the SDK path still needs the forced tool.
+
+  Vendor forced-tool handling (MiniMax, z.ai, Kimi, `anthropic-compatible`) and the Agent-SDK transport are unchanged. `docs/idea/claude-fast-mode.md` records the replay and no longer says fast mode preserves the caller's choice.
+- **Fast-path refusals are typed and leave a trail.** A fast-transport `invalid-request` now reaches the client as the router's `InvalidRequestError`, carrying `error.router` (`wall: "request"`, `scope: "account"`, `signal` such as `claude-sdk:api-status-400`) in every dialect. developerz.ai can classify it on `error.router.wall`. For every fast non-2xx, Anthropic's own text reaches the `upstream attempt failed` warn line as `upstreamMessage`, with the selected account's token and pattern-shaped credentials redacted. Clients still receive only the router's sentence.
+
 ## [2.54.2] — 2026-11-08
 
 ### Added
@@ -2086,3 +2098,5 @@ your tooling config.
 [2.54.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.1
 
 [2.54.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.2
+
+[2.55.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.55.0

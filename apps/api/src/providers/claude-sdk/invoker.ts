@@ -9,6 +9,7 @@ import {
   type CredentialRefreshClaim,
 } from "./credential-freshness"
 import { classifySdkFailure } from "./errors"
+import { FORCED_TOOL_UNMET } from "./failure-rules-request"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
 import { type OwnerLaunchFactory, ownedQuery } from "./owned-query"
@@ -281,7 +282,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         ) {
           // The sentence's tail is load-bearing: `errors.ts` matches it to classify this refusal as
           // `server-error` — retryable on another account, never the client's fault.
-          throw new Error("tool_choice forced a tool call, but the turn completed without one")
+          throw new Error(FORCED_TOOL_UNMET)
         }
 
         return response

@@ -152,6 +152,13 @@ export interface AnsweredFailureContext {
    * the transport failure that carries a verdict of its own — see below.
    */
   readonly failureKind?: FailureKind
+  /**
+   * A router-authored verdict the transport reached itself (`AttemptOutcome.verdict`). It wins
+   * over the classification and the body: the fast Claude transport's request refusal, which
+   * `toRouterError` leaves to the relay for every HTTP driver but which there carries only a
+   * router sentence — so it is rendered as the router's own error, with `error.router`.
+   */
+  readonly verdict?: RouterError
 }
 
 /**
@@ -190,6 +197,7 @@ export function answeredFailure(
           // sentence anyone should read in a `429`.
           ...(upstream === null ? { clientMessage: context.clientMessage } : {}),
         }
+  if (context?.verdict !== undefined) return { kind: "router", error: context.verdict }
   const error = classification === null ? null : toRouterError(classification, failure)
   if (error !== null) return { kind: "router", error }
   if (upstream !== null) return { kind: "upstream", upstream, dialect }

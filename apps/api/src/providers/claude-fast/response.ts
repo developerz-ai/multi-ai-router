@@ -1,7 +1,8 @@
 import { z } from "zod"
-import { readErrorBody } from "../../services/dataplane/error-body"
+import { readErrorBody, sanitizeErrorBody } from "../../services/dataplane/error-body"
 import { createSseParser, frameJson } from "../../services/translate/sse/parse"
-import { classifySdkFailure } from "../claude-sdk/errors"
+import { classifySdkFailure, type SdkFailure } from "../claude-sdk/errors"
+import { FORCED_TOOL_UNMET } from "../claude-sdk/failure-rules-request"
 import { createMessageFold } from "../claude-sdk/render/message"
 
 const frame = z.looseObject({
@@ -16,10 +17,23 @@ const message = z.looseObject({
   content: z.array(z.looseObject({ type: z.string() })),
 })
 
+/**
+ * A forced tool the fast transport relaxed to `auto` (`tool-choice.ts`) and the model did not call.
+ * Its own class so the invoker's catch passes it through instead of rewrapping it as a transport
+ * failure; the sentence is the Agent-SDK transport's, so `failure-rules-request.ts` classifies it
+ * as `claude-sdk:forced-tool-unmet` — a retryable `502`.
+ */
+export class FastForcedToolUnmet extends Error {
+  constructor() {
+    super(FORCED_TOOL_UNMET)
+  }
+}
+
 /** Only a non-streaming caller pays for a fold. Streaming callers receive the upstream body. */
 export async function collectFastResponse(
   response: Response,
   signal: AbortSignal,
+  requireToolUse = false,
 ): Promise<Response> {
   const reader = response.body?.getReader()
   if (!reader) return safeError(502, "Claude returned no response body")
@@ -80,16 +94,50 @@ export async function collectFastResponse(
   }
   if (invalid || !started || !stopped || openBlocks.size > 0 || fold.failed())
     return safeError(502, "Claude ended the response before completion")
-  return Response.json(fold.body())
+  const body = fold.body()
+  if (requireToolUse && !hasToolUse(body.content)) throw new FastForcedToolUnmet()
+  return Response.json(body)
 }
 
-/** Provider error prose can echo credentials. Classify privately and expose only router-authored text. */
-export async function sanitizeFastError(response: Response, maxBytes: number): Promise<Response> {
-  const text = await readErrorBody(response, maxBytes)
+function hasToolUse(content: unknown): boolean {
+  return (
+    Array.isArray(content) &&
+    content.some(
+      (block) => typeof block === "object" && block !== null && block.type === "tool_use",
+    )
+  )
+}
+
+/**
+ * Provider error prose can echo credentials. Classify privately and expose only router-authored
+ * text. The classification — whose `message` is the upstream's words with the selected Account's
+ * own token and every pattern-shaped credential redacted — rides beside the Response
+ * ({@link fastFailureOf}) so the attempt log can quote it (`dataplane/attempt-log.ts`) while the
+ * client body stays the router's sentence.
+ */
+export async function sanitizeFastError(
+  response: Response,
+  maxBytes: number,
+  secrets: readonly string[] = [],
+): Promise<Response> {
+  const text = sanitizeErrorBody(await readErrorBody(response, maxBytes), secrets)
   const failure = classifySdkFailure({ message: text, apiErrorStatus: response.status })
   const status =
     failure.classification.kind === "unknown" ? response.status : failure.classification.status
-  return safeError(status, failure.clientMessage, response.headers.get("retry-after"))
+  const safe = safeError(status, failure.clientMessage, response.headers.get("retry-after"))
+  FAST_FAILURES.set(safe, failure)
+  return safe
+}
+
+/**
+ * Keyed weakly by the sanitized Response the invoker returned, so nothing outlives the attempt that
+ * produced it — the pattern of `errors/router-object.ts`'s request facts. The `SdkInvoker` contract
+ * stays a plain `Response`; only the attempt seam (`dataplane/sdk-attempt-response.ts`) reads this.
+ */
+const FAST_FAILURES = new WeakMap<Response, SdkFailure>()
+
+export function fastFailureOf(response: Response): SdkFailure | undefined {
+  return FAST_FAILURES.get(response)
 }
 function safeError(status: number, message: string, retryAfter?: string | null): Response {
   return Response.json(

@@ -41,7 +41,8 @@ still apply. SDK session lineage is disabled for this transport. Account selecti
 request deadlines, usage accounting and quota cooling retain the shared router pipeline.
 
 Tool definitions, names, calls/results, thinking signatures, per-turn system messages and unknown
-protocol fields are preserved. Tools execute at the client; no host tools are added or run.
+protocol fields are preserved, except for a forced tool choice
+([Forced tool choice](#forced-tool-choice)). Tools execute at the client; no host tools are added or run.
 Native attribution preserves subagent markers, task-notification origins, previous-request IDs
 and omitted helper origins. Generic requests receive the captured interactive CLI envelope.
 Session identity is derived from account, router key and client session, so replicas agree and
@@ -98,6 +99,52 @@ were delivered. No host tools or SDK inference were used. This is an invoker can
 end-to-end deployed-router benchmark or a cross-account soak test.
 
 That model rejected `tool_choice: tool`/`any` with 400; automatic choice completed the round trip.
-Fast mode preserves the caller's choice and native upstream validation rather than silently
-changing model capabilities. The separate offline tests cover streaming byte preservation,
-cancellation, truncation, errors, identity isolation and SDK fallback.
+Through 2.54.2 fast mode forwarded the caller's choice anyway. Since 2.55.0 it adapts the choice
+([Forced tool choice](#forced-tool-choice)). The separate offline tests cover streaming byte
+preservation, cancellation, truncation, errors, identity isolation and SDK fallback.
+
+## Forced tool choice
+
+**Evidence.** A prod replay ran on 2026-11-09 against router 2.54.2 through fast mode, with one
+attempt per row, using a key scoped to one subscription account (issue #370, checkpoint 1):
+
+| Request | opus-5-5 | sonnet-5 | sonnet-5-5 |
+|---|---|---|---|
+| `/v1/messages`, `tool_choice {type:"tool"}` + `thinking {type:"disabled"}` | 400 | 200 `tool_use` | 400 |
+| the same without `thinking` | 400 | | |
+| `tool_choice {type:"auto"}` | 200 `tool_use` | 200 | 200 |
+| `output_config.format` json_schema, no tools | 200 JSON text | 200 | 200 |
+| `/v1/chat/completions` + `response_format` json_schema | 400 | 200 | 400 |
+
+The force itself is what is refused, not `thinking`. Every 400 reached the client as "the upstream
+rejected the request as malformed", with no `error.router` and with Anthropic's own text logged
+nowhere.
+
+**Behavior** (`tool-choice.ts`, a pure function `prepareFastRequest` calls after it copies the
+client's fields):
+
+- `{type:"tool", name}` keeps only that tool. `{type:"any"}` keeps every declared tool. Both send
+  `{type:"auto"}` (keeping `disable_parallel_tool_use`) and remove a `thinking {type:"disabled"}`,
+  which only existed to permit the force. Fast mode never adds one.
+- The router's structured-output tool `router_structured_output` (the openai-chat `response_format`
+  carrier, `translate/shared/structured-output-anthropic.ts`), when it is the only tool, is sent as
+  native `output_config.format` `{type:"json_schema", schema}` instead. It is merged into any
+  existing `output_config`, and sent with `tools: []` and no `tool_choice`. The answer is ordinary
+  text, which the openai-chat renderer returns as `message.content`.
+- Unchanged, so the upstream refuses them as before: a forced name the request does not declare,
+  and `any` with no tools. `auto`, `none` and an absent choice are byte-unchanged.
+- A non-streaming answer to a relaxed force with no `tool_use` block fails as
+  `claude-sdk:forced-tool-unmet`: `502`, retryable on another account, the same sentence and rule
+  as the Agent-SDK transport. Streaming answers are not checked, also matching the SDK. On a model
+  that would have honored the force (sonnet-5), that means a streaming turn loses the hard
+  guarantee.
+
+The choice is made here, not at translation. The translator runs before the invoker chooses direct
+HTTP or its SDK fallback, and the SDK transport enforces a forced tool itself (`createPassthrough`).
+Only the vendor `thinkingOnByDefault` drivers keep their own forced-tool handling, and it is
+unchanged.
+
+**Refusals.** A fast-path `invalid-request` reaches the client as the router's
+`InvalidRequestError`, carrying `error.router` with `wall: "request"`, in every dialect. Anthropic's
+text, with the account's token and pattern-shaped credentials redacted, goes only to the attempt
+warn line, as `upstreamMessage`. Other statuses keep their verdict and also log that text.
