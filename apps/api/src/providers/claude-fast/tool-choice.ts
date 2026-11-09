@@ -1,4 +1,5 @@
 import { STRUCTURED_OUTPUT_TOOL } from "../../services/translate/shared/structured-output-anthropic"
+import { nativeStructuredSchema } from "./native-schema"
 
 /**
  * A forced tool choice on the fast transport, adapted to what Claude subscriptions accept.
@@ -11,9 +12,11 @@ import { STRUCTURED_OUTPUT_TOOL } from "../../services/translate/shared/structur
  *   send `{type:"auto"}` (keeping `disable_parallel_tool_use`) and drop a `thinking: disabled`,
  *   which only existed to permit the force. A non-streaming answer is checked for the call by the
  *   invoker, as the Agent-SDK transport does.
- * - The router's own structured-output tool, when it is the only tool, becomes
- *   `output_config.format` json_schema: the answer arrives as text, which the openai-chat
- *   renderer already returns as `message.content`.
+ * - The router's own structured-output tool, when it is the only tool and its schema closes every
+ *   object node (`native-schema.ts`), becomes `output_config.format` json_schema: the answer
+ *   arrives as text, which the openai-chat renderer already returns as `message.content`. Any
+ *   other schema (json_object's bare `{type:"object"}` included) is refused natively, so it stays
+ *   the adapted forced tool above, whose `tool_use` the renderer also returns as content.
  *
  * Decided here rather than at translation: only code that has committed to direct HTTP may drop
  * the force. The translator runs before the invoker picks fast mode or the SDK fallback (cold
@@ -44,7 +47,14 @@ export function adaptFastToolChoice(body: Readonly<Record<string, unknown>>): {
   if (isRecord(body.thinking) && body.thinking.type === "disabled") delete unforced.thinking
 
   const schema = kept[0]?.input_schema
-  if (choice.name === STRUCTURED_OUTPUT_TOOL && declared.length === 1 && isRecord(schema)) {
+  // Native only where Anthropic accepts the schema (`native-schema.ts`); json_object's bare
+  // `{type:"object"}`, or any node leaving `additionalProperties` open, rides the adapted tool.
+  if (
+    choice.name === STRUCTURED_OUTPUT_TOOL &&
+    declared.length === 1 &&
+    isRecord(schema) &&
+    nativeStructuredSchema(schema)
+  ) {
     const existing = isRecord(body.output_config) ? body.output_config : {}
     return {
       body: {

@@ -126,6 +126,25 @@ describe("fast-mode tool choice adaptation (pure)", () => {
     expect(body).not.toHaveProperty("thinking")
   })
 
+  test("a structured-output schema Anthropic would refuse natively stays an adapted forced tool", () => {
+    const loose = {
+      name: STRUCTURED_OUTPUT_TOOL,
+      description: "answer",
+      input_schema: { type: "object" },
+    }
+    const { body, adapted } = adaptFastToolChoice({
+      ...base,
+      tools: [loose],
+      tool_choice: { type: "tool", name: STRUCTURED_OUTPUT_TOOL },
+      thinking: { type: "disabled" },
+    })
+    expect(adapted).toBe("forced-tool")
+    expect(body.tools).toEqual([loose])
+    expect(body.tool_choice).toEqual({ type: "auto" })
+    expect(body).not.toHaveProperty("thinking")
+    expect(body).not.toHaveProperty("output_config")
+  })
+
   test("structured output merges into an existing output_config", () => {
     const { body } = adaptFastToolChoice({
       ...base,

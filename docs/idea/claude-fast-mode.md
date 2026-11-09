@@ -128,9 +128,16 @@ client's fields):
   which only existed to permit the force. Fast mode never adds one.
 - The router's structured-output tool `router_structured_output` (the openai-chat `response_format`
   carrier, `translate/shared/structured-output-anthropic.ts`), when it is the only tool, is sent as
-  native `output_config.format` `{type:"json_schema", schema}` instead. It is merged into any
-  existing `output_config`, and sent with `tools: []` and no `tool_choice`. The answer is ordinary
-  text, which the openai-chat renderer returns as `message.content`.
+  native `output_config.format` `{type:"json_schema", schema}` instead, but only when every object
+  node of the schema states `additionalProperties: false` (`native-schema.ts`: the root and every
+  schema under properties, items, combinators, `$defs`/`definitions` and `additionalProperties`).
+  It is merged into any existing `output_config`, and sent with `tools: []` and no `tool_choice`.
+  The answer is ordinary text, which the openai-chat renderer returns as `message.content`.
+- Any other structured-output schema stays the adapted forced tool from the first bullet. That
+  includes `json_object`, whose schema is a bare `{type:"object"}`. Anthropic refuses such a
+  schema natively: a local 2.55.0 router against a real subscription (claude-opus-5-5, 2026-11-09)
+  got `400` `output_config.format.schema: For 'object' type, 'additionalProperties' must be explicitly set to false`. The tool's `tool_use` input still returns as `message.content` with
+  `finish_reason: "stop"`, and the non-streaming forced-tool-unmet check applies.
 - Unchanged, so the upstream refuses them as before: a forced name the request does not declare,
   and `any` with no tools. `auto`, `none` and an absent choice are byte-unchanged.
 - A non-streaming answer to a relaxed force with no `tool_use` block fails as

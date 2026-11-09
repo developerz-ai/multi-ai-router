@@ -135,6 +135,106 @@ describe("openai-chat response_format on a fast-mode Claude subscription", () =>
   })
 })
 
+const toolWire = [
+  event({
+    type: "message_start",
+    message: {
+      id: "msg_tool",
+      type: "message",
+      role: "assistant",
+      model: "claude-opus-5-5",
+      content: [],
+      usage: { input_tokens: 3 },
+    },
+  }),
+  event({
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "tool_use", id: "toolu_1", name: "router_structured_output", input: {} },
+  }),
+  event({
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "input_json_delta", partial_json: answer },
+  }),
+  event({ type: "content_block_stop", index: 0 }),
+  event({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 4 } }),
+  event({ type: "message_stop" }),
+].join("")
+
+function chatWithJsonObject(stream: boolean): string {
+  return JSON.stringify({
+    model: "claude-opus-5-5",
+    stream,
+    messages: [{ role: "user", content: "answer ok" }],
+    response_format: { type: "json_object" },
+  })
+}
+
+describe("openai-chat json_object on a fast-mode Claude subscription", () => {
+  // Anthropic refuses `output_config.format` {type:"object"}: "For 'object' type,
+  // 'additionalProperties' must be explicitly set to false" (local router vs a real subscription,
+  // 2026-11-09). So json_object rides the adapted forced tool instead.
+  test("sends the adapted tool, not output_config, and returns the tool input as content", async () => {
+    const h = fastRouter(() => sse(toolWire))
+    const response = await h.app.request(
+      "/v1/chat/completions",
+      post(chatWithJsonObject(false), bearer()),
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as {
+      choices: {
+        message: { content: string | null; tool_calls?: unknown }
+        finish_reason: string
+      }[]
+    }
+    expect(JSON.parse(body.choices[0]?.message.content ?? "null")).toEqual(JSON.parse(answer))
+    expect(body.choices[0]?.message.tool_calls).toBeUndefined()
+    expect(body.choices[0]?.finish_reason).toBe("stop")
+    const forwarded = h.sent[0]
+    expect(forwarded).not.toHaveProperty("output_config")
+    expect(forwarded?.tool_choice).toEqual({ type: "auto" })
+    expect(forwarded?.tools).toMatchObject([{ name: "router_structured_output" }])
+    expect(forwarded).not.toHaveProperty("thinking")
+  })
+
+  test("streams the tool input as content and finishes with stop", async () => {
+    const h = fastRouter(() => sse(toolWire))
+    const response = await h.app.request(
+      "/v1/chat/completions",
+      post(chatWithJsonObject(true), bearer()),
+    )
+    expect(response.status).toBe(200)
+    let content = ""
+    const finishes: string[] = []
+    for (const line of (await response.text()).split("\n")) {
+      if (!line.startsWith("data: ") || line === "data: [DONE]") continue
+      const chunk = JSON.parse(line.slice(6)) as {
+        choices?: { delta?: { content?: string; tool_calls?: unknown }; finish_reason?: string }[]
+      }
+      const choice = chunk.choices?.[0]
+      expect(choice?.delta?.tool_calls).toBeUndefined()
+      content += choice?.delta?.content ?? ""
+      if (choice?.finish_reason) finishes.push(choice.finish_reason)
+    }
+    expect(JSON.parse(content)).toEqual(JSON.parse(answer))
+    expect(finishes).toEqual(["stop"])
+    expect(h.sent[0]).not.toHaveProperty("output_config")
+  })
+
+  test("a nonstream answer in plain text fails as forced-tool-unmet", async () => {
+    const h = fastRouter(() => sse(textWire))
+    const response = await h.app.request(
+      "/v1/chat/completions",
+      post(chatWithJsonObject(false), bearer()),
+    )
+    await settle()
+    expect(response.status).toBe(502)
+    const line = h.lines.find((entry) => entry.msg === "upstream attempt failed")
+    expect(line?.signal).toBe("claude-sdk:forced-tool-unmet")
+  })
+})
+
 describe("a fast-mode upstream refusal", () => {
   const said = `tool_choice forced is not supported for this model (account ${TOKEN})`
   const refusal = () =>
