@@ -11,6 +11,13 @@ import { any, pattern, phrase, type SdkRule } from "./failure-rules-vocabulary"
  * Order inside this array is load-bearing, and so is the order this array holds within the composed
  * table: these rows come before every quota and account row.
  */
+/**
+ * Thrown by both Claude transports when a forced tool call never came (`claude-sdk/invoker.ts`,
+ * `claude-fast/response.ts`). Its tail is the phrase the `forced-tool-unmet` row matches.
+ */
+export const FORCED_TOOL_UNMET =
+  "tool_choice forced a tool call, but the turn completed without one"
+
 export const SDK_REQUEST_FAILURE_RULES: readonly SdkRule[] = [
   {
     // The rules that are **not** CLI prose: every sentence here is one of this router's own throws
