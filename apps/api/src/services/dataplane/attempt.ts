@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { Dialect } from "@multi-ai-router/core"
+import type { Dialect, RouterError } from "@multi-ai-router/core"
 import type { FailureClassification, ProviderDriver, RateLimitSignal } from "../../providers"
 import {
   UpstreamAdmissionRefused,
@@ -118,6 +118,17 @@ export type AttemptOutcome =
       readonly rateLimit: RateLimitSignal | null
       /** Present whenever the upstream answered at all. Absent on a connect failure or timeout. */
       readonly upstream: UpstreamError | null
+      /**
+       * The upstream's own words, already scrubbed, for the attempt log when no classification
+       * carries them: the fast Claude transport keeps its verdict status-shaped and still owes the
+       * operator Anthropic's sentence (`sdk-attempt-response.ts`). Never rendered to a client.
+       */
+      readonly upstreamMessage?: string
+      /**
+       * A router-authored verdict the transport decided itself, preferred over `upstream` when the
+       * chain folds this attempt (`chain-error.ts`). The fast transport's own request refusal.
+       */
+      readonly verdict?: RouterError
     }
 
 export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {

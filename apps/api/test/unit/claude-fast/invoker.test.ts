@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { createFastInvoker } from "../../../src/providers/claude-fast/invoker"
 import { reportFastQuota } from "../../../src/providers/claude-fast/quota"
+import { fastFailureOf } from "../../../src/providers/claude-fast/response"
 import { createSdkConcurrency } from "../../../src/providers/claude-sdk/concurrency"
+import { classifySdkFailure } from "../../../src/providers/claude-sdk/errors"
 import type { SdkInvocation } from "../../../src/providers/claude-sdk/invoke"
 
 const credential = {
@@ -304,5 +306,120 @@ describe("Claude fast invoker", () => {
         overageResetsAt: undefined,
       },
     ])
+  })
+})
+
+describe("Claude fast invoker: forced tool choice (#370)", () => {
+  const weather = { name: "weather", input_schema: { type: "object" } }
+  const search = { name: "search", input_schema: { type: "object" } }
+  function forced(stream: boolean): SdkInvocation {
+    return {
+      ...input(stream),
+      model: "claude-opus-5-5",
+      body: Buffer.from(
+        JSON.stringify({
+          model: "claude-opus-5-5",
+          max_tokens: 64,
+          stream,
+          tools: [weather, search],
+          tool_choice: { type: "tool", name: "search" },
+          thinking: { type: "disabled" },
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      ),
+    }
+  }
+  const toolUseWire = [
+    event({
+      type: "message_start",
+      message: {
+        id: "msg_tool",
+        type: "message",
+        role: "assistant",
+        model: "claude-opus-5-5",
+        content: [],
+        usage: { input_tokens: 3 },
+      },
+    }),
+    event({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_1", name: "search", input: {} },
+    }),
+    event({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: '{"q":"x"}' },
+    }),
+    event({ type: "content_block_stop", index: 0 }),
+    event({
+      type: "message_delta",
+      delta: { stop_reason: "tool_use" },
+      usage: { output_tokens: 1 },
+    }),
+    event({ type: "message_stop" }),
+  ].join("")
+
+  test("the forwarded body of an adapted request forces nothing", async () => {
+    const h = setup({ body: toolUseWire })
+    const response = await h.invoke(forced(false))
+    expect(response.status).toBe(200)
+    const sent = JSON.parse((await h.requests[0]?.text()) ?? "{}")
+    expect(sent.tool_choice).toEqual({ type: "auto" })
+    expect(sent.tools).toEqual([search])
+    expect(sent).not.toHaveProperty("thinking")
+    const body = (await response.json()) as { content: { type: string; name?: string }[] }
+    expect(body.content[0]).toMatchObject({ type: "tool_use", name: "search" })
+  })
+
+  test("a nonstream 200 without the forced call fails as forced-tool-unmet", async () => {
+    const h = setup()
+    let thrown: unknown
+    try {
+      await h.invoke(forced(false))
+    } catch (error) {
+      thrown = error
+    }
+    const failure = classifySdkFailure(thrown)
+    expect(failure.classification).toMatchObject({
+      kind: "server-error",
+      status: 502,
+      retryable: true,
+      signal: "claude-sdk:forced-tool-unmet",
+    })
+    expect(h.concurrency.inFlight).toBe(0)
+    expect(h.fallback).toBe(0)
+  })
+
+  test("a streaming adapted request is relayed untouched", async () => {
+    const h = setup()
+    const response = await h.invoke(forced(true))
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe(wire)
+    expect(JSON.parse((await h.requests[0]?.text()) ?? "{}").tool_choice).toEqual({ type: "auto" })
+  })
+
+  test("an upstream 400's scrubbed words reach the failure, never the client body", async () => {
+    const said = `tool_choice forced is not supported with this model; credential ${credential.accessToken}`
+    const h = setup({
+      status: 400,
+      body: JSON.stringify({
+        type: "error",
+        error: { type: "invalid_request_error", message: said },
+      }),
+    })
+    const response = await h.invoke(forced(false))
+    expect(response.status).toBe(400)
+    const client = await response.text()
+    expect(client).not.toContain("tool_choice forced is not supported")
+    expect(client).not.toContain(credential.accessToken)
+    const failure = fastFailureOf(response)
+    expect(failure?.classification).toMatchObject({
+      kind: "invalid-request",
+      status: 400,
+      signal: "claude-sdk:api-status-400",
+    })
+    expect(failure?.classification.message).toContain("tool_choice forced is not supported")
+    expect(failure?.classification.message).not.toContain(credential.accessToken)
   })
 })

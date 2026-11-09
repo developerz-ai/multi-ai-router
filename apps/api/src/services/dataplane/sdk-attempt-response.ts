@@ -1,4 +1,6 @@
+import { InvalidRequestError } from "@multi-ai-router/core"
 import type { RateLimitSignal } from "../../providers"
+import { fastFailureOf } from "../../providers/claude-fast/response"
 import { type AttemptOutcome, failoverKind } from "./attempt"
 import type { SdkAttemptInput } from "./sdk-attempt"
 /**
@@ -62,11 +64,20 @@ export function releasingWith(response: Response, release: () => void): Response
  * A fully-built error Response off the SDK renderer, reshaped into the same outcome an HTTP
  * attempt's error response produces: classified by status, the body kept so the client can still
  * be answered with the upstream's own words when no other candidate serves.
+ *
+ * A fast-transport refusal (`claude-fast/response.ts`) also carries its private classification.
+ * Its scrubbed upstream text goes to the attempt log as `upstreamMessage`. When that classification
+ * is `invalid-request`, the attempt also gets a router verdict: the fast body is only a sentence
+ * the router wrote, so it is rendered as the router's own `InvalidRequestError`, which carries
+ * `error.router` with `wall: "request"`. Every other status keeps its status-shaped verdict
+ * unchanged.
  */
 export async function errorResponseFailure(
   response: Response,
   rateLimit: RateLimitSignal | null,
 ): Promise<AttemptOutcome> {
+  const fast = fastFailureOf(response)
+  const refusal = fast?.classification.kind === "invalid-request" ? fast : undefined
   let bodyText = ""
   try {
     bodyText = await response.text()
@@ -82,7 +93,7 @@ export async function errorResponseFailure(
       // answer where relaying is safe, but this sentence is what a router-shaped error renders.
       message: "the Claude Agent SDK turn ended in an upstream error",
     },
-    classification: null,
+    classification: refusal?.classification ?? null,
     rateLimit,
     upstream: {
       status: response.status,
@@ -90,6 +101,16 @@ export async function errorResponseFailure(
       bodyText,
       contentType: response.headers.get("content-type"),
     },
+    ...(fast?.classification.message === undefined
+      ? {}
+      : { upstreamMessage: fast.classification.message }),
+    ...(refusal === undefined
+      ? {}
+      : {
+          verdict: new InvalidRequestError(refusal.clientMessage, {
+            detail: { scope: "account", signal: refusal.classification.signal },
+          }),
+        }),
   }
 }
 
