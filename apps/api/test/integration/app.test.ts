@@ -57,7 +57,8 @@ describe("GET /healthz", () => {
 
   test("logs one structured line carrying the request id", async () => {
     const { app, lines } = harness()
-    await app.request("/healthz", { headers: { [REQUEST_ID_HEADER]: "req-42" } })
+    // The line is written when the response settles, as a real client's read makes it (01.12).
+    await (await app.request("/healthz", { headers: { [REQUEST_ID_HEADER]: "req-42" } })).text()
 
     const entry: unknown = JSON.parse(lines.at(-1) ?? "{}")
     expect(entry).toMatchObject({

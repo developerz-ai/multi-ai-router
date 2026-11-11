@@ -12,6 +12,7 @@ import {
   resolveWindow,
   usageWindowQuery,
 } from "../../../src/services/usage-read"
+import { composedAggregates } from "./history-fixture"
 
 /**
  * The usage read surface.
@@ -89,6 +90,8 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
     series: async () => [],
     seriesByDimension: async () => [],
     breakdown: async () => [...rows],
+    summaryAggregates: (window, limit, filter, attribution) =>
+      composedAggregates(history, window, limit, filter, attribution),
     exportRows: async () => {
       throw new Error("the summary must not export usage rows")
     },

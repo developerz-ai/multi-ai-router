@@ -278,6 +278,12 @@ Verified procedure:
 5. Compute xxHash64 of those UTF-8 bytes with seed `0x4d659218e32a3268`.
 6. Take the low 20 bits and format as five lowercase hexadecimal characters.
 
+The router's `stampIntegrity` (2.56.x, 101 finding 05.6) assembles the projection and the final
+body around one serialisation of each top-level value instead of calling `JSON.stringify` twice
+over the whole body. The bytes are unchanged: `test/unit/claude-fast/integrity-layout.test.ts`
+keeps the two-pass implementation as its oracle and asserts byte identity, including bodies
+without `model`, with `fallbacks`, `undefined` values and an own `__proto__` key.
+
 The three-hex version suffix was also reproduced from one original user-text block in every
 one of the 17 later private TTY/helper captures checked. Ignoring CLI-injected system-reminder
 blocks matters. After compaction, the first user text can be the summary, so the suffix changes.

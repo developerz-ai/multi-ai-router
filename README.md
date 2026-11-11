@@ -158,7 +158,7 @@ Then open **<http://localhost:8080>** and sign in — **Sign in with SSO**, or t
 | `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | — | Opts out of the boot refusal for a local password on a non-loopback `PUBLIC_URL`. Default off; boot warns while on. |
 | `ADMIN_API_TOKEN` | — | Break-glass bearer for scripts and recovery; separate from browser sign-in. |
 | `ENCRYPTION_KEY` | ✅ | 32 bytes, base64. Boot fails loudly if missing or short. Encrypts upstream credentials and router keys. |
-| `DATABASE_URL` | ✅ | PostgreSQL 16+ connection string. Supplied by the bundled compose file, so you don't set it by hand. |
+| `DATABASE_URL` | ✅ | PostgreSQL 18 connection string (the only major CI tests). Supplied by the bundled compose file, so you don't set it by hand. |
 | `PORT`, `LOG_LEVEL`, `TRUST_PROXY`, `PUBLIC_URL` | — | `PUBLIC_URL` is the router's own public address: the provider-account OAuth callback base, and the base URL the console fills into every client snippet. Set it when the console's own origin is not what an agent machine should call — a port-forward, a tunnel, a private hostname. Falls back to that origin. |
 | `ADMIN_SESSION_*`, `ADMIN_LOGIN_*` | — | Session idle/absolute windows and callback-throttle limits. |
 | `CATALOG_REFRESH_SECONDS`, `KEY_CACHE_*`, `USAGE_*` | — | The request path's staleness and memory bounds. Nothing there queries Postgres, so these decide how fast it learns about a change. |
@@ -454,7 +454,7 @@ Cost comes from a price table shipped with the image and overridable per provide
 | HTTP | Hono |
 | Validation | Zod at every external boundary |
 | ORM | Drizzle |
-| Database | PostgreSQL 16+ via `postgres.js` — concurrent writers, real transactions, JSONB for provider-shaped payloads, and a path to a managed/HA instance |
+| Database | PostgreSQL 18 (the major CI tests and compose ships) via `postgres.js` — concurrent writers, real transactions, JSONB for provider-shaped payloads, and a path to a managed/HA instance |
 | Claude subscriptions | `@anthropic-ai/claude-agent-sdk` + the `claude` CLI in the image, one `CLAUDE_CONFIG_DIR` per account |
 | Frontend | SolidJS + Vite SPA, `@solidjs/router`, SCSS modules, TanStack Solid Query |
 | Lint/format | Biome |

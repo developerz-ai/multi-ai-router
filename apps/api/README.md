@@ -108,7 +108,7 @@ explicitly, before an upstream call, rather than degrading into a lossy approxim
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `DATABASE_URL` | yes | — | PostgreSQL 16+ connection string. The bundled compose file supplies it |
+| `DATABASE_URL` | yes | — | PostgreSQL 18 connection string. The bundled compose file supplies it |
 | `ADMIN_OIDC_ISSUER_URL` | yes | — | Exact OIDC issuer used for discovery and the `iss` check |
 | `ADMIN_OIDC_CLIENT_ID` | yes | — | Client id and expected ID-token audience |
 | `ADMIN_OIDC_CLIENT_SECRET` | no | — | Confidential-client secret; omit only for a public client |

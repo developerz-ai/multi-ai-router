@@ -1,4 +1,13 @@
-import { boolean, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
+import {
+  boolean,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core"
 import { keyOwnerKind, keyScope } from "./enums"
 
 /**
@@ -63,6 +72,9 @@ export const apiKeys = pgTable(
     // is resolved by the constant-time compare, not by the index.
     index("api_keys_prefix_idx").on(table.prefix),
     index("api_keys_revoked_at_idx").on(table.revokedAt),
+    // Names identify keys on the console and in usage reports. The admin service checks under an
+    // advisory lock; this is what holds for every other writer (0045).
+    uniqueIndex("api_keys_name_key").on(table.name),
   ],
 )
 

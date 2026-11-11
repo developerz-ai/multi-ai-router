@@ -15,6 +15,8 @@ export interface RateCard {
   readonly outputPerMtok: number
   readonly cacheReadPerMtok: number
   readonly cacheWritePerMtok: number
+  /** The 1-hour-TTL cache write rate. Absent: the write rate above (an operator override, every non-Anthropic row). */
+  readonly cacheWrite1hPerMtok?: number
 }
 
 /**

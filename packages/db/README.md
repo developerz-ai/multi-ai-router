@@ -120,6 +120,10 @@ until the whole upgrade commits. Order DDL so `CREATE INDEX` (SHARE) comes befor
 `MigrationLockTimeoutError` instead of queueing every later query on the table. No
 `statement_timeout` applies to the migration connection.
 
+A migration whose precondition the data breaks raises SQLSTATE `MR001` with a message naming the
+fix (e.g. duplicate key names before `0045`'s unique index); `runMigrations` surfaces it as
+`MigrationPreconditionError` and nothing is applied.
+
 A failure **fails the boot, loudly** — the entry point writes one structured line naming the
 migrations folder and the error, then exits non-zero. A router answering requests against a schema
 it does not understand is worse than one that is down.

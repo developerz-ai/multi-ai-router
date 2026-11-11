@@ -1,7 +1,7 @@
 import { For, type JSX, Show } from "solid-js"
 import { Banner } from "../../components/Banner"
 import type { AccountView } from "../../lib/api/types"
-import { formatAbsolute } from "../../lib/reset-countdown"
+import { formatAbsolute } from "../../lib/format"
 import {
   describeLoginExpiry,
   listNames,

@@ -18,7 +18,7 @@ import { usageDaily } from "../../src/schema/usage-daily"
 import { usageRecords } from "../../src/schema/usage-records"
 
 /**
- * Needs a real PostgreSQL 16+. A unit test can only lock the SQL a repository
+ * Needs a real PostgreSQL 18. A unit test can only lock the SQL a repository
  * builds; whether `delete … where id in (select … limit n)` actually stops at
  * `n`, and whether `returning` counts what was removed, is a question only the
  * planner answers. Both are load-bearing: the janitor runs these against live

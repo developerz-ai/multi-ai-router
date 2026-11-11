@@ -1,10 +1,12 @@
 import type {
+  UsageColumnDimension,
   UsageDimension,
   UsageFilter,
   UsageHistoryCoverage,
   UsageHistoryRepository,
   UsageKeyAttribution,
   UsageReadRepository,
+  UsageSummaryAggregates,
   UsageWindow,
 } from "@multi-ai-router/db"
 
@@ -66,6 +68,8 @@ export function historyFixture(
     }),
     totals: async (window, filter) => ({ ...(await raw.totals(window, filter)), unpriced }),
     breakdown,
+    summaryAggregates: (window, limit, filter, attribution) =>
+      composedAggregates(history, window, limit, filter, attribution),
     series: (window, bucket, _width, filter) => raw.series(window, bucket, filter),
     seriesByDimension,
     exportRows: async () => [],
@@ -79,4 +83,42 @@ export function historyFixture(
     deleteRetainedHistory: async () => 0,
   }
   return history
+}
+
+const COLUMN_DIMENSIONS: readonly UsageColumnDimension[] = [
+  "apiKeyId",
+  "accountId",
+  "poolId",
+  "model",
+]
+
+/**
+ * `summaryAggregates` as the seven separate reads it replaces, read through `history` at call time
+ * so a test that overrides `totals` or `breakdown` sees the override. The SQL equivalence itself is
+ * packages/db's differential test (`usage-history-summary.test.ts`).
+ */
+export async function composedAggregates(
+  history: Pick<UsageHistoryRepository, "totals" | "breakdown">,
+  window: UsageWindow,
+  limit: number,
+  filter: UsageFilter,
+  attribution: UsageKeyAttribution,
+): Promise<UsageSummaryAggregates> {
+  const [totals, apiKeyId, accountId, poolId, model, owner, tool] = await Promise.all([
+    history.totals(window, filter),
+    ...COLUMN_DIMENSIONS.map((dimension) => history.breakdown(window, dimension, limit, filter)),
+    history.breakdown(window, "owner", limit, filter, attribution),
+    history.breakdown(window, "tool", limit, filter, attribution),
+  ])
+  return {
+    totals,
+    breakdowns: {
+      apiKeyId: apiKeyId ?? [],
+      accountId: accountId ?? [],
+      poolId: poolId ?? [],
+      model: model ?? [],
+      owner: owner ?? [],
+      tool: tool ?? [],
+    },
+  }
 }

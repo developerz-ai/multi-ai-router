@@ -1,6 +1,7 @@
 import type { ProviderId } from "@multi-ai-router/core"
 import type { PriceOverrideRow } from "@multi-ai-router/db"
 import { createSnapshotRefresh } from "../snapshots/refresh"
+import { createJitteredRefreshTimer } from "../snapshots/timer"
 import { lookupRatesByKeys } from "./prices"
 import { type ModelRates, modelLookupKeys, type RateLookupContext } from "./rates"
 
@@ -63,36 +64,26 @@ const EMPTY: Overrides = new Map()
 
 export function createPriceBook(deps: PriceBookDeps): PriceBook {
   const now = deps.now ?? (() => new Date())
-  const jitter = deps.jitter ?? defaultJitter
   let overrides: Overrides = EMPTY
   let loadedAt: Date | null = null
-  let timer: ReturnType<typeof setTimeout> | null = null
   const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (rows) => {
     overrides = index(rows)
     loadedAt = now()
   })
 
-  const schedule = (): void => {
-    timer = setTimeout(() => {
-      // A periodic refresh that throws must not take the process down, and the next tick retries.
-      // The snapshot stays as it was; the failure goes to `onRefreshError`.
-      void refresh().catch((error: unknown) => deps.onRefreshError?.(error))
-      if (timer !== null) schedule()
-    }, jitter(deps.refreshIntervalMs))
-    timer.unref?.()
-  }
+  const timer = createJitteredRefreshTimer({
+    intervalMs: deps.refreshIntervalMs,
+    refresh,
+    ...(deps.onRefreshError === undefined ? {} : { onError: deps.onRefreshError }),
+    ...(deps.jitter === undefined ? {} : { jitter: deps.jitter }),
+  })
 
   return {
     lookup: (provider, model, context) => lookupIndexed(overrides, provider, model, context),
     refresh,
     refreshAfterMutation,
-    start: () => {
-      if (timer === null) schedule()
-    },
-    stop: () => {
-      if (timer !== null) clearTimeout(timer)
-      timer = null
-    },
+    start: timer.start,
+    stop: timer.stop,
     loadedAt: () => loadedAt,
   }
 }
@@ -117,14 +108,6 @@ function index(rows: readonly PriceOverrideRow[]): Overrides {
     byProvider.set(scope, table)
   }
   return byProvider
-}
-
-/**
- * ±20%. Replicas start together — under a fixed interval they would refresh in lockstep for the
- * life of the deployment, turning a cheap query into a synchronised burst.
- */
-function defaultJitter(intervalMs: number): number {
-  return Math.round(intervalMs * (0.8 + Math.random() * 0.4))
 }
 
 function lookupIndexed(

@@ -96,6 +96,16 @@ account-enforcement outcomes.
 The initial RSS observation was about 265 MiB for the CLI process; a controlled router memory/
 latency benchmark across accounts is still required before claiming a measured improvement.
 
+The request builder's own event-loop cost is measured by `bun apps/api/bench/claude-fast.ts`:
+`readFastRequest` + `prepareFastRequest` over synthetic Claude Code histories of 4 KB, 850 KB and
+3 MB. Since 101 finding 05.6 the history is serialised once (the integrity projection and the wire
+body share each top-level value's JSON), the generic prompt id hashes only the human prompts,
+only the mutated last message is copied, content blocks are type-checked in place rather than
+rebuilt, and the `cache_control` walk is skipped when the raw body never names it. Interleaved
+against 2.56.0 on one loaded host (load 7–12), p50 per request fell from 7.0–8.3 ms to 4.5–5.7 ms
+at 850 KB and from 19–23 ms to 13–15 ms at 3 MB, roughly a third. What remains is the one
+`JSON.parse` and the one `JSON.stringify` of the history the wire body needs.
+
 Each infrastructure repository pins the released image and explicitly configures
 `CLAUDE_FAST_MODE`. Publish and verify the image using each repository's normal GitOps process,
 then validate the selected deployment's cache hits, quota headers, tool rounds, truncations and

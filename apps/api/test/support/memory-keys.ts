@@ -1,4 +1,9 @@
-import type { ApiKeyAccountRow, ApiKeyPoolRow, ApiKeyRow } from "@multi-ai-router/db"
+import {
+  type ApiKeyAccountRow,
+  ApiKeyNameTakenError,
+  type ApiKeyPoolRow,
+  type ApiKeyRow,
+} from "@multi-ai-router/db"
 import { drop, replace } from "./memory-row-operations"
 import type { MemoryKeys } from "./memory-store-types"
 
@@ -18,6 +23,8 @@ export function memoryKeys(
 ): MemoryKeys {
   return {
     create: async (input) => {
+      // The unique `api_keys(name)` index (0045), as the repository reports it.
+      if (keys.some((row) => row.name === input.name)) throw new ApiKeyNameTakenError(input.name)
       const row: ApiKeyRow = {
         id: crypto.randomUUID(),
         name: input.name,
@@ -79,7 +86,11 @@ export function memoryKeys(
         })),
     findById: async (id) => keys.find((row) => row.id === id),
     findByName: async (name) => keys.find((row) => row.name === name),
-    update: async (id, patch, now) => replace(keys, id, patch, now),
+    update: async (id, patch, now) => {
+      if (patch.name !== undefined && keys.some((row) => row.name === patch.name && row.id !== id))
+        throw new ApiKeyNameTakenError(patch.name)
+      return replace(keys, id, patch, now)
+    },
     markRevoked: async (id, now) => {
       replace(keys, id, { revoked: true, revokedAt: now }, now)
     },

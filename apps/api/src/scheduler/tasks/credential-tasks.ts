@@ -1,4 +1,4 @@
-import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import type { AccountRepository, AccountSummaryRow } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import { CLI_REFRESH_LEAD_MS } from "../../providers/claude-sdk/credential-freshness"
 import type { CredentialMetadata } from "../../providers/claude-sdk/credential-metadata"
@@ -15,9 +15,12 @@ import { createLoginLifetimeWatchTask } from "./login-lifetime-watch"
  * freshness gate uses; neither is built where that reader is not wired.
  */
 export interface CredentialTaskDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "readEligibleBackgroundAccount">
-  /** Credential metadata for one account's config directory. Never a token. */
-  readonly credentialMetadata?: (account: AccountRow) => Promise<CredentialMetadata>
+  readonly accounts: Pick<
+    AccountRepository,
+    "listSummaries" | "findById" | "readEligibleBackgroundAccount"
+  >
+  /** Credential metadata for one account's config directory, keyed by id. Never a token. */
+  readonly credentialMetadata?: (account: AccountSummaryRow) => Promise<CredentialMetadata>
   /** Last interactive login per account, from the audit log. */
   readonly lastLogins?: LastLoginLookup
   readonly testAccount?: IdleAccountProbeDeps["test"]

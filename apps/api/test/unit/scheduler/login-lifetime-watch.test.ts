@@ -16,6 +16,11 @@ const DAY = 86_400_000
 const ACCESS = "opaque-access-value-watch-41a2"
 const REFRESH = "opaque-refresh-value-watch-77c9"
 
+/** The ciphertext-free projection the task now lists (07.11): no credential field reaches it. */
+function summaryOf({ id, label, provider, status, lastUsedAt, createdAt }: AccountRow) {
+  return { id, label, provider, status, lastUsedAt, createdAt }
+}
+
 function file(refreshTokenExpiresAt: number | null, tokens = true): string {
   return JSON.stringify({
     claudeAiOauth: {
@@ -46,7 +51,7 @@ function harness(
   })
   const asked: string[][] = []
   const task = createLoginLifetimeWatchTask({
-    accounts: { list: async () => [...accounts] },
+    accounts: { listSummaries: async () => accounts.map(summaryOf) },
     readMetadata: (account) => reader.read(`/data/claude/${account.id}`),
     lastLogins: async (ids) => {
       asked.push([...ids])

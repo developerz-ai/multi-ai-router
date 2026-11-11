@@ -32,6 +32,7 @@ export interface Env {
   readonly usageRetryBufferMax: number
   readonly modelListingMaxBytes: number
   readonly upstreamBufferedBodyMaxBytes: number
+  readonly upstreamStreamCapMinSeconds: number
   readonly migrationLockTimeoutMs: number
   readonly accountLastUsedStampIntervalSeconds: number
   readonly usageBackfillFullScanHours: number

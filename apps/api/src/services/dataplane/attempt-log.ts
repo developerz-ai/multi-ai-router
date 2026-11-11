@@ -48,10 +48,13 @@ export function logStreamFailure(
   reasonMaxChars: number,
   /** The transport error that broke the stream, when no frame said why (10.17). */
   cause?: unknown,
+  /** Event types the stream carried, by count — names only (`stream-cap.ts`, 12.8). */
+  eventTypes?: Readonly<Record<string, number>>,
 ): void {
   log?.warn("upstream stream failure", {
     accountId,
     errorClass,
+    ...(eventTypes === undefined ? {} : { eventTypes }),
     upstreamMessage: scrubbedQuote(message, reasonMaxChars),
     ...(cause instanceof Error
       ? { transportError: scrubbedQuote(transportCause(cause), reasonMaxChars) }

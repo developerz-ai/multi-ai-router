@@ -95,8 +95,29 @@ export interface SdkUsage {
   readonly cache_read_input_tokens: number | null
 }
 
+/**
+ * Each SDK chunk is read by the passthrough's early stop, the liveness check and the renderer —
+ * three to five `safeParse`s of one object (101 finding 05.10). The views are pure functions of
+ * the object, so each is parsed once and remembered against it; the weak keys go with the chunk.
+ * The SDK hands over a fresh object per message, and nothing here mutates one.
+ */
+const MESSAGE_VIEWS = new WeakMap<object, SdkMessageView | null>()
+const WIRE_EVENTS = new WeakMap<object, WireEvent | null>()
+
+function memoised<V>(cache: WeakMap<object, V>, value: unknown, read: (value: unknown) => V): V {
+  if (typeof value !== "object" || value === null) return read(value)
+  if (cache.has(value)) return cache.get(value) as V
+  const view = read(value)
+  cache.set(value, view)
+  return view
+}
+
 /** @returns null when the value is not an SDK message at all. The caller skips it. */
 export function readSdkMessage(value: unknown): SdkMessageView | null {
+  return memoised(MESSAGE_VIEWS, value, parseSdkMessage)
+}
+
+function parseSdkMessage(value: unknown): SdkMessageView | null {
   const parsed = sdkMessageSchema.safeParse(value)
   if (!parsed.success) return null
   const data = parsed.data
@@ -174,6 +195,10 @@ export interface WireEvent {
 
 /** @returns null when the payload is not a wire event. Nothing is forwarded for it. */
 export function readWireEvent(value: unknown): WireEvent | null {
+  return memoised(WIRE_EVENTS, value, parseWireEvent)
+}
+
+function parseWireEvent(value: unknown): WireEvent | null {
   const parsed = wireEventSchema.safeParse(value)
   if (!parsed.success) return null
   return {

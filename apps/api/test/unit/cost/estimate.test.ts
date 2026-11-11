@@ -695,3 +695,47 @@ test("six-decimal rounding cannot overflow numeric(14,6)", () => {
     costBasis: "metered",
   })
 })
+
+/**
+ * 07.8: Anthropic bills a 1-hour cache write at 2x input and a 5-minute one at 1.25x; the usage
+ * object states the split (`cache_creation.ephemeral_1h_input_tokens`, typed on `Usage` in
+ * `@anthropic-ai/sdk`). Before this, every write was priced at 1.25x — 1 M 1-hour write tokens on a
+ * $4/MTok model recorded $5.00 for an $8.00 charge.
+ */
+describe("1-hour cache writes", () => {
+  const price = (overrides: Partial<TokenCounts>) =>
+    estimateCost({ provider: "anthropic-api", model: "claude-opus-5-5", tokens: tokens(overrides) })
+
+  test("are priced at twice the input rate", () => {
+    expect(price({ cacheWriteTokens: 1_000_000, cacheWrite1hTokens: 1_000_000 }).costEstimate).toBe(
+      "8.000000",
+    )
+  })
+
+  test("a mixed write prices each part at its own rate", () => {
+    expect(price({ cacheWriteTokens: 2_000_000, cacheWrite1hTokens: 1_000_000 }).costEstimate).toBe(
+      "13.000000",
+    )
+  })
+
+  test("a write with no stated split keeps the 5-minute rate", () => {
+    expect(price({ cacheWriteTokens: 1_000_000 }).costEstimate).toBe("5.000000")
+  })
+
+  test("a card without a 1-hour rate (an operator override) prices the split at the write rate", () => {
+    const override: RateLookup = () => ({
+      inputPerMtok: 4,
+      outputPerMtok: 20,
+      cacheReadPerMtok: 0.4,
+      cacheWritePerMtok: 5,
+    })
+    expect(
+      estimateCost({
+        provider: "anthropic-api",
+        model: "claude-opus-5-5",
+        tokens: tokens({ cacheWriteTokens: 1_000_000, cacheWrite1hTokens: 1_000_000 }),
+        prices: override,
+      }).costEstimate,
+    ).toBe("5.000000")
+  })
+})

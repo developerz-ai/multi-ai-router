@@ -1,6 +1,7 @@
 import type { RoutableAccount, RoutingCatalog } from "../dataplane"
 import type { PoolSnapshot } from "../routing"
 import { createSnapshotRefresh } from "../snapshots/refresh"
+import { createJitteredRefreshTimer } from "../snapshots/timer"
 import type { CatalogData } from "./load"
 
 /**
@@ -72,25 +73,20 @@ const EMPTY: Installed = { data: { accounts: [], pools: [] }, byId: new Map() }
 
 export function createRoutingCatalog(deps: RoutingCatalogStoreDeps): RoutingCatalogStore {
   const now = deps.now ?? (() => new Date())
-  const jitter = deps.jitter ?? defaultJitter
   let installed: Installed = EMPTY
   let loadedAt: Date | null = null
-  let timer: ReturnType<typeof setTimeout> | null = null
   const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (next) => {
     deps.onInstalled?.(next.accounts)
     installed = { data: next, byId: new Map(next.accounts.map((account) => [account.id, account])) }
     loadedAt = now()
   })
 
-  const schedule = (): void => {
-    timer = setTimeout(() => {
-      // Never rethrown: a periodic refresh that throws must not take the process down, and the
-      // next tick retries. The snapshot stays as it was; the failure goes to `onRefreshError`.
-      void refresh().catch((error: unknown) => deps.onRefreshError?.(error))
-      if (timer !== null) schedule()
-    }, jitter(deps.refreshIntervalMs))
-    timer.unref?.()
-  }
+  const timer = createJitteredRefreshTimer({
+    intervalMs: deps.refreshIntervalMs,
+    refresh,
+    ...(deps.onRefreshError === undefined ? {} : { onError: deps.onRefreshError }),
+    ...(deps.jitter === undefined ? {} : { jitter: deps.jitter }),
+  })
 
   return {
     accounts: (): readonly RoutableAccount[] => installed.data.accounts,
@@ -98,22 +94,8 @@ export function createRoutingCatalog(deps: RoutingCatalogStoreDeps): RoutingCata
     account: (id) => installed.byId.get(id),
     refresh,
     refreshAfterMutation,
-    start: () => {
-      if (timer === null) schedule()
-    },
-    stop: () => {
-      if (timer !== null) clearTimeout(timer)
-      timer = null
-    },
+    start: timer.start,
+    stop: timer.stop,
     loadedAt: () => loadedAt,
   }
-}
-
-/**
- * ±20%. Replicas start together — under a fixed interval they would refresh in
- * lockstep for the life of the deployment, turning a cheap query into a
- * synchronised burst.
- */
-function defaultJitter(intervalMs: number): number {
-  return Math.round(intervalMs * (0.8 + Math.random() * 0.4))
 }

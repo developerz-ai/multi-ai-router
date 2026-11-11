@@ -1,6 +1,11 @@
 import type { Logger } from "../../logging/logger"
 import { releasingWith } from "../../services/dataplane/sdk-attempt-response"
+import {
+  createTranslationDropLog,
+  dropReporter,
+} from "../../services/dataplane/translation-drop-log"
 import type { FetchLike } from "../../services/dataplane/types"
+import type { TranslationDrop } from "../../services/translate/shared/drops"
 import type { SdkConcurrency } from "../claude-sdk/concurrency"
 import { CLI_REFRESH_LEAD_MS } from "../claude-sdk/credential-freshness"
 import type { SdkInvocation, SdkInvoker } from "../claude-sdk/invoke"
@@ -42,6 +47,11 @@ export interface FastInvokerDeps {
   readonly nativeSchemaMemoSize?: number
   readonly fetch?: FetchLike
   readonly now?: () => number
+  /**
+   * The `translation dropped fields` warn window (`TRANSLATION_DROP_LOG_WINDOW_SECONDS`), shared
+   * with the translator's own line: one warn per key and drop signature per window, then `debug`.
+   */
+  readonly dropLogWindowMs?: number
   /** Every fallback, for the `claude_fast_fallback_total{reason}` counter. */
   readonly onFallback?: (reason: FastFallbackReason, accountId: string) => void
   /** Warn-once per Account and reason for fallbacks; the transport and native-schema reasons. */
@@ -49,6 +59,8 @@ export interface FastInvokerDeps {
 }
 
 const DEFAULT_NATIVE_SCHEMA_TIMEOUT_MS = 20_000
+/** The drop line's dialect pair: the Anthropic body, reduced to the native schema subset. */
+const NATIVE_SCHEMA_PAIR = { ingress: "anthropic", egress: "claude-native-schema" } as const
 const DEFAULT_NATIVE_SCHEMA_MEMO_SIZE = 512
 
 /** Warm requests perform HTTP only. SDK fallback owns every credential refresh. */
@@ -59,6 +71,11 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
     deps.nativeSchemaMemoSize ?? DEFAULT_NATIVE_SCHEMA_MEMO_SIZE,
   )
   const warned = new Set<string>()
+  const dropLog = createTranslationDropLog({
+    windowMs: deps.dropLogWindowMs,
+    now: deps.now ?? Date.now,
+  })
+  const reportDrops = (keyId: string) => dropReporter(dropLog, deps.logger, keyId)
   const fallback = (input: SdkInvocation, reason: FastFallbackReason) => {
     deps.onFallback?.(reason, input.accountId)
     // A permanent fallback (an identity-less `.claude.json`, an unresolved alias) is otherwise
@@ -99,7 +116,9 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
         return fallback(input, "credential")
       }
       const contextTag = model.endsWith("[1m]")
+      const drops: TranslationDrop[] = []
       const prepare = (native: boolean) => {
+        drops.length = 0
         try {
           return prepareFastRequest({
             request: body,
@@ -112,6 +131,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
               input.clientHeaders?.get("x-claude-code-session-id") ??
               input.configDir,
             nativeStructuredOutput: native,
+            onDrop: (drop) => drops.push(drop),
           })
         } catch (error) {
           // A calibration bug ("uncalibrated Claude request profile", a missing checksum) is the
@@ -127,6 +147,10 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
       let prepared = prepare(true)
       if (prepared?.nativeSchema !== undefined && refusedSchemas.has(prepared.nativeSchema))
         prepared = prepare(false)
+      // Constraints the native schema reduction restated as text: the client's request went out
+      // without them as keywords. Reported only when the reduced schema is what is sent.
+      if (prepared?.nativeSchema !== undefined && drops.length > 0)
+        reportDrops(input.apiKeyId ?? "")(NATIVE_SCHEMA_PAIR, drops)
       if (!prepared) {
         release()
         return fallback(input, "profile")

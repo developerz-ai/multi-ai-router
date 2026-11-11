@@ -47,6 +47,7 @@ export function fixture() {
   let outcomeUnavailable = false
   let catalog: () => Promise<void> = async () => {}
   let clock = 1000
+  let accountReads = 0
   const deps: RecoveryCoordinatorDeps = {
     config: {
       intervalMs: 1000,
@@ -63,7 +64,12 @@ export function fixture() {
     now: () => new Date(clock),
     schedule: () => () => {},
     warn: () => {},
-    accounts: { findById: async () => account },
+    accounts: {
+      findByIds: async (ids) => {
+        accountReads++
+        return ids.includes(account.id) ? [account] : []
+      },
+    },
     refreshCatalogAfterMutation: async () => {
       catalogCalls++
       await catalog()
@@ -136,7 +142,7 @@ export function fixture() {
     installed,
     retired,
     deps,
-    counts: () => ({ issued, committed, catalogCalls }),
+    counts: () => ({ issued, committed, catalogCalls, accountReads }),
     ackLost: () => {
       acknowledgmentLost = true
     },

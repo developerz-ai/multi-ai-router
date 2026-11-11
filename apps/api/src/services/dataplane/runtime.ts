@@ -68,6 +68,8 @@ export interface RuntimeInput {
   readonly recoveryWaitMs?: () => number
   readonly errorMaxBytes?: number
   readonly responseObservationMaxBytes?: number
+  /** `UPSTREAM_STREAM_CAP_MIN_SECONDS` in ms (`stream-cap.ts`). Absent: the module default. */
+  readonly streamCapMinMs?: number
   /** `UPSTREAM_BUFFERED_BODY_MAX_BYTES` (`relay-body-read.ts`). Absent: the module default. */
   readonly bufferedBodyMaxBytes?: number
   /** `MAX_TRANSLATION_SSE_FRAME_BYTES`: one translated SSE frame's ceiling. Absent: unbounded. */

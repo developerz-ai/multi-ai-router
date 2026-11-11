@@ -103,15 +103,18 @@ export interface RequestLoggerOptions {
   readonly quietPaths?: readonly string[]
 }
 
-/**
- * A streamed body is still flowing when this middleware resumes: what it can time is the headers.
- * The line says so under its own name instead of passing time-to-headers off as `durationMs`; the
- * stream's whole lifetime is on the usage record and `router_request_duration_seconds`.
- */
 function isStreamed(response: Response): boolean {
   return response.headers.get("content-type")?.startsWith("text/event-stream") === true
 }
 
+/**
+ * The line is written when the response **settles** — its last byte handed to the socket, or the
+ * client gone — never between the handler returning and the headers going out (01.12): the
+ * redaction and serialisation it costs are then off the time-to-headers path of every request.
+ * Settling also makes `durationMs` honest for a stream, which used to report time-to-headers; a
+ * streamed line carries both. A body nobody reads never settles, so it never logs — which is only
+ * ever a test that did not consume its response.
+ */
 export function requestLogger(
   base: Logger,
   options: RequestLoggerOptions = {},
@@ -129,24 +132,57 @@ export function requestLogger(
 
     const failure = tracked.get(request) ?? null
     tracked.delete(request)
-    const elapsedMs = Math.round(performance.now() - startedAt)
-    const status = c.res.status
-    const timing = isStreamed(c.res)
-      ? { streamed: true, timeToHeadersMs: elapsedMs }
-      : { durationMs: elapsedMs }
-    const common = { method: c.req.method, path: c.req.path, status, ...timing }
-    if (failure === null) {
-      const level = status < 400 && quiet.has(c.req.path) ? "debug" : "info"
-      log[level]("request completed", {
+    const headersMs = Math.round(performance.now() - startedAt)
+    const response = c.res
+    const status = response.status
+    const streamed = isStreamed(response)
+    const method = c.req.method
+    const path = c.req.path
+
+    let written = false
+    const emit = (closedByClient: boolean): void => {
+      if (written) return
+      written = true
+      const durationMs = Math.round(performance.now() - startedAt)
+      const common = {
+        method,
+        path,
+        status,
+        durationMs,
+        ...(streamed ? { streamed: true, timeToHeadersMs: headersMs } : {}),
+        ...(closedByClient ? { closedByClient: true } : {}),
+      }
+      if (failure === null) {
+        const level = status < 400 && quiet.has(path) ? "debug" : "info"
+        log[level]("request completed", {
+          ...common,
+          ...headerContext(request.headers, LOGGED_HEADERS),
+        })
+        return
+      }
+      log[failure.level]("request failed", {
         ...common,
-        ...headerContext(request.headers, LOGGED_HEADERS),
+        ...failureContext(request.headers),
+        ...failure.fields,
       })
+    }
+
+    if (response.body === null) {
+      emit(false)
       return
     }
-    log[failure.level]("request failed", {
-      ...common,
-      ...failureContext(request.headers),
-      ...failure.fields,
-    })
+    c.res = new Response(
+      response.body.pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) {
+            controller.enqueue(chunk)
+          },
+          flush: () => emit(false),
+          // Bun cancels the body when the client goes away mid-response.
+          cancel: () => emit(true),
+        } as Transformer<Uint8Array, Uint8Array>),
+      ),
+      response,
+    )
   }
 }

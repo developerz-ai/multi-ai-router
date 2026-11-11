@@ -14,7 +14,7 @@ import { usageRecords } from "../../src/schema/usage-records"
 import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * The aggregate readers — `totals`, `breakdown`, `series`, `seriesByDimension`, `latency` — are
  * built from raw fragments no unit test can execute: `percentile_disc ... within group`, filtered

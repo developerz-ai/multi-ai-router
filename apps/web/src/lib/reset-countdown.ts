@@ -145,14 +145,3 @@ export function describeInstant(
   const countdown = formatDuration(remaining)
   return { kind: "countdown", countdown, text: `in ${countdown}`, qualifier }
 }
-
-/**
- * The absolute half of the pair. Reset is always shown as absolute time *and*
- * countdown; the locale and zone stay the viewer's.
- */
-export function formatAbsolute(epochMs: number, locale?: string): string {
-  return new Date(epochMs).toLocaleString(locale, {
-    dateStyle: "short",
-    timeStyle: "short",
-  })
-}

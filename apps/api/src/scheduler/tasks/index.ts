@@ -71,6 +71,7 @@ export interface ScheduledTaskDeps
     AccountRepository,
     | "list"
     | "listSummaries"
+    | "findById"
     | "listIds"
     | "listQuotaWindows"
     | "clearObservedQuotaWindow"

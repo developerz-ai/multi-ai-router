@@ -12,7 +12,7 @@ import { usageRecords } from "../../src/schema/usage-records"
 import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * `tokensSince` is the one query in this repository that is **hand-written SQL over a VALUES join**
  * rather than composed by the query builder, and it exists to answer a question the builder cannot:

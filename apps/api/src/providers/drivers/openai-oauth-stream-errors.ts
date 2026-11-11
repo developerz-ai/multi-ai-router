@@ -1,5 +1,9 @@
 import { isRetryableFailureKind } from "../failure/classify"
-import type { FailureClassification, UpstreamFailureKind } from "../types"
+import type {
+  FailureClassification,
+  ResponseObservationDescriptor,
+  UpstreamFailureKind,
+} from "../types"
 
 /**
  * Classifies a Codex error that arrives **inside** an HTTP 200 Responses stream — a
@@ -181,4 +185,22 @@ function describeSilent(
     status === undefined ? undefined : `status=${status}`,
   ].filter((part) => part !== undefined)
   return `${type} carried no message${parts.length === 0 ? "" : ` (${parts.join(", ")})`}`
+}
+
+/**
+ * The Codex driver's response observation. In-stream Codex Responses events — `response.failed`
+ * and bare `error` events — are classified here, NOT in the HTTP `rules` array: a request-shaped
+ * refusal in a 200 stream must not strike the breaker; an in-stream rate limit / deactivated code
+ * must (`docs/idea/05-routing-and-failover.md`).
+ *
+ * `streamCap`: the Codex backend drops a Responses stream at about fifteen minutes with no
+ * `response.completed` and no error frame. Provenance: tesote production, 119 attempts over 14 d
+ * ending at 895–905 s (http 200, streamed, tokens_out 0 — usage only arrives in the completed
+ * frame); no router or edge clock is 900 s (plan 101, 12.8). Blast radius: only the label of an
+ * already-failed attempt.
+ */
+export const CODEX_RESPONSE_OBSERVATION: ResponseObservationDescriptor = {
+  terminalPolicy: "evidence-only",
+  inspectPayload: inspectCodexStreamFrame,
+  streamCap: { signal: "codex:stream-cap" },
 }

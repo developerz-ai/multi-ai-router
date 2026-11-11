@@ -1,7 +1,7 @@
 import { Show } from "solid-js"
 import type { AccountView } from "../../lib/api/types"
 import { cx } from "../../lib/cx"
-import { formatAbsolute } from "../../lib/reset-countdown"
+import { formatAbsolute } from "../../lib/format"
 import {
   credentialOf,
   describeLoginExpiry,

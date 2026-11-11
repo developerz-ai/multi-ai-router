@@ -49,7 +49,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 | HTTP | Hono |
 | Validation | Zod at every external boundary (requests, env, provider responses) |
 | ORM | Drizzle |
-| Database | PostgreSQL 16+ via `postgres.js` (not node-postgres) |
+| Database | PostgreSQL 18 (the only major CI tests) via `postgres.js` (not node-postgres) |
 | Claude subscriptions | `@anthropic-ai/claude-agent-sdk` — the `claude` CLI ships in the image; one `CLAUDE_CONFIG_DIR` per Account on a persistent volume |
 | Frontend | SolidJS + Vite SPA, `@solidjs/router`, SCSS modules + CSS custom properties |
 | Server state | TanStack Solid Query |

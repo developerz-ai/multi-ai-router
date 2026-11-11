@@ -9,7 +9,7 @@ import {
 import { type AdminSessionRow, adminSessions } from "../../src/schema/admin-sessions"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * Only a live database proves the `ON CONFLICT` slide touches exactly the two
  * columns it claims to, that the bounded purge honours both expiry bounds and

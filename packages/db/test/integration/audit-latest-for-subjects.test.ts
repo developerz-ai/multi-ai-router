@@ -9,7 +9,7 @@ import {
 import { auditEvents } from "../../src/schema/audit-events"
 
 /**
- * Needs a real PostgreSQL 16+. `latestForSubjects` is the one-query read behind a subscription's
+ * Needs a real PostgreSQL 18. `latestForSubjects` is the one-query read behind a subscription's
  * estimated login lifetime: newest matching event per subject, observer events (`detail.source`)
  * excluded. A grouped `max` and a `jsonb_exists` predicate are exactly what a unit test cannot bind.
  */

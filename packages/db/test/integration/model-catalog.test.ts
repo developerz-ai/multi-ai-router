@@ -13,7 +13,7 @@ import {
 import { accounts } from "../../src/schema/accounts"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * Three things here cannot be proved against a stub, and one of them has already bitten this
  * repository once: a hand-written statement that every caller was tested against a mock of turned

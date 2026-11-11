@@ -13,7 +13,7 @@ import { createUsageRecordRepository } from "../../src/repositories/usage-reposi
 import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
- * Needs a real PostgreSQL 16+. CI always sets `DATABASE_URL` and `bin/check`
+ * Needs a real PostgreSQL 18. CI always sets `DATABASE_URL` and `bin/check`
  * refuses to run without one, so this can only skip on a deliberately
  * database-less `bin/test` — which names the gap on its way out. It never talks
  * to a provider, only to the database.

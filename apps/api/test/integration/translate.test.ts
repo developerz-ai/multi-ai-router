@@ -421,6 +421,8 @@ describe("a Claude Code turn on translate egress", () => {
     const res = await app.request("/v1/messages", post(noMessages, bearer()))
 
     expect(res.status).toBe(400)
+    // The transport line is written when the response settles (01.12).
+    await res.text()
     const line = lines.find((entry) => entry.msg === "request failed")
     expect(line?.errorCode).toBe("translation_failed")
     expect(String(line?.error)).toContain("messages")

@@ -23,8 +23,9 @@ import type { ModelTable, RateCard } from "../rates"
  * 0.1x". So it is a parameter, defaulted to the standard and stated only on the rows the vendor
  * footnotes — the write multiple is still 1.25x on every row.
  *
- * A response never says which cache TTL was written, so the 5-minute default is assumed: a workload
- * built on 1-hour caching reads slightly low on cache writes, and is never over-reported.
+ * The response states the TTL split (`usage.cache_creation.ephemeral_1h_input_tokens`, typed on
+ * `Usage.cache_creation` in `@anthropic-ai/sdk`), so a 1-hour write is priced at 2x; a write with no
+ * stated split is priced at the 5-minute rate, which reads low rather than high.
  */
 function anthropicRates(
   inputPerMtok: number,
@@ -40,6 +41,7 @@ function anthropicRates(
     // published Anthropic figure, including the $0.025 and $0.3125 on Claude 3 Haiku.
     cacheReadPerMtok: Math.round(inputPerMtok * cacheReadMultiple * 10_000) / 10_000,
     cacheWritePerMtok: Math.round(inputPerMtok * 1.25 * 10_000) / 10_000,
+    cacheWrite1hPerMtok: Math.round(inputPerMtok * 2 * 10_000) / 10_000,
   }
 }
 

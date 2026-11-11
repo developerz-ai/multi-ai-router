@@ -27,18 +27,47 @@ export function stampIntegrity(body: Record<string, unknown>, version: string): 
     throw new Error("missing Claude request checksum")
   const text = block.text.replace(TOKEN, "cch=00000;")
   const system = blocks.map((entry, at) => (at === index ? { ...entry, text } : entry))
-  const projection: Record<string, unknown> = { ...body, system, model: "" }
-  delete projection.max_tokens
-  delete projection.fallbacks
-  delete projection.fallback_credit_token
-  const checksum = (Bun.hash.xxHash64(JSON.stringify(projection), seed) & 0xfffffn)
+  // The projection and the final body differ only in `system`, `model` and the dropped keys, so
+  // every other top-level value is serialised once and the two documents are assembled around it
+  // (101 finding 05.6). The byte layout is exactly `JSON.stringify` of
+  // `{ ...body, system, model: "" }` minus the dropped keys, and of `{ ...body, system: stamped }`.
+  const parts = new Map<string, string>()
+  for (const [key, value] of Object.entries(body)) {
+    if (key === "system") continue
+    const json = JSON.stringify(value)
+    if (json !== undefined) parts.set(key, json)
+  }
+  const assemble = (systemJson: string, projection: boolean): string => {
+    const members: string[] = []
+    const emit = (key: string, json: string) => members.push(`${JSON.stringify(key)}:${json}`)
+    for (const key of Object.keys(body)) {
+      if (key === "system") emit(key, systemJson)
+      else if (projection && key === "model") emit(key, '""')
+      else if (projection && PROJECTION_DROPS.has(key)) continue
+      else {
+        const json = parts.get(key)
+        if (json !== undefined) emit(key, json)
+      }
+    }
+    if (!Object.hasOwn(body, "system")) emit("system", systemJson)
+    if (projection && !Object.hasOwn(body, "model")) emit("model", '""')
+    return `{${members.join(",")}}`
+  }
+  const checksum = (Bun.hash.xxHash64(assemble(JSON.stringify(system), true), seed) & 0xfffffn)
     .toString(16)
     .padStart(5, "0")
   const stamped = system.map((entry, at) =>
     at === index ? { ...entry, text: text.replace(TOKEN, `cch=${checksum};`) } : entry,
   )
-  return JSON.stringify({ ...body, system: stamped })
+  return assemble(JSON.stringify(stamped), false)
 }
+
+/** Keys the checksum projection leaves out. */
+const PROJECTION_DROPS: ReadonlySet<string> = new Set([
+  "max_tokens",
+  "fallbacks",
+  "fallback_credit_token",
+])
 
 export function inspectIntegrity(bodyText: string) {
   const body = record.parse(JSON.parse(bodyText))

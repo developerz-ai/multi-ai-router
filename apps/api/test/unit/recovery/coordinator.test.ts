@@ -294,3 +294,14 @@ test("a poisoned automatic request does not block permit exposure behind it", as
   expect(begins).toBe(5)
   expect(warned.some((message) => message.includes("dropped"))).toBe(true)
 })
+
+// Plan 101, 03.11: each issued and each pending row read its account separately, and a freshly
+// issued permit read it again to expose it.
+test("issuing and exposing a demanded permit reads its account once", async () => {
+  const f = fixture()
+  f.coordinator.demand("account")
+  await f.coordinator.tick()
+  expect(f.counts().issued).toBe(1)
+  expect(f.installed).toHaveLength(1)
+  expect(f.counts().accountReads).toBe(1)
+})

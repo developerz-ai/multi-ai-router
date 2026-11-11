@@ -14,6 +14,7 @@ import {
   historySource,
   historySums,
 } from "./usage-history-source"
+import { readSummaryAggregates } from "./usage-history-summary"
 import type { UsageHistoryCoverage, UsageHistoryRepository } from "./usage-history-types"
 import {
   createUsageReadRepository,
@@ -235,6 +236,8 @@ function historyRepository(
     coverage,
     totals,
     breakdown,
+    summaryAggregates: (window, limit, filter, attribution) =>
+      readSummaryAggregates(read, window, limit, filter, attribution),
     exportRows: (window, filter, limit) => readUsageExportRows(db, window, filter, limit),
     weekRows: (window, ceiling) => readUsageWeekRows(db, window, ceiling),
     series: (window, bucket, width, filter) =>

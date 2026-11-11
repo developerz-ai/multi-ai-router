@@ -10,7 +10,7 @@ import {
 import { type AdminCredentialRow, adminCredentials } from "../../src/schema/admin-credentials"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * The proxy-driver unit test proves the SQL shape; only a live database proves
  * the `ON CONFLICT` actually replaces (the recovery path depends on it), that

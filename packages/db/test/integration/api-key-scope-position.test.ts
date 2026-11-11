@@ -5,7 +5,7 @@ import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 /**
  * Migration 0034 gives `api_key_pools` the listed order it always promised and
  * never stored. What has to survive the crossing is examined here against a real
- * PostgreSQL 16+: the backfill recovers each key's *today* order from physical
+ * PostgreSQL 18: the backfill recovers each key's *today* order from physical
  * row order, and the column's DEFAULT keeps the previous release image's INSERT
  * — the one that omits `position` — working after the migration (and therefore
  * through a rollback). Own database, dropped afterwards; a shared development

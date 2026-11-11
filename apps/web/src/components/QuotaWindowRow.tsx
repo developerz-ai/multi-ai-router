@@ -1,14 +1,18 @@
-import { createMemo, Show } from "solid-js"
-import type { QuotaWindowDisplay } from "../lib/quota-windows"
+import { Show } from "solid-js"
+import { formatAbsolute } from "../lib/format"
+import type { QuotaWindowReset, QuotaWindowStatic } from "../lib/quota-windows"
 import { quotaWindowTone } from "../lib/quota-windows"
-import { formatAbsolute, type ResetQualifier } from "../lib/reset-countdown"
+import type { ResetQualifier } from "../lib/reset-countdown"
 import { Badge, type BadgeTone } from "./Badge"
 import { QuotaGauge } from "./QuotaGauge"
 import styles from "./QuotaWindowRow.module.scss"
 import { Sparkline } from "./Sparkline"
 
 export interface QuotaWindowRowProps {
-  readonly window: QuotaWindowDisplay
+  /** Changes with the window's data only — the gauge, notes and series hang off this. */
+  readonly window: QuotaWindowStatic
+  /** Changes with the clock — only the reset text and the instant beside it read this. */
+  readonly reset: QuotaWindowReset
   /** Names the gauge for assistive tech — the account label, so two rows are distinguishable. */
   readonly owner: string
 }
@@ -27,10 +31,6 @@ export interface QuotaWindowRowProps {
  */
 export function QuotaWindowRow(props: QuotaWindowRowProps) {
   const window = () => props.window
-  // The description is rebuilt on every clock tick for its countdown text, but the series is the
-  // server's own array. A memo on the reference keeps the sparkline's path from being recomputed
-  // every second for every window on the screen.
-  const series = createMemo(() => window().tokenSeries)
 
   return (
     <li class={styles.row} data-spent={window().spent ? "true" : "false"}>
@@ -55,25 +55,25 @@ export function QuotaWindowRow(props: QuotaWindowRowProps) {
         It earns its space by answering what the bar cannot: two windows both two-thirds spent
         look identical until one of them shows the whole two-thirds went in the first hour.
       */}
-      <Show when={series().length > 0}>
+      <Show when={window().tokenSeries.length > 0}>
         <span
           class={styles.trend}
           title="Tokens this router recorded across the window's span, oldest first. Same measurement as the bar — these slices are what it sums."
         >
           <Sparkline
             label={`${props.owner}, ${window().title} consumption over the window`}
-            points={series()}
+            points={window().tokenSeries}
           />
         </span>
       </Show>
 
       <span class={styles.reset}>
-        <span class={window().reset.kind === "needs_topup" ? styles.topUp : styles.text}>
-          {window().reset.text}
+        <span class={props.reset.reset.kind === "needs_topup" ? styles.topUp : styles.text}>
+          {props.reset.reset.text}
         </span>
 
-        <Show when={window().resetsAtMs !== null}>
-          <span class={styles.absolute}>{formatAbsolute(window().resetsAtMs ?? 0)}</span>
+        <Show when={props.reset.resetsAtMs !== null}>
+          <span class={styles.absolute}>{formatAbsolute(props.reset.resetsAtMs ?? 0)}</span>
         </Show>
 
         <Badge

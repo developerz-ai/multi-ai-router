@@ -137,7 +137,7 @@ approximated. See [00-overview.md](00-overview.md) for the product boundary and
 | usage | Usage records, rollups, metrics exposition | `apps/api/src/services/usage/**` |
 | cost | The shipped price table (one file per vendor), the operator's warm override book, and the pure pricing arithmetic | `apps/api/src/services/cost/**` |
 | scheduler | Every periodic task: jittered in-process interval timers, Postgres advisory-lock leader election, retention sweeps, usage rollup, OAuth-state purge, last-run/outcome recording | `apps/api/src/scheduler/**` |
-| db | Drizzle schema over **PostgreSQL 16+** (postgres.js), migrations, repositories — the only place with SQL | `packages/db/**` |
+| db | Drizzle schema over **PostgreSQL 18** (postgres.js), migrations, repositories — the only place with SQL | `packages/db/**` |
 | config | Zod-validated env, retention knobs, shared types and errors | `packages/core/**`, `apps/api/src/config/**` |
 
 Everything is wired together in `apps/api/src/composition.ts` — see
@@ -177,7 +177,7 @@ committing. Never write an ad-hoc invocation where a wrapper exists.
 5. **Transport is the only layer that touches Hono.** No service, driver, or repository imports the
    web framework or sees a `Context`. Services take plain values and return plain values.
 6. **Repositories are the only place with SQL.** Services never write queries inline; they call a
-   repository method. Postgres is the database (16+, Drizzle over postgres.js); its dialect,
+   repository method. Postgres is the database (18, the major CI tests; Drizzle over postgres.js); its dialect,
    connection pool, and JSONB columns stay behind the repository interface. Migrations run at boot,
    are idempotent, and **fail the boot loudly rather than serving traffic on a half-migrated
    schema**.

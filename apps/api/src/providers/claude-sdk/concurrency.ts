@@ -1,3 +1,5 @@
+import { abortReason, throwIfAborted } from "./abort"
+
 /**
  * How many `claude` subprocesses may run at once, globally and per Account.
  *
@@ -38,6 +40,9 @@
  * So `perAccount` remains what it always was — a memory bound, and throughput the pool is sized on.
  * It is not, and never was, the thing keeping a credential safe.
  */
+
+/** The sentence an abort with a non-Error reason carries out of the queue (`abort.ts`). */
+const NOT_GRANTED = "the Agent SDK slot was released before it was granted"
 
 export interface SdkConcurrencyLimits {
   /** Subprocesses in flight across every Account on this replica. */
@@ -147,7 +152,7 @@ function createGate(limit: number): Gate {
 
   return {
     acquire: async (signal) => {
-      throwIfAborted(signal)
+      throwIfAborted(signal, NOT_GRANTED)
       if (held < permits) {
         held += 1
         return once(release)
@@ -161,7 +166,7 @@ function createGate(limit: number): Gate {
         const onAbort = (): void => {
           const at = queue.indexOf(admit)
           if (at >= 0) queue.splice(at, 1)
-          reject(abortReason(signal))
+          reject(abortReason(signal, NOT_GRANTED))
         }
         signal.addEventListener("abort", onAbort, { once: true })
         queue.push(admit)
@@ -180,22 +185,6 @@ function createGate(limit: number): Gate {
       return held === 0 && queue.length === 0
     },
   }
-}
-
-function throwIfAborted(signal: AbortSignal): void {
-  if (signal.aborted) throw abortReason(signal)
-}
-
-/**
- * The reason the signal itself carries, so a deadline stays a `TimeoutError` and a disconnect stays
- * an `AbortError` all the way to `runSdkAttempt`'s classification. Only synthesized when a caller
- * aborted with a non-Error reason.
- */
-function abortReason(signal: AbortSignal): unknown {
-  if (signal.reason instanceof Error) return signal.reason
-  const error = new Error("the Agent SDK slot was released before it was granted")
-  error.name = "AbortError"
-  return error
 }
 
 function once(action: () => void): () => void {

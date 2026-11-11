@@ -60,8 +60,8 @@ The repo ships a working [`docker-compose.yml`](../../docker-compose.yml) and
 
 The bundled and development Compose files pin PostgreSQL 18.4 by version and index digest on a
 fresh major-specific `postgres-data-18` volume, so a pull preserves the existing 18 data directory.
-CI runs PostgreSQL 18.6 to cover managed instances on that major; the schema still supports
-PostgreSQL 16+. A database major upgrade requires an explicit migration of its data, and is
+CI runs PostgreSQL 18.6 to cover managed instances on that major; PostgreSQL 18 is the supported
+major, because it is the only one CI tests. A database major upgrade requires an explicit migration of its data, and is
 separate from updating the router or these image pins.
 
 ### Using an existing or managed Postgres
@@ -74,7 +74,7 @@ DATABASE_URL: postgres://user:pass@db.internal:5432/router?sslmode=require
 ```
 
 …then delete the bundled `postgres` service, the `depends_on` block, and the `postgres-data-18` volume.
-Nothing else in the deployment changes: the router needs a reachable PostgreSQL 16+ and a role that
+Nothing else in the deployment changes: the router needs a reachable PostgreSQL 18 and a role that
 may create and alter tables in its schema (migrations run at boot). The `claude-config` volume stays
 either way — it is unrelated to the database.
 
@@ -121,7 +121,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `ADMIN_OIDC_SCOPES` | no | `openid profile email` | Space-separated scopes sent to the IdP. Must include `openid`. The IdP must embed `email` and `email_verified` in the ID token. |
 | `ADMIN_OIDC_CLOCK_SKEW_SECONDS` | no | `60` | Clock-skew tolerance for token timestamps. **`0` refused at boot**: no real hosts have perfectly synchronized clocks. |
 | `ENCRYPTION_KEY` | yes | — | 32 bytes, base64. AES-256-GCM key for upstream credentials and router keys. Boot fails loudly if missing or short. |
-| `DATABASE_URL` | yes | — | PostgreSQL 16+ connection string. **Supplied by the bundled compose file**, so it is not one of the three you set by hand. Set it yourself only when pointing at an existing/managed instance. |
+| `DATABASE_URL` | yes | — | PostgreSQL 18 connection string. **Supplied by the bundled compose file**, so it is not one of the three you set by hand. Set it yourself only when pointing at an existing/managed instance. |
 | `DB_POOL_MAX` | no | `10` | Main-pool connections this replica may hold open. **The main pool serves repository work** — the admin console, every scheduler sweep, the off-path usage/quota/status writers and `/readyz` — so it is the ceiling on all of them at once, and a long sweep holding a connection is one fewer for the console. Raise it for a busy console or long sweeps; lower it when several replicas share a managed instance with its own connection cap (`max_connections`), remembering each replica opens its own pool. **`0` refused at boot**: it opens nothing and queues every query forever. |
 | `SCHEDULER_LOCK_POOL_MAX_CONNECTIONS` | no | `1` | Dedicated scheduler advisory sessions, separate from the main pool. Positive and at most 100; local capacity is bounded. A locally full pool reports `skipped_capacity` and retries soon; a held task lock reports `skipped_locked` and keeps its normal interval. A main pool of one remains supported. |
 | `SCHEDULER_LOCAL_CAPACITY_RETRY_MS` | no | `1000` | Positive delay, at most 60000 ms, before retrying a due task denied by local scheduler session capacity. Ordinary remote lock contention retains the task interval. |
@@ -286,6 +286,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `UPSTREAM_FIRST_BYTE_TIMEOUT_MS` | no | `300000` | A **streamed** HTTP attempt's wait for response headers. Nothing has reached the client, so expiry is a `timeout` the chain fails over on and the breaker counts. 5 min: wide enough for a cold prefill of the largest contexts sold today and a provider queueing a stream before its headers, and half the 10 min a hung upstream used to hold a request. An estimate — tighten it against the per-provider time-to-first-byte the usage rows record. **`0` refused at boot**; must be at most `UPSTREAM_STREAM_TIMEOUT_MS`. See [05](05-routing-and-failover.md#upstream-deadlines). |
 | `UPSTREAM_IDLE_TIMEOUT_MS` | no | `55000` | The longest silence between a streamed attempt's body chunks, counted only while the router is waiting on the upstream (a client that stops reading is backpressure, not a stall). Expiry aborts the upstream and ends the client's stream with an error, recorded `upstream_timeout`, breaker struck — never a retry, bytes may be out. 55 s: under `SERVER_IDLE_TIMEOUT_SECONDS`' 60 s default, so a silent upstream is failed as an upstream timeout before the listener closes the socket and the attempt is misread as `client_cancelled`. Raise it with that one. **`0` refused at boot**; must be at most `UPSTREAM_STREAM_TIMEOUT_MS`. |
 | `UPSTREAM_STREAM_TIMEOUT_MS` | no | `3600000` | The whole of a streamed HTTP attempt, headers to last byte. 1 h: the first-byte and idle clocks catch every hang, so this only bounds a stream that keeps trickling — and a 128k-token generation at a slow model's 40 tokens/s runs ~55 min. Was the shared 600 s, which cut healthy long generations mid-stream. The weekly usage report's settle caveat compares its real gap with this when it is the longer deadline (`USAGE_REPORT_SETTLE_MINUTES`). **`0` refused at boot.** |
+| `UPSTREAM_STREAM_CAP_MIN_SECONDS` | no | `840` | A stream the upstream drops without completing, after at least this long, is read as the provider's own stream cap (Codex closes at ~900 s; 840 leaves a minute for clock skew) rather than as a fault of the account, and is reported as such. |
 | `UPSTREAM_STREAM_WALL_HOLD_MS` | no | `5000` | How long a **streaming** client's status line may wait, after the upstream's headers, for the first event that decides wall or content. A wall inside it (`event: error`, `response.failed`, a MiniMax `base_resp`) fails over to a sibling in the same call; the first content event ends the hold at once, so time to first token is unchanged. Expiry commits the stream with what the upstream sent so far. 5 s: walls arrive within milliseconds of the headers, and a client's header timeout is the failure a longer hold buys. See [05](05-routing-and-failover.md#a-wall-inside-a-2xx). **`0` refused at boot.** |
 | `TRANSLATE_DEFAULT_MAX_TOKENS` | no | `4096` | The `max_tokens` an Anthropic account is given when the client spoke a dialect that makes it optional and sent none. Anthropic requires the field; the default is generous on purpose, because a low value truncates answers nobody asked to truncate. **`0` refused at boot**: Anthropic requires `max_tokens >= 1`, so zero turns every translated request that omitted it into a `400` that looks like a client bug. |
 | `MAX_TRANSLATION_PENDING_BYTES` | no | `1048576` | Whole 1024..33554432. Bounds each cross-dialect deferred fragment queue and final-snapshot identity tracker. Ordinary live deltas remain incremental. Overflow emits an honest translation error and does not strike the account or retry after bytes; separate from protocol observation and request-body limits. |

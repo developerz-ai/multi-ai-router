@@ -57,6 +57,7 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     upstreamStream: env.upstreamStream,
     upstreamErrorMaxBytes: failover.upstreamErrorMaxBytes,
     responseObservationMaxBytes: failover.responseObservationMaxBytes,
+    upstreamStreamCapMinMs: env.upstreamStreamCapMinSeconds * 1_000,
     translation: {
       defaultMaxTokens: env.translation.defaultMaxTokens,
       maximumPendingBytes: env.translation.maximumPendingBytes,

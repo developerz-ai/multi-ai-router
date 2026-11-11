@@ -9,7 +9,7 @@ import {
 import { accounts } from "../../src/schema/accounts"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * `findIdle` is the reader of the very column the pre-#77 `markUsed` never stamped, and its whole
  * contract lives in one raw `order by ... asc nulls first` fragment: never-used accounts (NULL)

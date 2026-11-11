@@ -8,7 +8,7 @@ import {
 import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
- * The per-outcome scan behind "3% failed — of which what?", against a real PostgreSQL 16+.
+ * The per-outcome scan behind "3% failed — of which what?", against a real PostgreSQL 18.
  *
  * A unit test can lock the SQL this builds; only the planner can answer whether the enum column
  * groups the way the console reads it. Two claims are worth a live database:

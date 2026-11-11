@@ -30,7 +30,12 @@ export type {
 export { createCredentialRefreshLockPool } from "./credential-refresh-lock"
 export type { MigrateOptions } from "./migrate"
 // --- migrations -------------------------------------------------------------
-export { defaultMigrationsFolder, runMigrations } from "./migrate"
+export {
+  defaultMigrationsFolder,
+  MigrationLockTimeoutError,
+  MigrationPreconditionError,
+  runMigrations,
+} from "./migrate"
 export type { PoolSample } from "./pool-metrics"
 export type {
   AccountAuthorizationMethods,
@@ -74,7 +79,7 @@ export type {
   ApiKeyRepository,
   ApiKeyWithTargets,
 } from "./repositories/api-key-repository"
-export { createApiKeyRepository } from "./repositories/api-key-repository"
+export { ApiKeyNameTakenError, createApiKeyRepository } from "./repositories/api-key-repository"
 export type { ApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
 export { createApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
 export type {
@@ -160,6 +165,7 @@ export {
 export type { UsageExportRow } from "./repositories/usage-export-repository"
 export type { UsageHistoryRepositoryOptions } from "./repositories/usage-history-repository"
 export { createUsageHistoryRepository } from "./repositories/usage-history-repository"
+export type { UsageSummaryAggregates } from "./repositories/usage-history-summary"
 export type {
   UsageHistoryCoverage,
   UsageHistoryRepository,

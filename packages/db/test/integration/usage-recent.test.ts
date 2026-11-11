@@ -10,7 +10,7 @@ import * as schema from "../../src/schema/index"
 import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
- * The live request feed against a real PostgreSQL 16+.
+ * The live request feed against a real PostgreSQL 18.
  *
  * A unit test can only lock the SQL this repository builds. Two of its claims are things only the
  * planner can answer, and both are the kind that fail loudly in production and silently in a mock:

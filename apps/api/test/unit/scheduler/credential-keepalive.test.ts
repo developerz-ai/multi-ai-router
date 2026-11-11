@@ -25,6 +25,11 @@ const REFRESH_V1 = "opaque-refresh-value-one-91bd"
 const ACCESS_V2 = "opaque-access-value-two-c0de"
 const REFRESH_V2 = "opaque-refresh-value-two-beef"
 
+/** The ciphertext-free projection the task now lists (07.11): no credential field reaches it. */
+function summaryOf({ id, label, provider, status, lastUsedAt, createdAt }: AccountRow) {
+  return { id, label, provider, status, lastUsedAt, createdAt }
+}
+
 function credentialFile(access: string, refresh: string, expiresAt: number): string {
   return JSON.stringify({
     claudeAiOauth: {
@@ -81,7 +86,8 @@ function harness(options: HarnessOptions) {
 
   const task = createCredentialKeepaliveTask({
     accounts: {
-      list: async () => [...options.accounts],
+      listSummaries: async () => options.accounts.map(summaryOf),
+      findById: async (id) => options.accounts.find((a) => a.id === id),
       readEligibleBackgroundAccount: async (id) =>
         options.eligible === false ? undefined : options.accounts.find((a) => a.id === id),
     },
