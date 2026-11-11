@@ -63,7 +63,7 @@ slices:
     status: complete
     percent: 100
     findings: 18
-evidence: ["#373", "#368", "#385", "#386", "v2.56.0", "developerz-ai/infrastructure#2268", "developerz-ai/infrastructure#2269", "developerz-ai/infrastructure#2270", "tesote/infrastructure#766", "tesote/infrastructure#767", "tesote/infrastructure#768", "tesote/infrastructure#769", "tesote/tesote.ai#3481", "developerz-ai/developerz.ai#8649", "developerz-ai/developerz.ai#8655", "developerz-ai/developerz.ai#8657", "#387", "#388", "#389", "v2.57.0", "v2.57.1", "developerz-ai/infrastructure#2271", "tesote/infrastructure#770", "developerz-ai/developerz.ai#8660", "developerz-ai/developerz.ai#8663", "developerz-ai/developerz.ai#8667", "developerz-ai/developerz.ai#8668"]
+evidence: ["#373", "#368", "#385", "#386", "v2.56.0", "developerz-ai/infrastructure#2268", "developerz-ai/infrastructure#2269", "developerz-ai/infrastructure#2270", "tesote/infrastructure#766", "tesote/infrastructure#767", "tesote/infrastructure#768", "tesote/infrastructure#769", "tesote/tesote.ai#3481", "developerz-ai/developerz.ai#8649", "developerz-ai/developerz.ai#8655", "developerz-ai/developerz.ai#8657", "#387", "#388", "#389", "v2.57.0", "v2.57.1", "developerz-ai/infrastructure#2271", "tesote/infrastructure#770", "developerz-ai/developerz.ai#8660", "developerz-ai/developerz.ai#8663", "developerz-ai/developerz.ai#8667", "developerz-ai/developerz.ai#8668", "tesote/infrastructure#771", "tesote/infrastructure#772", "developerz-ai/infrastructure#2272", "developerz-ai/infrastructure#2273"]
 notes: >-
   Shipped in 2.56.0 (web #385 + #386) and 2.57.0 (wave 3: the 2.56.0 deferrals). Owner rulings taken under
   delegation: 07.4 keep-and-retry bounded; 06.4 typed 502; 02.4 narrowed; 03.7 thrown re-test does not advance;
@@ -76,8 +76,10 @@ notes: >-
   13.2 router side (clients use GET /v1/models; dz preflight fixed in dz#8649). Still over 300 LOC, frozen by
   file-size.test.ts: response-salvage.ts (shared-closure state), claude-sdk render/envelope.ts, tools/early-stop.ts.
   Needs a human: 5 Claude subs needs_reauth on developerz-ai (interactive login), second zai seat on tesote (12.6),
-  per-box fleet router keys (13.11, Vaultwarden + fleet reinstall), tesote CHAT_UPSTREAM_API_KEY secret split
-  (source env not on this host), npm scope bootstrap for claudes (#215).
+  per-box fleet router keys (13.11 dz half, Vaultwarden locked), npm scope bootstrap for claudes (#215, owner 2FA).
+  13.11 tesote half done: CHAT_UPSTREAM_API_KEY moved to SealedSecret tesote-ai-router-secrets, router the only
+  reader (tesote/infrastructure#772); 236/236 successes in the 30 min after the final roll. Fleet pin
+  MiniMax-M3 -> pooled alias waits on the dz-runner canary soak (ends 2026-11-12 04:19Z), then dz#3251 closes.
   Post-release, developerz-ai prod (first 27 min on 2.56.0): translate overhead p50 13→11 ms, p99 42→27 ms
   (still over the 5 ms budget); recovery-coordinator poll 0 calls (was 64 % of statements); 0 generic 5xx/402.
   After 2.57.0 (06:56-08:00Z): dz translate p50/p99 16/31 ms (linear in transcript size, ~5 ms/MB of inherent
