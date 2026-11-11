@@ -5,10 +5,11 @@ import type {
   AnthropicThinkingBlock,
   AnthropicToolUseBlock,
 } from "../shared/anthropic"
-import type { TranslatedResponse } from "../shared/response"
+import { type TranslatedResponse, undecodableToolArguments } from "../shared/response"
 import { readResponsesBody } from "../shared/responses-read"
 import { reasoningBlock } from "../shared/sealed-reasoning"
 import { fromResponsesCompletion, toAnthropicStopReason } from "../shared/stop-reason"
+import { upstreamToolInput } from "../shared/tools"
 import { anthropicUsageCounts, responsesUsageToOpenAiChat } from "../shared/usage"
 
 /**
@@ -20,10 +21,10 @@ import { anthropicUsageCounts, responsesUsageToOpenAiChat } from "../shared/usag
  * every dialect Responses is translated into needs the same array read the same way.
  *
  * **Nothing here throws.** The upstream already answered, so a malformed field is reported as absent
- * rather than turned into a failure on a request that cannot be retried
- * (`docs/idea/06-protocol-translation.md`, "Rejected: nothing at stream time"). That is the one place
- * this module differs from `request.ts`, where the same undecodable `arguments` string is a `400`
- * naming the call: there, nothing has happened yet and refusing costs the caller nothing.
+ * rather than thrown (`docs/idea/06-protocol-translation.md`, "Rejected: nothing at stream time").
+ * The one exception is a `function_call` whose `arguments` do not decode to an object: Anthropic's
+ * `input` has no form for it, and an invented `{}` is a call the client would run, so the result
+ * carries `translationFailure` and the caller answers with an error instead of the body.
  *
  * **A `reasoning` item becomes a `thinking` block**, in place. Under the serving account's reasoning
  * seal, its encrypted handle is the block's signature (`redacted_thinking` when there is no summary),
@@ -53,6 +54,8 @@ export function openAiResponsesToAnthropicResponse(
     | AnthropicRedactedThinkingBlock
     | AnthropicToolUseBlock
   )[] = []
+  let translationFailure: TranslatedResponse["translationFailure"]
+  let callIndex = 0
   for (const item of read.items) {
     // An item that flattened to no text is already absent, so no empty text or thinking block can
     // be built here — Anthropic rejects one.
@@ -62,11 +65,14 @@ export function openAiResponsesToAnthropicResponse(
     }
     if (item.kind === "text") content.push({ type: "text", text: item.text })
     if (item.kind === "function_call") {
+      const input = upstreamToolInput(item.arguments)
+      translationFailure ??= input === null ? undecodableToolArguments(callIndex) : undefined
+      callIndex += 1
       content.push({
         type: "tool_use",
         id: item.callId,
         name: item.name,
-        input: toolInput(item.arguments),
+        input: input ?? {},
       })
     }
   }
@@ -93,25 +99,6 @@ export function openAiResponsesToAnthropicResponse(
     // The unrecognized value can only come from the first hop — the second reads a finish reason
     // this build produced — but both are consulted so neither table can drift out unreported.
     unrecognizedStopReason: finish.unrecognized ?? stop.unrecognized,
+    ...(translationFailure === undefined ? {} : { translationFailure }),
   }
-}
-
-/**
- * `arguments` (a JSON string) → `input` (an object), best effort.
- *
- * An upstream that answered with a call whose arguments do not decode is broken, and there is no way
- * to say so in the shape — Anthropic's `input` has no array, scalar, or error form. An empty object
- * is the only representable answer; it is not a silent success, because the accompanying
- * `stop_reason: "tool_use"` still tells the client a call was made.
- */
-function toolInput(raw: string): Record<string, unknown> {
-  if (raw.trim().length === 0) return {}
-  let decoded: unknown
-  try {
-    decoded = JSON.parse(raw)
-  } catch {
-    return {}
-  }
-  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) return {}
-  return decoded as Record<string, unknown>
 }

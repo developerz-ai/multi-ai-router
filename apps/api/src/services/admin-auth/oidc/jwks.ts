@@ -4,7 +4,7 @@
  * The cache is an in-memory map keyed by `kid` and a moment-in-time, so a kid we
  * have never seen forces a fetch and a kid we have seen reuses the entry. The
  * JWKS endpoint's own `Cache-Control` header is respected when present, falling
- * back to a conservative one-hour max-age.
+ * back to the injected default (`ADMIN_OIDC_JWKS_TTL_SECONDS`, one hour).
  *
  * Key rotation is the case this has to get right: a signed id_token can carry
  * a kid we have not seen before, and the verifier needs to know to fetch and
@@ -112,22 +112,28 @@ interface CacheEntry {
   maxAgeMs: number
 }
 
-const DEFAULT_MAX_AGE_MS = 60 * 60 * 1000
-const MIN_MAX_AGE_MS = 5 * 60 * 1000 // floor under operator control
+/** `ADMIN_OIDC_JWKS_TTL_SECONDS`' default, in milliseconds. */
+export const DEFAULT_JWKS_TTL_MS = 60 * 60 * 1000
+/**
+ * The floor under an IdP-sent `max-age`, so `max-age=0` cannot turn every sign-in into a JWKS
+ * fetch. It never raises the operator's own TTL: the smaller of the two wins.
+ */
+const MIN_IDP_MAX_AGE_MS = 5 * 60 * 1000
 
-function parseMaxAge(header: string | null): number {
-  if (header === null) return DEFAULT_MAX_AGE_MS
+function parseMaxAge(header: string | null, defaultMs: number): number {
+  if (header === null) return defaultMs
   const match = /max-age\s*=\s*(\d+)/i.exec(header)
-  if (match === null) return DEFAULT_MAX_AGE_MS
+  if (match === null) return defaultMs
   const seconds = Number(match[1])
-  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_MAX_AGE_MS
-  return Math.max(MIN_MAX_AGE_MS, seconds * 1000)
+  if (!Number.isFinite(seconds) || seconds <= 0) return defaultMs
+  return Math.max(Math.min(MIN_IDP_MAX_AGE_MS, defaultMs), seconds * 1000)
 }
 
 export function createJWKSCache(
   jwksUri: string,
   fetcher: typeof fetch | JWKSFetch = defaultJWKSFetch(),
   clock: () => number = () => Date.now(),
+  defaultMaxAgeMs: number = DEFAULT_JWKS_TTL_MS,
 ): JWKSCache {
   const fetcherNorm = asFetch(fetcher)
   const cache = new Map<string, CacheEntry>()
@@ -146,7 +152,7 @@ export function createJWKSCache(
     const parsed = jwksSchema.safeParse(body)
     if (!parsed.success) throw new OIDCJWKSError("jwks document is malformed", "parse_failed")
 
-    const maxAgeMs = parseMaxAge(res.headers.get("cache-control"))
+    const maxAgeMs = parseMaxAge(res.headers.get("cache-control"), defaultMaxAgeMs)
     const nowMs = clock()
     const imported: CacheEntry[] = []
     for (const jwk of parsed.data.keys) {

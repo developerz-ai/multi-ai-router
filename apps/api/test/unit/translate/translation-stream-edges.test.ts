@@ -95,3 +95,23 @@ test("a transport-truncated tool stream receives no invented completed arguments
     expect(t.flush()).toEqual([])
   }
 })
+
+// 06.6: `"error": null` is a compatible vendor saying "no error" beside real content.
+test("a chunk carrying `error: null` is content, not an upstream failure", () => {
+  const chunk = frame({ id: "c", error: null, choices: [{ delta: { content: "hi" } }] })
+  for (const translator of [
+    openAiChatToAnthropicStream(),
+    openAiChatToOpenAiResponsesStream({ created: 1 }),
+  ]) {
+    const events = translator.push(chunk)
+    expect(events.some((event) => event.event === "error")).toBe(false)
+    expect(events.map((event) => event.data).join("")).toContain("hi")
+  }
+})
+
+test("a chunk carrying an `error` object or string still fails the stream", () => {
+  for (const error of [{ message: "boom" }, "boom"]) {
+    const events = openAiChatToAnthropicStream().push(frame({ error }))
+    expect(events.some((event) => event.event === "error")).toBe(true)
+  }
+})

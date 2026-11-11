@@ -1,6 +1,7 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import { TranslationError } from "@multi-ai-router/core"
 import { disableThinkingDefaultForForcedTool } from "../translate"
+import { type ParsedIngressRequest, parseIngressRequest } from "../translate/parse-ingress"
 import type { TranslationContext, TranslationPair } from "../translate/registry"
 import type { TranslationDrop } from "../translate/shared/drops"
 import type { ResponsesEgressRules } from "../translate/shared/responses-egress"
@@ -15,6 +16,9 @@ import { type AccountReasoningSeal, withReasoningSeal } from "./reasoning-seal-c
  * the hot path; a chain that mixes modes pays for it only if a translated candidate is actually
  * reached, and a failover from one openai-chat account to another reuses the conversion rather
  * than redoing it.
+ *
+ * The schema parse is spent once per request too (`parseIngressRequest`); only the conversion runs
+ * per shape.
  *
  * The **model** is re-applied per attempt rather than baked into the cached conversion. Two
  * accounts of the same dialect can carry different alias maps — `sonnet` to `glm-4.7` on one and
@@ -92,6 +96,15 @@ export function createTranslatedRequestBody(
   const converted = new Map<string, Record<string, unknown>>()
   let source: unknown
   let parsed = false
+  // The schema parse of the body, once per request: it depends on the body alone, and it is most of
+  // a conversion's cost on a long transcript. Every candidate shape converts from the same value.
+  let ingress: ParsedIngressRequest | undefined
+
+  const parsedFor = (pair: TranslationPair): ParsedIngressRequest => {
+    if (ingress?.dialect === pair.ingress) return ingress
+    ingress = parseIngressRequest(pair.ingress, body())
+    return ingress
+  }
 
   const body = (): unknown => {
     if (parsed) return source
@@ -152,20 +165,21 @@ export function createTranslatedRequestBody(
         // upstream could read, and asserting it here beats discovering it as a 400 from the
         // provider on a body we wrote.
         const drops: TranslationDrop[] = []
-        const result = pair.request(
-          body(),
-          withReasoningSeal(
-            {
-              ...context,
-              chatCeiling,
-              cacheControl,
-              defaultMaxTokens: effectiveDefault,
-              responsesEgress,
-              onDrop: (drop) => void drops.push(drop),
-            },
-            sealed,
-          ),
+        const shapeContext = withReasoningSeal(
+          {
+            ...context,
+            chatCeiling,
+            cacheControl,
+            defaultMaxTokens: effectiveDefault,
+            responsesEgress,
+            onDrop: (drop) => void drops.push(drop),
+          },
+          sealed,
         )
+        const result =
+          pair.requestFromParsed === undefined
+            ? pair.request(body(), shapeContext)
+            : pair.requestFromParsed(parsedFor(pair), shapeContext)
         if (typeof result !== "object" || result === null || Array.isArray(result)) {
           throw new TranslationError(
             `the ${pair.ingress} to ${pair.egress} conversion produced no body`,

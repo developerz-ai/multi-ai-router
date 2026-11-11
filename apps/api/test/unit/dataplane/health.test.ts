@@ -850,3 +850,27 @@ describe("a limiter reading riding a rejected key's response", () => {
     expect(breaker.cooldownReason).toBeUndefined()
   })
 })
+
+describe("recent tokens decay over the configured window (02.10)", () => {
+  test("tokens recorded at t0 are gone at t0 + 2 windows, and half-counted in between", () => {
+    let now = 0
+    const health = createHealthStore({ tokenWindowMs: 1_000, elapsed: () => now })
+    health.beginAttempt("a")
+    health.endAttempt("a", 100)
+    expect(health.stateOf("a").recentTokens).toBe(100)
+    now = 1_500
+    health.beginAttempt("a")
+    health.endAttempt("a", 10)
+    // The first bucket rolled to `previous`; both still count.
+    expect(health.stateOf("a").recentTokens).toBe(110)
+    now = 3_000
+    expect(health.stateOf("a").recentTokens).toBe(0)
+  })
+
+  test("without a window the counter is the since-boot total, as before", () => {
+    const health = createHealthStore()
+    health.endAttempt("a", 5)
+    health.endAttempt("a", 5)
+    expect(health.stateOf("a").recentTokens).toBe(10)
+  })
+})

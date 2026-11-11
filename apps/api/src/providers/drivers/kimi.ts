@@ -26,16 +26,44 @@ const BASE_URL = "https://api.kimi.com/coding"
  * `error.type`. `exceeded_current_quota_error` is the drained-balance case and is the reason this
  * driver exists as more than a base URL. Blast radius: without it the account cools down on a
  * timer instead of being flagged `exhausted` for a human to top up.
+ *
+ * **Not on its own, though.** Since 2026-11-09 Kimi also sends that type on the `429` that reports a
+ * spent *weekly window* ("You've reached your weekly (7-day) usage limit. Your quota will reset when
+ * the current 7-day window ends…") — a clock-recoverable wall. Read on the type alone it parked a
+ * healthy account `exhausted` five times in 37 h and answered 28 requests `402` while the plan's own
+ * reading said the window reopens 2026-11-12 (prod, sweep 101, 10.1). So the window wording below is
+ * read first, and the type keeps only what no window sentence claims.
  */
 const QUOTA_TYPES = ["exceeded_current_quota_error"]
 const RATE_LIMIT_TYPES = ["rate_limit_reached_error"]
 const AUTH_TYPES = ["invalid_authentication_error", "authentication_error"]
 const OVERLOAD_TYPES = ["engine_overloaded_error"]
 
-const INSUFFICIENT_BALANCE = /insufficient balance|balance is insufficient|account.*not active/i
+/**
+ * A dead balance in words. Off `403`/`404`: those are where Kimi echoes a model name ("You do not
+ * have access to model <name>", "model <name> not found"), so a client naming its model
+ * "insufficient balance" would park the key `exhausted` (sweep 101, 04.1). Bounded, because an
+ * unbounded `account.*not active` rescans the message from every "account" — 760 ms on a 64 KB body.
+ */
+const INSUFFICIENT_BALANCE =
+  /insufficient balance|balance is insufficient|account[^.]{0,80}not active/i
+const BALANCE_STATUSES = [400, 402, 429]
 
 /**
- * Kimi's plan limits, all of them announced as `403 {"error":{"type":"permission_error",…}}`.
+ * Kimi's genuine "this key may not use that model" — a `403 permission_error` that ends in the name
+ * the client sent. Read before every wording rule, so whatever that name says is never read as a
+ * limit or a balance. It is the auth failure the `403` default already made it; the rule only stops
+ * the echoed tail from reaching the rules below. Provenance: `kimiPermissionDeniedBody`, the shape
+ * documented with the limit families below.
+ */
+const MODEL_ACCESS_DENIED = /^you do not have access to model\b/i
+
+/** Where Kimi announces a spent window: `403 permission_error` (2026-08/10) and `429` (2026-11-09). */
+const LIMIT_STATUSES = [403, 429]
+
+/**
+ * Kimi's plan limits, announced as `403 {"error":{"type":"permission_error",…}}` — and, since
+ * 2026-11-09, the weekly one also as `429 {"error":{"type":"exceeded_current_quota_error",…}}`.
  *
  * Provenance, three phrasings observed live, measured by the developerz.ai platform over four days
  * to 2026-08-29 (314 bodies) and confirmed in this router's own production log on 2026-10-02:
@@ -140,6 +168,8 @@ const accountTakenAway: ClassificationRule = {
 const FIVE_HOUR_RETEST_SECONDS = 15 * 60
 const LONG_WINDOW_RETEST_SECONDS = 60 * 60
 
+const LIMIT_GUARD = { statuses: LIMIT_STATUSES }
+
 export const kimiDriver: ProviderDriver = {
   ...createHttpDriver({
     id: "kimi",
@@ -152,34 +182,42 @@ export const kimiDriver: ProviderDriver = {
       },
     ],
     rules: [
-      typeRule("credits-exhausted", "kimi:exceeded_current_quota_error", QUOTA_TYPES),
-      messageRule("credits-exhausted", "kimi:insufficient-balance", INSUFFICIENT_BALANCE),
+      messageRule("auth", "kimi:model-access-denied", MODEL_ACCESS_DENIED, { statuses: [403] }),
       // Ahead of every limit rule: a suspension that also mentions a limit is still a suspension.
       // Auth statuses only — on a 429 or a 5xx the same words describe a throttle or a fault.
       onStatus(AUTH_STATUSES, accountTakenAway),
-      // Ahead of the auth rules below: these arrive as a 403 and must never be read as one. The
-      // specific windows first, so each carries its own signal and re-test cadence; the family last,
-      // for a window Kimi has not shipped yet.
+      // Ahead of the auth rules below (these arrive as a 403 and must never be read as one) and of
+      // `exceeded_current_quota_error` (Kimi now sends that type on the weekly 429 too). The specific
+      // windows first, so each carries its own signal and re-test cadence; the family last, for a
+      // window Kimi has not shipped yet. The estimate yields to a fresh plan reading's reset
+      // (`routing/plan-reset.ts`), so a spent weekly window waits for the instant Kimi states.
       withResetEstimate(
-        messageRule("rate-limited", "kimi:billing-cycle-limit", CYCLE_LIMIT),
+        messageRule("rate-limited", "kimi:billing-cycle-limit", CYCLE_LIMIT, LIMIT_GUARD),
         LONG_WINDOW_RETEST_SECONDS,
       ),
       withResetEstimate(
-        messageRule("rate-limited", "kimi:usage-limit-weekly", WEEKLY_LIMIT),
+        messageRule("rate-limited", "kimi:usage-limit-weekly", WEEKLY_LIMIT, LIMIT_GUARD),
         LONG_WINDOW_RETEST_SECONDS,
       ),
       withResetEstimate(
-        messageRule("rate-limited", "kimi:usage-limit-5-hour", FIVE_HOUR_LIMIT),
+        messageRule("rate-limited", "kimi:usage-limit-5-hour", FIVE_HOUR_LIMIT, LIMIT_GUARD),
         FIVE_HOUR_RETEST_SECONDS,
       ),
       withResetEstimate(
-        messageRule("rate-limited", "kimi:usage-limit", ANY_USAGE_LIMIT),
+        messageRule("rate-limited", "kimi:usage-limit", ANY_USAGE_LIMIT, LIMIT_GUARD),
         FIVE_HOUR_RETEST_SECONDS,
       ),
+      typeRule("credits-exhausted", "kimi:exceeded_current_quota_error", QUOTA_TYPES),
+      messageRule("credits-exhausted", "kimi:insufficient-balance", INSUFFICIENT_BALANCE, {
+        statuses: BALANCE_STATUSES,
+      }),
       typeRule("rate-limited", "kimi:rate_limit_reached_error", RATE_LIMIT_TYPES),
       typeRule("auth", "kimi:invalid_authentication_error", AUTH_TYPES),
       typeRule("overloaded", "kimi:engine_overloaded_error", OVERLOAD_TYPES),
     ],
   }),
   quotaRead: kimiQuotaRead,
+  // The `kimi-coding-reference` rows are Kimi's list prices beside a flat-fee Coding plan: an
+  // attribution, not a meter (`ProviderDriver.shippedPrices`).
+  shippedPrices: "notional",
 }

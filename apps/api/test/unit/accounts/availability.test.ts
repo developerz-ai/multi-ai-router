@@ -354,3 +354,39 @@ describe("measuring a window against a configured ceiling", () => {
     expect(spans).toEqual([])
   })
 })
+
+// Plan 101 (09 hint): `?status=` filtered the stored column before the live overlay, so a cooling
+// account listed under `active` and was missing under `cooling_down`.
+describe("the status filter on an account list", () => {
+  function cooling(): AccountsService {
+    const base = serviceOf([view({ status: "active" })])
+    const live = {
+      ...routable(),
+      snapshot: { ...routable().snapshot, status: "cooling_down" as const },
+    }
+    return withAvailability(
+      {
+        ...base,
+        list: async (query) => {
+          // The stored filter would drop the row: prove the decorator never asks for it.
+          return query.status === undefined ? base.list(query) : ok([])
+        },
+      },
+      { catalog: catalogOf([live]), health: createHealthStore(), now: () => NOW },
+    )
+  }
+
+  test("matches the overlaid status, not the stored one", async () => {
+    const service = cooling()
+    const coolingList = await service.list({ status: "cooling_down" })
+    const activeList = await service.list({ status: "active" })
+    if (!coolingList.ok || !activeList.ok) throw new Error("the read path must not fail here")
+    expect(coolingList.value.map((entry) => entry.id)).toEqual([ACCOUNT_ID])
+    expect(activeList.value).toEqual([])
+  })
+
+  test("an unfiltered list is unchanged", async () => {
+    const result = await cooling().list({})
+    expect(result.ok && result.value.map((entry) => entry.status)).toEqual(["cooling_down"])
+  })
+})

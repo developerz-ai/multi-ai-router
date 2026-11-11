@@ -1,5 +1,6 @@
 import { InvalidRequestError } from "@multi-ai-router/core"
 import { z } from "zod"
+import type { DropSink } from "../../services/translate/shared/drops"
 import { scrubSystemPrompt } from "../claude-sdk/scrub"
 import type { FastCredential } from "./credential"
 import { CLAUDE_FAST_CLI_VERSION, stableUuid, stampIntegrity, versionSuffix } from "./integrity"
@@ -43,6 +44,10 @@ export function prepareFastRequest(input: {
   accountId: string
   apiKeyId: string
   sessionKey: string
+  /** `false` keeps a structured-output request on the adapted tool (`tool-choice.ts`). */
+  nativeStructuredOutput?: boolean
+  /** Constraints the native schema reduction restated as text (`tool-choice.ts`). */
+  onDrop?: DropSink
 }) {
   const { request: original } = input
   const system =
@@ -154,7 +159,10 @@ export function prepareFastRequest(input: {
   for (const [key, value] of Object.entries(original))
     if (!Object.hasOwn(copied, key) && key !== "stream") copied[key] = value
   // After the copy, where `tool_choice`, `thinking` and `output_config` arrive (`tool-choice.ts`).
-  const adaptation = adaptFastToolChoice(copied)
+  const adaptation = adaptFastToolChoice(copied, {
+    native: input.nativeStructuredOutput !== false,
+    ...(input.onDrop === undefined ? {} : { onDrop: input.onDrop }),
+  })
   const body: Record<string, unknown> = { ...adaptation.body }
   if (
     body.cache_control === undefined &&
@@ -184,6 +192,8 @@ export function prepareFastRequest(input: {
     toolNames,
     /** What the invoker must check on a non-streaming answer; `null` when nothing was adapted. */
     forcedTool: adaptation.adapted,
+    /** Set when the schema travels natively: the invoker's key for remembering a refusal. */
+    nativeSchema: adaptation.nativeSchema,
   }
 }
 

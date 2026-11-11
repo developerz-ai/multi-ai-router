@@ -86,7 +86,11 @@ describe("opencode-go failures, as the endpoint words them", () => {
     expect(failure?.rateLimit?.retryAfterSeconds).toBe(33947)
   })
 
-  test("a service-account key is refused as a credential, not retried as a limit", () => {
+  // Sweep 101, 10.7: this was `auth`, and an `api-key` account's auth failure is re-tested by a
+  // half-open probe that spends a client request — 11 client 502s in 37.5 h in prod. The key is
+  // valid; the plan does not cover it, and only a human changes that: `exhausted`, re-tested only by
+  // the bounded background re-check, never a limit and never a live re-probe.
+  test("a service-account key is a plan wall for a human, not retried as a limit or a credential", () => {
     const failure = driver().classifyFailure(
       response(403, {
         body: {
@@ -99,7 +103,8 @@ describe("opencode-go failures, as the endpoint words them", () => {
       }),
     )
 
-    expect(failure?.kind).toBe("auth")
+    expect(failure?.kind).toBe("credits-exhausted")
+    expect(failure?.signal).toBe("opencode-go:plan-not-entitled")
   })
 
   for (const body of [

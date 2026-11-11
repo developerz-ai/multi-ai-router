@@ -44,7 +44,10 @@ approximated. See [00-overview.md](00-overview.md) for the product boundary and
    widens. From that set, keep Accounts that are `active` — not `cooling_down`, not `exhausted`, not
    `disabled`, not `needs_reauth` — and that support the requested model. An empty result raises
    `NoHealthyAccountError`, which names the actual cause (rate limited, out of credits, nothing in
-   scope) rather than failing generically.
+   scope) rather than failing generically. Its `503` carries `error.router.wall`; only a
+   `capacity` wall — every attempt failed, a clock clears it — may carry a `Retry-After`. A
+   `human` or `scope` wall (account disabled, model not served here) never does, so a client
+   cannot mistake an operator-only refusal for one worth retrying.
 6. **Policy selection.** The Pool's policy (`sticky` by default) picks one candidate from the
    filtered set. Pure function over the session key and an injected snapshot of account health —
    no clock, no store, no network. Details in [05-routing-and-failover.md](05-routing-and-failover.md).
@@ -192,8 +195,12 @@ committing. Never write an ad-hoc invocation where a wrapper exists.
     stores, or forwards a subscription token, and no code path may add one to an outbound HTTP
     request. See [11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md).
 11. **Every external boundary is Zod-parsed.** Client requests, env, and provider responses. Nothing
-    untyped enters the system — with the passthrough exception in the performance budget below: an
-    opaque body that is never interpreted is relayed, not parsed.
+    untyped enters the system — with the passthrough exception in the performance budget below: a
+    passthrough request body is grammar-validated by the routing scanner and relayed byte for byte,
+    never parsed into objects. Response frames are a separate matter: usage and terminal
+    observation frames and `JSON.parse`s each same-dialect response frame off the relay, and a
+    non-streamed `2xx` is read whole (≤ `UPSTREAM_ERROR_MAX_BYTES`) and parsed for a wall before it
+    is committed (`success-wall.ts`).
 
 ## Performance budget
 
@@ -206,12 +213,13 @@ time-to-first-token** beyond the one extra network hop.
 |---|---|
 | Never buffer a stream | Upstream bytes are relayed as they arrive. No accumulate-then-forward, no re-chunking, no waiting for a complete SSE event before flushing |
 | Don't parse what you don't need | On same-dialect passthrough the body is opaque — swap headers and stream it through. Extract only the model name and session key, incrementally. A full parse happens only when cross-dialect translation is actually required |
+| A per-byte budget for the body scan | The scanner still validates the whole body (a duplicate top-level `model` or malformed tail must not reach an upstream), so it is O(body) and must stay cheap per byte: escapes are consumed inline, and every subtree no routing field or opening byte is read from is validated by a typed-array skim (`body/skim.ts`) instead of per-byte frame objects. Target ≤ 2–3 ns/B on prod-shaped transcripts (measured 2.3–2.7 ns/B at 350 KB–1 MB, 8.6 ns/B on pathological structure-dense input, Bun 1.4.4) |
 | Nothing touches Postgres on the critical path | Key verification, account selection, health, and quota state are served from in-memory caches kept warm by the scheduler and by upstream responses. A miss is one indexed query, never a scan |
 | Usage accounting is off the request path | `UsageRecord` rows are enqueued in memory and batch-written by a background writer. A slow database degrades reporting, never traffic |
 | Reuse connections | Keep-alive pools per upstream host, warmed at boot, so a request never pays TLS setup. Same for the Postgres pool |
 | Routing math is pure and allocation-light | Rendezvous hashing over a small candidate array; no I/O and no locks on the read path |
 | Measure it | `router_overhead_seconds` (time inside the router, excluding upstream) is a first-class metric, shown next to upstream latency. A regression is a bug |
-| Reproduce it on demand | `bin/bench` drives the real router against an in-process stub upstream and reads both claims back off its own metrics — p50/p95/p99 overhead per egress path, and added time-to-first-token measured separately. Non-zero exit when either breaks. See [08-observability.md](08-observability.md#verifying-the-budget) |
+| Reproduce it on demand | `bin/bench` drives the real router against an in-process stub upstream and reads both claims back off its own metrics — p50/p95/p99 overhead per egress path, and added time-to-first-token measured separately — on a 1 KB baseline **and** prod-shaped 350 KB / 1 MB agent transcripts, a 200-chunk stream and a ~62 KB non-streamed answer. Non-zero exit when either breaks. See [08-observability.md](08-observability.md#verifying-the-budget) |
 
 **The Agent-SDK path is the labeled exception.** A subprocess per request is inherently heavier than
 an HTTP hop; the budget does not apply to it uniformly and the docs say so rather than pretending
@@ -365,6 +373,8 @@ decision in [10-roadmap.md](10-roadmap.md).
 | **In-process interval timers, jittered** | Each periodic task is a plain timer inside the router process. Jitter keeps replicas from aligning and keeps sweeps off request spikes and off each other after a restart |
 | **One Postgres advisory lock per task** | Before doing work, a task takes `pg_try_advisory_lock` named for that task. Exactly one replica runs a given sweep; the others fail the try and skip instantly and cheaply. That is leader election without a leader-election system |
 | **Idempotent, resumable, bounded batches** | Every task must be safe to run twice and safe to kill halfway, and must process or delete in fixed-size batches rather than one giant transaction. The data plane must not feel a sweep |
+| **Every run has a deadline** | A run past `SCHEDULER_TASK_MAX_RUN_MINUTES` (60) has its signal aborted, is recorded `failed` with `run exceeded <n> ms`, and its advisory lock is released whether or not the task stops. With the default one-connection lock pool, one hung await would otherwise answer every other task `skipped_capacity` until a restart. A throwing tick observer is logged and the timer re-armed, never left disarmed |
+| **Restarts spread overdue tasks** | A task resumes from its persisted last run. One already overdue fires at a random point inside its jitter band (`jitterFraction × interval`) rather than at once, so every replica's overdue sweeps do not land in the same millisecond. Orphaned-run maintenance before a tick is single-flighted and spaced by the janitor interval, so one-second capacity retries do not repeat it |
 | **Last run and outcome are recorded** | Each run writes a `ScheduledTaskRun` row — task, start, finish, outcome, items processed, error — so the admin UI can say "janitor last ran 4 min ago, deleted 812 rows". **A wedged task is visible rather than silent**, which is the whole point of persisting the record. See [02-domain-model.md](02-domain-model.md) |
 
 ### The periodic tasks

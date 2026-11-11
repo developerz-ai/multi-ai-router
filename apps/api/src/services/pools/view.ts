@@ -1,5 +1,5 @@
 import type { AccountStatus, ProviderId, RoutingPolicy } from "@multi-ai-router/core"
-import type { AccountRow, PoolMemberRow, PoolRow } from "@multi-ai-router/db"
+import type { AccountSummaryRow, PoolMemberRow, PoolRow } from "@multi-ai-router/db"
 
 /**
  * What the console renders for a pool.
@@ -33,7 +33,7 @@ export interface PoolView {
 export function toPoolView(
   pool: PoolRow,
   members: readonly PoolMemberRow[],
-  accounts: ReadonlyMap<string, AccountRow>,
+  accounts: ReadonlyMap<string, AccountSummaryRow>,
 ): PoolView {
   return {
     id: pool.id,
@@ -54,7 +54,10 @@ export function toPoolView(
  * than with an invented label — a fabricated provider on a fabricated row is
  * worse than a missing one.
  */
-function toMemberView(member: PoolMemberRow, account: AccountRow | undefined): PoolMemberView[] {
+function toMemberView(
+  member: PoolMemberRow,
+  account: AccountSummaryRow | undefined,
+): PoolMemberView[] {
   if (account === undefined) return []
   return [
     {

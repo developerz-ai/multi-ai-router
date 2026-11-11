@@ -1,11 +1,13 @@
 import type { MiddlewareHandler } from "hono"
-import type { Logger } from "../logging/logger"
+import type { LogFields, Logger } from "../logging/logger"
 import type { AppEnv } from "../types"
 
 /**
- * Binds a request-scoped logger onto the context and writes one line per completed request —
- * `info`, or `debug` for a probe path that answered normally. A request that throws is also logged
- * by the error handler, which is the place that knows why it failed.
+ * Binds a request-scoped logger onto the context and writes exactly **one** transport line per
+ * request when it ends: `request completed` — `info`, or `debug` for a quiet path that answered
+ * normally — or, for a request the error handler rendered, `request failed` at the level the
+ * handler chose, carrying the handler's fields and this line's timing. One line, not two: a failed
+ * request used to log both, and the pair was half the bytes of a production week's log.
  */
 
 /**
@@ -68,6 +70,30 @@ export function failureContext(headers: Headers): Record<string, string> {
   return headerContext(headers, FAILURE_HEADERS)
 }
 
+/** What the error handler knows about a failed request, held until its one line is written. */
+export interface RequestFailure {
+  readonly level: "info" | "warn" | "error"
+  readonly fields: LogFields
+}
+
+/**
+ * Requests a `requestLogger` is tracking, keyed by the request object itself so nothing has to be
+ * declared on the context type. An entry is `null` until the error handler records a failure; a
+ * request absent from the map has no completion line coming, so its failure must log on its own.
+ */
+const tracked = new WeakMap<Request, RequestFailure | null>()
+
+/**
+ * Hands a failure to the request's completion line. Returns `false` when no request logger is
+ * tracking this request — an error raised before the middleware ran, or an app built without
+ * it — and the caller must then write its own line, or the failure would go unlogged.
+ */
+export function deferFailureLine(request: Request, failure: RequestFailure): boolean {
+  if (!tracked.has(request)) return false
+  tracked.set(request, failure)
+  return true
+}
+
 export interface RequestLoggerOptions {
   /**
    * `LOG_QUIET_PATHS`: exact paths whose *successful* completions log at `debug`. A liveness probe
@@ -75,6 +101,15 @@ export interface RequestLoggerOptions {
    * opened the log to read. A probe that fails keeps its normal level — that line is the point.
    */
   readonly quietPaths?: readonly string[]
+}
+
+/**
+ * A streamed body is still flowing when this middleware resumes: what it can time is the headers.
+ * The line says so under its own name instead of passing time-to-headers off as `durationMs`; the
+ * stream's whole lifetime is on the usage record and `router_request_duration_seconds`.
+ */
+function isStreamed(response: Response): boolean {
+  return response.headers.get("content-type")?.startsWith("text/event-stream") === true
 }
 
 export function requestLogger(
@@ -86,18 +121,32 @@ export function requestLogger(
   return async (c, next) => {
     const log = base.child({ component: "transport", requestId: c.get("requestId") })
     c.set("log", log)
+    const request = c.req.raw
+    tracked.set(request, null)
 
     const startedAt = performance.now()
     await next()
 
+    const failure = tracked.get(request) ?? null
+    tracked.delete(request)
+    const elapsedMs = Math.round(performance.now() - startedAt)
     const status = c.res.status
-    const level = status < 400 && quiet.has(c.req.path) ? "debug" : "info"
-    log[level]("request completed", {
-      method: c.req.method,
-      path: c.req.path,
-      status,
-      durationMs: Math.round(performance.now() - startedAt),
-      ...headerContext(c.req.raw.headers, LOGGED_HEADERS),
+    const timing = isStreamed(c.res)
+      ? { streamed: true, timeToHeadersMs: elapsedMs }
+      : { durationMs: elapsedMs }
+    const common = { method: c.req.method, path: c.req.path, status, ...timing }
+    if (failure === null) {
+      const level = status < 400 && quiet.has(c.req.path) ? "debug" : "info"
+      log[level]("request completed", {
+        ...common,
+        ...headerContext(request.headers, LOGGED_HEADERS),
+      })
+      return
+    }
+    log[failure.level]("request failed", {
+      ...common,
+      ...failureContext(request.headers),
+      ...failure.fields,
     })
   }
 }

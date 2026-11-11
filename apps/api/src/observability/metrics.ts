@@ -6,16 +6,19 @@ export type {
   DbPoolSample,
   MetricsOptions,
   ProbeAdmissionSample,
+  RequestMetricSample,
   RouterMetrics,
   SdkConcurrencySample,
   UsageQueueSample,
 } from "./metric-types"
 
-import type { EgressMode, ProviderId, UsageOutcome } from "@multi-ai-router/core"
+import type { EgressMode, ProviderId } from "@multi-ai-router/core"
 import { UNKNOWN_REVISION, USAGE_OUTCOME_SUCCESS, VERSION } from "@multi-ai-router/core"
 import { PRICE_TABLE_AS_OF } from "../services/cost"
 import type { UsageRecord } from "../services/usage"
+import { createFailoverTracker } from "./failovers"
 import { createInventoryMetrics } from "./inventory"
+import { createSelfMetrics } from "./self-metrics"
 import { createSeries } from "./series"
 
 /**
@@ -29,10 +32,7 @@ import { createSeries } from "./series"
  * the single place a request is known to have ended, because no attempt row can name which
  * attempt the client's answer came from.
  *
- * `router_failovers_total` is exact rather than estimated, and that costs the one piece of state
- * in this file: a failed attempt is only counted as a failover once a *later* attempt of the same
- * request proves the router moved on. A chain that gave up leaves its last failure uncounted,
- * which is correct — it moved nowhere.
+ * `router_failovers_total` is exact; `failovers.ts` holds the one piece of state that costs.
  */
 
 /**
@@ -41,14 +41,14 @@ import { createSeries } from "./series"
  */
 const MAX_LABEL_CHARS = 64
 
-/**
- * In-flight requests whose last attempt failed, held until a later attempt proves a failover.
- * Bounds memory when a chain ends in failure and its entry is therefore never resolved; the
- * oldest is dropped, uncounted, rather than kept forever.
- */
-const MAX_PENDING_HOPS = 1_024
-
 const UNKNOWN = "unknown"
+
+/**
+ * The `model` label for a requested name the routing catalog did not resolve. Every caller with a
+ * key can type any string; labelling it verbatim let a typo loop fill the series ceiling and lock
+ * every later key and model out of the request series until restart.
+ */
+const OTHER_MODEL = "other"
 
 /** `path` on `router_overhead_seconds`, as the spec spells it. */
 const EGRESS_PATH: Readonly<Record<EgressMode, string>> = {
@@ -57,23 +57,17 @@ const EGRESS_PATH: Readonly<Record<EgressMode, string>> = {
   "agent-sdk": "agent_sdk",
 }
 
-/** `reason` on `router_failovers_total`. Anything not quota, credits, or a deadline is upstream. */
-function failoverReason(outcome: UsageOutcome): string {
-  if (outcome === "quota_exhausted") return "rate_limited"
-  if (outcome === "credits_exhausted") return "exhausted"
-  if (outcome === "upstream_timeout") return "timeout"
-  return "upstream_error"
-}
-
-interface PendingHop {
-  readonly pool_id: string
-  readonly from_provider: ProviderId
-  readonly reason: string
-}
-
 export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   const now = options.now ?? (() => new Date())
-  const s = createSeries(options)
+  // Late-bound: the dropped counter lives in the registry whose refusals it counts.
+  let countDropped: (metric: string) => void = () => {}
+  const s = createSeries({
+    ...options,
+    onSeriesDropped: (metric) => {
+      countDropped(metric)
+      options.onSeriesDropped?.(metric)
+    },
+  })
   const inventory = createInventoryMetrics(
     s.registry,
     options.metricInventory ?? {},
@@ -91,7 +85,9 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     labels: [],
     buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 15],
   })
-  const pending = new Map<string, PendingHop>()
+  const self = createSelfMetrics(s.registry)
+  countDropped = self.seriesDropped
+  const settleFailover = createFailoverTracker((hop) => s.failovers.inc(hop))
   const consecutiveFailures = new Map<string, number>()
   let droppedSeen = 0
   let retriedSeen = 0
@@ -107,25 +103,6 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
   // an epoch timestamp claiming the table was verified in 1970.
   const asOf = Date.parse(`${PRICE_TABLE_AS_OF}T00:00:00Z`)
   if (Number.isFinite(asOf)) s.priceTableAsOf.set({}, asOf / 1_000)
-
-  /** Counts the hop the previous failed attempt of this request turned out to be. */
-  const settleFailover = (record: UsageRecord): void => {
-    const prior = pending.get(record.correlationId)
-    if (prior !== undefined) {
-      pending.delete(record.correlationId)
-      s.failovers.inc(prior)
-    }
-    if (record.outcome === USAGE_OUTCOME_SUCCESS || record.provider === null) return
-    if (pending.size >= MAX_PENDING_HOPS) {
-      const oldest = pending.keys().next()
-      if (!oldest.done) pending.delete(oldest.value)
-    }
-    pending.set(record.correlationId, {
-      pool_id: record.poolId ?? "none",
-      from_provider: record.provider,
-      reason: failoverReason(record.outcome),
-    })
-  }
 
   const observeTokens = (record: UsageRecord, provider: ProviderId, accountId: string): void => {
     const model = label(record.model ?? "unknown")
@@ -154,7 +131,8 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     observeRequest(sample) {
       inventory.observe(sample)
       const ingress_dialect = sample.ingressDialect
-      const model = label(sample.model ?? UNKNOWN)
+      // Unset means the producer predates the flag: label as before rather than fold every model.
+      const model = sample.modelKnown === false ? OTHER_MODEL : label(sample.model ?? UNKNOWN)
       s.requests.inc({ ingress_dialect, model, key_id: sample.keyId, outcome: sample.outcome })
       s.requestDuration.observe(
         { ingress_dialect, model, streamed: String(sample.streamed) },
@@ -263,6 +241,10 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
         s.breakerProbeAdmissions.inc({ result: "refused" }, delta),
       )
     },
+
+    setProcess: (sample) => self.setProcess(sample),
+    observeFastFallback: (reason) => self.fastFallback(reason),
+    setSnapshotLoadedAt: (store, at) => self.snapshotLoadedAt(store, at),
 
     setDbPool(sample) {
       s.dbPoolConnections.set({ state: "in_use" }, sample.inUse)

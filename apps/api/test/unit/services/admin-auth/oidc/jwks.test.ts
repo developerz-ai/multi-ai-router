@@ -114,6 +114,30 @@ describe("createJWKSCache", () => {
     expect(calls).toBe(2)
   })
 
+  test("with no Cache-Control the injected TTL decides, below the IdP floor too", async () => {
+    const { publicJwk } = await makeJwkPair("kid-1")
+    let calls = 0
+    let now = 0
+    const cache = createJWKSCache(
+      "https://sso.test/jwks",
+      {
+        fetch: async () => {
+          calls += 1
+          return new Response(JSON.stringify({ keys: [publicJwk] }), { status: 200 })
+        },
+      },
+      () => now,
+      60_000,
+    )
+    await cache.resolve({ kid: "kid-1", alg: "RS256" })
+    now = 59_999
+    await cache.resolve({ kid: "kid-1", alg: "RS256" })
+    expect(calls).toBe(1)
+    now = 60_000
+    await cache.resolve({ kid: "kid-1", alg: "RS256" })
+    expect(calls).toBe(2)
+  })
+
   test("fails with not_found when the kid is not in JWKS after a fetch", async () => {
     const { publicJwk } = await makeJwkPair("kid-1")
     const cache = createJWKSCache("https://sso.test/jwks", {

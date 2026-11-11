@@ -264,12 +264,15 @@ overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 `bun.lock`. CI runs it as a gate: a finding turns the build red, and an assessment that could not
 complete is reported as `unavailable` rather than as a clean pass.
 
-The `ci` workflow runs lint, typecheck, test, advisory, ui-geometry, build and bench. All of them
-but `bench` turn the run red when they fail — lint, typecheck, test, advisory, ui-geometry and
-build. The `bench` job is a report — job-level `continue-on-error: true`, so it never fails CI — but a regression in `router_overhead_seconds` is still a bug, so run `bin/bench`.
+The `ci` workflow runs lint, typecheck, test, advisory, bench, ui-geometry, build and image
+(the release Dockerfile, built and never pushed). Before a merge, know what each one is.
+Gates — a red one fails the run: lint, typecheck, test, build, ui-geometry, image and advisory.
+The bench job is a report: job-level `continue-on-error: true`, so it never fails the run, but a
+regression in `router_overhead_seconds` is still a bug, so run `bin/bench`.
 Which of those a merge waits for is branch protection's call, not this file's: read the required
-checks at merge time, and merge only when every applicable gate is green — the `ci` workflow's
-required checks, the required review approval, and branch protection on `main`.
+checks at merge time (`gh api repos/developerz-ai/multi-ai-router/branches/main/protection`).
+Today they are bench, build, image, lint, test, typecheck and ui-geometry, strict, with no review
+approval; advisory is not required for a merge, but the release workflow refuses a tag without it.
 `bin/check` covers the offline subset only (lint, typecheck, test, build): the advisory gate
 needs the network and the ui-geometry layout gate needs a browser.
 

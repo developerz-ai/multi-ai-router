@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from "hono"
+import { DEFAULT_ADMIN_JSON_MAX_BYTES } from "../../config/admin-bodies"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
 import { readJsonBody, validate } from "../../services/admin"
 import { auditQuery, type SettingsService, updatePriceOverridesBody } from "../../services/settings"
@@ -44,7 +45,9 @@ export function adminSettingsRoutes(deps: AdminSettingsRoutesDeps): Hono<AdminAu
   routes.patch("/", async (c) => {
     const body = validate(
       updatePriceOverridesBody,
-      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
     )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.update(body.value))

@@ -480,3 +480,53 @@ describe("opencode-go reads its listing off the OpenAI surface, whatever surface
     })
   }
 })
+
+/**
+ * Sweep 101, 04.6. A success body was read whole, bounded only by the attempt timeout: an
+ * operator-typed base URL streaming hundreds of megabytes was buffered then parsed, hourly.
+ */
+describe("the listing body has a ceiling", () => {
+  test("a body streaming past the ceiling is refused and the read cancelled", async () => {
+    let pulled = 0
+    let cancelled = false
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1
+        controller.enqueue(new TextEncoder().encode(`{"data":[${'{"id":"m"},'.repeat(100)}`))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const result = await listUpstreamModels(
+      { ...deps(async () => new Response(endless, { status: 200 })), maxResponseBytes: 4096 },
+      accountRow(),
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe("discovery_unreadable")
+    expect(cancelled).toBe(true)
+    expect(pulled).toBeLessThan(10)
+  })
+
+  test("a declared length past the ceiling is refused before reading", async () => {
+    const result = await listUpstreamModels(
+      {
+        ...deps(answering({ data: [{ id: "m" }], padding: "x".repeat(8192) })),
+        maxResponseBytes: 1024,
+      },
+      accountRow(),
+    )
+
+    expect(result.ok).toBe(false)
+  })
+
+  test("has_more is carried as a truncated listing, not dropped", async () => {
+    const result = await listUpstreamModels(
+      deps(answering({ data: [{ id: "m" }], has_more: true })),
+      accountRow({ provider: "anthropic-api" }),
+    )
+
+    expect(result).toMatchObject({ ok: true, truncated: true })
+  })
+})

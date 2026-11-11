@@ -1,6 +1,6 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
+import { type ParsedAnthropicRequest, parseAnthropicRequest } from "../parse-ingress"
 import type { ParsedAnthropicBlock, ParsedAnthropicMessage } from "../shared/anthropic"
-import { anthropicRequestSchema } from "../shared/anthropic"
 import {
   documentText,
   dropBlock,
@@ -9,7 +9,7 @@ import {
   systemText,
   toolResultParts,
 } from "../shared/anthropic-blocks"
-import { isClearedSystemTurn, systemTurnText } from "../shared/anthropic-system-turns"
+import { clearedSystemTurns, systemTurnText } from "../shared/anthropic-system-turns"
 import {
   type CacheMark,
   cacheMark,
@@ -26,7 +26,7 @@ import type {
 } from "../shared/openai-chat"
 import { chatCeiling } from "../shared/openai-chat"
 import { openAiEffortFromAnthropic, reasoningBesideToolChoice } from "../shared/reasoning-effort"
-import { assertNoAnthropicStructuredOutput, parseRequest, rejectField } from "../shared/reject"
+import { assertNoAnthropicStructuredOutput, rejectField } from "../shared/reject"
 import { forcesOpenAiChatTool, toolChoiceForOpenAiChat } from "../shared/tool-choice"
 import { argumentsFromInput, toolsToOpenAiChat } from "../shared/tools"
 
@@ -89,7 +89,14 @@ export function anthropicToOpenAiChatRequest(
   body: unknown,
   options: AnthropicToOpenAiChatOptions = {},
 ): OpenAiChatRequest {
-  const request = parseRequest(anthropicRequestSchema, body, "anthropic")
+  return anthropicToOpenAiChatRequestFromParsed(parseAnthropicRequest(body), options)
+}
+
+/** {@link anthropicToOpenAiChatRequest} over a body already parsed once for every candidate (`dataplane/translate-body.ts`). */
+export function anthropicToOpenAiChatRequestFromParsed(
+  request: ParsedAnthropicRequest,
+  options: AnthropicToOpenAiChatOptions = {},
+): OpenAiChatRequest {
   // Anthropic's own structured-output field cannot cross into openai-chat: the constraint is a
   // contract the caller will parse, and this build carries it in the other direction only. Refused
   // by name, before any work — `shared/reject.ts` owns the rule for all three spellings.
@@ -106,10 +113,11 @@ export function anthropicToOpenAiChatRequest(
     drafts.push({ role: "system", parts: [{ type: "text", text: system }], toolCalls: [] })
   }
 
+  const cleared = clearedSystemTurns(request.messages)
   for (const [index, message] of request.messages.entries()) {
     const at = `messages[${index}]`
     if (message.role !== "system") appendMessage(drafts, message, at, onDrop, mark)
-    else if (!isClearedSystemTurn(request.messages, index)) {
+    else if (!cleared(index)) {
       // In place, as `system` — not `developer`, which several OpenAI-compatible chat vendors
       // (Qwen, Kimi, MiniMax, GLM) refuse while every one of them accepts a mid-list `system`.
       const text = systemTurnText(message, at, onDrop, TARGET)

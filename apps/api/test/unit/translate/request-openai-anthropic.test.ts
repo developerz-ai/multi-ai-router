@@ -5,7 +5,11 @@
 
 import { describe, expect, test } from "bun:test"
 import { TranslationError } from "@multi-ai-router/core"
-import { DEFAULT_MAX_TOKENS, openAiChatToAnthropicRequest } from "../../../src/services/translate"
+import {
+  DEFAULT_MAX_TOKENS,
+  openAiChatToAnthropicRequest,
+  openAiChatToOpenAiResponsesRequest,
+} from "../../../src/services/translate"
 import { openAiChatRequest, openAiChatTool } from "./fixtures"
 
 describe("max_tokens defaulting", () => {
@@ -293,5 +297,25 @@ describe("empty and malformed bodies", () => {
 
   test("a body that is not a valid openai-chat request is a 400", () => {
     expect(() => openAiChatToAnthropicRequest({ model: "x" })).toThrow(TranslationError)
+  })
+})
+
+// 06.14: legacy function calling is a contract; stripping it answered a different question.
+describe("legacy `functions` / `function_call`", () => {
+  const legacy = {
+    model: "m",
+    messages: [{ role: "user", content: "hi" }],
+    functions: [{ name: "f", parameters: { type: "object" } }],
+  }
+
+  test("toward anthropic: a 400 naming `functions`", () => {
+    expect(() => openAiChatToAnthropicRequest(legacy)).toThrow("`functions`")
+  })
+
+  test("toward openai-responses: a 400 naming `function_call`", () => {
+    const { functions: _f, ...rest } = legacy
+    expect(() => openAiChatToOpenAiResponsesRequest({ ...rest, function_call: "auto" })).toThrow(
+      "`function_call`",
+    )
   })
 })

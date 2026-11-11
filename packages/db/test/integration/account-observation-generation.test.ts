@@ -49,7 +49,9 @@ describe.skipIf(!url)("observed status recovery generation fence", () => {
     const account = await fixture.seed()
     const writer = createDatabase({ url, maxConnections: 1 })
     try {
-      const [{ pid }] = await writer.sql<{ pid: number }[]>`select pg_backend_pid() as pid`
+      const [backend] = await writer.sql<{ pid: number }[]>`select pg_backend_pid() as pid`
+      if (backend === undefined) throw new Error("no backend pid")
+      const { pid } = backend
       let mutation: Promise<unknown> | undefined
       await fixture.db().transaction(async (tx) => {
         await tx.select().from(accounts).where(eq(accounts.id, account.id)).for("update")

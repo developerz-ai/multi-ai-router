@@ -24,16 +24,23 @@ and health are served from warm in-memory caches; usage rows are enqueued and ba
 ```
 src/
   index.ts            explicit public API barrel
-  client.ts           createDatabase() — postgres.js pool + Drizzle instance
+  client.ts           createDatabase() — postgres.js pool + Drizzle instance, server-side timeouts
   migrate.ts          runMigrations() + a runnable entry point
+  advisory-lock.ts    advisoryLockKey() — FNV-1a name → lock key
+  scheduler-lock.ts / credential-refresh-lock.ts
+                      dedicated session advisory-lock pools, built on
+  session-advisory-lock.ts (+ -types, -lease, -query)
+  pool-metrics.ts     router_db_pool_connections sampling
   schema/
     index.ts          re-exports every table
     enums.ts          pgEnums, built from @multi-ai-router/core's Zod .options
-    <domain>.ts       one file per concern: accounts, quota-windows, pools,
-                      api-keys, api-key-scope, sessions, usage-records,
-                      usage-daily, audit-events, scheduled-task-runs, oauth-states
-  repositories/       one module per aggregate; all SQL lives here:
-                      account, api-key, pool, audit, usage-record
+    <domain>.ts       one file per table family (see Schema below)
+  repositories/       one module per aggregate or concern; all SQL lives here —
+                      accounts (+ lifecycle, recovery, authorization, quota windows,
+                      exhausted watches), api keys (+ tombstones), pools, sessions,
+                      admin sessions/credentials, audit, model catalog, oauth state,
+                      price overrides, scheduled tasks, usage (admission, history,
+                      raw reads, recent feed, reports, export)
 migrations/           generated SQL, committed, applied at boot
 test/unit/            schema-shape assertions, no database
 test/integration/     needs a live Postgres, skips cleanly without one
@@ -51,11 +58,21 @@ test/integration/     needs a live Postgres, skips cleanly without one
 | `api_key_pools` / `api_key_accounts` | A key's scope targets |
 | `sessions` | Conversation identity, and on the SDK path the authoritative account binding |
 | `usage_records` | One row per upstream **attempt**, joined by `correlation_id` |
-| `usage_daily` | Hourly rollup, idempotent per (day, key, account, model) |
+| `usage_daily` | Sealed legacy baseline (pre-2.16 rollups). Read-only since `0030`: a trigger refuses writes; retention still sweeps it |
+| `usage_contributions` | One durable receipt per admitted attempt/terminal, `(kind, id)`: what makes usage admission idempotent and survives raw retention |
+| `usage_attempt_daily_v2` / `usage_request_daily_v2` | Event-time daily aggregates built from receipts — the usage history source |
+| `usage_request_terminals` | One row per client request's terminal outcome |
+| `usage_history_state` | Singleton: retention horizon and the banked-through watermark |
+| `usage_reports` | Weekly usage reports, one per UTC week |
 | `audit_events` | Append-only admin-plane mutations. Never credential material |
 | `scheduled_task_runs` | One row per periodic-task run — how anyone knows a sweep happened |
 | `api_key_tombstones` | What a purged or deleted key leaves behind: id, name, display prefix, owner, owner kind, tool, purge time. Never the value. Read only by the usage label loader; swept on `RETENTION_USAGE_DAILY_DAYS` + 1 day |
 | `oauth_states` | One-shot OAuth `state` + PKCE verifier, short TTL |
+| `account_recoveries` / `account_operator_checks` | Recovery generations and probe permits per account; the operator "Re-check now" claim |
+| `account_exhausted_watches` | Rule 7's persisted re-test ladder for `exhausted` accounts (`0044`) |
+| `admin_sessions` / `admin_credentials` | Durable admin console sessions (hashed id) and the local admin credential |
+| `model_catalog` / `model_catalog_attempts` | Per-account model listing, and the refresh sweep's failed-attempt bookkeeping |
+| `price_overrides` | Operator price overrides, global or per account |
 
 Modeling decisions worth knowing:
 
@@ -84,14 +101,24 @@ here needs a `DATABASE_URL` exported by hand.
 | Apply to the dev database | `bin/db migrate` |
 | Destroy and re-migrate the dev database | `bin/db reset` |
 | Interactive shell | `bin/db psql` |
-| Verify the generated set | `bun run --cwd packages/db db:check` |
+| Verify the generated set | `bin/db check` |
 | Apply in production | `runMigrations({ url })`, called at boot before the listener opens |
 
 Generated SQL is committed. drizzle-kit never runs in the container.
 
 `runMigrations()` pins one connection and takes a session-scoped `pg_advisory_lock`, so two
-replicas starting against the same database converge instead of racing the same DDL. Re-running is a
-no-op: already-applied files are skipped.
+replicas starting against the same database converge instead of racing the same DDL (a replica that
+has to wait says so first). Re-running is a no-op: drizzle's journal skips already-applied files —
+that, not the SQL, is the idempotency. From `0044` on every statement is additionally guarded
+(`IF NOT EXISTS`, `DROP … IF EXISTS` before `ADD CONSTRAINT`), so replaying a file over a schema that
+has it is also a no-op; `test/unit/migration-guards.test.ts` enforces it.
+
+drizzle applies **all pending files in one transaction**, so every lock a migration takes is held
+until the whole upgrade commits. Order DDL so `CREATE INDEX` (SHARE) comes before `DROP INDEX` /
+`ADD CONSTRAINT` (ACCESS EXCLUSIVE). After the advisory lock is held, `lock_timeout` (10 s, or
+`lockTimeoutMs`) bounds each DDL's lock wait: a DDL stuck behind a long read fails the boot with
+`MigrationLockTimeoutError` instead of queueing every later query on the table. No
+`statement_timeout` applies to the migration connection.
 
 A failure **fails the boot, loudly** — the entry point writes one structured line naming the
 migrations folder and the error, then exits non-zero. A router answering requests against a schema
@@ -105,6 +132,11 @@ import { createDatabase } from "@multi-ai-router/db"
 const { db, sql, close } = createDatabase({ url: env.DATABASE_URL, maxConnections: 10 })
 ```
 
+Every pooled session carries server-side bounds as startup parameters: `statementTimeoutMs`
+(default 60 000), `lockTimeoutMs` (30 000) and `idleInTransactionTimeoutMs` (60 000), each `0` to
+disable — `DATABASE_POOL_DEFAULTS`, wired from `DB_STATEMENT_TIMEOUT_MS`, `DB_LOCK_TIMEOUT_MS` and
+`DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`. Nothing else cancels a statement whose caller has gone.
+
 A factory, not a singleton, and this module has **no side effects at import time**: a module-level
 connection would dial a database on import — including in unit tests that never touch one — and
 leave nobody responsible for draining it. The server, the migration runner, and each test own a
@@ -116,13 +148,14 @@ outcome with a fixed HTTP status, and a missing `DATABASE_URL` has no client to 
 
 ## Testing
 
-`bun test packages/db` — the unit suites need no database.
+`bin/test packages/db` — the unit suites need no database.
 
 | Suite | Asserts |
 |---|---|
 | `test/unit/enums.test.ts` | Shared enums equal core's `.options` in order; `account_status` is exactly the five documented states including `exhausted`; the six routing policies; open-vs-closed set split |
 | `test/unit/schema-shape.test.ts` | Every table exposes exactly its documented columns; uuid PKs with database-side defaults; every timestamp carries a time zone; `sessions` has both `account_id` and `sdk_session_id`; `usage_records` has `correlation_id`, cache tokens, and router overhead |
-| `test/unit/indexes.test.ts` | The indexes the access patterns need, by column: key display-prefix lookup, usage by key/day, session lookup, rollup grain |
+| `test/unit/indexes.test.ts` | The indexes the access patterns need, by column — key display-prefix lookup, per-account usage, session lookup, rollup grain — and the absence of the ones nothing reads (no key/session-led usage index; the six dropped in `0044`) |
+| `test/unit/migration-guards.test.ts` | Every schema-changing statement from `0044` on is replay-safe, and `0044` builds indexes before it takes ACCESS EXCLUSIVE locks |
 | `test/integration/migrations.test.ts` | Migrations apply, are idempotent when run twice, and produce every expected table. Skips cleanly when `DATABASE_URL` is unset or no SQL has been generated |
 
 ## See also

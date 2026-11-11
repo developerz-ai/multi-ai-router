@@ -16,7 +16,6 @@ import { priceLookupForRows } from "../cost/book"
 import { type PriceAccount, unpricedModels } from "../cost/coverage"
 import { diffPriceOverrides, PRICE_OVERRIDES_SETTING, priceOverrideAuditDetail } from "./audit"
 import {
-  AUDIT_LIMIT_MAX,
   type AuditQuery,
   type AuditView,
   type SettingsView,
@@ -52,7 +51,7 @@ export interface SettingsService {
 export interface SettingsServiceDeps {
   readonly priceAccounts?: () => readonly PriceAccount[]
   readonly prices: Pick<PriceOverrideRepository, "list" | "replaceAll">
-  readonly scheduledTasks: Pick<ScheduledTaskRepository, "lastRun" | "lastSuccess">
+  readonly scheduledTasks: Pick<ScheduledTaskRepository, "latestPerTask">
   /** Read-only. The audit log is append-only, and this service reads it through two methods. */
   readonly auditEvents: Pick<AuditRepository, "list" | "listForSubject">
   readonly audit: AuditRecorder
@@ -155,40 +154,30 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
       // One reading of the clock for the whole screen: two would let one task be judged against a
       // later instant than the one beside it.
       const now = deps.now()
-      const statuses = await Promise.all(
-        // Driven off the Postgres enum, so a task that has never run still appears — a task
-        // missing from this list is indistinguishable from one that is merely quiet.
-        scheduledTask.enumValues.map(async (task) => {
-          const [lastRun, lastSuccess] = await Promise.all([
-            deps.scheduledTasks.lastRun(task),
-            deps.scheduledTasks.lastSuccess(task),
-          ])
-          return toTaskStatusView({
-            task,
-            lastRun,
-            lastSuccess,
-            intervalMs: deps.intervals[task],
-            now,
-          })
+      // Two statements for the whole screen, not two per task (01.11).
+      const latest = await deps.scheduledTasks.latestPerTask()
+      // Driven off the Postgres enum, so a task that has never run still appears — a task missing
+      // from this list is indistinguishable from one that is merely quiet.
+      const statuses = scheduledTask.enumValues.map((task) =>
+        toTaskStatusView({
+          task,
+          lastRun: latest.lastRun.get(task),
+          lastSuccess: latest.lastSuccess.get(task),
+          intervalMs: deps.intervals[task],
+          now,
         }),
       )
       return ok({ tasks: statuses })
     },
 
     audit: async (query) => {
-      // `kind` has no repository predicate and services never write SQL, so it is applied after the
-      // read. The scan is widened to the query's own maximum when a kind is asked for, which keeps
-      // the filter useful without turning one indexed `LIMIT` into an unbounded scan; a search
-      // deeper than that needs a repository method, not a loop in a service.
-      const scan = query.kind === undefined ? query.limit : AUDIT_LIMIT_MAX
+      // `kind` is a repository predicate (01.10): filtered in SQL, so an older event of that kind
+      // is never hidden behind `limit` newer rows of another.
       const rows =
         query.subjectId === undefined
-          ? await deps.auditEvents.list(scan)
-          : await deps.auditEvents.listForSubject(query.subjectId, scan)
-
-      const matched =
-        query.kind === undefined ? rows : rows.filter((row) => row.kind === query.kind)
-      return ok({ events: matched.slice(0, query.limit).map(toAuditEventView), limit: query.limit })
+          ? await deps.auditEvents.list(query.limit, query.kind)
+          : await deps.auditEvents.listForSubject(query.subjectId, query.limit, query.kind)
+      return ok({ events: rows.map(toAuditEventView), limit: query.limit })
     },
   }
 }

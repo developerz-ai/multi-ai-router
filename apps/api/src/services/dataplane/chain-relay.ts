@@ -1,9 +1,7 @@
 import type { Logger } from "../../logging/logger"
-import type { AttemptFailure } from "../routing"
 import type { TranslationContext } from "../translate/registry"
-import { createResponseObserver, type UsageRecord } from "../usage"
+import { createResponseObserver } from "../usage"
 import { RouterShutdownError } from "./active-requests"
-import type { UpstreamError } from "./attempt"
 import { logStreamFailure } from "./attempt-log"
 import { reasoningSealFor } from "./chain-body"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
@@ -13,7 +11,7 @@ import type { HealthObservation } from "./health-observation"
 import { observingModelOutput } from "./model-output"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { withReasoningSeal } from "./reasoning-seal-context"
-import { attemptCost, attemptRecord, failureOutcome } from "./records"
+import { attemptCost, attemptRecord } from "./records"
 import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
 import { ClientCancelledError } from "./relay-cancellation"
@@ -22,6 +20,7 @@ import { costRequested, restampingPair } from "./relay-cost-optin"
 import { endsWithRouterError } from "./relay-stream-end"
 import { createRelayTerminal } from "./relay-terminal"
 import { relayTranslatedResponse } from "./relay-translate"
+import { refusedStatus } from "./relay-translate-held"
 import type { DispatchRuntime } from "./runtime"
 
 export interface AttemptClock {
@@ -95,23 +94,28 @@ export function relaySuccess(
               streamed,
             }),
           ctx.request?.signal,
+          undefined,
+          ctx.runtime.bufferedBodyMaxBytes,
         )
   const upstreamStreams = forcesUpstreamStream(servable)
   // Whether the body is SSE whatever its `content-type` says: the driver declares a surface that
   // answers only as a stream (Codex sends one with no `content-type` at all), translated or not.
   const sendsSse = servable.responsesEgress.requireStream
   let modelOutput = false
+  // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
+  const observedType = sendsSse ? "text/event-stream" : response.headers.get("content-type")
+  const framesMidBody = observedType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
   const observation = createResponseObserver({
     dialect: servable.dialect,
     operation: ctx.runtime.operation,
-    // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
-    contentType: sendsSse ? "text/event-stream" : response.headers.get("content-type"),
+    contentType: observedType,
     maximumObservationBytes: ctx.runtime.responseObservationMaxBytes ?? 65_536,
     descriptor: observingModelOutput(servable.dialect, servable.driver.responseObservation, () => {
       modelOutput = true
     }),
   })
   const terminal = createRelayTerminal()
+  const clientStreams = ctx.translated?.clientStreams() === true
   let firstByteAt: number | undefined
   let relayedBytes = 0
   let settled = false
@@ -160,7 +164,10 @@ export function relaySuccess(
           outcome: verdict.outcome,
           streamed,
           httpStatus: response.status,
-          responseStatus: response.status,
+          // A held translation the router could not convert was answered as its typed `502`.
+          responseStatus:
+            refusedStatus(error, streamed, servable.translation !== null && !clientStreams) ??
+            response.status,
           errorClass: verdict.errorClass,
         }),
       )
@@ -172,6 +179,7 @@ export function relaySuccess(
           verdict.errorClass,
           facts.provider?.message,
           ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
+          error,
         )
       }
     } finally {
@@ -200,7 +208,15 @@ export function relaySuccess(
     },
     onChunk: (chunk: Uint8Array) => {
       observation.observe(chunk)
-      terminal.observe(observation.snapshot())
+      // Only an SSE body completes a frame mid-body; a JSON one is read at `finish`. The live
+      // getters say whether a verdict landed, so the snapshot is taken only then (02.2).
+      if (
+        framesMidBody &&
+        (observation.failure !== null ||
+          observation.terminal === "explicit_error" ||
+          observation.terminal === "explicit_incomplete")
+      )
+        terminal.observe(observation.snapshot())
     },
     onEnd: (bytes: number) => settle(bytes > 0, undefined, true),
     onError: (error: unknown, bytes: number) => settle(bytes > 0, error),
@@ -241,6 +257,12 @@ export function relaySuccess(
   return ended(
     relayTranslatedResponse({
       upstream: response,
+      refusal: {
+        ingress: ctx.runtime.ingressDialect,
+        requestId: ctx.runtime.requestId ?? null,
+        accountId: servable.account.id,
+        attempt,
+      },
       pair: servable.translation ?? restampingPair(servable.dialect),
       // The same account's seal the request was converted under, so reasoning this upstream issues
       // is sealed to it and only it.
@@ -255,6 +277,12 @@ export function relaySuccess(
         upstreamStreams &&
         ctx.translated?.clientStreams() !== true,
       upstreamStreams: sendsSse,
+      ...(ctx.runtime.bufferedBodyMaxBytes === undefined
+        ? {}
+        : { bufferedBodyMaxBytes: ctx.runtime.bufferedBodyMaxBytes }),
+      ...(ctx.runtime.translationFrameMaxBytes === undefined
+        ? {}
+        : { maximumFrameLength: ctx.runtime.translationFrameMaxBytes }),
       ...(priced ? { cost } : {}),
       observer,
       ...(relaySignal === undefined ? {} : { signal: relaySignal }),
@@ -266,26 +294,4 @@ export function relaySuccess(
         }),
     }),
   )
-}
-
-export function recordAttemptFailure(
-  ctx: AttemptRelay,
-  servable: ServableCandidate,
-  attempt: number,
-  failure: AttemptFailure,
-  upstream: UpstreamError | null,
-  at: AttemptClock,
-): UsageRecord {
-  const event = attemptRecord({
-    ...ctx.runtime.attribution(attempt, servable),
-    // Same rule on the way down: a count that never landed is no more priceable than one that did.
-    priced: ctx.runtime.operation !== "count-tokens",
-    timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs),
-    outcome: failureOutcome(failure.kind),
-    streamed: false,
-    httpStatus: upstream?.status ?? null,
-    errorClass: null,
-  })
-  ctx.runtime.record(event)
-  return event
 }

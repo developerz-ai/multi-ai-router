@@ -119,10 +119,12 @@ describe("the task view", () => {
 
 describe("the tasks read", () => {
   test("lists every scheduled_task enum value, including one that has never run", async () => {
-    const { service } = harness({
+    const { service, tasks } = harness({
       runs: { janitor_sweep: [run({ startedAt: at(5), finishedAt: at(4), outcome: "success" })] },
     })
     const result = await service.tasks()
+    // One repository call for the whole screen — it used to be two per task (01.11).
+    expect(tasks.calls).toBe(1)
 
     expect(result.ok).toBe(true)
     if (!result.ok) return

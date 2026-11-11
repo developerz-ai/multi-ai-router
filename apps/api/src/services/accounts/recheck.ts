@@ -83,23 +83,45 @@ export interface RecheckServiceDeps {
   readonly onRecoveryRequested?: (accountId: string) => void
   /** A committed re-check of a `needs_reauth` account: its refresh gets one more try, off-path. */
   readonly onParkedRecheck?: (accountId: string) => void
+  /**
+   * Whether nothing holds this account out of rotation right now (`liveHealthCheck`). Such a
+   * re-check publishes a settled generation: a pending one would gate every request but the one
+   * permit holder behind a probe the account does not need (plan 101, 03.1). Absent, every re-check
+   * publishes a probe — the behaviour before this option existed.
+   */
+  readonly isLiveHealthy?: (accountId: string) => boolean
+  /** How many accounts "Re-check all" commits at once (`ACCOUNT_RECHECK_ALL_CONCURRENCY`). */
+  readonly recheckAllConcurrency?: number
   readonly operatorCheckLeaseMs?: number
   readonly cooldownSeconds: number
 }
 
+type Committed = NonNullable<
+  Awaited<ReturnType<OperatorRecoveryRepository["beginOperatorRecovery"]>>
+>
+
+/** A re-check split at its durable commit: publishing it needs the catalog installed first. */
+type CommitPhase =
+  | { readonly kind: "done"; readonly result: AdminResult<RecheckResult> }
+  | {
+      readonly kind: "committed"
+      readonly accountId: string
+      readonly source: RecheckSource
+      readonly committed: Committed
+      readonly auth: ClaudeAuthReport | undefined
+    }
+
 export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
-  const attempt = async (
-    accountId: string,
-    source: RecheckSource,
-  ): Promise<AdminResult<RecheckResult>> => {
+  const commit = async (accountId: string, source: RecheckSource): Promise<CommitPhase> => {
+    const done = (result: AdminResult<RecheckResult>): CommitPhase => ({ kind: "done", result })
     const claimToken = crypto.randomUUID()
     const claim = await deps.recovery.reserveOperatorCheck({
       accountId,
       claimToken,
       leaseMs: deps.operatorCheckLeaseMs ?? 30_000,
     })
-    if (claim === undefined) return notFound("No account has that id")
-    if (claim.kind !== "acquired") return ok(refusedView(accountId, claim))
+    if (claim === undefined) return done(notFound("No account has that id"))
+    if (claim.kind !== "acquired") return done(ok(refusedView(accountId, claim)))
     const original = claim.account
     try {
       // No database lock crosses the CLI call; its token fences post-lease authentication mutations.
@@ -109,6 +131,7 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
         claimToken,
         generationCandidate: crypto.randomUUID(),
         cooldownMs: deps.cooldownSeconds * 1_000,
+        ...(deps.isLiveHealthy?.(accountId) === true ? { settled: true } : {}),
         ...(auth?.loggedIn === false
           ? {
               negativeAuthObservation: {
@@ -119,34 +142,49 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
             }
           : {}),
       })
-      if (finalized === undefined) return notFound("No account has that id")
-      if (finalized.kind === "refused") return ok(refusedView(accountId, finalized))
-      const committed = finalized.result
-      if (committed === undefined) return notFound("No account has that id")
-      // Our reserved authentication check can publish a recovery even when finalization joins its cooldown.
-      await deps.refreshCatalog()
-      if (committed.recovery.state === "pending") deps.onRecoveryRequested?.(accountId)
-      if (committed.rechecked) {
-        // A committed pending restriction must reach local routing even if audit later fails.
-        await deps.audit.record({
-          kind: AUDIT_KINDS.accountRechecked,
-          subjectType: AUDIT_SUBJECTS.account,
-          subjectId: accountId,
-          detail: {
-            provider: committed.account.provider,
-            source,
-            ...(committed.clearedStatus === null ? {} : { clearedStatus: committed.clearedStatus }),
-            ...(auth === undefined
-              ? {}
-              : { loggedIn: auth.loggedIn, statusChangedTo: auth.statusChangedTo }),
-          },
-        })
-        if (committed.account.status === "needs_reauth") deps.onParkedRecheck?.(accountId)
-      }
-      return ok({ ...recheckView(accountId, committed), ...(auth === undefined ? {} : { auth }) })
+      if (finalized === undefined) return done(notFound("No account has that id"))
+      if (finalized.kind === "refused") return done(ok(refusedView(accountId, finalized)))
+      return { kind: "committed", accountId, source, committed: finalized.result, auth }
     } finally {
       await deps.recovery.releaseOperatorCheck({ accountId, claimToken })
     }
+  }
+
+  // Runs only after the committed generation is installed locally (`refreshCatalog`).
+  const publish = async (
+    phase: Extract<CommitPhase, { kind: "committed" }>,
+  ): Promise<AdminResult<RecheckResult>> => {
+    const { accountId, committed, auth } = phase
+    if (committed.recovery.state === "pending") deps.onRecoveryRequested?.(accountId)
+    if (committed.rechecked) {
+      // A committed pending restriction must reach local routing even if audit later fails.
+      await deps.audit.record({
+        kind: AUDIT_KINDS.accountRechecked,
+        subjectType: AUDIT_SUBJECTS.account,
+        subjectId: accountId,
+        detail: {
+          provider: committed.account.provider,
+          source: phase.source,
+          ...(committed.clearedStatus === null ? {} : { clearedStatus: committed.clearedStatus }),
+          ...(auth === undefined
+            ? {}
+            : { loggedIn: auth.loggedIn, statusChangedTo: auth.statusChangedTo }),
+        },
+      })
+      if (committed.account.status === "needs_reauth") deps.onParkedRecheck?.(accountId)
+    }
+    return ok({ ...recheckView(accountId, committed), ...(auth === undefined ? {} : { auth }) })
+  }
+
+  const attempt = async (
+    accountId: string,
+    source: RecheckSource,
+  ): Promise<AdminResult<RecheckResult>> => {
+    const phase = await commit(accountId, source)
+    if (phase.kind === "done") return phase.result
+    // Our reserved authentication check can publish a recovery even when finalization joins its cooldown.
+    await deps.refreshCatalog()
+    return publish(phase)
   }
   const flights = new Map<string, Promise<AdminResult<RecheckResult>>>()
   const recheck = (
@@ -161,25 +199,49 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
     flights.set(accountId, flight)
     return flight
   }
-  return {
-    recheck,
-    recheckAll: async () => {
-      const accounts = await deps.accounts.list({})
-      const results: RecheckResult[] = []
-      for (const account of accounts) {
-        const result = await recheck(account.id)
-        if (result.ok) results.push(result.value)
-        else if (result.failure.status !== 404) return result
-      }
-      return ok(results)
-    },
+
+  // Commits with bounded concurrency, installs the catalog once, then publishes: one five-table
+  // reload for the fleet instead of one per account (plan 101, 03.4).
+  const recheckAll = async (): Promise<AdminResult<readonly RecheckResult[]>> => {
+    const accounts = await deps.accounts.list({})
+    const phases = await mapBounded(
+      accounts,
+      Math.max(1, deps.recheckAllConcurrency ?? 4),
+      (account) => commit(account.id, "operator_recovery"),
+    )
+    if (phases.some((phase) => phase.kind === "committed")) await deps.refreshCatalog()
+    const results: RecheckResult[] = []
+    for (const phase of phases) {
+      const result = phase.kind === "done" ? phase.result : await publish(phase)
+      if (result.ok) results.push(result.value)
+      else if (result.failure.status !== 404) return result
+    }
+    return ok(results)
   }
+
+  return { recheck, recheckAll }
 }
 
-function recheckView(
-  accountId: string,
-  committed: NonNullable<Awaited<ReturnType<OperatorRecoveryRepository["beginOperatorRecovery"]>>>,
-): RecheckResult {
+/** `run` over `items` with at most `limit` in flight; results keep the input order. */
+async function mapBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++
+      const item = items[index] as T
+      results[index] = await run(item)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+function recheckView(accountId: string, committed: Committed): RecheckResult {
   const recovery = toRecoveryView(committed.recovery)
   return {
     accountId,

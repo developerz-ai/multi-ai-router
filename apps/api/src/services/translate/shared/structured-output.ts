@@ -1,3 +1,4 @@
+import { isRecord } from "./is-record"
 import type { OpenAiResponsesTextFormat } from "./openai-responses"
 import { rejectField } from "./reject"
 
@@ -59,14 +60,14 @@ export function responseFormatToResponsesText(
 
 function jsonSchemaFormat(spec: unknown): OpenAiResponsesTextFormat {
   const at = `${FIELD}.json_schema`
-  if (!isPlainObject(spec)) rejectField(at, "must be an object when `type` is `json_schema`")
+  if (!isRecord(spec)) rejectField(at, "must be an object when `type` is `json_schema`")
 
   const name = spec.name ?? DEFAULT_SCHEMA_NAME
   if (typeof name !== "string" || !SCHEMA_NAME.test(name)) {
     rejectField(`${at}.name`, "must be 1-64 characters of a-z, A-Z, 0-9, `_` or `-`")
   }
   const schema = spec.schema
-  if (!isPlainObject(schema)) {
+  if (!isRecord(schema)) {
     rejectField(
       `${at}.schema`,
       "must be a JSON Schema object: openai-responses requires one, and an invented schema would promise a constraint the caller never stated",
@@ -89,8 +90,4 @@ function jsonSchemaFormat(spec: unknown): OpenAiResponsesTextFormat {
     ...(typeof strict === "boolean" ? { strict } : {}),
     ...(typeof description === "string" ? { description } : {}),
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

@@ -1,7 +1,7 @@
 import { createHttpDriver } from "../driver"
-import { messageRule, typeRule } from "../failure/classify"
+import { messageRule } from "../failure/classify"
 import type { ProviderDriver } from "../types"
-import { OPENCODE_OVERLOADED } from "./opencode-failures"
+import { OPENCODE_SESSION_HEADER, OPENCODE_USER_AGENT, opencodeRules } from "./opencode-failures"
 import { opencodeGoQuotaRead } from "./opencode-go-quota"
 import { opencodeModelListing } from "./opencode-models"
 
@@ -19,31 +19,22 @@ import { opencodeModelListing } from "./opencode-models"
 const BASE_URL = "https://opencode.ai/inference/go"
 
 /**
- * Provenance: measured 2026-11-06 — a request without it answers `400 MissingSessionID` on every
- * surface, streaming included. Blast radius: losing it fails every request, on every account.
- */
-const SESSION_HEADER = "x-opencode-session"
-
-/**
- * Provenance: the Go docs ask a client for its own user agent, not a generic HTTP library's, and
- * state that traffic is monitored. This is ours, stated honestly; the upstream accepted it on every
- * surface on 2026-11-06. Blast radius: requests read as an unidentified library.
- */
-const USER_AGENT = "developerz.ai"
-
-/**
- * Provenance: bodies observed live, 2026-11-06, with a key holding no pay-as-you-go balance.
+ * A Go key the plan does not cover: Go Teams entitles workspace *members*, not service accounts, and
+ * a team-owned key is refused on every model —
+ * `403 "Go Teams covers workspace members, not service accounts. Use a personal API key to call Go
+ * models."`, or `403 "This API key belongs to the team…"`.
  *
- * - `402 Insufficient account funds` is the status default's verdict too; the rule only names it.
- *   Unobserved: what a spent plan window answers with Extra Usage on and no balance. If that is this
- *   same `402`, a clock-recoverable window lands in `exhausted` and needs an operator — check the
- *   first real one against docs/idea/03-providers.md.
- * - `FreeUsageLimitError` is a `429` with a real `Retry-After`, so a clock revives it.
- * - `Model is unavailable` is a `400` for a name this plan does not serve: the next account may.
+ * `credits-exhausted`, not `auth`: the key is valid, the plan simply does not pay for it, and no
+ * clock or retry changes that — a human must issue a personal key or change the plan. Read as `auth`
+ * it landed on `credential-rejected`, whose re-test is a half-open probe that spends a *client*
+ * request: one seat failed a real request about every 4 h with a `502` while the rest of the pool
+ * was cooling (prod 2026-11-09/10, sweep 101, 10.7). `exhausted` is re-tested only by the bounded
+ * background re-check, never by routing a request to it (CLAUDE.md non-negotiable 7).
+ *
+ * Provenance: this router's production log, 2026-11-09..10 (accounts `e2d54875`, `0c688ac8`). Blast
+ * radius: every Go `403` naming the team entitlement.
  */
-const FREE_LIMIT_TYPES = ["FreeUsageLimitError"]
-const NO_FUNDS = /insufficient account funds/i
-const MODEL_UNAVAILABLE = /model is unavailable/i
+const NOT_ENTITLED = /\bGo Teams covers workspace members\b|\bAPI key belongs to the team\b/i
 
 /**
  * Provenance: Go relays MiniMax's own refusal, driven live on the anthropic surface 2026-11-06:
@@ -58,25 +49,29 @@ const driver = createHttpDriver({
   id: "opencode-go",
   billing: "subscription",
   surfaces: [
-    { dialect: "openai-chat", baseUrl: `${BASE_URL}/openai/v1`, sessionHeader: SESSION_HEADER },
+    {
+      dialect: "openai-chat",
+      baseUrl: `${BASE_URL}/openai/v1`,
+      sessionHeader: OPENCODE_SESSION_HEADER,
+    },
     {
       dialect: "anthropic",
       baseUrl: `${BASE_URL}/anthropic`,
       anthropicAuth: "vendor-bearer",
-      sessionHeader: SESSION_HEADER,
+      sessionHeader: OPENCODE_SESSION_HEADER,
       thinkingRequiredModels: THINKING_REQUIRED_MODELS,
     },
     {
       dialect: "openai-responses",
       baseUrl: `${BASE_URL}/openai/v1`,
-      sessionHeader: SESSION_HEADER,
+      sessionHeader: OPENCODE_SESSION_HEADER,
     },
   ],
   rules: [
-    messageRule("overloaded", "opencode-go:overloaded", OPENCODE_OVERLOADED),
-    typeRule("rate-limited", "opencode-go:free-usage-limit", FREE_LIMIT_TYPES),
-    messageRule("credits-exhausted", "opencode-go:insufficient-funds", NO_FUNDS),
-    messageRule("model-unsupported", "opencode-go:model-unavailable", MODEL_UNAVAILABLE),
+    messageRule("credits-exhausted", "opencode-go:plan-not-entitled", NOT_ENTITLED, {
+      statuses: [403],
+    }),
+    ...opencodeRules("opencode-go"),
   ],
 })
 
@@ -86,7 +81,7 @@ export const opencodeGoDriver: ProviderDriver = {
   quotaRead: opencodeGoQuotaRead,
   buildHeaders: (account, credential) => {
     const headers = driver.buildHeaders(account, credential)
-    headers.set("user-agent", USER_AGENT)
+    headers.set("user-agent", OPENCODE_USER_AGENT)
     return headers
   },
 }

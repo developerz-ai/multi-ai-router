@@ -24,96 +24,9 @@
  *   account and explicitly not a failover.
  */
 
-import type { ResetSource } from "@multi-ai-router/core"
+import { waitOutOverload } from "./failover-progress"
+import { type AttemptFailure, isRetryable } from "./failure-kind"
 import type { Candidate } from "./types"
-
-export type FailureKind =
-  | "rate-limited"
-  | "credits-exhausted"
-  | "server-error"
-  | "connection"
-  | "timeout"
-  | "auth"
-  | "client-error"
-  /**
-   * The upstream refused the model name itself. About the request's model *and* this account
-   * together: the next account may serve a different vendor's names, so it is retryable — and the
-   * account answered correctly, so `breaker.ts` never strikes for it.
-   */
-  | "model-unsupported"
-  /** SDK path: `No conversation found with session ID` on the account that owns it. */
-  | "stale-session"
-  /**
-   * SDK path: the CLI refuses to resume a session it is already running. About the *conversation*,
-   * not the account — see {@link RETRYABLE_FAILURE_KINDS} and `breaker.ts`.
-   */
-  | "busy-session"
-  /**
-   * The provider's shared backend is busy (`UpstreamFailureKind` `overloaded`). Retryable — the next
-   * account, then the same one again after a backoff ({@link planNextAttempt}) — and blameless: the
-   * breaker never strikes for it, so no account cools or waits on a recovery permit over it.
-   */
-  | "overloaded"
-
-export interface AttemptFailure {
-  readonly kind: FailureKind
-  readonly status?: number
-  readonly resetsAt?: Date
-  readonly retryAfterSeconds?: number
-  /** How the reset instant was obtained. Defaults to `provider-reported` when one is present. */
-  readonly resetSource?: ResetSource
-  readonly message: string
-}
-
-/**
- * Failures that justify walking to the next candidate.
- *
- * `auth` is here because a rejected credential is account-scoped: the breaker has already parked
- * the account (`needs_reauth` for a token, `disabled` for a key) by the time this is consulted, and
- * the next candidate authenticates with its own credential. Stopping on it made the first request
- * to land on an expired subscription fail while healthy accounts sat beside it — only the *next*
- * request routed around the parked account. `client-error` stays out: a bad request is bad at every
- * account. Both hold only before a byte reaches the client; `planNextAttempt` checks that first.
- *
- * `busy-session` is here for a third reason, and it is the one that separates *retryable* from
- * *account-scoped*: the SDK transport has already spent its own recovery (the in-place fork) by the
- * time the chain sees one, so the next candidate deserves its turn — but the fault was about the
- * conversation's session, not about the account it happened on, so `breaker.ts` never strikes for
- * it. Retryable and blameless are different questions, and only this kind answers them differently.
- */
-export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
-  "rate-limited",
-  "credits-exhausted",
-  "server-error",
-  "connection",
-  "timeout",
-  "auth",
-  "busy-session",
-  "model-unsupported",
-  "overloaded",
-]
-
-export function isRetryable(kind: FailureKind): boolean {
-  return RETRYABLE_FAILURE_KINDS.includes(kind)
-}
-
-/**
- * Maps an upstream status to a failure kind. `outOfCredits` comes from the driver, because every
- * provider words a drained balance differently and that classification is a driver-level concern.
- * Returns null for a status that is not a failure at all.
- */
-export function classifyStatus(
-  status: number,
-  signals: { readonly outOfCredits?: boolean } = {},
-): FailureKind | null {
-  if (signals.outOfCredits === true) return "credits-exhausted"
-  if (status < 400) return null
-  if (status === 429) return "rate-limited"
-  if (status === 402) return "credits-exhausted"
-  if (status === 401 || status === 403) return "auth"
-  if (status >= 500) return "server-error"
-  return "client-error"
-}
 
 /** A stale SDK session earns exactly one replay in place. */
 export const DEFAULT_MAX_IN_PLACE_RETRIES = 1
@@ -134,7 +47,15 @@ export interface FailoverOptions {
   readonly overloadRetryBaseMs?: number
   /** The account this session is bound to, when it has a binding. */
   readonly boundAccountId?: string
+  /** Request-attributable refusals in one chain that end it as a request wall. Default 2. */
+  readonly requestWallAfter?: number
 }
+
+/**
+ * Two accounts refusing the same request for the request's own content is the request's fault:
+ * walking the rest of the pool would only spend more turns on the same refusal.
+ */
+export const REQUEST_WALL_AFTER = 2
 
 export interface FailoverProgress {
   /** In attempt order. Its length is the attempt count that lands in the `UsageRecord`. */
@@ -154,6 +75,8 @@ export interface FailoverProgress {
    * account said: a later seat's own limit must not decide whether a busy one is asked again.
    */
   readonly overloadedAccountId?: string
+  /** Request-attributable refusals so far ({@link noteRequestAttributable}). Absent: none. */
+  readonly requestAttributable?: number
 }
 
 export const NO_ATTEMPTS: FailoverProgress = {
@@ -168,6 +91,8 @@ export type FailoverStopReason =
   | "not-retryable"
   | "attempts-exhausted"
   | "candidates-exhausted"
+  /** The request itself is refused wherever it goes ({@link AttemptFailure.requestAttributable}). */
+  | "request-wall"
 
 export type FailoverDecision =
   | {
@@ -206,6 +131,11 @@ export function planNextAttempt(
   if (lastFailure.kind === "stale-session") return replayInPlace(ordered, progress, options)
   if (!isRetryable(lastFailure.kind)) return { action: "stop", reason: "not-retryable" }
   if (
+    lastFailure.requestAttributable === true &&
+    (progress.requestAttributable ?? 0) >= (options.requestWallAfter ?? REQUEST_WALL_AFTER)
+  )
+    return { action: "stop", reason: "request-wall" }
+  if (
     progress.attemptedAccountIds.length >= attemptCeiling(plannedCount(ordered, progress), options)
   ) {
     return waitOutOverload(ordered, progress, lastFailure, options, "attempts-exhausted")
@@ -218,38 +148,6 @@ export function planNextAttempt(
   }
 
   return attemptOn(next, ordered, progress, options)
-}
-
-/**
- * Every account was asked and one said `overloaded`: the provider's shared backend is busy, which a
- * short wait fixes and another account does not. So that account is asked again after
- * `overloadRetryBaseMs`, doubling per retry, `overloadRetries` times — before any byte is on the
- * wire, as every retry here. Then the chain stops and the client hears `503` + `Retry-After`
- * (`UpstreamOverloadedError`), never a router-made `429`.
- */
-function waitOutOverload(
-  ordered: readonly Candidate[],
-  progress: FailoverProgress,
-  lastFailure: AttemptFailure,
-  options: FailoverOptions,
-  exhausted: FailoverStopReason,
-): FailoverDecision {
-  const busyId =
-    lastFailure.kind === "overloaded"
-      ? progress.attemptedAccountIds[progress.attemptedAccountIds.length - 1]
-      : progress.overloadedAccountId
-  if (busyId === undefined) return { action: "stop", reason: exhausted }
-  const cap = Math.max(0, Math.trunc(options.overloadRetries ?? 0))
-  if (progress.overloadRetries >= cap) return { action: "stop", reason: exhausted }
-  const candidate = ordered.find((entry) => entry.account.id === busyId)
-  if (candidate === undefined) return { action: "stop", reason: exhausted }
-  const base = Math.max(0, options.overloadRetryBaseMs ?? 0)
-  return {
-    action: "retry-in-place",
-    candidate,
-    attempt: progress.attemptedAccountIds.length,
-    delayMs: base * 2 ** progress.overloadRetries,
-  }
 }
 
 /**
@@ -288,51 +186,6 @@ function plannedCount(ordered: readonly Candidate[], progress: FailoverProgress)
   const offered = new Set(ordered.map((candidate) => candidate.account.id))
   const dropped = new Set(progress.attemptedAccountIds.filter((id) => !offered.has(id)))
   return ordered.length + dropped.size
-}
-
-/** Why an attempt went to the same account again: a session replay, or a wait on a busy provider. */
-export type InPlaceReason = "replay" | "overload"
-
-/**
- * Folds one dispatched attempt into the progress. Returns a new value; nothing mutates. `true` is a
- * replay, as it was before the two in-place reasons had their own counters.
- */
-export function recordAttempt(
-  progress: FailoverProgress,
-  accountId: string,
-  inPlace: boolean | InPlaceReason = false,
-): FailoverProgress {
-  if (inPlace === false)
-    return { ...progress, attemptedAccountIds: [...progress.attemptedAccountIds, accountId] }
-  return inPlace === "overload"
-    ? { ...progress, overloadRetries: progress.overloadRetries + 1 }
-    : { ...progress, inPlaceRetries: progress.inPlaceRetries + 1 }
-}
-
-/** The in-place reason a planned retry carries: only an overload wait states a delay. */
-export function inPlaceReason(decision: FailoverDecision): InPlaceReason | false {
-  if (decision.action !== "retry-in-place") return false
-  return decision.delayMs === undefined ? "replay" : "overload"
-}
-
-/**
- * Folds one failed attempt's kind into the progress: `overloaded` names the account to wait out,
- * anything else from that same account forgets it. Pure; returns a new value.
- */
-export function noteOverload(
-  progress: FailoverProgress,
-  accountId: string,
-  kind: FailureKind,
-): FailoverProgress {
-  if (kind === "overloaded") return { ...progress, overloadedAccountId: accountId }
-  if (progress.overloadedAccountId !== accountId) return progress
-  const { overloadedAccountId: _forgotten, ...rest } = progress
-  return rest
-}
-
-/** Called the instant the first byte reaches the client. From here nothing may be retried. */
-export function markStreamed(progress: FailoverProgress): FailoverProgress {
-  return { ...progress, bytesStreamed: true }
 }
 
 function firstAttempt(ordered: readonly Candidate[], progress: FailoverProgress): FailoverDecision {
@@ -384,6 +237,6 @@ function attemptOn(
     candidate: next,
     attempt: progress.attemptedAccountIds.length + 1,
     invalidateBinding: leavingBound,
-    sessionRestart: leavingBound && bound?.account.provider === "anthropic-oauth",
+    sessionRestart: leavingBound && bound?.account.carriesSession === true,
   }
 }

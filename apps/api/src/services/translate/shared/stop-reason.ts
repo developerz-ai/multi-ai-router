@@ -180,3 +180,19 @@ export function fromResponsesCompletion(
   // and reported, exactly as an unknown `stop_reason` is.
   return { value: CONSERVATIVE_FINISH_REASON, unrecognized: incompleteReason ?? "incomplete" }
 }
+
+/**
+ * {@link fromResponsesCompletion} for an openai-chat terminal, which has no null finish: a body or
+ * final chunk is a claim that the completion ended, and openai-chat clients branch on the reason.
+ * A status this build does not map (`cancelled`, absent) becomes the conservative `stop` and is
+ * returned as unrecognized, so the caller logs the provider change once.
+ */
+export function chatFinishFromResponses(
+  status: string | null | undefined,
+  incompleteReason: string | null | undefined,
+  hasToolCall: boolean,
+): { readonly value: OpenAiFinishReason; readonly unrecognized: string | null } {
+  const mapped = fromResponsesCompletion(status, incompleteReason, hasToolCall)
+  if (mapped.value !== null) return { value: mapped.value, unrecognized: mapped.unrecognized }
+  return { value: CONSERVATIVE_FINISH_REASON, unrecognized: status ?? "absent" }
+}

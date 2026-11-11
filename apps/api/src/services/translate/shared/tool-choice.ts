@@ -1,6 +1,7 @@
-import type { ParsedAnthropicToolChoice } from "./anthropic"
+import type { AnthropicToolChoice, ParsedAnthropicToolChoice } from "./anthropic"
 import { type DropSink, IGNORE_DROPS } from "./drops"
 import type { OpenAiChatTool, OpenAiChatToolChoice } from "./openai-chat"
+import { forcesToolUse } from "./structured-output-anthropic"
 import { toolChoiceToOpenAiChat } from "./tools"
 
 /**
@@ -44,4 +45,34 @@ export function toolChoiceForOpenAiChat(
  */
 export function forcesOpenAiChatTool(choice: OpenAiChatToolChoice | unknown): boolean {
   return choice === "required" || (typeof choice === "object" && choice !== null)
+}
+
+export interface AnthropicToolPolicy {
+  readonly tool_choice?: AnthropicToolChoice | undefined
+  /** Stated last in the body: a forced call and extended thinking cannot share a request. */
+  readonly thinking?: { readonly type: "disabled" } | undefined
+}
+
+/**
+ * The one `tool_choice` + `thinking` rule for every OpenAI dialect aimed at Anthropic, so two
+ * ingress dialects with the same intent produce the same body.
+ *
+ * `parallel_tool_calls` becomes `disable_parallel_tool_use` on `auto` / `any` / `tool` — an absent
+ * choice is `auto` — and only when tools are declared. `none` states no parallel policy in
+ * Anthropic's dialect, so it travels bare. A choice that forces a call brings
+ * `thinking: {type: "disabled"}` with it (`forcesToolUse`): think-by-default Anthropic-dialect
+ * vendors otherwise ignore the force and answer in prose.
+ */
+export function anthropicToolPolicy(
+  choice: AnthropicToolChoice | undefined,
+  parallel: boolean | null | undefined,
+  hasTools: boolean,
+): AnthropicToolPolicy {
+  const tool_choice =
+    parallel === undefined || parallel === null || !hasTools || choice?.type === "none"
+      ? choice
+      : { ...(choice ?? { type: "auto" as const }), disable_parallel_tool_use: !parallel }
+  return forcesToolUse(tool_choice)
+    ? { tool_choice, thinking: { type: "disabled" } }
+    : { tool_choice }
 }

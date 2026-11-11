@@ -8,6 +8,15 @@ refactor with the actual change, split it.
 <!-- The diff shows what changed. Explain why — what problem this solves,
      or what it enables. -->
 
+## Issue
+
+<!-- One line. `Fixes #` closes the issue on merge; use it only when this PR is the whole fix.
+     A list issue or an epic takes `Part of #`, and is closed by hand when its last part merges. -->
+
+- Fixes #
+- Part of #
+- No issue: <why>
+
 ## Behavior change?
 
 - [ ] This PR changes observable behavior (new endpoint, new config, new
@@ -19,8 +28,10 @@ refactor with the actual change, split it.
 
 <!-- Delete lines that don't apply. See CLAUDE.md for the full list. -->
 
-- [ ] Claude subscriptions still go only through the Agent SDK's `query()` —
-      no extracted token, no forged `api.anthropic.com` request
+- [ ] Claude subscriptions: login and refresh stay with the SDK / CLI; the fast
+      transport reads only the selected Account's token under its ownership
+      fence; nothing reads another Account's or HOME credentials or patches
+      the CLI
 - [ ] Agent SDK tool execution still passthrough-only, explicit allowlist,
       `settingSources: []` — nothing runs on the router host
 - [ ] No upstream credential appears in a response, log, or error

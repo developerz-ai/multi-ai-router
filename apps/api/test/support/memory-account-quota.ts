@@ -8,7 +8,13 @@ import type {
 export function memoryAccountQuota(
   accounts: readonly AccountRow[],
   recoveries: ReadonlyMap<string, Pick<RecoveryRow, "generation" | "state">>,
-): Pick<AccountRepository, "upsertQuotaWindow" | "upsertObservedQuotaWindow"> {
+): Pick<
+  AccountRepository,
+  | "upsertQuotaWindow"
+  | "upsertObservedQuotaWindow"
+  | "upsertQuotaWindows"
+  | "upsertObservedQuotaWindows"
+> {
   const windows = new Map<string, QuotaWindowRow>()
   const upsertQuotaWindow: AccountRepository["upsertQuotaWindow"] = async (accountId, state) => {
     if (!accounts.some((account) => account.id === accountId)) throw new Error("account removed")
@@ -51,21 +57,44 @@ export function memoryAccountQuota(
     windows.set(key, row)
     return row
   }
+  const upsertObservedQuotaWindow: AccountRepository["upsertObservedQuotaWindow"] = async ({
+    accountId,
+    state,
+    expected,
+  }) => {
+    const account = accounts.find((row) => row.id === accountId)
+    if (
+      account === undefined ||
+      account.lifecycleVersion !== expected.lifecycleVersion ||
+      account.healthRecoveryVersion !== expected.healthRecoveryVersion ||
+      account.authRecoveryVersion !== expected.authRecoveryVersion ||
+      account.authMaterial !== expected.authMaterial ||
+      account.status !== expected.status ||
+      (recoveries.get(accountId)?.generation ?? null) !== expected.recoveryGeneration
+    )
+      return undefined
+    return upsertQuotaWindow(accountId, state)
+  }
   return {
     upsertQuotaWindow,
-    upsertObservedQuotaWindow: async ({ accountId, state, expected }) => {
-      const account = accounts.find((row) => row.id === accountId)
-      if (
-        account === undefined ||
-        account.lifecycleVersion !== expected.lifecycleVersion ||
-        account.healthRecoveryVersion !== expected.healthRecoveryVersion ||
-        account.authRecoveryVersion !== expected.authRecoveryVersion ||
-        account.authMaterial !== expected.authMaterial ||
-        account.status !== expected.status ||
-        (recoveries.get(accountId)?.generation ?? null) !== expected.recoveryGeneration
-      )
-        return undefined
-      return upsertQuotaWindow(accountId, state)
+    upsertObservedQuotaWindow,
+    // The batch forms count what they wrote. A write for an account that is gone is skipped, as
+    // the SQL batch skips accounts its `key share` lock did not find, rather than thrown.
+    upsertQuotaWindows: async (writes) => {
+      let written = 0
+      for (const { accountId, state } of writes) {
+        if (!accounts.some((account) => account.id === accountId)) continue
+        await upsertQuotaWindow(accountId, state)
+        written += 1
+      }
+      return written
+    },
+    upsertObservedQuotaWindows: async (writes) => {
+      let written = 0
+      for (const write of writes) {
+        if ((await upsertObservedQuotaWindow(write)) !== undefined) written += 1
+      }
+      return written
     },
   }
 }

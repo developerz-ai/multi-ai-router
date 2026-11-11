@@ -27,6 +27,11 @@ export interface RecoveryAccess {
   readonly quotaStaleAfterMs: number
   readonly catalog: RoutingCatalog
   currentSnapshot(accountId: string): AccountSnapshot | undefined
+  /**
+   * A permit for this account was issued and is no longer available here: a request holds it, so
+   * its probe is on the wire and settles the account one way or the other.
+   */
+  probing?(accountId: string): boolean
   hint(accountId: string, reason: AutomaticRecoveryRequest["reason"]): void
   prepare(
     account: RoutableAccount,
@@ -97,6 +102,12 @@ export function createRecoveryAccess(deps: {
       return account === undefined
         ? undefined
         : overlayHealth(account.snapshot, deps.health.stateOf(id))
+    },
+    probing(id) {
+      return (
+        current(id)?.snapshot.recovery?.state === "issued" &&
+        deps.capabilities.available(id) === undefined
+      )
     },
     hint,
     prepare(

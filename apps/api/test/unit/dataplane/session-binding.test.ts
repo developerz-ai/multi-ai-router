@@ -64,6 +64,30 @@ describe("whether a request has a binding to read at all", () => {
     expect(await bindings.read("key-1", "conv-1")).toMatchObject({ accountId: "acct-1" })
     expect(store.reads).toEqual(["key-1/conv-1"])
   })
+
+  // Plan 101, 02.8: a key that can never reach a subscription pays no session-table read, even
+  // when one exists elsewhere in the catalog.
+  test("a key scoped to HTTP accounts or pools never queries, beside a subscription elsewhere", async () => {
+    const store = spyStore()
+    const bindings = sessionBindings(
+      catalog(
+        [account("api-1"), subscriptionAccount("sub")],
+        [
+          { id: "http", name: "http", policy: "round-robin", members: [{ accountId: "api-1" }] },
+          { id: "subs", name: "subs", policy: "round-robin", members: [{ accountId: "sub" }] },
+        ],
+      ),
+      store,
+    )
+
+    await bindings.read("key-1", "conv-1", { kind: "accounts", accountIds: ["api-1"] })
+    await bindings.read("key-1", "conv-1", { kind: "pools", poolIds: ["http"] })
+    expect(store.reads).toHaveLength(0)
+
+    await bindings.read("key-1", "conv-1", { kind: "pools", poolIds: ["subs"] })
+    await bindings.read("key-1", "conv-1", { kind: "accounts", accountIds: ["sub"] })
+    expect(store.reads).toHaveLength(2)
+  })
 })
 
 describe("the production store's log lines", () => {

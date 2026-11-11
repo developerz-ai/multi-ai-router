@@ -33,6 +33,7 @@ export const auditEvents = pgTable(
   },
   (table) => [
     index("audit_events_created_at_idx").on(table.createdAt),
+    // The activity feed filtered by kind (`list(limit, kind)`): newest-first within one kind.
     index("audit_events_kind_created_idx").on(table.kind, table.createdAt),
     index("audit_events_subject_idx").on(table.subjectId),
   ],

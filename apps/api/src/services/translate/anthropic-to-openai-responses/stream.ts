@@ -1,5 +1,13 @@
-import { z } from "zod"
-import { eventType, mergeUsage } from "../shared/anthropic-stream-events"
+import {
+  blockDeltaSchema,
+  blockStartSchema,
+  eventType,
+  mergeUsage,
+  messageDeltaSchema,
+  messageStartSchema,
+  readBlockIndex,
+  startedArguments,
+} from "../shared/anthropic-stream-events"
 import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { toOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
@@ -31,10 +39,6 @@ import { frameJson } from "../sse/parse"
  * lives here is only the Anthropic half of the reading. `thinking_delta` finally has somewhere to
  * go: the spec's table maps it to `response.reasoning_summary_text.delta`, where translating toward
  * openai-chat has to drop it.
- *
- * The event schemas below are this module's own reading of the Anthropic wire, not a shared one.
- * They are small, and a pair that owns its reading cannot have a field added for another pair's
- * benefit change what this one accepts.
  */
 
 /** `created` is a caller-supplied value, never `Date.now()`: a translator holds no clock. */
@@ -47,46 +51,12 @@ export interface AnthropicToOpenAiResponsesStreamOptions extends ResponsesRecove
   readonly model?: string | undefined
 }
 
-const messageStartSchema = z.looseObject({
-  message: z
-    .looseObject({
-      id: z.string().nullish().catch(null),
-      model: z.string().nullish().catch(null),
-      usage: z.unknown().optional(),
-    })
-    .nullish(),
-})
-
-const blockStartSchema = z.looseObject({
-  index: z.number().int().nonnegative(),
-  content_block: z.looseObject({
-    type: z.string(),
-    text: z.string().nullish().catch(null),
-    id: z.string().nullish().catch(null),
-    name: z.string().nullish().catch(null),
-  }),
-})
-
-const blockDeltaSchema = z.looseObject({
-  index: z.number().int().nonnegative(),
-  delta: z.looseObject({
-    type: z.string(),
-    text: z.string().nullish().catch(null),
-    thinking: z.string().nullish().catch(null),
-    partial_json: z.string().nullish().catch(null),
-  }),
-})
-
-const messageDeltaSchema = z.looseObject({
-  delta: z.looseObject({ stop_reason: z.string().nullish().catch(null) }).nullish(),
-  usage: z.unknown().optional(),
-})
-
 export function anthropicToOpenAiResponsesStream(
   options: AnthropicToOpenAiResponsesStreamOptions,
 ): StreamTranslator {
   const emitter = createResponsesStreamEmitter(options)
-  const emptyTools = new Set<number>()
+  /** Tool blocks with no argument delta yet → the arguments their start stated (`startedArguments`). */
+  const emptyTools = new Map<number, string>()
   let startUsage: AnthropicUsage | null = null
   let unrecognized: string | null = null
 
@@ -107,7 +77,7 @@ export function anthropicToOpenAiResponsesStream(
 
     if (block.type === "tool_use") {
       // Keyed by Anthropic's own block index, which every delta for this call repeats.
-      emptyTools.add(index)
+      emptyTools.set(index, startedArguments(block.input))
       emitter.toolStart(out, index, { id: block.id, name: block.name })
       return
     }
@@ -133,6 +103,16 @@ export function anthropicToOpenAiResponsesStream(
       if ((delta.partial_json ?? "").length > 0) emptyTools.delete(index)
       emitter.toolArgs(out, index, delta.partial_json ?? "")
     }
+  }
+
+  /** A tool block that streamed no arguments closes with the ones its start stated, or `{}`. */
+  function onBlockStop(out: SseEvent[], payload: unknown): void {
+    const index = readBlockIndex(payload)
+    if (index === undefined) return
+    const stated = emptyTools.get(index)
+    if (stated === undefined) return
+    emptyTools.delete(index)
+    emitter.toolArgs(out, index, stated)
   }
 
   /**
@@ -177,15 +157,7 @@ export function anthropicToOpenAiResponsesStream(
         case "content_block_stop":
           // Forwarded, not reconstructed: Anthropic states the boundary, and a Responses item needs
           // exactly that to close with its `done` events before the next one opens.
-          if (
-            typeof payload === "object" &&
-            payload !== null &&
-            "index" in payload &&
-            typeof payload.index === "number" &&
-            emptyTools.delete(payload.index)
-          ) {
-            emitter.toolArgs(out, payload.index, "{}")
-          }
+          onBlockStop(out, payload)
           emitter.closeItem(out)
           break
         case "message_delta":

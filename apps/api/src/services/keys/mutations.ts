@@ -72,7 +72,13 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
           async (tx) => {
             const current = await tx.keys.findById(id)
             if (current === undefined) return notFound(`no key with id "${id}"`)
-            const expiry = checkExpiry(body.expiresAt ?? undefined, deps.now())
+            // Only a *changed* expiry must lie in the future: the console resends the stored value
+            // with every edit, and an already-expired key must still be renameable (09 → 05.7).
+            const expiryChanged = body.expiresAt?.getTime() !== current.expiresAt?.getTime()
+            const expiry = checkExpiry(
+              expiryChanged ? (body.expiresAt ?? undefined) : undefined,
+              deps.now(),
+            )
             if (!expiry.ok) return expiry
             let scope: ResolvedScope | null = null
             if (body.scope !== undefined) {

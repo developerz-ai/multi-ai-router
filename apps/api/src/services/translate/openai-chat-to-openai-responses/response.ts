@@ -1,5 +1,5 @@
-import { z } from "zod"
-import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
+import { readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
+import { openAiChatCompletionSchema } from "../shared/openai-chat-wire"
 import type { TranslatedResponse } from "../shared/response"
 import type { ResponsesOutputItem } from "../shared/responses-body"
 import { responsesBodyJson, responsesItemId } from "../shared/responses-body"
@@ -27,40 +27,6 @@ import { openAiChatUsageToResponses, parseOpenAiChatUsage } from "../shared/usag
  * nothing has happened yet and refusing costs the caller nothing.
  */
 
-const toolCallSchema = z.looseObject({
-  id: z.string().nullish().catch(null),
-  function: z
-    .looseObject({
-      name: z.string().nullish().catch(null),
-      arguments: z.string().nullish().catch(null),
-    })
-    .nullish()
-    .catch(null),
-})
-
-const completionSchema = z.looseObject({
-  id: z.string().nullish().catch(null),
-  model: z.string().nullish().catch(null),
-  choices: z
-    .array(
-      z.looseObject({
-        index: z.number().int().nullish().catch(null),
-        message: z
-          .looseObject({
-            content: z.string().nullish().catch(null),
-            ...openAiChatReasoningSchema,
-            tool_calls: z.array(toolCallSchema).nullish().catch(null),
-          })
-          .nullish()
-          .catch(null),
-        finish_reason: z.string().nullish().catch(null),
-      }),
-    )
-    .nullish()
-    .catch(null),
-  usage: z.unknown().optional(),
-})
-
 export interface OpenAiChatToOpenAiResponsesResponseOptions {
   /** Unix **seconds**. A caller-supplied value, never `Date.now()`: a translator holds no clock. */
   readonly created: number
@@ -74,7 +40,7 @@ export function openAiChatToOpenAiResponsesResponse(
   body: unknown,
   options: OpenAiChatToOpenAiResponsesResponseOptions,
 ): TranslatedResponse {
-  const parsed = completionSchema.safeParse(body)
+  const parsed = openAiChatCompletionSchema.safeParse(body)
   const completion = parsed.success ? parsed.data : null
   // Ids pass through verbatim so one response is traceable across the seam, and every item id is
   // derived from this one.

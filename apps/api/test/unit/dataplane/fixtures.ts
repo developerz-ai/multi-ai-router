@@ -8,6 +8,7 @@
 
 import { generateRouterKey, routerKeyDisplayPrefix } from "@multi-ai-router/core"
 import type { ApiKeyRow } from "@multi-ai-router/db"
+import { providerCarriesSession } from "../../../src/providers/registry"
 import { type CredentialCipher, createCredentialCipher } from "../../../src/services/crypto/cipher"
 import {
   createHealthStore,
@@ -123,6 +124,8 @@ export function account(id: string, options: AccountOptions = {}): RoutableAccou
       { id, label: id, provider },
       {
         ...(options.modelAliases === undefined ? {} : { modelAliases: options.modelAliases }),
+        // As `catalog/load.ts` sets it: from the registry's transport, never a provider literal.
+        ...(providerCarriesSession(provider) ? { carriesSession: true } : {}),
         ...options.snapshot,
       },
     ),

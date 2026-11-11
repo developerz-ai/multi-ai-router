@@ -3,7 +3,7 @@ import { createLogger } from "../../../src/logging/logger"
 import { createMetrics } from "../../../src/observability"
 import type { UsageRecord } from "../../../src/services/usage"
 import { createUsageRecorderFromEnv } from "../../../src/services/usage"
-import type { TrailingTimer } from "../../../src/services/usage/fromEnv"
+import { isTransientDatabaseError, type TrailingTimer } from "../../../src/services/usage/fromEnv"
 
 /**
  * The production recorder's voice. A metric says a batch was refused; a log line says *which*
@@ -331,4 +331,90 @@ test("throwing admission observer cannot cause a committed write to be retried",
   await recorder.flush()
   expect(writes).toBe(1)
   expect(recorder.stats().writeFailures).toBe(0)
+})
+
+describe("a database outage is told apart from an unwritable batch (07.4)", () => {
+  const coded = (code: string): Error => Object.assign(new Error(code), { code })
+
+  test("connection, shutdown, resource and concurrency codes are transient, through the cause chain", () => {
+    for (const code of [
+      "ENOTFOUND",
+      "ECONNREFUSED",
+      "CONNECTION_CLOSED",
+      "08006",
+      "57P01",
+      "53300",
+      "40001",
+      "40P01",
+    ])
+      expect(
+        isTransientDatabaseError(new Error("Failed query: insert …", { cause: coded(code) })),
+      ).toBe(true)
+  })
+
+  test("a constraint or a malformed row is not", () => {
+    for (const code of ["23505", "22P02", "42703"])
+      expect(isTransientDatabaseError(coded(code))).toBe(false)
+    expect(isTransientDatabaseError(new Error("UsageIdentityConflict"))).toBe(false)
+    expect(isTransientDatabaseError("boom")).toBe(false)
+  })
+
+  test("the 2026-10-31 restart keeps every record and drops nothing", async () => {
+    let down = 5
+    const inserted: number[] = []
+    const lines: Line[] = []
+    const recorder = createUsageRecorderFromEnv({
+      records: {
+        insertBatch: (admission) => {
+          if (down > 0) {
+            down -= 1
+            return Promise.reject(
+              new Error("Failed query: insert into usage_records …", {
+                cause: coded("ENOTFOUND"),
+              }),
+            )
+          }
+          for (const row of admission.attempts) inserted.push(row.attempt ?? 0)
+          return Promise.resolve({
+            insertedAttempts: admission.attempts.length,
+            insertedTerminals: admission.terminals.length,
+          })
+        },
+      },
+      accounts: { markUsed: () => Promise.resolve() },
+      env: ENV,
+      logger: createLogger({
+        level: "debug",
+        write: (line) => void lines.push(JSON.parse(line) as Line),
+      }),
+    })
+    for (let attempt = 1; attempt <= 6; attempt += 1) recorder.record(record(attempt))
+    for (let flush = 0; flush < 10; flush += 1) await recorder.flush()
+    expect(inserted.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(recorder.stats()).toMatchObject({ depth: 0, writeDiscarded: 0 })
+    expect(lines.some((line) => line.level === "error")).toBe(false)
+  })
+
+  test("a full retry buffer drops its oldest at error", async () => {
+    const lines: Line[] = []
+    const recorder = createUsageRecorderFromEnv({
+      records: { insertBatch: () => Promise.reject(coded("ECONNREFUSED")) },
+      accounts: { markUsed: () => Promise.resolve() },
+      env: { ...ENV, usageRetryBufferMax: 2 },
+      logger: createLogger({
+        level: "debug",
+        write: (line) => void lines.push(JSON.parse(line) as Line),
+      }),
+    })
+    for (let attempt = 1; attempt <= 4; attempt += 1) recorder.record(record(attempt))
+    await recorder.flush()
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        msg: "usage retry buffer full during a database outage — oldest records dropped",
+        records: 2,
+      }),
+    )
+    expect(recorder.stats()).toMatchObject({ writeDiscarded: 2, depth: 2 })
+  })
 })

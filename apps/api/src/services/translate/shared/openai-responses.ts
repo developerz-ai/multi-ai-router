@@ -8,10 +8,11 @@ import { z } from "zod"
  *
  * Responses is the **stateful** dialect, and that is why this file names fields it has no intention
  * of translating. `previous_response_id`, `store: true`, `include`, `conversation`, `prompt`,
- * `background: true`, and `reasoning` / `item_reference` items all mean "continue from, or leave
- * behind, something the server remembers", and the router remembers nothing: it picks an account per
- * request and holds no conversation state. They are declared here so `shared/reject.ts` can refuse
- * them **by name**
+ * `background: true`, and `item_reference` items all mean "continue from, or leave behind,
+ * something the server remembers", and the router remembers nothing: it picks an account per
+ * request and holds no conversation state. They are declared here so `shared/reject-responses.ts`
+ * can refuse them **by name** (a `reasoning` item is dropped instead: its encrypted handle is
+ * account-bound and the visible transcript beside it is complete)
  * (docs/idea/06-protocol-translation.md#translation-matrix), which is the difference between a
  * client learning what to change and a client getting a silently truncated transcript.
  *
@@ -57,11 +58,9 @@ const unsupportedPart = z
   .refine((part) => !KNOWN_PART_TYPES.has(part.type), { message: "malformed content part" })
   .transform((part) => ({ type: UNSUPPORTED, actual: part.type }) as const)
 
+// Dispatched on `type` first: a part pays for its own parser only (see `anthropicBlockSchema`).
 export const openAiResponsesPartSchema = z.union([
-  inputTextPart,
-  outputTextPart,
-  inputImagePart,
-  refusalPart,
+  z.discriminatedUnion("type", [inputTextPart, outputTextPart, inputImagePart, refusalPart]),
   unsupportedPart,
 ])
 
@@ -102,11 +101,17 @@ const unsupportedItem = z
   .refine((item) => !KNOWN_ITEM_TYPES.has(item.type), { message: "malformed input item" })
   .transform((item) => ({ type: UNSUPPORTED, actual: item.type }) as const)
 
+/**
+ * Typed items dispatch on `type` first; the `{role, content}` shorthand has no `type`, so the
+ * message item stays its own branch after them, and the catch-all last.
+ */
 export const openAiResponsesItemSchema = z.union([
-  functionCallItem,
-  functionCallOutputItem,
-  reasoningItem,
-  itemReferenceItem,
+  z.discriminatedUnion("type", [
+    functionCallItem,
+    functionCallOutputItem,
+    reasoningItem,
+    itemReferenceItem,
+  ]),
   messageItem,
   unsupportedItem,
 ])
@@ -114,13 +119,14 @@ export const openAiResponsesItemSchema = z.union([
 /**
  * A Responses tool is **flat** — `{type:"function", name, parameters}` — where a chat tool nests the
  * same fields under `function`. A built-in (`web_search_preview`, `file_search`, …) declares no
- * `parameters` at all and is refused by name in `shared/tools.ts`.
+ * `parameters` at all; `shared/responses-tools.ts` drops a hosted one and refuses the rest by name.
  */
 export const openAiResponsesToolSchema = z.looseObject({
   type: z.string().optional(),
   name: z.string().optional(),
   description: z.string().optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
+  strict: z.boolean().nullish().catch(undefined),
 })
 
 export const openAiResponsesToolChoiceSchema = z.union([
@@ -213,6 +219,8 @@ export interface OpenAiResponsesTool {
   readonly name: string
   readonly description?: string | undefined
   readonly parameters: Record<string, unknown>
+  /** Carried from openai-chat's `function.strict`; absent means the upstream's default. */
+  readonly strict?: boolean | undefined
 }
 
 export type OpenAiResponsesToolChoice =

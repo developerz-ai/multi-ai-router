@@ -45,6 +45,12 @@ export interface DispatchOptions {
   readonly upstreamStream?: StreamDeadlines
   readonly upstreamErrorMaxBytes?: number
   readonly responseObservationMaxBytes?: number
+  /** `UPSTREAM_BUFFERED_BODY_MAX_BYTES`: an upstream body the router must read whole (02.9). */
+  readonly bufferedBodyMaxBytes?: number
+  /** `MAX_TRANSLATION_SSE_FRAME_BYTES`: one translated upstream SSE frame (06 slice). */
+  readonly maxTranslationSseFrameBytes?: number
+  /** `TRANSLATION_DROP_LOG_WINDOW_SECONDS` in ms: one drop warn per signature per window. */
+  readonly translationDropLogWindowMs?: number
   readonly translation?: TranslationOptions
   readonly log?: LogOptions
   /**
@@ -60,6 +66,13 @@ export interface RecoveryWaitOptions {
   readonly budgetMs: number
   /** How often a waiting request re-reads the snapshot — the coordinator's own tick. */
   readonly intervalMs: number
+  /**
+   * `RECOVERY_PROBE_WAIT_MS`. Total wait, from the first pause, a request may spend past `budgetMs`
+   * while the hold is a recovery probe already on the wire: it rides that probe's outcome instead
+   * of answering `429` behind it (plan 101, 12.5 — a 21 s zai probe outlived every 5 s waiter).
+   * Absent, or not above `budgetMs`, rides nothing.
+   */
+  readonly probeBudgetMs?: number
 }
 
 export interface LogOptions {

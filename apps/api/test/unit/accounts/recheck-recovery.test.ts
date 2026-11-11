@@ -186,3 +186,47 @@ test("two service instances expose the same atomic repository generation across 
   expect(first.events).toEqual(["barrier", "demand", "audit"])
   expect(second.events).toEqual(["barrier", "demand"])
 })
+
+function settledHarness(isLiveHealthy: (id: string) => boolean) {
+  const settledInputs: (boolean | undefined)[] = []
+  const demanded: string[] = []
+  const service = createRecheckService({
+    accounts: { list: async () => [accountRow()], findById: async () => accountRow() },
+    recovery: operatorCheckRepository({
+      begin: async (input) => {
+        settledInputs.push(input.settled)
+        const base = committed()
+        return input.settled === true
+          ? { ...base, recovery: { ...base.recovery, state: "cancelled" as const } }
+          : base
+      },
+      find: () => accountRow(),
+    }),
+    cooldownSeconds: 60,
+    refreshCatalog: async () => {},
+    audit: { record: async () => {} },
+    onRecoveryRequested: (id) => demanded.push(id),
+    isLiveHealthy,
+  })
+  return { service, settledInputs, demanded }
+}
+
+// Plan 101, 03.1: "Re-check all" on five serving subscriptions gated every request but one behind
+// a probe permit, and the waiters were refused 429 after the request wait budget.
+test("a re-check of a live-healthy account publishes a settled generation and demands no probe", async () => {
+  const h = settledHarness(() => true)
+  const response = await h.service.recheck(accountRow().id)
+  if (!response.ok) throw new Error("expected accepted request")
+  expect(h.settledInputs).toEqual([true])
+  expect(h.demanded).toEqual([])
+  expect(response.value.recovery?.state).not.toBe("pending")
+})
+
+test("a re-check of an account something holds out keeps its one probe", async () => {
+  const h = settledHarness(() => false)
+  const response = await h.service.recheck(accountRow().id)
+  if (!response.ok) throw new Error("expected accepted request")
+  expect(h.settledInputs).toEqual([undefined])
+  expect(h.demanded).toEqual([accountRow().id])
+  expect(response.value.recovery?.state).toBe("pending")
+})

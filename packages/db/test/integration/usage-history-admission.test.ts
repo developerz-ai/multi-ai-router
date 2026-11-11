@@ -35,9 +35,9 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
       insertedAttempts: 3,
       insertedTerminals: 1,
     })
-    const before = await fixture.history().totals(fixture.window)
+    const before = await fixture.history().totals(fixture.window, {})
     expect(before).toMatchObject({ requests: 1, attempts: 3, errors: 2, tokensIn: 9 })
-    const groups = await fixture.history().breakdown(fixture.window, "accountId")
+    const groups = await fixture.history().breakdown(fixture.window, "accountId", undefined, {})
     expect(groups.find((row) => row.id === a.accountId)).toMatchObject({ requests: 1, attempts: 1 })
     expect(groups.find((row) => row.id === c.accountId)).toMatchObject({ requests: 0, attempts: 1 })
     await write.deleteOlderThan(new Date("1984-01-04"), 10)
@@ -45,10 +45,10 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
       insertedAttempts: 0,
       insertedTerminals: 0,
     })
-    expect(await fixture.history().totals(fixture.window)).toEqual(before)
+    expect(await fixture.history().totals(fixture.window, {})).toEqual(before)
     expect(await fixture.db().select().from(usageRecords)).toHaveLength(0)
     expect(await fixture.db().select().from(usageRequestTerminals)).toHaveLength(0)
-    const series = await fixture.history().series(fixture.window, "day")
+    const series = await fixture.history().series(fixture.window, "day", undefined, {})
     expect(series.reduce((sum, row) => sum + row.requests, 0)).toBe(1)
     expect(series.find((row) => row.at === "1984-01-03T00:00:00.000Z")).toMatchObject({
       requests: 1,
@@ -56,7 +56,7 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
   })
   test("late event after raw purge remains in its application day, independent of DB ingestion", async () => {
     const row = historyAttempt({ createdAt: new Date("1984-01-10T12:34:00Z") })
-    const prior = await fixture.history().totals(fixture.window)
+    const prior = await fixture.history().totals(fixture.window, {})
     await fixture.usage().insertMany([row])
     const [persisted] = await fixture
       .db()
@@ -68,15 +68,15 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
     expect(persisted?.ingestedAt?.getTime()).toBeGreaterThan(new Date("2020-01-01").getTime())
     await fixture.usage().deleteOlderThan(new Date("1984-01-11"), 10)
     await fixture.usage().insertMany([row])
-    const total = await fixture.history().totals(fixture.window)
+    const total = await fixture.history().totals(fixture.window, {})
     expect(total.attempts).toBe(prior.attempts + 1)
     const partial = await fixture
       .history()
-      .totals({ from: new Date("1984-01-10T12:00:00Z"), to: new Date("1984-01-10T13:00:00Z") })
+      .totals({ from: new Date("1984-01-10T12:00:00Z"), to: new Date("1984-01-10T13:00:00Z") }, {})
     expect(partial.attempts).toBe(1)
   })
   test("real overflow aborts raw, terminal, receipt and additive deltas atomically", async () => {
-    const before = await fixture.history().totals(fixture.window)
+    const before = await fixture.history().totals(fixture.window, {})
     const valid = historyAttempt(),
       bad = historyAttempt({ tokensIn: 2147483648 })
     await expect(
@@ -92,7 +92,7 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
     expect(
       await fixture.db().select().from(usageRecords).where(eq(usageRecords.id, valid.id)),
     ).toHaveLength(0)
-    expect(await fixture.history().totals(fixture.window)).toEqual(before)
+    expect(await fixture.history().totals(fixture.window, {})).toEqual(before)
     await expect(
       fixture.usage().insertBatch({
         attempts: [valid],
@@ -128,7 +128,7 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
       insertedAttempts: 0,
       insertedTerminals: 4500,
     })
-    expect((await fixture.history().totals(window)).requests).toBe(4500)
+    expect((await fixture.history().totals(window, {})).requests).toBe(4500)
     expect(await write.insertBatch({ attempts: [], terminals })).toEqual({
       insertedAttempts: 0,
       insertedTerminals: 0,
@@ -141,7 +141,7 @@ describe.skipIf(!historyUrl)("idempotent event-time history admission", () => {
     if (last === undefined) throw Error("fixture terminal absent")
     last.responseStatus = 40000
     await expect(write.insertBatch({ attempts: [attempt], terminals: invalid })).rejects.toThrow()
-    expect((await fixture.history().totals(window)).requests).toBe(4500)
+    expect((await fixture.history().totals(window, {})).requests).toBe(4500)
     expect(
       await fixture.db().select().from(usageRecords).where(eq(usageRecords.id, attempt.id)),
     ).toHaveLength(0)

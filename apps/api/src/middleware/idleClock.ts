@@ -16,8 +16,13 @@ import type { MiddlewareHandler } from "hono"
  * So the clock is switched off per request (`server.timeout(request, 0)`), and back on to the
  * configured value at the point the global's purpose applies again:
  *
- * - **an event stream, as soon as its headers are out** — it carries its own heartbeats, and a
- *   stream gone silent past the timeout is still cut by the server exactly as before;
+ * - **an event stream, once its first byte is written** — from there its gaps are bounded by the
+ *   upstream idle clock (`UPSTREAM_IDLE_TIMEOUT_MS`, inside this one) or its own heartbeats, and a
+ *   stream gone silent past the timeout is still cut by the server. Not at its headers: Bun writes
+ *   no status line until the first body byte, and the upstream may legitimately stay silent up to
+ *   `UPSTREAM_FIRST_BYTE_TIMEOUT_MS` (300 s) before it. Restoring at the headers cut every passthrough
+ *   stream whose upstream thought longer than 60 s with nothing written at all — Envoy saw a reset
+ *   before any header (`502 UPE`) and the router filed it `client_cancelled` (2026-11, zai, 512 in 14 d);
  * - **any other body, once its last byte is written** — Bun keeps a per-request timeout on the
  *   socket afterwards, so without the restore an idle keep-alive socket whose peer vanished would
  *   never be reaped.
@@ -36,12 +41,27 @@ export function holdIdleClock(idleTimeoutSeconds: number): MiddlewareHandler {
     await next()
 
     const response = c.res
-    if (response.body === null || isEventStream(response)) {
+    if (response.body === null) {
       restore()
       return
     }
+    const atFirstByte = isEventStream(response)
+    let restored = false
+    const restoreOnce = (): void => {
+      if (restored) return
+      restored = true
+      restore()
+    }
     c.res = new Response(
-      response.body.pipeThrough(new TransformStream({ flush: restore })),
+      response.body.pipeThrough(
+        new TransformStream({
+          transform(chunk, controller) {
+            controller.enqueue(chunk)
+            if (atFirstByte) restoreOnce()
+          },
+          flush: restoreOnce,
+        }),
+      ),
       response,
     )
   }

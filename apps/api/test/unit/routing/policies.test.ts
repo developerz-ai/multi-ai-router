@@ -210,6 +210,26 @@ describe("quota-aware", () => {
     ])
   })
 
+  // Plan 101, 03.5: equal headroom broke by declared order, so a burst of agents all started on
+  // the first of six fresh subscriptions.
+  test("candidates at equal headroom rotate by the counter", () => {
+    const pool = [
+      candidate(account("a", { quotaWindows: [continuous(0)] }), 0),
+      candidate(account("b", { quotaWindows: [continuous(0)] }), 1),
+      candidate(account("c", { quotaWindows: [continuous(0)] }), 2),
+      candidate(account("d", { quotaWindows: [continuous(0.5)] }), 3),
+    ]
+    const heads = [0, 1, 2, 3, 4, 5].map(
+      (rotationCounter) =>
+        ids(runPolicy("quota-aware", input({ candidates: pool, rotationCounter })).ordered)[0],
+    )
+    expect(heads).toEqual(["a", "b", "c", "a", "b", "c"])
+    // A lower headroom never jumps a tie: `d` stays last whatever the counter.
+    expect(
+      ids(runPolicy("quota-aware", input({ candidates: pool, rotationCounter: 1 })).ordered),
+    ).toEqual(["b", "c", "a", "d"])
+  })
+
   test("the account is judged by its most consumed window", () => {
     const pool = [
       candidate(

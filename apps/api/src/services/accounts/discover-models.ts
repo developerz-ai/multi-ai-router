@@ -68,6 +68,8 @@ export interface DiscoverModelsServiceDeps {
   readonly timeoutMs: number
   /** Injected so a test never opens a socket. Defaults to global `fetch`. */
   readonly fetch?: FetchLike
+  /** Ceiling on the listing body (`MODEL_LISTING_MAX_BYTES`); absent keeps the listing default. */
+  readonly maxResponseBytes?: number
   /** Where a failed listing is reported, with the upstream's own (scrubbed, bounded) words. */
   readonly log?: Pick<Logger, "warn">
   /** `LOG_REASON_MAX_CHARS`: how much of the upstream's message one line quotes. */
@@ -148,7 +150,12 @@ async function listModels(
   account: AccountRow,
 ): Promise<AdminResult<readonly string[]>> {
   const listed = await listUpstreamModels(
-    { cipher: deps.cipher, timeoutMs: deps.timeoutMs, fetch: call },
+    {
+      cipher: deps.cipher,
+      timeoutMs: deps.timeoutMs,
+      fetch: call,
+      ...(deps.maxResponseBytes === undefined ? {} : { maxResponseBytes: deps.maxResponseBytes }),
+    },
     account,
   )
   if (!listed.ok) {

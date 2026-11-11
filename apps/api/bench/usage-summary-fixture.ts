@@ -74,7 +74,8 @@ async function insertBatches(
   types: string[],
   columnsData: unknown[][],
 ) {
-  for (let start = 0; start < columnsData[0].length; start += 10_000) {
+  const rows = columnsData[0]?.length ?? 0
+  for (let start = 0; start < rows; start += 10_000) {
     const slice = columnsData.map((c) => c.slice(start, start + 10_000))
     const params = slice.map(
       (c) =>
@@ -160,7 +161,7 @@ async function seedV2(sql: SqlConnection, days: string[], keys: number, attempt:
               ? { unpriced_attempts: basis === "live" ? (n % 7 === 0 ? 1 : 0) : null }
               : {}),
           }
-          for (const [i, c] of columns.entries()) data[i].push(row[c])
+          for (const [i, c] of columns.entries()) data[i]?.push(row[c])
         }
   await insertBatches(sql, table, [...columns], [...types], data)
 }
@@ -254,7 +255,7 @@ async function seedRaw(sql: SqlConnection, rows: number, from: Date, to: Date, k
       outcome: error ? "upstream_error" : "success",
       created_at: new Date(t).toISOString(),
     }
-    for (const [ci, c] of columns.entries()) data[ci].push(row[c])
+    for (const [ci, c] of columns.entries()) data[ci]?.push(row[c])
   }
   await insertBatches(sql, "usage_records", columns, types, data)
 }
@@ -294,7 +295,7 @@ async function seedContributions(sql: SqlConnection, rows: number, lastFull: Dat
       }),
       ingested_at: new Date(t).toISOString(),
     }
-    for (const [ci, c] of columns.entries()) data[ci].push(row[c])
+    for (const [ci, c] of columns.entries()) data[ci]?.push(row[c])
   }
   await insertBatches(sql, "usage_contributions", columns, types, data)
 }

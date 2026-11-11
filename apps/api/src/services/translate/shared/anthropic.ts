@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { type CacheControl, cacheControlSchema } from "./cache-control-schema"
+import { cacheControlSchema } from "./cache-control-schema"
 
 /**
  * The Anthropic Messages request, in the two shapes translation needs.
@@ -97,7 +97,11 @@ const unsupportedToolResultContent = z
   })
   .transform((block) => ({ type: UNSUPPORTED_BLOCK, actual: block.type }) as const)
 
-const toolResultContent = z.union([textBlock, imageBlock, unsupportedToolResultContent])
+// Dispatched on `type` first, so a block pays for its own parser only, not every failing branch.
+const toolResultContent = z.union([
+  z.discriminatedUnion("type", [textBlock, imageBlock]),
+  unsupportedToolResultContent,
+])
 
 const toolResultBlock = z.object({
   type: z.literal("tool_result"),
@@ -150,15 +154,23 @@ const unsupportedBlock = z
   .refine((block) => !KNOWN_BLOCK_TYPES.has(block.type), { message: "malformed content block" })
   .transform((block) => ({ type: UNSUPPORTED_BLOCK, actual: block.type }) as const)
 
+/**
+ * Dispatched on `type` before anything is parsed: a plain union ran (and failed) every earlier
+ * branch for each block, ~4 ms of Zod for an 800-message transcript — the whole overhead budget.
+ * A block of a known type that fails its own parser falls to `unsupportedBlock`, whose `refine`
+ * refuses it, so the `400` still names the deepest field (`shared/reject.ts`, `locate`).
+ */
 export const anthropicBlockSchema = z.union([
-  textBlock,
-  imageBlock,
-  toolUseBlock,
-  toolResultBlock,
-  thinkingBlock,
-  redactedThinkingBlock,
-  documentBlock,
-  toolChangeBlock,
+  z.discriminatedUnion("type", [
+    textBlock,
+    imageBlock,
+    toolUseBlock,
+    toolResultBlock,
+    thinkingBlock,
+    redactedThinkingBlock,
+    documentBlock,
+    toolChangeBlock,
+  ]),
   unsupportedBlock,
 ])
 
@@ -235,82 +247,17 @@ export type ParsedAnthropicTool = z.infer<typeof anthropicToolSchema>
 export type ParsedAnthropicCacheControl = z.infer<typeof cacheControl>
 export type ParsedAnthropicToolChoice = z.infer<typeof anthropicToolChoiceSchema>
 
-export interface AnthropicTextBlock {
-  readonly type: "text"
-  readonly text: string
-  readonly cache_control?: CacheControl | undefined
-}
-
-export interface AnthropicImageBlock {
-  readonly type: "image"
-  readonly source: ParsedAnthropicImageSource
-  readonly cache_control?: CacheControl | undefined
-}
-
-export interface AnthropicToolUseBlock {
-  readonly type: "tool_use"
-  readonly id: string
-  readonly name: string
-  readonly input: Record<string, unknown>
-}
-
-/** Native tool results carry text or text/image blocks; Chat hoists images separately. */
-export interface AnthropicToolResultBlock {
-  readonly type: "tool_result"
-  readonly tool_use_id: string
-  readonly content: string | readonly (AnthropicTextBlock | AnthropicImageBlock)[]
-  readonly cache_control?: CacheControl | undefined
-}
-
-/**
- * A `thinking` block this router synthesized from another dialect's reasoning summary. Its
- * `signature` is the router's tag (`router-thinking.ts`), never one Anthropic minted.
- */
-export interface AnthropicThinkingBlock {
-  readonly type: "thinking"
-  readonly thinking: string
-  readonly signature: string
-}
-
-/** A reasoning item with no summary, carried as its sealed blob (`sealed-reasoning.ts`). */
-export interface AnthropicRedactedThinkingBlock {
-  readonly type: "redacted_thinking"
-  readonly data: string
-}
-
-export type AnthropicBlock =
-  | AnthropicTextBlock
-  | AnthropicImageBlock
-  | AnthropicToolUseBlock
-  | AnthropicToolResultBlock
-
-export interface AnthropicMessage {
-  readonly role: "user" | "assistant"
-  readonly content: readonly AnthropicBlock[]
-}
-
-export interface AnthropicTool {
-  readonly name: string
-  readonly description?: string | undefined
-  readonly input_schema: Record<string, unknown>
-}
-
-export type AnthropicToolChoice = ParsedAnthropicToolChoice
-
-export interface AnthropicRequest {
-  readonly model: string
-  readonly messages: readonly AnthropicMessage[]
-  readonly max_tokens: number
-  /** An array only when a block carries a cache breakpoint; otherwise the joined string. */
-  readonly system?: string | readonly AnthropicTextBlock[] | undefined
-  readonly temperature?: number | undefined
-  readonly top_p?: number | undefined
-  readonly stop_sequences?: readonly string[] | undefined
-  readonly stream?: boolean | undefined
-  readonly tools?: readonly AnthropicTool[] | undefined
-  readonly tool_choice?: AnthropicToolChoice | undefined
-  readonly output_config?: { readonly effort: string } | undefined
-  readonly thinking?: { readonly type: "disabled" } | undefined
-  /** Automatic caching: the client's own top-level marker, or the router's toward Anthropic. */
-  readonly cache_control?: CacheControl | undefined
-}
+// What the `* → anthropic` translators emit lives apart from what they parse.
+export type {
+  AnthropicBlock,
+  AnthropicImageBlock,
+  AnthropicMessage,
+  AnthropicRedactedThinkingBlock,
+  AnthropicRequest,
+  AnthropicTextBlock,
+  AnthropicThinkingBlock,
+  AnthropicTool,
+  AnthropicToolChoice,
+  AnthropicToolResultBlock,
+  AnthropicToolUseBlock,
+} from "./anthropic-emit"

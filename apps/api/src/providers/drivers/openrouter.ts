@@ -1,5 +1,5 @@
 import { createHttpDriver } from "../driver"
-import { codeRule, messageRule, onStatus, withResetEstimate } from "../failure/classify"
+import { codeRule, messageRule, withResetEstimate } from "../failure/classify"
 import type { ProviderDriver } from "../types"
 
 /**
@@ -14,7 +14,8 @@ const BASE_URL = "https://openrouter.ai/api/v1"
 /**
  * Provenance: OpenRouter answers a spent balance with `402` and a message naming credits, and
  * echoes the numeric HTTP status back in `error.code` rather than a string identifier. Blast
- * radius: the wording rule is what catches a `402` proxied through with a different status.
+ * radius: the wording rule is what catches a `402` proxied through as a `403`; it never reads a
+ * `400`/`404`, where OpenRouter echoes the requested model id (sweep 101, 04.1).
  */
 const INSUFFICIENT_CREDITS = /insufficient credits|requires more credits|add more using/i
 
@@ -87,10 +88,13 @@ const BODY_SESSION_ID = true
 const NAMESPACED_MODEL_ID = /^[^/\s]+\/[^/\s]\S*$/
 
 /**
- * The refusal itself, for a namespaced id it does not carry. About the name, so the next account gets
- * its turn. Provenance: same log line. Blast radius: without it the chain stops at this account.
+ * The refusal itself, for a namespaced id it does not carry — or no longer carries: a delisted model
+ * answers `404 "<id> is no longer available on OpenRouter"` (prod 2026-11-09..10, `inception/mercury-2`,
+ * 40 client-visible `404`s in 37.5 h; sweep 101, 10.16). About the name, so the next account gets its
+ * turn and this one is not struck. Provenance: the two log lines. Blast radius: without it the chain
+ * stops at this account.
  */
-const MODEL_REFUSED = /is not a valid model id/i
+const MODEL_REFUSED = /is not a valid model id|is no longer available/i
 
 const driver = createHttpDriver({
   id: "openrouter",
@@ -105,28 +109,24 @@ const driver = createHttpDriver({
   ],
   rules: [
     withResetEstimate(
-      messageRule("rate-limited", "openrouter:key-limit-window", KEY_LIMIT_WINDOW),
+      messageRule("rate-limited", "openrouter:key-limit-window", KEY_LIMIT_WINDOW, {
+        statuses: [403],
+      }),
       KEY_LIMIT_RETEST_SECONDS,
     ),
-    messageRule("credits-exhausted", "openrouter:key-limit", KEY_LIMIT),
-    onStatus(
-      [403],
-      messageRule(
-        "invalid-request",
-        "openrouter:moderation",
-        /moderation|flagged.*content|content.*flagged/i,
-      ),
+    messageRule("credits-exhausted", "openrouter:key-limit", KEY_LIMIT, { statuses: [403] }),
+    messageRule(
+      "invalid-request",
+      "openrouter:moderation",
+      /moderation|flagged[^.]{0,80}content|content[^.]{0,80}flagged/i,
+      { statuses: [403] },
     ),
-    onStatus(
-      [400, 404],
-      messageRule("model-unsupported", "openrouter:model-unsupported", MODEL_REFUSED),
-    ),
-    {
-      kind: "server-error",
-      signal: "openrouter:http-408",
-      when: (_facts, status) => status === 408,
-    },
-    messageRule("credits-exhausted", "openrouter:insufficient-credits", INSUFFICIENT_CREDITS),
+    messageRule("model-unsupported", "openrouter:model-unsupported", MODEL_REFUSED, {
+      statuses: [400, 404],
+    }),
+    messageRule("credits-exhausted", "openrouter:insufficient-credits", INSUFFICIENT_CREDITS, {
+      statuses: [402, 403],
+    }),
     codeRule("credits-exhausted", "openrouter:code-402", ["402"]),
     codeRule("rate-limited", "openrouter:code-429", ["429"]),
     codeRule("auth", "openrouter:code-401", ["401"]),
@@ -136,4 +136,8 @@ const driver = createHttpDriver({
 export const openRouterDriver: ProviderDriver = {
   ...driver,
   modelFamily: { patterns: [NAMESPACED_MODEL_ID] },
+  // An aggregator of several hundred models it does not itself serve: mirroring its catalog hourly
+  // would make this router's listing mostly a stale copy of someone else's. The discover button
+  // still asks it whenever an operator wants the answer.
+  catalogSweep: "manual",
 }

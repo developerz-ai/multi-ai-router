@@ -1,12 +1,18 @@
 import type { Dialect } from "@multi-ai-router/core"
-import { z } from "zod"
 import type { TokenCounts } from "./tokens"
 
-const objectSchema = z.record(z.string(), z.unknown())
-const countSchema = z.number().int().min(0).max(2147483647)
+const COUNT_MAX = 2147483647
+/**
+ * A plain guard, not a schema parse: this runs several times per observed frame on the relay's
+ * event loop, and the value is a fresh `JSON.parse` result, so a copy buys nothing.
+ */
 export function responseObject(value: unknown): Record<string, unknown> | undefined {
-  const result = objectSchema.safeParse(value)
-  return result.success ? result.data : undefined
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+function isCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= COUNT_MAX
 }
 /** Complete samples are atomic; Anthropic explicitly splits input/start and output/delta. */
 export function readResponseUsage(
@@ -53,7 +59,7 @@ export function readResponseUsage(
   const write =
     dialect === "anthropic" ? usage.cache_creation_input_tokens : details?.cache_write_tokens
   const values = [input, output, cache, write]
-  if (values.some((value) => value !== undefined && !countSchema.safeParse(value).success))
+  if (values.some((value) => value !== undefined && !isCount(value)))
     return { counts: previous, invalid: true }
   if (values.every((value) => value === undefined)) return { counts: previous, invalid: false }
   const numericInput = typeof input === "number" ? input : undefined

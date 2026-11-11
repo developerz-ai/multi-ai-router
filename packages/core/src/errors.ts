@@ -64,10 +64,17 @@ export class NoHealthyAccountError extends RouterError {
   readonly code = "no_healthy_account"
   readonly status = 503
   readonly wall: NoHealthyAccountWall
+  /**
+   * Seconds until a retry can succeed — kept only on a `capacity` wall, the one a clock clears.
+   * A `human` or `scope` wall gets no `Retry-After`: retrying it is what made clients hammer an
+   * operator-only `503` for an hour (101, 13.8).
+   */
+  readonly retryAfterSeconds: number | undefined
 
   constructor(message: string, init: NoHealthyAccountInit = {}) {
     super(message, init)
     this.wall = init.wall ?? "capacity"
+    this.retryAfterSeconds = this.wall === "capacity" ? init.retryAfterSeconds : undefined
   }
 }
 
@@ -75,6 +82,8 @@ export type NoHealthyAccountWall = "capacity" | "human" | "scope"
 
 export interface NoHealthyAccountInit extends RouterErrorInit {
   readonly wall?: NoHealthyAccountWall
+  /** Dropped unless the wall is `capacity`. */
+  readonly retryAfterSeconds?: number
 }
 
 export interface RetryableInit extends RouterErrorInit {
@@ -270,11 +279,15 @@ export class TranslationError extends RouterError {
 }
 
 /**
- * A client probed one specific model id (`GET /v1/models/:id`) that the presenting key cannot
- * reach — unknown entirely, or known but filtered out of the key's scope. `404`, deliberately not
- * the `403`/`503`/`429`/`402` a routing *attempt* against that id might have produced: this is a
- * catalog lookup, not a failed request, so it always renders as "not found" regardless of which
- * underlying reason kept every account from claiming it. The message still names that reason.
+ * The requested model is served by no account the presenting key can reach. Two throw sites:
+ *
+ * - `GET /v1/models/:id` — a catalog lookup for an id the key cannot reach (unknown entirely, or
+ *   filtered out of its scope), rendered "not found" whatever kept every account from claiming it.
+ * - **routing**, when no in-scope account serves the model at all (101, 10.21). That is a client
+ *   change, not an outage: `404`, logged at `warn`, no `Retry-After`. It used to be a `503`
+ *   `no_healthy_account`, which invited retries and paged as a server error.
+ *
+ * The message still names the reason.
  */
 export class ModelNotFoundError extends RouterError {
   readonly code = "model_not_found"

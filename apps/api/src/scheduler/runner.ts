@@ -4,8 +4,8 @@ import {
   type ScheduledTaskRepository,
 } from "@multi-ai-router/db"
 import type { Logger } from "../logging/logger"
-import { describe, indexTasks } from "./runner-support"
-import type { ScheduledTask, TaskLock, TaskOutcome, TickResult } from "./types"
+import { describe, indexTasks, runBounded } from "./runner-support"
+import type { ScheduledTask, TaskLock, TickResult } from "./types"
 
 /** Jittered background tasks with distributed exclusion and bounded shutdown. */
 
@@ -19,6 +19,11 @@ export interface SchedulerDeps {
   readonly shutdownDrainMs?: number
   readonly interruptedBatchSize?: number
   readonly capacityRetryMs?: number
+  /**
+   * Longest one run may hold its lock before it is recorded `failed` and the lock released
+   * (`SCHEDULER_TASK_MAX_RUN_MINUTES`). Absent: unbounded.
+   */
+  readonly maxRunMs?: number
   /** Off-path orphan maintenance, always outside the current task lock. */
   readonly beforeTick?: (signal: AbortSignal) => Promise<void>
   readonly jitterFraction: number
@@ -67,21 +72,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return Math.max(1, Math.round(intervalMs * spread))
   }
 
-  /** Runs the task, converting a throw into the `failed` row it deserves. */
-  const attempt = async (
-    task: ScheduledTask,
-    at: Date,
-    logger: Logger,
-    signal: AbortSignal,
-  ): Promise<TaskOutcome> => {
-    try {
-      const outcome = await task.run({ now: at, logger, signal })
-      return outcome.error === undefined ? outcome : { ...outcome, error: describe(outcome.error) }
-    } catch (error) {
-      return { outcome: "failed", itemsProcessed: 0, error: describe(error) }
-    }
-  }
-
   const tick = async (task: ScheduledTask): Promise<TickResult> => {
     const signal = abort.signal
     const fence = new AbortController()
@@ -108,7 +98,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           await deps.repo.markInterruptedRunIds(interruptedIds, startedAt)
           taskSignal.throwIfAborted()
           const runId = await deps.repo.begin(task.name, startedAt)
-          const outcome = await attempt(task, startedAt, logger, taskSignal)
+          // A throw, or a run past its deadline, comes back as a `failed` outcome.
+          const outcome = await runBounded(
+            task,
+            { now: startedAt, logger, signal: taskSignal },
+            deps.maxRunMs,
+          )
           lockSignal?.throwIfAborted()
           fence.signal.throwIfAborted()
           await deps.repo.finish(runId, outcome, now())
@@ -168,7 +163,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (existing !== undefined) return existing
     const pending = tick(task)
       .then((result) => {
-        deps.onTick?.(result)
+        // A throw here would reject `pending` and the timer would never re-arm.
+        try {
+          deps.onTick?.(result)
+        } catch (error) {
+          deps.logger.error("scheduled task observer failed", {
+            component: "scheduler",
+            task: task.name,
+            reason: describe(error),
+          })
+        }
         return result
       })
       .finally(() => {
@@ -189,15 +193,26 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       timers.delete(task.name)
       // Always the full interval from here on: `startupDelayMs` describes the *first* gap only,
       // and a task that kept using it would be running on a cadence nobody configured.
-      void run(task).then((result) => {
-        if (started && epoch === ownedEpoch)
-          schedule(
-            task,
-            result.status === "skipped_capacity"
-              ? Math.min(task.intervalMs, deps.capacityRetryMs ?? 1000)
-              : task.intervalMs,
-          )
-      })
+      void run(task).then(
+        (result) => {
+          if (started && epoch === ownedEpoch)
+            schedule(
+              task,
+              result.status === "skipped_capacity"
+                ? Math.min(task.intervalMs, deps.capacityRetryMs ?? 1000)
+                : task.intervalMs,
+            )
+        },
+        (error: unknown) => {
+          // Defence in depth: a timer never re-armed is a task silently stopped until restart.
+          deps.logger.error("scheduled task tick rejected; re-arming", {
+            component: "scheduler",
+            task: task.name,
+            reason: describe(error),
+          })
+          if (started && epoch === ownedEpoch) schedule(task, task.intervalMs)
+        },
+      )
     }, jitter(delayMs))
     // A sweep must never be the reason the process stays alive.
     timer.unref?.()
@@ -212,6 +227,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const last = await deps.repo.lastRun(task.name)
       if (last !== undefined) {
         delayMs = Math.max(0, task.intervalMs - (now().getTime() - last.startedAt.getTime()))
+        // Overdue after a restart: spread over the jitter band instead of `jitter(0)` (1 ms), which
+        // fired every overdue task on every replica in the same millisecond.
+        if (delayMs === 0) delayMs = Math.round(random() * deps.jitterFraction * task.intervalMs)
       }
     } catch (error) {
       deps.logger.warn("scheduled task last-run lookup failed; using the configured first gap", {

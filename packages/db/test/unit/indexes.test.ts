@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core"
-import { apiKeys, sessions, usageDaily, usageRecords } from "../../src/schema/index"
+import {
+  accounts,
+  apiKeys,
+  modelCatalog,
+  quotaWindows,
+  scheduledTaskRuns,
+  sessions,
+  usageContributions,
+  usageDaily,
+  usageRecords,
+} from "../../src/schema/index"
 
 /** Index columns are columns or raw SQL; only the former carry a name. */
 function nameOf(target: object): string | undefined {
@@ -47,6 +57,10 @@ function indexShape(table: PgTable, name: string): IndexShape {
   }
 }
 
+function namesOf(table: PgTable): string[] {
+  return getTableConfig(table).indexes.map((index) => index.config.name ?? "")
+}
+
 describe("the indexes the access patterns actually need", () => {
   test("key verification is a display-prefix lookup, not a table scan", () => {
     const index = indexShape(apiKeys, "api_keys_prefix_idx")
@@ -55,28 +69,44 @@ describe("the indexes the access patterns actually need", () => {
     expect(index.unique).toBe(false)
   })
 
-  test("usage breakdowns filter by time window alone, never by key or account", () => {
-    // usage-read-repository.ts filters every query on createdAt only; apiKeyId/accountId are
-    // group-by dimensions applied after the window scan, never a leading predicate column. An
-    // (api_key_id, created_at) or (account_id, created_at) index can't serve that access pattern
-    // — it would just be three extra B-tree inserts per row on the write-heaviest table with
-    // nothing ever reading it. If a per-key/per-account drilldown starts filtering on the id
-    // itself, add the index back naming the query that needs it.
-    expect(
-      getTableConfig(usageRecords).indexes.some(
-        (index) => index.config.name === "usage_records_api_key_created_idx",
-      ),
-    ).toBe(false)
-    expect(
-      getTableConfig(usageRecords).indexes.some(
-        (index) => index.config.name === "usage_records_account_created_idx",
-      ),
-    ).toBe(false)
-    expect(
-      getTableConfig(usageRecords).indexes.some(
-        (index) => index.config.name === "usage_records_session_key_idx",
-      ),
-    ).toBe(false)
+  test("per-account reads lead with the account; nothing reads by key or session first", () => {
+    // `tokensSince` (window gauges on every accounts list) and the usage reads' account filter
+    // are `account_id = $1 and created_at >= $2` predicates. 0015 dropped this index on the
+    // belief that accountId was only a group-by dimension; 0044 restores it (with the token
+    // columns INCLUDEd in SQL, so the gauge is index-only).
+    expect(indexShape(usageRecords, "usage_records_account_created_idx").columns).toEqual([
+      "account_id",
+      "created_at",
+    ])
+    // Still no (api_key_id, created_at) or session-key index: no query leads with either, and
+    // each would be one more btree insert per row on the write-heaviest table.
+    for (const name of ["usage_records_api_key_created_idx", "usage_records_session_key_idx"])
+      expect(namesOf(usageRecords)).not.toContain(name)
+  })
+
+  test("indexes nothing reads are gone (0044)", () => {
+    // Each had no reader in src/repositories (the only place SQL lives), and two had a write cost:
+    // `accounts_last_used_at_idx` made every usage flush's stamp a non-HOT update, and
+    // `usage_contributions_source_idx` was a third btree insert on the hottest insert table.
+    const dead: readonly [PgTable, string][] = [
+      [accounts, "accounts_provider_idx"],
+      [accounts, "accounts_status_idx"],
+      [accounts, "accounts_last_used_at_idx"],
+      [usageContributions, "usage_contributions_source_idx"],
+      [quotaWindows, "quota_windows_resets_at_idx"],
+      [modelCatalog, "model_catalog_model_id_idx"],
+    ]
+    for (const [table, name] of dead) expect(namesOf(table)).not.toContain(name)
+  })
+
+  test("the rare legacy receipts and the open task runs each have a partial index", () => {
+    expect(indexShape(usageContributions, "usage_contributions_legacy_day_idx").columns).toEqual([
+      "day",
+    ])
+    expect(indexShape(scheduledTaskRuns, "scheduled_task_runs_open_idx").columns).toEqual([
+      "task",
+      "started_at",
+    ])
   })
 
   test("the attempts of one client request are retrievable together", () => {

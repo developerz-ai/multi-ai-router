@@ -1,5 +1,6 @@
 import type { ProviderId } from "@multi-ai-router/core"
 import { type BenchApp, benchApp, scrape } from "./harness"
+import { transcriptBody } from "./transcript"
 import { stubUpstream, TRIP_HEADER, type Trip } from "./upstream"
 
 /**
@@ -27,13 +28,62 @@ export interface Scenario {
   readonly stream: boolean
   /** Anthropic ingress against an Anthropic account passes bytes through; anything else converts. */
   readonly provider: ProviderId
+  /**
+   * A prod-shaped agent transcript of this many bytes instead of `--prompt-bytes` of `"x"`
+   * (`transcript.ts`). The `"x"` body is the scanner's one fast path; this is what prod posts.
+   */
+  readonly transcriptBytes?: number
+  /** A non-streamed answer padded to this many bytes, so response observation is measured too. */
+  readonly answerBytes?: number
+  /** SSE chunks for this scenario, overriding `--chunks`: a long answer, not a 16-chunk one. */
+  readonly chunks?: number
 }
+
+/** The size prod's p99 is measured at (plan 101, 10.2 / 12.4): a long Claude Code session. */
+const TRANSCRIPT_BYTES = 350_000
 
 export const SCENARIOS: readonly Scenario[] = [
   { name: "passthrough", path: "passthrough", stream: false, provider: "anthropic-api" },
   { name: "passthrough (stream)", path: "passthrough", stream: true, provider: "anthropic-api" },
   { name: "translate", path: "translate", stream: false, provider: "openrouter" },
   { name: "translate (stream)", path: "translate", stream: true, provider: "openrouter" },
+  {
+    name: "passthrough 350 KB transcript",
+    path: "passthrough",
+    stream: false,
+    provider: "anthropic-api",
+    transcriptBytes: TRANSCRIPT_BYTES,
+  },
+  {
+    name: "passthrough 350 KB transcript (stream, 200 chunks)",
+    path: "passthrough",
+    stream: true,
+    provider: "anthropic-api",
+    transcriptBytes: TRANSCRIPT_BYTES,
+    chunks: 200,
+  },
+  {
+    name: "passthrough 1 MB transcript",
+    path: "passthrough",
+    stream: false,
+    provider: "anthropic-api",
+    transcriptBytes: 1_000_000,
+  },
+  {
+    // ~62 KB on the wire: just under the 64 KiB a non-streamed success is peeked at before commit.
+    name: "passthrough 62 KB answer",
+    path: "passthrough",
+    stream: false,
+    provider: "anthropic-api",
+    answerBytes: 56_000,
+  },
+  {
+    name: "translate 350 KB transcript",
+    path: "translate",
+    stream: false,
+    provider: "openrouter",
+    transcriptBytes: TRANSCRIPT_BYTES,
+  },
 ]
 
 export interface DriveOptions {
@@ -94,7 +144,8 @@ function build(scenario: Scenario, options: DriveOptions): Built {
   const upstream = stubUpstream({
     dialect: scenario.provider === "anthropic-api" ? "anthropic" : "openai-chat",
     stream: scenario.stream,
-    chunks: options.chunks,
+    chunks: scenario.chunks ?? options.chunks,
+    ...(scenario.answerBytes === undefined ? {} : { answerBytes: scenario.answerBytes }),
     chunkGapMs: options.chunkGapMs,
     firstByteDelayMs: options.firstByteDelayMs,
   })
@@ -113,7 +164,10 @@ async function drive(
   options: DriveOptions,
   count: number,
 ): Promise<Driven> {
-  const body = requestBody(scenario.stream, options.promptBytes)
+  const body =
+    scenario.transcriptBytes === undefined
+      ? requestBody(scenario.stream, options.promptBytes)
+      : transcriptBody({ model: MODEL, bytes: scenario.transcriptBytes, stream: scenario.stream })
   const addedTtftMs: number[] = []
   let failures = 0
   let buffered = 0

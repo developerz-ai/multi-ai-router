@@ -53,8 +53,9 @@ RUN [ "$(bun --version)" = "1.4.4" ] || { \
 
 # The init the *runtime* stage runs as PID 1 (see its `---- PID 1 ----` block). Installed here so
 # the shipped image never carries an apt cache for it, and installed *before* the source COPY so a
-# source edit does not re-run an apt fetch. `tini-static` rather than `tini`: it is the same program
-# with no libc to trip over on the way across stages — the trap documented at the `claude` COPY.
+# source edit does not re-run an apt fetch. The `tini` package ships both binaries; the runtime copies
+# `/usr/bin/tini-static`, not `tini`: the same program with no libc to trip over on the way across
+# stages — the trap documented at the `claude` COPY.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
@@ -205,7 +206,7 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
       org.opencontainers.image.url="https://github.com/developerz-ai/multi-ai-router" \
       org.opencontainers.image.documentation="https://github.com/developerz-ai/multi-ai-router/blob/main/README.md" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="2.55.0" \
+      org.opencontainers.image.version="2.56.0" \
       org.opencontainers.image.revision="${ROUTER_REVISION}"
 
 # ---- PID 1 ----

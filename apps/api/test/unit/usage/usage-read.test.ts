@@ -46,6 +46,10 @@ interface Stub {
   readonly outcomes?: readonly UsageOutcomeCount[]
   /** The stitched total the split is folded against, for the `partial` rule. */
   readonly totals?: UsageTotals
+  /** Counts snapshot reads, the unit a coalesced summary must issue once. */
+  readonly snapshots?: { count: number }
+  readonly summaryCacheMs?: number
+  readonly now?: () => Date
 }
 
 function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
@@ -73,7 +77,10 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
       requestsBasis: "terminal",
       historicalPrecision: "day",
     }),
-    withSnapshot: async (callback) => callback(history, raw),
+    withSnapshot: async (callback) => {
+      if (stub.snapshots !== undefined) stub.snapshots.count += 1
+      return callback(history, raw)
+    },
     backfill: async () => ({ processed: 0, remaining: false }),
     rollupDay: async () => 0,
     deleteOlderThan: async () => 0,
@@ -116,7 +123,8 @@ function service(rows: readonly UsageGroupRow[], stub: Stub = {}) {
       accounts: new Map([["acct-1", "claude-max-01"]]),
       pools: new Map([["pool-1", "default"]]),
     }),
-    now: () => NOW,
+    now: stub.now ?? (() => NOW),
+    summaryCacheMs: stub.summaryCacheMs,
   })
 }
 
@@ -246,5 +254,43 @@ describe("the failure split", () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.failures).toEqual(EMPTY_FAILURES)
+  })
+})
+
+describe("summary coalescing", () => {
+  test("two concurrent identical summaries issue one set of queries", async () => {
+    const snapshots = { count: 0 }
+    const usage = service([], { snapshots })
+    const [first, second] = await Promise.all([
+      usage.summary({ window: "7d" }, { model: ["m"] }),
+      usage.summary({ window: "7d" }, { model: ["m"] }),
+    ])
+    expect(snapshots.count).toBe(1)
+    expect(second).toEqual(first)
+  })
+
+  test("differing filters do not coalesce, and nothing is reused once settled without a ttl", async () => {
+    const snapshots = { count: 0 }
+    const usage = service([], { snapshots })
+    await Promise.all([
+      usage.summary({ window: "7d" }, { model: ["m"] }),
+      usage.summary({ window: "7d" }, { model: ["n"] }),
+    ])
+    expect(snapshots.count).toBe(2)
+    await usage.summary({ window: "7d" }, { model: ["m"] })
+    expect(snapshots.count).toBe(3)
+  })
+
+  test("a settled summary answers identical reads for the configured ttl, then expires", async () => {
+    const snapshots = { count: 0 }
+    let at = NOW.getTime()
+    const usage = service([], { snapshots, summaryCacheMs: 10_000, now: () => new Date(at) })
+    await usage.summary({ window: "today" }, {})
+    at += 9_999
+    await usage.summary({ window: "today" }, {})
+    expect(snapshots.count).toBe(1)
+    at += 2
+    await usage.summary({ window: "today" }, {})
+    expect(snapshots.count).toBe(2)
   })
 })

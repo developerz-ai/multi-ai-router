@@ -196,3 +196,64 @@ describe("fast-mode tool choice adaptation in the prepared body", () => {
     expect(body.output_config).toEqual({ format: { type: "json_schema", schema } })
   })
 })
+
+// 101 finding 10.4: a schema with a keyword Anthropic's native subset refuses is reduced to that
+// subset (`anthropic-output-schema.ts`) and goes native, the bound restated as text; it no longer
+// costs a 400 or falls back to the tool.
+describe("native structured output with a reduced schema", () => {
+  const tags = { type: "array", items: { type: "string" }, maxItems: 3 }
+  const bounded = {
+    type: "object",
+    properties: { ok: { type: "boolean" }, tags },
+    required: ["ok", "tags"],
+    additionalProperties: false,
+  }
+  const forcedStructured = (input_schema: object) => ({
+    ...base,
+    tools: [{ name: STRUCTURED_OUTPUT_TOOL, description: "answer", input_schema }],
+    tool_choice: { type: "tool", name: STRUCTURED_OUTPUT_TOOL },
+  })
+
+  test("maxItems goes native, without the keyword, with the bound in the description", () => {
+    const drops: string[] = []
+    const adapted = adaptFastToolChoice(forcedStructured(bounded), {
+      onDrop: (drop) => drops.push(drop.field),
+    })
+    expect(adapted.adapted).toBe("structured-output")
+    const format = (adapted.body.output_config as { format: { schema: Record<string, unknown> } })
+      .format
+    const sentTags = (format.schema.properties as Record<string, Record<string, unknown>>).tags
+    expect(sentTags).not.toHaveProperty("maxItems")
+    expect(sentTags?.description).toContain("maxItems: 3")
+    expect(adapted.nativeSchema).toBe(format.schema)
+    expect(drops).toEqual(["response_format.json_schema.schema.properties.tags.maxItems"])
+    // The client's own schema is untouched.
+    expect(tags.maxItems).toBe(3)
+  })
+
+  test("the prepared body carries the reduced schema natively", () => {
+    const { result, body } = prepare(forcedStructured(bounded))
+    expect(result.forcedTool).toBe("structured-output")
+    const sent = body.output_config as {
+      format: { schema: { properties: Record<string, Record<string, unknown>> } }
+    }
+    expect(sent.format.schema.properties.tags).not.toHaveProperty("maxItems")
+    expect(body.tools).toEqual([])
+  })
+
+  test("native: false keeps the adapted tool with the client's own schema", () => {
+    const adapted = adaptFastToolChoice(forcedStructured(bounded), { native: false })
+    expect(adapted.adapted).toBe("forced-tool")
+    expect(adapted.body.tools).toEqual([
+      { name: STRUCTURED_OUTPUT_TOOL, description: "answer", input_schema: bounded },
+    ])
+  })
+
+  test("a reduced schema past the complexity budget still rides the tool", () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [`p${i}`, { type: "string", maxLength: 9 }]),
+    )
+    const wide = { type: "object", properties: many, additionalProperties: false }
+    expect(adaptFastToolChoice(forcedStructured(wide)).adapted).toBe("forced-tool")
+  })
+})

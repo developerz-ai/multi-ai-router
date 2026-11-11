@@ -5,6 +5,7 @@ import { resolveUsageFilter, type UsageFilterQuery } from "./filter"
 import { resolveReadWindow } from "./read-window"
 import { outcomesFor, type RecentQuery, type RecentView, toRecentAttemptView } from "./recent"
 import { readSummary } from "./summary"
+import { createSummaryCache, summaryKey } from "./summary-cache"
 import { keyNames } from "./summary-view"
 import type { UsageWindowQuery } from "./window"
 
@@ -35,6 +36,11 @@ export interface UsageServiceDeps {
   readonly exportMaxRows: number
   readonly maxChartPoints?: number
   readonly breakdownMaxRows?: number
+  /**
+   * How long a settled summary answers identical `(query, filter)` reads, in ms. Absent or 0:
+   * identical concurrent reads still share one in-flight read, nothing is reused after it.
+   */
+  readonly summaryCacheMs?: number
 }
 
 export interface UsageService {
@@ -50,19 +56,20 @@ export interface UsageService {
 }
 
 export function createUsageService(deps: UsageServiceDeps): UsageService {
+  const summaries = createSummaryCache<UsageSummary>(deps.summaryCacheMs ?? 0, deps.now)
+  const readOne = async (query: UsageWindowQuery, filter: UsageFilterQuery) => {
+    const labels = await deps.labels()
+    // Resolved from the label read above, which sits outside the snapshot below: the owner/tool
+    // to key-id set is current labels, not the labels as of the facts' snapshot.
+    // Required by type; tests are not type-checked, so an absent filter at runtime reads as none.
+    const resolved = resolveUsageFilter(filter ?? {}, labels.keys)
+    return deps.history.withSnapshot((history, raw) =>
+      readSummary({ ...deps, history, raw, labels }, query, resolved),
+    )
+  }
   return {
-    summary: async (query, filter) => {
-      const labels = await deps.labels()
-      // Resolved from the label read above, which sits outside the snapshot below: the owner/tool
-      // to key-id set is current labels, not the labels as of the facts' snapshot.
-      // Required by type; tests are not type-checked, so an absent filter at runtime reads as none.
-      const resolved = resolveUsageFilter(filter ?? {}, labels.keys)
-      return ok(
-        await deps.history.withSnapshot((history, raw) =>
-          readSummary({ ...deps, history, raw, labels }, query, resolved),
-        ),
-      )
-    },
+    summary: async (query, filter) =>
+      ok(await summaries.read(summaryKey({ query, filter }), () => readOne(query, filter))),
 
     exportCsv: async (query, filter) => {
       const labels = await deps.labels()

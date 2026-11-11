@@ -1,5 +1,4 @@
 import type { UsageGroupRow, UsageGroupSeriesPoint, UsageSeriesPoint } from "@multi-ai-router/db"
-import { densify } from "./axis"
 import type { KeyLabel, UsageBreakdownRow, UsageSeriesEntry } from "./types"
 
 /**
@@ -30,14 +29,49 @@ export function keyNames(keys: ReadonlyMap<string, KeyLabel>): ReadonlyMap<strin
   return new Map([...keys].map(([id, key]) => [id, key.name]))
 }
 
+/** One dimension's series, already densified onto the axis, keyed by row id. */
+export type GroupedSeries = ReadonlyMap<string | null, readonly number[]>
+
+/**
+ * Places a dimension's series points on the axis once, so labelling a breakdown is
+ * O(rows + points) rather than every row re-scanning every point (100 rows x 400 buckets cost
+ * ~96 ms per dimension on the loop that also relays streams). The query already emits ISO
+ * instants; each distinct `at` is still normalised once so a differently formatted instant lands
+ * on its bucket. A point off the axis is dropped and a duplicate instant keeps the last point,
+ * exactly as `densify` does.
+ */
+export function groupSeries(
+  axis: readonly string[],
+  points: readonly UsageGroupSeriesPoint[],
+): GroupedSeries {
+  const slot = new Map(axis.map((at, index) => [at, index]))
+  const slotOf = new Map<string, number | undefined>()
+  const grouped = new Map<string | null, number[]>()
+  for (const point of points) {
+    let index = slotOf.get(point.at)
+    if (!slotOf.has(point.at)) {
+      index = slot.get(new Date(point.at).toISOString())
+      slotOf.set(point.at, index)
+    }
+    if (index === undefined) continue
+    let mine = grouped.get(point.id)
+    if (mine === undefined) {
+      mine = new Array<number>(axis.length).fill(0)
+      grouped.set(point.id, mine)
+    }
+    mine[index] = point.requests
+  }
+  return grouped
+}
+
 export function label(
   rows: readonly UsageGroupRow[],
   names: ReadonlyMap<string, string>,
   axis: readonly string[],
-  points: readonly UsageGroupSeriesPoint[],
+  series: GroupedSeries,
 ): UsageBreakdownRow[] {
   return rows.map((row) => {
-    const base = breakdownRow(row, axis, points)
+    const base = breakdownRow(row, axis, series)
     if (base.id === null) return { ...base, label: null, note: "none" }
     const found = names.get(base.id)
     return found === undefined
@@ -60,20 +94,15 @@ export function label(
 export function breakdownRow(
   row: UsageGroupRow,
   axis: readonly string[],
-  points: readonly UsageGroupSeriesPoint[],
+  series: GroupedSeries,
 ): Omit<UsageBreakdownRow, "label" | "note"> {
   const { id, latencyP50Ms, latencyP95Ms, routerOverheadP95Ms, ...totals } = row
-  const mine = new Map(
-    points
-      .filter((point) => point.id === id)
-      .map((point) => [new Date(point.at).toISOString(), point.requests]),
-  )
   return {
     id,
     totals,
     latencyP50Ms,
     latencyP95Ms,
     routerOverheadP95Ms,
-    series: densify(axis, mine),
+    series: series.get(id) ?? axis.map(() => 0),
   }
 }

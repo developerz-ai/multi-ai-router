@@ -70,6 +70,18 @@ function harness() {
       }
       return deleted
     },
+    deleteByUsername: async (username) => {
+      let deleted = 0
+      for (const [id, row] of rows) {
+        if (row.username === username && rows.delete(id)) deleted++
+      }
+      return deleted
+    },
+    deleteAll: async () => {
+      const deleted = rows.size
+      rows.clear()
+      return deleted
+    },
   }
   const replica = (cacheMaxEntries = 10) =>
     createPostgresSessionStore({
@@ -239,4 +251,43 @@ test("reads and slides during a pending logout cannot restore its cache", async 
   deletion.release()
   await pending
   expect(await store.get(session().id)).toBeUndefined()
+})
+
+test("an unrelated logout or purge sweep during a revalidation does not log the reader out", async () => {
+  const h = harness()
+  const writer = h.replica()
+  await writer.create(session("a"))
+  await writer.create(session("b"))
+  const store = h.replica()
+  const gate = h.pauseReads()
+  const pending = store.get("a")
+  await store.delete("b")
+  await store.deleteExpired(0, 10)
+  gate.release()
+  expect(await pending).toEqual(session("a"))
+})
+
+test("deleting the session being revalidated still fences that read", async () => {
+  const h = harness()
+  await h.replica().create(session("a"))
+  const store = h.replica()
+  const gate = h.pauseReads()
+  const pending = store.get("a")
+  const deletion = store.delete("a")
+  gate.release()
+  await deletion
+  expect(await pending).toBeUndefined()
+})
+
+test("a slide in flight survives another session's logout", async () => {
+  const h = harness()
+  const store = h.replica()
+  await store.create(session("a"))
+  await store.create(session("b"))
+  const gate = h.pauseWrites()
+  const slide = store.touch({ ...session("a"), lastSeenAtMs: 1 })
+  const logout = store.delete("b")
+  gate.release()
+  await logout
+  expect(await slide).toBe(true)
 })

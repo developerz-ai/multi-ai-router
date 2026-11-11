@@ -1,6 +1,6 @@
 {
   "name": "multi-ai-router",
-  "version": "2.55.0",
+  "version": "2.56.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -13,16 +13,15 @@
   },
   "scripts": {
     "build": "bin/build",
-    "build:types": "bun run --filter '*' build",
     "check": "bin/check",
     "db:generate": "bin/db generate",
     "db:migrate": "bin/db migrate",
     "dev": "bin/dev",
-    "fmt": "biome check --write .",
+    "fmt": "bin/fmt",
     "lint": "biome check .",
     "setup": "bin/setup",
     "test": "bin/test",
-    "typecheck": "tsc --build --verbose && tsc --project apps/api/tsconfig.tests.json"
+    "typecheck": "tsc --build --verbose && tsc --project apps/api/tsconfig.tests.json && tsc --project packages/core/tsconfig.tests.json && tsc --project packages/db/tsconfig.tests.json && tsc --project apps/web/tsconfig.tests.json && tsc --project tsconfig.tools.json"
   },
   "devDependencies": {
     "@biomejs/biome": "~2.5.15",

@@ -262,10 +262,9 @@ const codex = createHttpDriver({
     onStatus([429], codeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES)),
     // "The '<model>' model is not supported when using Codex with a ChatGPT account." (prod
     // 2026-10-04): the model is wrong, not the request, so fail over instead of `invalid-request`.
-    onStatus(
-      [400, 404],
-      messageRule("model-unsupported", "openai-oauth:model-unsupported", CODEX_MODEL_REFUSED),
-    ),
+    messageRule("model-unsupported", "openai-oauth:model-unsupported", CODEX_MODEL_REFUSED, {
+      statuses: [400, 404],
+    }),
   ],
 })
 
@@ -273,6 +272,9 @@ export const openAiOAuthDriver: ProviderDriver = {
   ...codex,
   modelFamily: CODEX_MODEL_FAMILY,
   modelListing: codexModelListing,
+  // The idle keepalive/probe's one minimal turn: the cheapest current model this provider serves.
+  // Provenance: carried from `scheduler/tasks/idle-account-probe.ts` IDLE_PROBE_MODELS (sweep 101).
+  idleProbeModel: "gpt-5",
   oauth: {
     loopbackRedirectUri: OPENAI_OAUTH_LOOPBACK_REDIRECT_URI,
     authorizeUrl: openAiOAuthAuthorizeUrl,

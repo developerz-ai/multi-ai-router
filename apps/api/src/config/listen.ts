@@ -1,3 +1,5 @@
+import { DEFAULT_MAX_BODY_BYTES } from "../services/dataplane/body/read"
+import { DEFAULT_ADMIN_JSON_MAX_BYTES } from "./admin-bodies"
 import type { Env } from "./env"
 
 /** What `Bun.serve` is handed besides the handler. */
@@ -21,8 +23,8 @@ export function listenOptions(
     port: env.port,
     idleTimeout: env.serverIdleTimeoutSeconds,
     maxRequestBodySize: Math.max(
-      env.dataPlane?.maxRequestBodyBytes ?? 32 * 1024 * 1024,
-      env.adminBodies?.maximumJsonBytes ?? 1024 * 1024,
+      env.dataPlane?.maxRequestBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+      env.adminBodies?.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
       env.adminBodies?.maximumLoginJsonBytes ?? 8 * 1024,
     ),
   }

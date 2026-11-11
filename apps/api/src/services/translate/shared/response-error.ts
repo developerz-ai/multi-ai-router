@@ -1,5 +1,6 @@
 import type { Dialect } from "@multi-ai-router/core"
 import { translateUpstreamError } from "./errors"
+import { isRecord } from "./is-record"
 import type { TranslatedResponse } from "./response"
 
 /** Match the upstream terminal observer's structural error criteria without inventing HTTP status. */
@@ -8,13 +9,13 @@ export function translatedResponseError(
   ingress: Dialect,
   egress: Dialect,
 ): TranslatedResponse | null {
-  const payload = object(body)
+  const payload = isRecord(body) ? body : null
   if (!payload) return null
   const recognized =
     egress === "openai-chat"
-      ? object(payload.error) !== null
+      ? carriesOpenAiChatError(payload)
       : egress === "anthropic"
-        ? payload.type === "error" && object(payload.error) !== null
+        ? payload.type === "error" && isRecord(payload.error)
         : payload.type === "error" ||
           payload.type === "response.failed" ||
           payload.status === "failed"
@@ -23,8 +24,12 @@ export function translatedResponseError(
   return { body: translateUpstreamError(body, 502, ingress), unrecognizedStopReason: null }
 }
 
-function object(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
+/**
+ * Whether an openai-chat body or chunk states an upstream failure: an `error` member that is an
+ * object or a string. `"error": null` is a compatible vendor stating "no error" beside real content,
+ * so it is not one — `"error" in payload` would end a healthy stream.
+ */
+export function carriesOpenAiChatError(payload: Readonly<Record<string, unknown>>): boolean {
+  const error = payload.error
+  return isRecord(error) || typeof error === "string"
 }

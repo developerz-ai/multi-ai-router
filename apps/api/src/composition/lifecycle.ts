@@ -41,6 +41,7 @@ export function createRuntimeLifecycle(deps: {
                 component: "runtime",
                 step,
                 errorClass: "runtime_shutdown_failure",
+                error: result.reason,
               })
             } catch {
               /* Continue cleanup even if logging fails. */

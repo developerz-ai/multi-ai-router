@@ -123,13 +123,17 @@ export function unused(parameter: string) { const local = 1; return 0 }
     COMPILER_TEST_TIMEOUT_MS,
   )
 
-  test("bin/check requires bin/lint and the solution build followed by the no-emit project", () => {
+  test("bin/check requires bin/lint and the solution build followed by the no-emit projects", () => {
     const manifest: { scripts: { typecheck: string } } = JSON.parse(
       readFileSync(join(root, "package.json"), "utf8"),
     )
     expect(manifest.scripts.typecheck.split(/\s*&&\s*/)).toEqual([
       "tsc --build --verbose",
       "tsc --project apps/api/tsconfig.tests.json",
+      "tsc --project packages/core/tsconfig.tests.json",
+      "tsc --project packages/db/tsconfig.tests.json",
+      "tsc --project apps/web/tsconfig.tests.json",
+      "tsc --project tsconfig.tools.json",
     ])
     for (const path of ["bin/check", "bin/lint"]) {
       expect(commands(path)).toContain("set -eu")

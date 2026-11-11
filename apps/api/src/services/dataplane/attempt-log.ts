@@ -46,12 +46,23 @@ export function logStreamFailure(
   errorClass: string | null,
   message: string | undefined,
   reasonMaxChars: number,
+  /** The transport error that broke the stream, when no frame said why (10.17). */
+  cause?: unknown,
 ): void {
   log?.warn("upstream stream failure", {
     accountId,
     errorClass,
     upstreamMessage: scrubbedQuote(message, reasonMaxChars),
+    ...(cause instanceof Error
+      ? { transportError: scrubbedQuote(transportCause(cause), reasonMaxChars) }
+      : {}),
   })
+}
+
+/** `Name(CODE): message` — what broke a stream that carried no error frame of its own. */
+function transportCause(error: Error): string {
+  const code = "code" in error && typeof error.code === "string" ? `(${error.code})` : ""
+  return `${error.name}${code}: ${error.message}`
 }
 
 /**

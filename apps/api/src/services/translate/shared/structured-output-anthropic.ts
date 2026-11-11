@@ -1,4 +1,5 @@
 import type { AnthropicTool, AnthropicToolChoice } from "./anthropic"
+import { isRecord } from "./is-record"
 import { rejectField } from "./reject"
 
 /**
@@ -72,9 +73,9 @@ export function structuredOutputToAnthropic(
 
 function jsonSchemaTool(spec: unknown): AnthropicTool {
   const at = `${FIELD}.json_schema`
-  if (!isPlainObject(spec)) rejectField(at, "must be an object when `type` is `json_schema`")
+  if (!isRecord(spec)) rejectField(at, "must be an object when `type` is `json_schema`")
   const schema = spec.schema
-  if (!isPlainObject(schema)) {
+  if (!isRecord(schema)) {
     rejectField(
       `${at}.schema`,
       "must be a JSON Schema object: an invented schema would promise a constraint the caller never stated",
@@ -119,8 +120,4 @@ export function assertNoReservedTool(
 /** Whether the model must call a tool; the dialect forbids that beside extended thinking. */
 export function forcesToolUse(choice: AnthropicToolChoice | undefined): boolean {
   return choice?.type === "any" || choice?.type === "tool"
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

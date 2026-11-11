@@ -43,26 +43,22 @@ export interface ModelCatalogRefreshDeps {
   /** `MODEL_CATALOG_REFRESH_INTERVAL_MINUTES`, in milliseconds. The runner jitters it. */
   readonly intervalMs: number
   /**
-   * Accounts refreshed per tick. Each is one outbound GET, so this bounds concurrency against a
-   * provider rather than memory — nothing like the keepalive's subprocess bound, and nothing like
-   * a delete sweep's row bound either.
+   * Accounts refreshed per tick. The loop below asks them one after another, so this bounds how
+   * long a tick holds its lock (one outbound GET each), not concurrency against a provider.
    */
   readonly batchSize: number
+  /**
+   * How long after boot the first sweep runs, before jitter (`MODEL_CATALOG_REFRESH_STARTUP_DELAY_SECONDS`,
+   * in ms). Clamped to `intervalMs`.
+   *
+   * The only task here that does not wait a full interval for its first tick, and the reason is
+   * that its output is visible: `GET /v1/catalog` reads what this writes, so an hour of `data: []`
+   * after a fresh deploy looks like a broken endpoint rather than a sweep that has not come round
+   * yet. The warm store reloads from Postgres at boot, so this matters on the *first* deploy rather
+   * than every restart — but the first deploy is exactly when someone is looking.
+   */
+  readonly startupDelayMs: number
 }
-
-/**
- * How long after boot the first sweep runs, before jitter.
- *
- * The only task here that does not wait a full interval for its first tick, and the reason is that
- * its output is visible: `GET /v1/catalog` reads what this writes, so an hour of `data: []` after a
- * fresh deploy looks like a broken endpoint rather than a sweep that has not come round yet. The
- * warm store reloads from Postgres at boot, so this matters on the *first* deploy rather than every
- * restart — but the first deploy is exactly when someone is looking.
- *
- * Half a minute, not zero: boot is when the router should be getting ready to serve, and a handful
- * of outbound listings can wait until it is. Jittered by the runner like any other delay.
- */
-const STARTUP_DELAY_MS = 30_000
 
 export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): ScheduledTask {
   return {
@@ -70,7 +66,7 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
     intervalMs: deps.intervalMs,
     // Never longer than the interval itself: a deployment that configured a one-minute refresh
     // must not have its first run pushed out to thirty seconds *later* than its own cadence.
-    startupDelayMs: Math.min(STARTUP_DELAY_MS, deps.intervalMs),
+    startupDelayMs: Math.min(deps.startupDelayMs, deps.intervalMs),
 
     run: async ({ now, logger, signal }) => {
       const [accounts, ages, attempts] = await Promise.all([
@@ -105,6 +101,14 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
           await deps.catalog.clearAttempt(account.id)
           tally.refreshed += 1
           tally.models += outcome.models
+          // A truncated listing still refreshed, but the operator should know rows may be missing.
+          if (outcome.detail !== undefined)
+            logger.info("model catalog refreshed with a note", {
+              accountId: account.id,
+              provider: account.provider,
+              models: outcome.models,
+              detail: outcome.detail,
+            })
           continue
         }
         // Asked without a write: stamp it durably, or the next tick — usually a different

@@ -60,6 +60,12 @@ export function createInventoryMetrics(
     help: "Replica-local currently selectable accounts for configured pool/model pairs, ordinary or recovery.",
     labels: ["pool_id", "model", "admission"],
   })
+  // Every pool, no inventory needed: the "pool lost its last serving member" alert (13.14).
+  const serving = registry.gauge({
+    name: "router_pool_serving_members",
+    help: "Members of each pool whose account is currently active on this replica (health overlaid). Zero means every request to the pool fails over or is refused.",
+    labels: ["pool_id"],
+  })
   return {
     observe(sample: RequestSample) {
       if (sample.model === null) return
@@ -79,7 +85,15 @@ export function createInventoryMetrics(
     collect(snapshot: RoutingSnapshot) {
       // Clearing first removes deleted or reconfigured pairs; never retain stale availability.
       available.clear()
+      serving.clear()
       knownPools = new Set(snapshot.pools.map((pool) => pool.id))
+      const active = new Set(
+        snapshot.accounts.filter((account) => account.status === "active").map((a) => a.id),
+      )
+      for (const pool of snapshot.pools) {
+        const count = pool.members.filter((member) => active.has(member.accountId)).length
+        serving.set({ pool_id: pool.id }, count)
+      }
       for (const reading of countInventory(snapshot, inventory, options)) {
         const labels = { pool_id: reading.poolId, model: reading.model }
         available.set({ ...labels, admission: "ordinary" }, reading.ordinary)

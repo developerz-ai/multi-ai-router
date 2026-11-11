@@ -23,6 +23,8 @@ export interface RuntimeDeps {
   readonly sql: SqlConnection
   /** The same pool's own occupancy sample, for `router_db_pool_connections` — `main.ts`. */
   readonly dbPoolStats: () => PoolSample
+  /** This pool's backends in `pg_stat_activity`, read off the scrape path (12.18). */
+  readonly dbOpenConnections?: () => Promise<number>
   readonly logger: Logger
 }
 

@@ -1,5 +1,6 @@
 import { createAdminSessionRepository } from "@multi-ai-router/db"
 import { createRuntimeMetrics } from "../observability"
+import { createOpenConnectionsReading } from "../observability/open-connections"
 import { createSdkUsageGauge } from "../providers"
 import { createPostgresSessionStore } from "../services/admin-auth"
 import { gaugeObservationCapture } from "../services/dataplane/gauge-observation"
@@ -20,8 +21,16 @@ export function createRuntimeTelemetry(
   const { recoveryComponents, health, prices, catalog, sdkQuota } = warm
   const { sdkConcurrency } = cli
   // `usage` is a getter because the recorder below reports *into* this: see `observability/`.
+  const openConnections =
+    deps.dbOpenConnections === undefined
+      ? undefined
+      : createOpenConnectionsReading({
+          read: deps.dbOpenConnections,
+          timeoutMs: env.healthDatabaseProbeTimeoutMs,
+        })
   const metrics = createRuntimeMetrics({
     metricInventory: env.metricInventory,
+    maxSeriesPerMetric: env.metricsMaxSeriesPerMetric,
     catalog: recoveryComponents.access.catalog,
     health,
     usage: () => usage,
@@ -29,17 +38,21 @@ export function createRuntimeTelemetry(
     dbPool: {
       sample: () => {
         const main = deps.dbPoolStats()
+        // Idle is opened minus in use; before the first reading lands, the pool's own estimate.
+        const opened = openConnections?.sample()
+        const mainIdle = opened === undefined ? main.idle : Math.max(0, opened - main.inUse)
         const auxiliary = refreshLock.poolStats()
         const scheduled = schedulerLock.poolStats()
         return {
           inUse: main.inUse + auxiliary.inUse + scheduled.inUse,
-          idle: main.idle + auxiliary.idle + scheduled.idle,
+          idle: mainIdle + auxiliary.idle + scheduled.idle,
           waiting: main.waiting + auxiliary.waiting + scheduled.waiting,
           max: main.max + auxiliary.max + scheduled.max,
         }
       },
     },
     prices,
+    snapshots: { routingCatalog: catalog, modelCatalog: warm.modelCatalogStore },
     logger,
     now,
     revision: env.revision,

@@ -177,4 +177,8 @@ export interface TranslationConfig {
    * emitted until an operator names a model — a vendor dial, never a model change (non-negotiable 4).
    */
   readonly thinkingDefaultModels: readonly string[]
+  /** `MAX_TRANSLATION_SSE_FRAME_BYTES`: one upstream SSE frame larger than this fails the relay. */
+  readonly maxSseFrameBytes: number
+  /** `TRANSLATION_DROP_LOG_WINDOW_SECONDS`: one `translation dropped fields` warn per key and field per window. */
+  readonly dropLogWindowSeconds: number
 }

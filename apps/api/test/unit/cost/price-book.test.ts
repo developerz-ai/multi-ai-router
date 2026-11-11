@@ -203,6 +203,41 @@ describe("refreshing off the request path", () => {
     expect(loads).toBe(settled)
   })
 
+  test("a failing timer refresh reaches the reporter and keeps the previous snapshot", async () => {
+    let loads = 0
+    let reported = (_error: unknown): void => undefined
+    const failure = new Promise<unknown>((resolve) => {
+      reported = resolve
+    })
+    const book = createPriceBook({
+      load: async () => {
+        loads += 1
+        if (loads > 1) throw new Error("override query failed")
+        return [row()]
+      },
+      refreshIntervalMs: 5,
+      now: () => NOW,
+      jitter: () => 1,
+      onRefreshError: (error) => reported(error),
+    })
+
+    await book.refresh()
+    book.start()
+    try {
+      const error = await Promise.race([
+        failure,
+        sleep(2_000).then(() => {
+          throw new Error("the failure was never reported")
+        }),
+      ])
+      expect(error).toBeInstanceOf(Error)
+    } finally {
+      book.stop()
+    }
+    expect(book.lookup("anthropic-api", "claude-sonnet-5")?.inputPerMtok).toBe(1)
+    expect(book.loadedAt()).toEqual(NOW)
+  })
+
   test("start() is idempotent and stop() is safe before it", () => {
     const book = bookOf([row()])
 

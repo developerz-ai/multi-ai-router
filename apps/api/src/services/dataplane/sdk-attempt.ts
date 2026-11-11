@@ -109,7 +109,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   const turn = await resolveTurn(input, plan.account.id).prepare()
   // A fresh plan is invisible as an error — it still answers — and visible only as a cold prompt
   // cache and a burnt window. This line is what tells a replay-every-turn loop from a resume.
-  input.log?.info("sdk session plan", {
+  input.log?.debug("sdk session plan", {
     accountId: plan.account.id,
     plan: turn.plan.kind,
     ...(turn.plan.kind === "fresh" ? { reason: turn.plan.reason } : {}),
@@ -256,6 +256,7 @@ function invocationFailure(
       // Router-authored: this is the sentence a client reads when no account could serve, and the
       // SDK's own wording never becomes one (docs/idea/07-security.md).
       message: clientMessage,
+      ...(classification.requestAttributable === true ? { requestAttributable: true } : {}),
     },
     classification,
     // The account's quota state rides `rate_limit_event`, never the throw (§5) — `classifySdkFailure`

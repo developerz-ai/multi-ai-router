@@ -1,0 +1,10 @@
+{
+  // Type-checks the tests the composite build leaves out (`bun test` checks
+  // nothing). Run by `bun run typecheck`.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true
+  },
+  "include": ["test/**/*.ts"]
+}

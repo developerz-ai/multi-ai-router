@@ -8,6 +8,7 @@ import {
   type PoolRepository,
 } from "@multi-ai-router/db"
 import type { Env } from "../config/env"
+import { usageSnapshotStatementTimeoutMs } from "../config/usage-snapshot"
 import type { AuditRecorder } from "../services/admin/audit"
 import type { RoutingCatalogStore } from "../services/catalog"
 import { catalogLabels } from "../services/usage-read"
@@ -27,8 +28,11 @@ import {
  */
 export function createUsageReports(deps: {
   readonly database: Database
-  readonly env: Pick<Env, "usageReport" | "retention" | "failover" | "upstreamStream">
-  readonly keys: Pick<ApiKeyRepository, "list">
+  readonly env: Pick<
+    Env,
+    "usageReport" | "retention" | "failover" | "upstreamStream" | "serverIdleTimeoutSeconds"
+  >
+  readonly keys: Pick<ApiKeyRepository, "listSummaries">
   readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "listAll">
   readonly pools: Pick<PoolRepository, "list">
   readonly accounts: Pick<AccountRepository, "list">
@@ -38,7 +42,9 @@ export function createUsageReports(deps: {
   const { env } = deps
   return createUsageReportService({
     reports: createUsageReportRepository(deps.database),
-    history: createUsageHistoryRepository(deps.database),
+    history: createUsageHistoryRepository(deps.database, {
+      snapshotStatementTimeoutMs: usageSnapshotStatementTimeoutMs(env),
+    }),
     labels: catalogLabels({
       keys: deps.keys,
       tombstones: deps.keyTombstones,

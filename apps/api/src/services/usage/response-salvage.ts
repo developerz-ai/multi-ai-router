@@ -23,6 +23,8 @@ import {
 
 export interface ResponseSalvage {
   push(byte: number): void
+  /** Same as pushing each byte of `bytes[start, end)`, without per-byte work inside skipped strings. */
+  pushChunk(bytes: Uint8Array, start: number, end: number): void
   /** The rebuilt shallow payload, or null when the scanned bytes were not one closed object. */
   finish(): Record<string, unknown> | null
   readonly retainedBytes: number
@@ -270,99 +272,121 @@ export function createResponseSalvage(maximumBytes: number): ResponseSalvage {
       dropped: false,
     }
   }
-  return {
-    push(byte) {
-      if (failed) return
-      if (inString) {
-        keep(byte)
-        if (escaped) escaped = false
-        else if (byte === BACKSLASH) escaped = true
-        else if (byte === QUOTE) {
-          inString = false
-          if (keyBytes !== null) {
-            keys[depth] = decodeSlotKey(keyBytes)
-            escapedKeys[depth] = keyBytes.includes(BACKSLASH)
-            keyBytes = null
-          } else if (capture?.kind === "string" && capture.depth === depth) endCapture()
-          return
-        }
-        if (keyBytes !== null && keyBytes.length <= KEY_MAX_BYTES) keyBytes.push(byte)
+  const push = (byte: number) => {
+    if (failed) return
+    if (inString) {
+      keep(byte)
+      if (escaped) escaped = false
+      else if (byte === BACKSLASH) escaped = true
+      else if (byte === QUOTE) {
+        inString = false
+        if (keyBytes !== null) {
+          keys[depth] = decodeSlotKey(keyBytes)
+          escapedKeys[depth] = keyBytes.includes(BACKSLASH)
+          keyBytes = null
+        } else if (capture?.kind === "string" && capture.depth === depth) endCapture()
         return
       }
-      if (isWhitespace(byte)) {
-        primitiveRun = false
-        if (capture?.kind === "primitive" && capture.depth === depth) endCapture()
-        else keep(byte)
-        return
-      }
-      if (closed) {
+      if (keyBytes !== null && keyBytes.length <= KEY_MAX_BYTES) keyBytes.push(byte)
+      return
+    }
+    if (isWhitespace(byte)) {
+      primitiveRun = false
+      if (capture?.kind === "primitive" && capture.depth === depth) endCapture()
+      else keep(byte)
+      return
+    }
+    if (closed) {
+      failed = true
+      return
+    }
+    if (capture?.kind === "primitive" && capture.depth === depth) {
+      if (byte === COMMA || byte === CLOSE_OBJECT || byte === CLOSE_ARRAY) endCapture()
+    }
+    if (!started) {
+      if (byte !== OPEN_OBJECT) {
         failed = true
         return
       }
-      if (capture?.kind === "primitive" && capture.depth === depth) {
-        if (byte === COMMA || byte === CLOSE_OBJECT || byte === CLOSE_ARRAY) endCapture()
-      }
-      if (!started) {
-        if (byte !== OPEN_OBJECT) {
+      started = true
+    }
+    const continuesPrimitive = primitiveRun
+    primitiveRun = false
+    switch (byte) {
+      case QUOTE:
+        inString = true
+        if (depth >= 1 && depth <= 2 && objects[depth] && expectKey[depth]) {
+          keyBytes = []
+          keys[depth] = null
+          valueStarted[depth] = false
+          keep(byte)
+          return
+        }
+        beginValue(byte, true)
+        keep(byte)
+        return
+      case OPEN_OBJECT:
+      case OPEN_ARRAY:
+        if (depth > 0) beginValue(byte, true)
+        keep(byte)
+        depth++
+        if (depth <= 2) {
+          objects[depth] = byte === OPEN_OBJECT
+          expectKey[depth] = byte === OPEN_OBJECT
+          keys[depth] = null
+          valueStarted[depth] = false
+        }
+        return
+      case CLOSE_OBJECT:
+      case CLOSE_ARRAY:
+        if (depth === 0) {
           failed = true
           return
         }
-        started = true
-      }
-      const continuesPrimitive = primitiveRun
-      primitiveRun = false
-      switch (byte) {
-        case QUOTE:
-          inString = true
-          if (depth >= 1 && depth <= 2 && objects[depth] && expectKey[depth]) {
-            keyBytes = []
-            keys[depth] = null
-            valueStarted[depth] = false
-            keep(byte)
-            return
-          }
-          beginValue(byte, true)
-          keep(byte)
+        keep(byte)
+        depth--
+        if (capture?.kind === "container" && capture.depth === depth) endCapture()
+        if (depth === 0) closed = true
+        return
+      case COLON:
+        if (depth <= 2) expectKey[depth] = false
+        keep(byte)
+        return
+      case COMMA:
+        if (depth <= 2 && objects[depth]) expectKey[depth] = true
+        keep(byte)
+        return
+      default:
+        if (depth === 0) {
+          failed = true
           return
-        case OPEN_OBJECT:
-        case OPEN_ARRAY:
-          if (depth > 0) beginValue(byte, true)
-          keep(byte)
-          depth++
-          if (depth <= 2) {
-            objects[depth] = byte === OPEN_OBJECT
-            expectKey[depth] = byte === OPEN_OBJECT
-            keys[depth] = null
-            valueStarted[depth] = false
-          }
-          return
-        case CLOSE_OBJECT:
-        case CLOSE_ARRAY:
-          if (depth === 0) {
-            failed = true
-            return
-          }
-          keep(byte)
-          depth--
-          if (capture?.kind === "container" && capture.depth === depth) endCapture()
-          if (depth === 0) closed = true
-          return
-        case COLON:
-          if (depth <= 2) expectKey[depth] = false
-          keep(byte)
-          return
-        case COMMA:
-          if (depth <= 2 && objects[depth]) expectKey[depth] = true
-          keep(byte)
-          return
-        default:
-          if (depth === 0) {
-            failed = true
-            return
-          }
-          primitiveRun = true
-          if (capture === null || !continuesPrimitive) beginValue(byte, !continuesPrimitive)
-          keep(byte)
+        }
+        primitiveRun = true
+        if (capture === null || !continuesPrimitive) beginValue(byte, !continuesPrimitive)
+        keep(byte)
+    }
+  }
+  return {
+    push,
+    pushChunk(bytes, start, end) {
+      // Cached positions of the next quote and backslash keep the skip linear in the chunk.
+      const view = end === bytes.length ? bytes : bytes.subarray(0, end)
+      let quoteAt = -2
+      let slashAt = -2
+      let at = start
+      while (at < end) {
+        if (failed) return
+        // A string no capture or key reads only needs its closing quote found; an escape must
+        // still be stepped through byte by byte so an escaped quote does not end it.
+        if (inString && !escaped && capture === null && keyBytes === null) {
+          if (quoteAt !== -1 && quoteAt < at) quoteAt = view.indexOf(QUOTE, at)
+          if (slashAt !== -1 && slashAt < at) slashAt = view.indexOf(BACKSLASH, at)
+          const stop = Math.min(quoteAt === -1 ? end : quoteAt, slashAt === -1 ? end : slashAt, end)
+          if (stop >= end) return
+          at = stop
+        }
+        push(bytes[at] ?? 0)
+        at++
       }
     },
     finish() {

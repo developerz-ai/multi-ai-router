@@ -103,7 +103,6 @@ describe("plan usage readers, refusals first", () => {
     ["minimax", { ...miniMaxLive, model_remains: [miniMaxLive.model_remains[1]] }],
     ["minimax", { base_resp: { status_code: 0 }, model_remains: [{ model_name: "general" }] }],
     ["zai", { code: 401, success: false, msg: "token expired" }],
-    ["zai", { success: true, data: { limits: [{ type: "TIME_LIMIT", unit: 5, number: 1 }] } }],
     [
       "zai",
       {
@@ -140,6 +139,32 @@ describe("plan usage readers, refusals first", () => {
       expect(signal?.retryAfterSeconds).toBeUndefined()
       for (const window of signal?.quotaWindows ?? []) expect(window.advisory).toBe(true)
     }
+  })
+})
+
+/**
+ * Sweep 101, 12.10: a reading that parses and states no token window is a key without a Coding Plan
+ * — a skip, not `quota:unreadable` on every tick (which left the sweep `partial` forever).
+ */
+describe("zai: no token window is no plan, not an unreadable reading", () => {
+  for (const limits of [[], [{ type: "TIME_LIMIT", unit: 5, number: 1 }]]) {
+    test(`limits ${JSON.stringify(limits)}`, () => {
+      const body = { success: true, data: { limits } }
+      expect(quotaRead("zai").read(body, AT)).toBeNull()
+      expect(quotaRead("zai").noPlan?.(body)).toBe(true)
+    })
+  }
+
+  test("a token window this cannot read is still unreadable, never a skip", () => {
+    const body = {
+      success: true,
+      data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: "high" }] },
+    }
+    expect(quotaRead("zai").read(body, AT)).toBeNull()
+    expect(quotaRead("zai").noPlan?.(body)).toBe(false)
+    expect(quotaRead("zai").noPlan?.({ code: 401, success: false, msg: "token expired" })).toBe(
+      false,
+    )
   })
 })
 

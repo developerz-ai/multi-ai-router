@@ -81,7 +81,9 @@ function isDeclaredEnum(value: unknown): value is DeclaredEnum {
   return typeof candidate.enumName === "string" && Array.isArray(candidate.enumValues)
 }
 
-const DECLARED: readonly DeclaredEnum[] = Object.values(schemaEnums).filter(isDeclaredEnum)
+const DECLARED: readonly DeclaredEnum[] = Object.values(
+  schemaEnums as Record<string, unknown>,
+).filter(isDeclaredEnum)
 
 describe("committed migrations carry every declared enum value", () => {
   test("the schema declares enums at all — an empty sweep would pass vacuously", () => {
@@ -98,7 +100,9 @@ describe("committed migrations carry every declared enum value", () => {
 })
 
 /** Every table the schema barrel exports — the Drizzle tables, not the enums beside them. */
-const SCHEMA_TABLES: readonly Table[] = Object.values(schema).filter(isTable)
+const SCHEMA_TABLES: readonly Table[] = Object.values(schema as Record<string, unknown>).filter(
+  isTable,
+)
 
 /** Every column the last migration leaves behind, by table and then by column name. */
 function migratedColumns(): ReadonlyMap<string, ReadonlySet<string>> {

@@ -70,6 +70,7 @@ export interface ScheduledTaskDeps
   readonly accounts: Pick<
     AccountRepository,
     | "list"
+    | "listSummaries"
     | "listIds"
     | "listQuotaWindows"
     | "clearObservedQuotaWindow"
@@ -144,7 +145,10 @@ export interface ScheduledTaskDeps
   /** The background read of plans that report usage on their own endpoint. Absent: no task. */
   readonly planQuotaRead?: PlanQuotaReadPorts
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
-  readonly env: Pick<Env, "retention" | "janitorIntervalMinutes"> &
+  readonly env: Pick<
+    Env,
+    "retention" | "janitorIntervalMinutes" | "schedulerLimits" | "usageBackfillFullScanHours"
+  > &
     CredentialTaskDeps["env"] &
     ReportTaskDeps["env"]
 }
@@ -175,6 +179,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       history: deps.history,
       batchSize,
       intervalMs: intervals.usage_rollup,
+      fullScanEveryMs: env.usageBackfillFullScanHours * HOUR_MS,
     }),
     createOauthPurgeTask({
       oauthStates: deps.oauthStates,
@@ -255,6 +260,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
             refresh: deps.refreshCatalog,
             intervalMs: intervals.model_catalog_refresh,
             batchSize: env.scheduler.modelCatalogRefreshBatchSize,
+            startupDelayMs: env.schedulerLimits.modelCatalogRefreshStartupDelaySeconds * 1000,
           }),
         ]),
     // Access-token keepalive and the daily login-lifetime warn line — `credential-tasks.ts`.

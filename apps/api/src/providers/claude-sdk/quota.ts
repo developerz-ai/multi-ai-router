@@ -101,18 +101,20 @@ export function createSdkQuotaStore(): SdkQuotaStore {
       const state = stateOf(accountId)
       const key = reading.rateLimitType ?? SDK_DEFAULT_BUCKET
       const previous = state.buckets.get(key)
-      const alarmed = reading.utilization !== null
+      const reported = reading.utilization !== null
+      // A continuous reporter (the fast transport's headers) is a gauge, not an alarm.
+      const fresh = reading.continuous ? "continuous" : "threshold-triggered"
       state.buckets.set(key, {
         limiter: key,
         kind: windowKind(reading.rateLimitType),
         limited: reading.status === "rejected",
-        // An alarm that said nothing about fullness leaves the gauge's number standing.
-        utilization: alarmed
+        // A reading that said nothing about fullness leaves the gauge's number standing.
+        utilization: reported
           ? clampFraction(reading.utilization ?? 0)
           : previous?.source === "continuous"
             ? previous.utilization
             : undefined,
-        source: alarmed ? "threshold-triggered" : (previous?.source ?? "none"),
+        source: reported ? fresh : (previous?.source ?? "none"),
         resetsAt: reading.resetsAt ?? futureReset(previous, now),
         lastCheckedAt: now,
       })

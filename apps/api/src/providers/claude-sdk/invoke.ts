@@ -27,7 +27,7 @@ import type { SdkUsageGaugeObservation } from "./usage-gauge"
  *   the answer to `query()` and reports what the subprocess named itself (§4).
  */
 export interface SdkInvocation {
-  /** Request context read only by the opt-in direct HTTP transport. Never inherited by query(). */
+  /** Request context read only by the direct HTTP (fast mode) transport. Never inherited by query(). */
   readonly clientHeaders?: Headers
   readonly apiKeyId?: string
   readonly sessionKey?: string

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import type { OauthStateRepository } from "@multi-ai-router/db"
 import type { CredentialCipher } from "../../crypto/cipher"
 
@@ -110,9 +110,4 @@ export function createOIDCStateStore(deps: OIDCStateStoreDeps): OIDCStateStore {
       }
     },
   }
-}
-
-/** SHA-256 hashed so a hostile 1 KB string cannot grow the throttle map. */
-export function ipThrottleNamespace(suffix: string): string {
-  return `admin-oidc:${createHash("sha256").update(suffix, "utf8").digest("base64url")}`
 }

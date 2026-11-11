@@ -5,6 +5,7 @@ import type { RequestSample } from "../services/dataplane"
 import type { RoutingSnapshot, SelectionOptions } from "../services/routing"
 import type { UsageRecord } from "../services/usage"
 import type { RegistryOptions } from "./registry"
+import type { ProcessSample } from "./self-metrics"
 
 export interface AccountMetric {
   readonly id: string
@@ -47,9 +48,16 @@ export interface SdkConcurrencySample {
   readonly queued: number
 }
 
+/**
+ * `modelKnown`: whether the requested model resolved against the routing catalog. `false` labels
+ * the request series `model="other"` — a client-typed string is unbounded, the catalog is not.
+ * Optional so a producer that does not set it keeps the verbatim label.
+ */
+export type RequestMetricSample = RequestSample & { readonly modelKnown?: boolean }
+
 export interface RouterMetrics {
   /** One client request, at the point it ended. */
-  observeRequest(sample: RequestSample): void
+  observeRequest(sample: RequestMetricSample): void
   observeBindingWait(milliseconds: number): void
   observeUsageAdmission(milliseconds: number): void
   /** One upstream attempt. Fed from the usage recorder's drain, off the request path. */
@@ -66,6 +74,12 @@ export interface RouterMetrics {
   setSdkConcurrency(sample: SdkConcurrencySample): void
   /** Cumulative-to-delta off `HealthStore.probeStats()`, read per scrape like the two above. */
   setProbeAdmissions(sample: ProbeAdmissionSample): void
+  /** Per scrape: resident memory and event-loop delay since the previous scrape. */
+  setProcess(sample: ProcessSample): void
+  /** One Claude subscription request fast mode sent to the Agent SDK instead (05.12). */
+  observeFastFallback(reason: string): void
+  /** When a warm snapshot last loaded, from its store's own `loadedAt()` (04.5). */
+  setSnapshotLoadedAt(store: "routing_catalog" | "model_catalog", at: Date | null): void
   /** Per scrape, from the pool wrapper's own in-flight count — see `DbPoolSample`. */
   setDbPool(sample: DbPoolSample): void
   /**

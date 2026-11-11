@@ -156,3 +156,13 @@ export function captureException(
     ...(context?.extra ? { extra: context.extra } : {}),
   })
 }
+
+/**
+ * Drains queued GlitchTip events before the process exits — a boot failure or a crash handler
+ * that exits straight after `captureException` would otherwise drop the very event it captured.
+ * Resolves `true` with nothing to drain when no DSN was initialised; `false` when the timeout hit.
+ */
+export async function flushSentry(timeoutMs: number): Promise<boolean> {
+  if (Sentry.getClient() === undefined) return true
+  return Sentry.flush(timeoutMs)
+}

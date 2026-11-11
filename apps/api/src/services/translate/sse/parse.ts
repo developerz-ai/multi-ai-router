@@ -1,3 +1,5 @@
+import { TranslationStreamError } from "../shared/stream-error"
+
 /**
  * The router's only SSE reader.
  *
@@ -25,7 +27,7 @@
  * of its own (`dataplane/relay-translate.ts`). The passthrough relay never parses and forwards
  * them with everything else.
  *
- * Nothing here throws. A malformed frame is a stream already on the wire, and by then the request
+ * Nothing here throws on stream content. A malformed frame is a stream already on the wire, and by then the request
  * fails honestly rather than being retranslated (`06-protocol-translation.md`, "Rejected: nothing
  * at stream time").
  */
@@ -42,26 +44,44 @@ export interface SseParser {
   push(chunk: Uint8Array | string): readonly SseFrame[]
   /** The upstream stream ended. @returns a trailing frame the upstream never terminated. */
   flush(): readonly SseFrame[]
+  /**
+   * Set once a frame outgrew {@link SseParserOptions.maximumFrameLength}; from then on `push` and
+   * `flush` return nothing and the caller ends the stream with this error.
+   */
+  failure(): TranslationStreamError | null
 }
 
 const CR = 13
 const LF = 10
-const BOM = "﻿"
+const BOM = "\uFEFF"
 const NONE: readonly SseFrame[] = []
 
 export interface SseParserOptions {
   /** Called with each comment line's text (the part after the leading `:`), in arrival order. */
   readonly onComment?: (text: string) => void
+  /**
+   * The most UTF-16 code units one frame may hold before it is dispatched: its unterminated line
+   * plus the `data:` lines already gathered. Absent means unbounded. An upstream that streams bytes
+   * with no line or frame end would otherwise grow one string per stream until it stops.
+   */
+  readonly maximumFrameLength?: number | undefined
 }
 
 export function createSseParser(options: SseParserOptions = {}): SseParser {
+  const limit = frameLimit(options.maximumFrameLength)
   const decoder = new TextDecoder("utf-8")
-  let buffer = ""
+  // The unterminated line, held as the chunks it arrived in and joined once when its end arrives:
+  // re-scanning or re-concatenating the whole partial line on every chunk is quadratic in its
+  // length, and a Responses `response.completed` line restates the whole output.
+  let partial: string[] = []
+  let partialLength = 0
   let atStreamStart = true
   // A chunk ending on `\r` may be a `\r\n` split down the middle; the `\n` is not a second line.
   let pendingLf = false
   let event: string | null = null
   let data: string[] = []
+  let dataLength = 0
+  let failed: TranslationStreamError | null = null
 
   function dispatch(out: SseFrame[]): void {
     // A frame with no `data:` line at all dispatches nothing — it is a bare comment or a stray
@@ -73,6 +93,7 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
     out.push({ event, data: data.join("\n") })
     event = null
     data = []
+    dataLength = 0
   }
 
   function line(raw: string, out: SseFrame[]): void {
@@ -91,28 +112,53 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
     const value = rest.startsWith(" ") ? rest.slice(1) : rest
 
     if (field === "event") event = value
-    else if (field === "data") data.push(value)
+    else if (field === "data") {
+      data.push(value)
+      dataLength += value.length
+    }
   }
 
+  /** The held partial line plus `text[from, end)`, and the hold emptied. */
+  function takeLine(text: string, from: number, end: number): string {
+    const tail = text.slice(from, end)
+    if (partial.length === 0) return tail
+    partial.push(tail)
+    const whole = partial.join("")
+    partial = []
+    partialLength = 0
+    return whole
+  }
+
+  /** Scans only `text`, never the held partial line: every code unit is visited once. */
   function consume(text: string, out: SseFrame[]): void {
-    buffer += text
-    let cursor = 0
     let from = 0
-    while (cursor < buffer.length) {
-      const code = buffer.charCodeAt(cursor)
-      if (code !== LF && code !== CR) {
-        cursor += 1
-        continue
-      }
-      line(buffer.slice(from, cursor), out)
-      cursor += 1
+    for (let cursor = 0; cursor < text.length; cursor += 1) {
+      const code = text.charCodeAt(cursor)
+      if (code !== LF && code !== CR) continue
+      line(takeLine(text, from, cursor), out)
       if (code === CR) {
-        if (cursor === buffer.length) pendingLf = true
-        else if (buffer.charCodeAt(cursor) === LF) cursor += 1
+        if (cursor + 1 === text.length) pendingLf = true
+        else if (text.charCodeAt(cursor + 1) === LF) cursor += 1
       }
-      from = cursor
+      from = cursor + 1
     }
-    if (from > 0) buffer = buffer.slice(from)
+    if (from < text.length) {
+      partial.push(from === 0 ? text : text.slice(from))
+      partialLength += text.length - from
+    }
+    if (limit !== null && partialLength + dataLength > limit) fail()
+  }
+
+  function fail(): void {
+    failed = new TranslationStreamError(
+      "translation_pending_overflow",
+      `An upstream stream event exceeded the ${limit} character translation limit`,
+    )
+    partial = []
+    partialLength = 0
+    data = []
+    dataLength = 0
+    event = null
   }
 
   function trim(chunk: Uint8Array | string): string {
@@ -130,10 +176,12 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
 
   return {
     push(chunk) {
+      if (failed !== null) return NONE
       const text = trim(chunk)
       if (text.length === 0) return NONE
       const frames: SseFrame[] = []
       consume(text, frames)
+      // Frames completed before the overflowing one in this chunk are still honest output.
       return frames
     },
 
@@ -145,17 +193,28 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
      * otherwise cost the client its `message_stop`.
      */
     flush() {
+      if (failed !== null) return NONE
       const frames: SseFrame[] = []
       // Flushes any incomplete multi-byte sequence left by the last `stream: true` decode.
       const tail = decoder.decode()
-      const rest = buffer + tail
-      buffer = ""
+      const rest = takeLine(tail, 0, tail.length)
       pendingLf = false
       if (rest.length > 0) line(rest, frames)
       dispatch(frames)
       return frames
     },
+
+    failure() {
+      return failed
+    },
   }
+}
+
+function frameLimit(value: number | undefined): number | null {
+  if (value === undefined) return null
+  if (!Number.isSafeInteger(value) || value < 1)
+    throw new RangeError("maximumFrameLength must be a positive integer")
+  return value
 }
 
 /**

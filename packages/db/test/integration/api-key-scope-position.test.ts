@@ -81,7 +81,7 @@ describe.skipIf(!runnable)("api_key_pools position migration against a live data
       select pool_id::text, "position" from api_key_pools
       where api_key_id = ${KEY_ID}::uuid order by "position"
     `
-    expect(ordered).toEqual([
+    expect([...ordered]).toEqual([
       { pool_id: POOL_B, position: 0 },
       { pool_id: POOL_D, position: 1 },
       { pool_id: POOL_A, position: 2 },
@@ -118,6 +118,6 @@ describe.skipIf(!runnable)("api_key_pools position migration against a live data
       select pool_id::text, "position" from api_key_pools
       where api_key_id = ${SECOND_KEY_ID}::uuid
     `
-    expect(rows).toEqual([{ pool_id: THIRD_POOL_ID, position: 0 }])
+    expect([...rows]).toEqual([{ pool_id: THIRD_POOL_ID, position: 0 }])
   })
 })

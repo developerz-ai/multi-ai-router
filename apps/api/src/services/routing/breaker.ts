@@ -6,7 +6,7 @@
  * | `active` | Eligible for selection. | — |
  * | `cooling_down` | Excluded. **Temporary — a clock will fix it.** | Reset instant passes, then a half-open probe; or the hourly `cooldown_recheck` finds it open early. |
  * | half-open | One request through as a probe. | Success -> `active`. Failure -> `cooling_down` at the next backoff step. |
- * | `exhausted` | Excluded. **Permanent until a human acts.** The breaker never schedules a retry. | An operator tops up, then a re-check or a successful probe. |
+ * | `exhausted` | Excluded. **Needs a human.** No request is ever routed to it, and the breaker schedules nothing. | An operator tops up and re-checks, or the bounded re-test (`exhausted-retest.ts`) re-checks it on its doubling clock. |
  * | `cooling_down` + `credential-rejected` | An API key the provider refused. Excluded, reported as needing a human — and still re-tested on a long clock that doubles per refused re-test, up to a cap. Nothing else in flight moves it (`credential-rejection.ts`). | Cooldown passes, then a half-open probe. A fixed key (or a misread limit) serves; a dead one cools again, for longer. |
  *
  * `cooling_down` and `exhausted` are never conflated, and the difference is mechanical rather
@@ -19,9 +19,9 @@
  */
 
 import type { AccountStatus, AuthKind, ResetSource } from "@multi-ai-router/core"
-import { backoffMs, reportedReset } from "./backoff"
+import { backoffMs, boundedReportedReset, reportedResetSource } from "./backoff"
 import { refusalStands, rejectCredential } from "./credential-rejection"
-import type { AttemptFailure } from "./failover"
+import type { AttemptFailure } from "./failure-kind"
 
 /**
  * Why a cooldown is not an ordinary one. Absent on every cooldown a limit or a failure streak formed.
@@ -67,6 +67,11 @@ export interface BreakerOptions {
   readonly authFailureCooldownMs?: number
   /** Ceiling on that doubling. `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`. */
   readonly authFailureMaxCooldownMs?: number
+  /**
+   * Ceiling on any provider-reported reset, in seconds (`ROUTING_MAX_REPORTED_RESET_SECONDS`).
+   * A reset past it cools to the ceiling, labeled `estimated`. Default eight days.
+   */
+  readonly maxReportedResetSeconds?: number
 }
 
 /**
@@ -118,6 +123,9 @@ export function recordFailure(
   now: Date,
   options: BreakerOptions = {},
 ): BreakerState {
+  // Provoked by the request's content, not the account (plan 101, 05.14): a cooldown here would walk
+  // one client's refusal across the pool and answer every other tenant `429`.
+  if (failure.requestAttributable === true) return state
   switch (failure.kind) {
     // Faults whose cause is the **request**, not the account. They say nothing about this
     // account's health, so they leave its streak and its status exactly where they were.
@@ -190,10 +198,10 @@ export function recordFailure(
 }
 
 /**
- * The first success resets the streak and returns the account to `active` — including from
- * `exhausted`, because the only request that can reach an `exhausted` account is the operator's
- * "Re-check now" probe, which is the same code path as the half-open probe. Nothing here
- * *schedules* that; it is human action, exactly as the state machine requires.
+ * The first success resets the streak and returns the account to `active`. It never reaches an
+ * `exhausted` account: no request is routed there, and the health store refuses a success over a
+ * standing block (`dataplane/health.ts`). Its exit is the operator's or the bounded re-test's
+ * re-check, which bumps `healthRecoveryVersion` and so starts a fresh breaker.
  */
 export function recordSuccess(): BreakerState {
   return HEALTHY
@@ -206,14 +214,15 @@ function trip(
   options: BreakerOptions,
   failures: number,
 ): BreakerState {
-  const reported = reportedReset(failure, now)
-  const until = reported ?? new Date(now.getTime() + backoffMs(failures, options))
+  const reported = boundedReportedReset(failure, now, options.maxReportedResetSeconds)
+  const until = reported?.at ?? new Date(now.getTime() + backoffMs(failures, options))
   // `estimated`, not `unknown`: when the provider reported nothing we still computed an instant
   // from the backoff schedule, and that is precisely what "estimated" means. Calling it unknown
   // would understate what we know, and the console renders this qualifier next to the countdown —
-  // an operator has to be able to tell a provider's own reset from our arithmetic.
+  // an operator has to be able to tell a provider's own reset from our arithmetic. A reset past the
+  // ceiling is cut to it, and the ceiling is ours, so it is `estimated` too.
   const source: ResetSource =
-    reported === null ? "estimated" : (failure.resetSource ?? "provider-reported")
+    reported === null ? "estimated" : reportedResetSource(reported, failure.resetSource)
 
   // A later mark may extend an entry; an earlier one never shortens it, so two concurrent
   // failures cannot un-learn the longer reset.

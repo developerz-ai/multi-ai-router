@@ -3,6 +3,18 @@ import {
   translationPendingLimit,
 } from "./responses-snapshot-recovery"
 
+/** The events that name an output item; a Set lookup per delta, not a regex. */
+const IDENTIFIED_EVENTS: ReadonlySet<string> = new Set([
+  "response.output_item.added",
+  "response.output_item.done",
+  "response.output_text.delta",
+  "response.output_text.done",
+  "response.refusal.delta",
+  "response.refusal.done",
+  "response.function_call_arguments.delta",
+  "response.function_call_arguments.done",
+])
+
 /** Canonicalize compatible ID/index aliases before consumers or snapshot recovery see them. */
 export function createResponsesItemIdentity(options: ResponsesRecoveryOptions = {}) {
   const limit = translationPendingLimit(options.maximumPendingBytes)
@@ -18,13 +30,7 @@ export function createResponsesItemIdentity(options: ResponsesRecoveryOptions = 
     errorClass?: "translation_pending_overflow"
   } => {
     const type = event.type
-    if (
-      typeof type !== "string" ||
-      !/^response\.(?:output_item\.(?:added|done)|(?:output_text|refusal|function_call_arguments)\.(?:delta|done))$/.test(
-        type,
-      )
-    )
-      return { event }
+    if (typeof type !== "string" || !IDENTIFIED_EVENTS.has(type)) return { event }
     const item =
       event.item !== null && typeof event.item === "object" && !Array.isArray(event.item)
         ? (event.item as Record<string, unknown>)

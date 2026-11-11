@@ -2,13 +2,18 @@ import { readErrorFacts } from "../failure/error-body"
 import type { RateLimitSignal, UpstreamResponse } from "../types"
 import { parseRateLimitHeaders } from "./parse"
 
+/**
+ * The one body-borne reset a compatible endpoint is known to state. Exported so the classification
+ * rule (`drivers/compatible-rules.ts`) and this parser read one literal, not two that can drift.
+ */
+export const COMPATIBLE_BODY_RESET =
+  /quota (?:has been )?exhausted\. The quota will reset at (\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC\./i
+
 /** Exact sanitized audit fixture only; response Date supplies its omitted year. */
 export function compatibleBodyReset(response: UpstreamResponse): Date | undefined {
   if (response.status !== 429) return undefined
   const message = readErrorFacts(response.body).message
-  const match = message?.match(
-    /quota (?:has been )?exhausted\. The quota will reset at (\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC\./i,
-  )
+  const match = message?.match(COMPATIBLE_BODY_RESET)
   const reference = response.headers.get("date")
   if (!match || !reference) return undefined
   const referenceMs = Date.parse(reference)

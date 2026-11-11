@@ -4,6 +4,20 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+# Same runtime as CI and the image, or say so: a different bun runs these silently.
+bin/lib/require-bun
+
+# docker-compose.dev.yml has no restart policy, so the dev database is down after
+# every reboot. Say so up front instead of leaving a connection-refused stack in
+# the API output beside a healthy Vite.
+# shellcheck source=bin/lib/dev-db-env
+. bin/lib/dev-db-env
+dev_port="$(dev_db_port)"
+if [ -f .env ] && grep -Eq "^[[:space:]]*DATABASE_URL[[:space:]]*=.*@localhost:${dev_port}/" .env &&
+   ! $DEV_DB_COMPOSE ps --services --status running 2>/dev/null | grep -qx postgres; then
+  printf '\033[0;33m⚠  the dev Postgres (localhost:%s) is not running — start it with bin/setup\033[0m\n' "$dev_port" >&2
+fi
+
 # Both children die with this script: trap the exits and kill the process group
 # so a Ctrl-C does not leave an orphaned vite holding the port.
 trap 'kill 0' EXIT INT TERM

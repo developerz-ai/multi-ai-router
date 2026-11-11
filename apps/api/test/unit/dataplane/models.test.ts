@@ -188,7 +188,7 @@ describe("model sizes on the listing", () => {
     ])
   })
 
-  test("across accounts a known size beats an unknown one, and the first known one stands", () => {
+  test("across accounts a known size beats an unknown one, and the smallest known one stands", () => {
     const models = reachableModels(
       catalog([
         account("unswept", { snapshot: { supportedModels: ["m"] } }),
@@ -200,8 +200,9 @@ describe("model sizes on the listing", () => {
       NOW,
       warm({ swept: [sized("m", 131_072, null)], later: [sized("m", 64_000, 8_192)] }),
     )
-    // The window is the swept account's; the ceiling only `later` knew, so it is `later`'s.
-    expect(models[0]).toMatchObject({ contextTokens: 131_072, maxOutputTokens: 8_192 })
+    // A request may land on any of them, so only the smallest known window is safe to plan by
+    // (plan 101, 13.15 — the rule `/v1/catalog` folds by); the ceiling only `later` knew.
+    expect(models[0]).toMatchObject({ contextTokens: 64_000, maxOutputTokens: 8_192 })
   })
 
   test("a model nothing sized stays null — never a default", () => {

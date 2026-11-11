@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { httpDriver, parseRateLimitHeaders, type RateLimitWindow } from "../../../src/providers"
 import {
+  EPOCH_SECONDS_CEILING_MS,
+  parseEpochSeconds,
+} from "../../../src/providers/rate-limit/duration"
+import {
   anthropicRateLimitHeaders,
   openAiRateLimitHeaders,
   openRouterRateLimitHeaders,
@@ -189,5 +193,57 @@ describe("what a driver refuses to invent", () => {
     const signal = parseRateLimitHeaders(response(429, { headers: { "retry-after-ms": "1500" } }))
 
     expect(signal?.retryAfterSeconds).toBe(1.5)
+  })
+})
+
+/**
+ * Sweep 101, 04.2. `Number()` read `retry-after: 0x10` as 16 s and `1e9` as 31 years, and the breaker
+ * then parked the account on our misreading. RFC 9110 `delay-seconds` is digits; anything else that
+ * is not an HTTP-date is no reset at all.
+ */
+describe("retry-after is read strictly", () => {
+  for (const value of ["0x10", "1e9", "-5", "+30", "Infinity", "30s", " 0b11 "]) {
+    test(`retry-after: ${JSON.stringify(value)} states no reset`, () => {
+      const signal = parseRateLimitHeaders(response(429, { headers: { "retry-after": value } }))
+
+      expect(signal?.retryAfterSeconds).toBeUndefined()
+      expect(signal?.resetsAt).toBeUndefined()
+      expect(signal?.resetSource).toBe("unknown")
+    })
+  }
+
+  test("retry-after-ms in exponent form is ignored, and the plain header still read", () => {
+    const signal = parseRateLimitHeaders(
+      response(429, { headers: { "retry-after-ms": "1e12", "retry-after": "12" } }),
+    )
+
+    expect(signal?.retryAfterSeconds).toBe(12)
+  })
+
+  test("digits and a fraction are still seconds", () => {
+    for (const [value, seconds] of [
+      ["30", 30],
+      [" 7 ", 7],
+      ["1.5", 1.5],
+    ] as const) {
+      const signal = parseRateLimitHeaders(response(429, { headers: { "retry-after": value } }))
+      expect({ value, seconds: signal?.retryAfterSeconds }).toEqual({ value, seconds })
+    }
+  })
+})
+
+describe("the inferred epoch-seconds ceiling is injectable", () => {
+  const reference = new Date("2026-11-10T00:00:00.000Z")
+
+  test("defaults to a week past the response's own Date", () => {
+    expect(parseEpochSeconds("9999999999", reference)?.getTime()).toBe(
+      reference.getTime() + EPOCH_SECONDS_CEILING_MS,
+    )
+  })
+
+  test("a tighter ceiling wins", () => {
+    expect(parseEpochSeconds("9999999999", reference, 3_600_000)?.getTime()).toBe(
+      reference.getTime() + 3_600_000,
+    )
   })
 })

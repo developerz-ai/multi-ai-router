@@ -45,7 +45,13 @@ export type ProviderSupport =
    * `CLAUDE_CONFIG_DIR`. A different interface, not a `ProviderDriver` — see `claude-sdk/driver.ts`.
    * `reason` is operator-facing: the console shows it beside the provider.
    */
-  | { readonly transport: "agent-sdk"; readonly driver: ClaudeSdkDriver; readonly reason: string }
+  | {
+      readonly transport: "agent-sdk"
+      readonly driver: ClaudeSdkDriver
+      readonly reason: string
+      /** As `ProviderDriver.idleProbeModel`, for the subscription the SDK serves. */
+      readonly idleProbeModel?: string
+    }
   /** Declared in the domain, no implementation yet. Selecting one is a configuration error. */
   | { readonly transport: "unimplemented"; readonly reason: string }
 
@@ -88,6 +94,8 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
     driver: claudeSdkDriver,
     reason:
       "Claude Max/Pro subscriptions go through @anthropic-ai/claude-agent-sdk, one isolated CLAUDE_CONFIG_DIR per account. Default inference uses calibrated direct HTTP with SDK fallback; CLAUDE_FAST_MODE=false forces SDK inference — docs/idea/claude-fast-mode.md.",
+    // The cheapest current model the subscription serves: the keepalive's one minimal turn.
+    idleProbeModel: "claude-haiku-4-5-20251001",
   },
 }
 
@@ -115,4 +123,32 @@ export function providerModelFamily(id: ProviderId): ModelFamily | undefined {
 export function providerUnderstandsContextTags(id: ProviderId): boolean {
   const support = PROVIDER_REGISTRY[id]
   return support.transport !== "unimplemented" && support.driver.understandsContextTags === true
+}
+
+/**
+ * Whether this provider's transport holds the conversation server-side (the Agent SDK), so a hop
+ * off a bound account restarts the session. Read by the catalog into `AccountSnapshot.carriesSession`.
+ */
+export function providerCarriesSession(id: ProviderId): boolean {
+  return PROVIDER_REGISTRY[id].transport === "agent-sdk"
+}
+
+/**
+ * Whether the hourly catalog sweep lists this provider. False for a `manual` one (an aggregator),
+ * and for anything not served over HTTP — a subscription's catalog has its own refresh path.
+ */
+export function providerCatalogSweep(id: ProviderId): "hourly" | "manual" {
+  return httpDriver(id)?.catalogSweep ?? "hourly"
+}
+
+/** The model the idle-account probe spends its turn on, or `undefined`: never probed idle. */
+export function providerIdleProbeModel(id: ProviderId): string | undefined {
+  const support = PROVIDER_REGISTRY[id]
+  if (support.transport === "unimplemented") return undefined
+  return support.transport === "http" ? support.driver.idleProbeModel : support.idleProbeModel
+}
+
+/** How this provider's shipped price rows read (`ProviderDriver.shippedPrices`). */
+export function providerShippedPrices(id: ProviderId): "list" | "notional" {
+  return httpDriver(id)?.shippedPrices ?? "list"
 }

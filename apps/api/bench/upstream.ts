@@ -47,6 +47,8 @@ export interface StubOptions {
    * zero, so a stub that does would report a number no deployment will ever see.
    */
   readonly firstByteDelayMs?: number
+  /** Pads a non-streamed answer's text to about this many bytes of escaped prose. */
+  readonly answerBytes?: number
 }
 
 export interface StubUpstream {
@@ -85,7 +87,7 @@ export function stubUpstream(options: StubOptions): StubUpstream {
           trip.upstreamFirstByteAt = at
           trip.upstreamLastByteAt = at
         }
-        return json(body(options.dialect))
+        return json(body(options.dialect, options.answerBytes))
       }
 
       // Headers now, first token after the wait — the shape every streaming provider has, and the
@@ -138,14 +140,22 @@ const UPSTREAM_MODEL = "gpt-4o"
 const TOKENS_IN = 24
 const TOKENS_OUT = 32
 
-function body(dialect: StubOptions["dialect"]): unknown {
+/** Answer text with an escape every line, the shape a model's code answer has on the wire. */
+function answerText(bytes: number | undefined): string {
+  if (bytes === undefined) return "bench"
+  const line = 'const value = "bench"\n'
+  return line.repeat(Math.max(1, Math.ceil(bytes / line.length)))
+}
+
+function body(dialect: StubOptions["dialect"], answerBytes?: number): unknown {
+  const text = answerText(answerBytes)
   if (dialect === "anthropic") {
     return {
       id: "msg_bench",
       type: "message",
       role: "assistant",
       model: MODEL,
-      content: [{ type: "text", text: "bench" }],
+      content: [{ type: "text", text }],
       stop_reason: "end_turn",
       usage: { input_tokens: TOKENS_IN, output_tokens: TOKENS_OUT },
     }
@@ -154,9 +164,7 @@ function body(dialect: StubOptions["dialect"]): unknown {
     id: "chatcmpl-bench",
     object: "chat.completion",
     model: UPSTREAM_MODEL,
-    choices: [
-      { index: 0, message: { role: "assistant", content: "bench" }, finish_reason: "stop" },
-    ],
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: TOKENS_IN, completion_tokens: TOKENS_OUT },
   }
 }

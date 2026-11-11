@@ -257,7 +257,7 @@ export function createSeries(options: RegistryOptions = {}) {
      */
     usageWriteFailures: registry.counter({
       name: "router_usage_write_failures_total",
-      help: "Usage records in a batch the database refused. disposition=retried went back for one more try; discarded was lost.",
+      help: "Usage records the database refused. disposition=retried counts each refused write (the records are kept and retried); discarded counts records lost — a row bisected out as unwritable, or the oldest dropped when the retry buffer overflowed.",
       labels: ["disposition"],
     }),
 

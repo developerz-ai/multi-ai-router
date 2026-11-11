@@ -44,7 +44,10 @@ describe.skipIf(!historyUrl)("historySource contributions day bound (output unch
     }
     // Partial start day (2) + the full in-window day (3); the 06:00 row and both out-of-window
     // days are excluded. tokensIn is 3 per attempt.
-    expect(await fixture.history().totals(windowed)).toMatchObject({ attempts: 5, tokensIn: 15 })
+    expect(await fixture.history().totals(windowed, {})).toMatchObject({
+      attempts: 5,
+      tokensIn: 15,
+    })
 
     // A window whose edges are both partial days, so both edges ride the contributions path.
     const bothEdges = {
@@ -52,11 +55,17 @@ describe.skipIf(!historyUrl)("historySource contributions day bound (output unch
       to: new Date("1984-01-15T13:30:00Z"),
     }
     // 2 on the partial start day + 2 of the three on 01-15 (12:00, 13:00 before 13:30; 14:00 after).
-    expect(await fixture.history().totals(bothEdges)).toMatchObject({ attempts: 4, tokensIn: 12 })
+    expect(await fixture.history().totals(bothEdges, {})).toMatchObject({
+      attempts: 4,
+      tokensIn: 12,
+    })
 
     // Lifetime: every banked attempt, both sides included.
     const lifetime = { from: new Date(0), to: new Date("2026-01-01T00:00:00Z") }
-    expect(await fixture.history().totals(lifetime)).toMatchObject({ attempts: 8, tokensIn: 24 })
+    expect(await fixture.history().totals(lifetime, {})).toMatchObject({
+      attempts: 8,
+      tokensIn: 24,
+    })
 
     // The per-key breakdown adds up to the same windowed total: the bound did not drop a group.
     const byKey = await fixture.history().breakdown(windowed, "apiKeyId", 100, {})

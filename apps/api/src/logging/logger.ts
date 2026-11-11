@@ -36,13 +36,17 @@ export function createLogger(options: LoggerOptions): Logger {
   const now = options.now ?? (() => new Date())
   const threshold = LEVEL_ORDER[options.level]
 
+  // `bound` is already redacted: a child's fields are scrubbed once, when it is made, rather than
+  // again on every line it writes. Redaction is per top-level field, so scrubbing the bound and the
+  // per-call halves apart yields the same line as scrubbing their merge.
   const emit = (level: LogLevel, bound: LogFields, msg: string, fields?: LogFields): void => {
     if (LEVEL_ORDER[level] < threshold) return
     const payload = {
       ts: now().toISOString(),
       level,
       msg: redactValue(msg),
-      ...redact({ ...bound, ...fields }),
+      ...bound,
+      ...(fields === undefined ? {} : redact(fields)),
     }
     write(JSON.stringify(payload))
   }
@@ -52,7 +56,7 @@ export function createLogger(options: LoggerOptions): Logger {
     info: (msg, fields) => emit("info", bound, msg, fields),
     warn: (msg, fields) => emit("warn", bound, msg, fields),
     error: (msg, fields) => emit("error", bound, msg, fields),
-    child: (fields) => build({ ...bound, ...fields }),
+    child: (fields) => build({ ...bound, ...redact(fields) }),
   })
 
   return build({})

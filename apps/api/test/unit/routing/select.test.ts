@@ -215,12 +215,14 @@ describe("the empty candidate set fails by cause", () => {
     expect(result.error.message).toContain("b, c, d, e")
   })
 
-  test("no account supporting the model is 503, never a generic 500", () => {
+  test("no account supporting the model is a 404 client change, never a generic 500", () => {
     const state = snapshot([account("a", { supportedModels: ["opus"] })], [pool("team", ["a"])])
     const result = expectFailure(selectAccounts(state, ask()))
 
-    expect(result.error.status).toBe(503)
-    expect(result.error.code).toBe("no_healthy_account")
+    // Was 503 `no_healthy_account`: that invited retries and paged as a server fault (plan 101,
+    // 10.21). Both vendors answer an unknown model 404.
+    expect(result.error.status).toBe(404)
+    expect(result.error.code).toBe("model_not_found")
   })
 
   test("the rejection list explains every drop", () => {

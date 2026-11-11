@@ -13,13 +13,15 @@ import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import { listenOptions } from "./config/listen"
 import { createLogger, type Logger } from "./logging/logger"
-import { initSentry } from "./observability"
+import { captureException, flushSentry, initSentry } from "./observability"
 import { ConfigDirError } from "./providers/claude-sdk/config-dir"
 import { adminAuthBootProblem } from "./services/admin-auth"
 import { createAccountProbe } from "./services/health/accountProbe"
 import { createClaudeCliProbe } from "./services/health/claudeCliProbe"
 import { createDatabaseProbe } from "./services/health/databaseProbe"
+import { installCrashHandlers } from "./services/shutdown/crash-handlers"
 import { createLifecycle } from "./services/shutdown/lifecycle"
+import { shutdownPhases } from "./services/shutdown/phases"
 import { runShutdownPhases } from "./services/shutdown/run-phases"
 import { announceUnready, drain, installShutdownHandlers } from "./services/shutdown/transport"
 
@@ -37,13 +39,34 @@ async function main(): Promise<void> {
   // exit the process runs. No-op when no SENTRY_DSN is set.
   initSentry(env, logger)
 
+  // Before anything can reject: Bun's default for a stray rejection is an immediate exit with the
+  // raw, unredacted error on stderr. Until the listener is up there is nothing to drain, so an
+  // uncaught exception exits once GlitchTip has the event; after it, `crashShutdown` is replaced
+  // by the ordinary drain.
+  let crashShutdown = () => {
+    void exitAfterFlush(env, 1)
+  }
+  installCrashHandlers({
+    signals: {
+      on: (event, callback) => {
+        process.on(event, callback)
+      },
+    },
+    logger,
+    capture: (error) => captureException(error),
+    shutdown: () => crashShutdown(),
+  })
+
   warnOnInsecureSessionCookie(env, logger)
 
   // Migrations run before the listener opens. A failure exits non-zero rather than serving
   // traffic on a half-migrated schema — docs/idea/09-deployment.md#migrations.
   await migrate(env, logger)
 
-  const database = createDatabase({ url: env.databaseUrl, ...env.databasePool })
+  const database = createDatabase({
+    url: env.databaseUrl,
+    ...env.databasePool,
+  })
 
   // "OIDC or local" needs the database — the local credential's existence is a
   // row, and the row does not exist until migrations have run. Same fail-fast
@@ -55,6 +78,7 @@ async function main(): Promise<void> {
     database: database.db,
     sql: database.sql,
     dbPoolStats: database.poolStats,
+    dbOpenConnections: () => database.openConnections(),
     logger,
   })
 
@@ -68,7 +92,11 @@ async function main(): Promise<void> {
 
   // Resolves which `claude` binary the Agent SDK would spawn. Called once here so the winning rung
   // is in the boot log before the first request, then again per `/readyz`.
-  const claudeCli = createClaudeCliProbe({ override: env.claudeCliPath, log: logger })
+  const claudeCli = createClaudeCliProbe({
+    override: env.claudeCliPath,
+    log: logger,
+    cacheMs: env.healthCliProbeCacheMs,
+  })
   await claudeCli()
 
   const app = createApp({
@@ -76,7 +104,11 @@ async function main(): Promise<void> {
     logger,
     logQuietPaths: env.logQuietPaths,
     probes: {
-      database: createDatabaseProbe({ handle: database, log: logger }),
+      database: createDatabaseProbe({
+        handle: database,
+        log: logger,
+        timeoutMs: env.healthDatabaseProbeTimeoutMs,
+      }),
       // Reads the same warm state the request path reads, so the endpoint cannot
       // disagree with the router about what is routable.
       accounts: createAccountProbe({ catalog: runtime.catalog, health: runtime.health }),
@@ -97,6 +129,7 @@ async function main(): Promise<void> {
       serverIdleTimeoutSeconds: env.serverIdleTimeoutSeconds,
     },
     trustProxy: env.trustProxy,
+    trustProxyHops: env.trustProxyHops,
     sessionCookieInsecure: env.adminAuth.sessionCookieInsecure,
     adminApiToken: env.adminApiToken,
     webRoot: resolveWebRoot(env, logger),
@@ -120,23 +153,35 @@ async function main(): Promise<void> {
 
   // Readiness and HTTP draining precede runtime producer, auxiliary-pool and writer phases.
   // The orchestrator must cover their complete configured bounds plus the final main-pool close.
-  installShutdownHandlers(lifecycle, logger, () =>
+  const shutdown = () =>
     runShutdownPhases(
-      [
-        { name: "admission", run: () => runtime.closeAdmission() },
-        { name: "readiness-grace", run: () => announceUnready(env, logger) },
-        { name: "http-drain", run: () => drain(server, env, logger) },
-        { name: "runtime", run: () => runtime.stop() },
-        { name: "database", run: () => database.close() },
-      ],
-      (phase) =>
+      shutdownPhases({
+        announceUnready: () => announceUnready(env, logger),
+        closeAdmission: () => runtime.closeAdmission(),
+        drainHttp: () => drain(server, env, logger),
+        stopRuntime: () => runtime.stop(),
+        closeDatabase: () => database.close(),
+      }),
+      (phase, error) =>
         logger.error("shutdown phase failed", {
           component: "transport",
           phase,
           errorClass: "shutdown_phase_failure",
+          error,
         }),
-    ),
-  )
+    )
+  installShutdownHandlers(lifecycle, logger, shutdown)
+  crashShutdown = () => {
+    // A signal-driven shutdown already under way owns the exit.
+    if (!lifecycle.begin()) return
+    void shutdown().finally(() => exitAfterFlush(env, 1))
+  }
+}
+
+/** Exit once GlitchTip has had a bounded chance to send what was just captured. */
+async function exitAfterFlush(env: Env, code: number): Promise<never> {
+  await flushSentry(env.sentryExitFlushMs).catch(() => false)
+  process.exit(code)
 }
 
 /**
@@ -259,6 +304,9 @@ async function migrate(env: Env, logger: Logger): Promise<void> {
     await runMigrations({
       url: env.databaseUrl,
       connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
+      lockTimeoutMs: env.migrationLockTimeoutMs,
+      onLockWait: () =>
+        logger.info("another replica holds the migration lock — waiting", { component: "db" }),
     })
     logger.info("migrations applied", { component: "db" })
   } catch (error) {
@@ -271,7 +319,8 @@ async function migrate(env: Env, logger: Logger): Promise<void> {
       errorClass: error instanceof Error ? error.name : "unknown",
       reason: describeError(error, Number.POSITIVE_INFINITY),
     })
-    process.exit(1)
+    captureException(error, { tags: { errorClass: "migration_failure" } })
+    await exitAfterFlush(env, 1)
   }
 }
 

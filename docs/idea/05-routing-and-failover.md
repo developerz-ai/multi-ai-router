@@ -152,8 +152,16 @@ permit holder may still bypass exactly the quota revisions its generation captur
 
 Filtering never falls back to "try it anyway" — an empty candidate set is an honest, specific error,
 and which error depends on *why* it is empty. When every in-scope account was dropped as
-`model-unsupported` the `503` says so in those words and echoes the client's model name: `no account
-serves model "glm-5.3" — a client change (3 accounts in scope: …)`.
+`model-unsupported` the answer is `404 model_not_found` (wall `scope`), says so in those words and
+echoes the client's model name: `no account serves model "glm-5.3" — a client change (3 accounts in
+scope: …)`. A `404`, the status both vendors give an unknown model: through 2.55.0 it was a `503`,
+which invited retries and paged as a server fault for what is a client change (plan 101, 10.21).
+
+A model the upstream itself refused as unknown (`model-unsupported`) is learned per account
+(`AccountSnapshot.refusedModels`, keyed by the upstream name after alias mapping, each with an
+expiry the health store sets) and filtered as `model-unsupported` until it lapses, so a delisted
+model stops costing one upstream round trip and one client-visible `404` per request (plan 101,
+10.16: 40 such `404`s in 37.5 h on one OpenRouter account).
 
 ### Context tags — a client hint, not part of the name
 
@@ -169,7 +177,7 @@ checked on `gpt-6.1-sol`, and `gpt-6.1-sol` is what goes upstream, including to 
 `model`-span rewrite an alias uses — no re-serialization. It is the same model with the hint
 dropped, not a substitution (non-negotiable 4): the resolution carries `strippedContextTag`, the
 usage row keeps the client's tagged name beside the upstream base name, and a base name no account
-serves is still the `model-unsupported` `503`. Why: `claudes gpt` sent `gpt-6.1-sol[1m]`, and a
+serves is still the `model-unsupported` `404`. Why: `claudes gpt` sent `gpt-6.1-sol[1m]`, and a
 ChatGPT account whose discovered list held `gpt-6.1-sol` was refused as `model-unsupported` (prod,
 2026-10-04). `GET /v1/models` lists no tagged spellings.
 
@@ -369,6 +377,8 @@ in the same scope sat idle (prod, 2026-10-06).
 
 `probe-in-flight` with an `estimated` reset is not a provider verdict: it is a recovery awaiting its permit from the coordinator, or another request's half-open probe. Both settle within a coordinator tick or one request. When a selection fails and at least one rejection is such a hold that can release before the budget runs out, the request does not answer `429`. A session bound to a held account counts the same way; for a blocked binding, only the bound account's own hold counts. The request re-reads the warm snapshot and selects again every `RECOVERY_COORDINATOR_INTERVAL_MS`, for at most `RECOVERY_REQUEST_WAIT_MS` (default 5 s, `0` disables), and is served as soon as the permit lands. The same applies to a chain that sent nothing and ended only because a recovering account's permit or probe belonged to someone else, including when another account in that chain answered a clock-recoverable `429`. Rejections that no short wait can change (provider-reported spent windows, `exhausted`, `needs_reauth`, `disabled`, model-unsupported, a hold whose instant falls past the budget) never start a wait on their own. On give-up the request fails with the error the last selection computed, or with the refusal's `429` and its short `Retry-After`, recording exactly one `UsageRecord` when no attempt did. The client's abort ends the wait. The wait never runs on a request whose first selection succeeded, so it adds no overhead to served traffic.
 
+**Riding a probe already on the wire (plan 101, 12.5).** A recovery probe on a slow provider can outlast the budget: tesote 2026-11-09, a zai probe settled after 21 s while every waiter's 5 s ran out behind it and answered `429` with the account about to serve (14.4k such 429s in 14 days). Past `RECOVERY_REQUEST_WAIT_MS`, a request whose only router-owned obstacle is a `probe-in-flight` account whose permit was issued and is no longer available on this replica — a request holds it, so its outcome is coming — keeps re-selecting on the same cadence, up to `RECOVERY_PROBE_WAIT_MS` from its first pause (absent, or not above the budget, rides nothing). The same holds for a chain refused for want of that account's permit. Time asleep in either wait is reported as `recoveryWaitMs` and excluded from `router_overhead_seconds` ([08-observability.md](08-observability.md)).
+
 The store-side mechanics: the row is never re-pointed by hand. The SDK attempt on the new account
 carries the transcript, and its own `remember` re-points the row at the account that actually
 served; per-session row writes are ordered so a clear can never land after the bind that
@@ -395,6 +405,13 @@ rotation: twenty agents starting on six subscriptions land 4·4·3·3·3·3, and
 where it landed. Before this counter existed nothing set the field, and every rotation policy ran at
 `0` — a fixed head, indistinguishable from the pool's declared order.
 
+It advances **once per request, and only for the pool whose group placed the head candidate**: not
+for every pool in the key's scope, not on a failed selection, and not again when a request
+re-selects while waiting out a recovery hold or retries its chain (plan 101, 03.2). Advancing every
+scoped pool let a key scoped to `[A, B]` that was always served by `A` stride `B` by one per request,
+so a second key scoped to `[B]` landed on the same `B` member forever. The unpooled (`all` /
+explicit-accounts) group shares one counter.
+
 | When to use | Trade-off |
 |---|---|
 | Homogeneous accounts, short stateless requests, or the flattest possible spread of **new sessions** across a fleet of Claude subscriptions serving many coding agents at once. | **Destroys cache affinity on the HTTP path.** A multi-turn conversation there hits a different account every turn and pays a cold cache each time. On a Claude subscription pool the binding holds the conversation in place and rotation only decides where the *next* session starts — there it is the policy for a fleet of parallel agents, where `priority-failover` would pile every agent onto the top account and its per-account concurrency gate. |
@@ -416,7 +433,9 @@ Picks the candidate with the lowest current load. **Implemented** (`routing/poli
 the default measure is **in-flight requests** — the one signal every provider has and that reacts
 immediately — with recent token spend as the tiebreak, then the declared order. `SelectionOptions.
 leastUsedMeasure: "recent-tokens"` swaps the two; it is not yet an env knob. The recent-tokens
-window is the health store's running counter; a bounded window for it is still **DEFERRED**.
+window is the health store's two-bucket counter over `LEAST_USED_TOKEN_WINDOW_SECONDS` (it covers
+the last one to two windows and rotates lazily on read and write); unset, it is the since-boot
+total, under which an account re-checked or added today wins every tie for days (plan 101, 02.10).
 
 | When to use | Trade-off |
 |---|---|
@@ -438,7 +457,10 @@ sequence, one quota window at a time, before ever touching a metered account.
 
 ### `quota-aware`
 
-Prefers the eligible account with the **most remaining subscription headroom**. Ranking accounts by
+Prefers the eligible account with the **most remaining subscription headroom**. Accounts at exactly
+equal headroom tie, and a tie rotates on the pool's counter like round-robin — six fresh
+subscriptions all reading 0 % must not send every unbound session to the first declared one until
+its gauge moves (plan 101, 03.5). Ranking accounts by
 headroom requires a **continuous** signal — a gauge that reads a real percentage at any point in the
 window. Not every quota signal is one, and the distinction decides whether this policy works at all:
 
@@ -494,11 +516,12 @@ that pool — the policy never runs across the union.
 | Condition | Action |
 |---|---|
 | `429` | Retry the next candidate. Mark the account `cooling_down` until its reset. |
-| `402`, or an out-of-credits / billing error body | Retry the next candidate. Mark the account **`exhausted`** — no reset, no request routed to it; its only clock is the bounded re-test (*The bounded `exhausted` re-test* below). |
+| `402`, or an out-of-credits / billing error body | Retry the next candidate. Mark the account **`exhausted`** — no reset, no request routed to it; its only clock is the bounded re-test (*The bounded `exhausted` re-test* below). A body's *wording* is a verdict only on the statuses its driver rule names, and never on a quoted span or past the first 2 KB: a `4xx` echoing a client-chosen model name (`404 "model: credit balance is too low"`) is the client's mistake, not a dead balance ([03-providers.md](03-providers.md), *A wording rule never reads the client's own words*). |
 | **A wall inside a `2xx`**, streaming or not (MiniMax `base_resp`, an `event: error` or Codex `response.failed` before any output) | Classified **before** the response is committed, from the front of the body (*A wall inside a 2xx* below), then exactly as the matching row of this table. With no candidate left, the client hears the real `429` / `402` / `503`, never a `200`. |
-| `5xx` | Retry the next candidate. Count toward the breaker's failure streak. |
+| `5xx`, `408`, `425` | Retry the next candidate. Count toward the breaker's failure streak. `408 Request Timeout` and `425 Too Early` are the server declining *this attempt*, not the request, so they fail over like a `5xx` (OpenRouter needed a rule of its own for `408` until the default covered it). |
+| `529` | Retry with the overload budget, as `overloaded` — whether or not Anthropic's `overloaded_error` body survived a rewriting proxy. Never a breaker strike. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. A **streamed** HTTP attempt's timeout before response headers is the first-byte clock (see *Upstream deadlines* below). |
-| `4xx` other than `429` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
+| `4xx` other than `429`, `408`, `425` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
 | The upstream refuses the **model name** (`model-unsupported`, driver-classified: the `claude` CLI's "There's an issue with the selected model … may not exist or you may not have access to it", Codex's "`<model>` model is not supported when using Codex with a ChatGPT account") | **Retry the next candidate**, before any byte reaches the client. **No breaker strike, no cooldown, no recovery probe** — the account answered correctly about a name it never served, and the next account may serve that vendor. Recorded as `client_error`. When every candidate refused it, the client hears the first refusal itself: Codex's own `400`, or for a subscription a router-authored `404` "the Claude subscription does not serve the requested model". Routing's [model family](#candidate-filtering) keeps most of these from being attempted at all; this row is for what the family admits and the upstream still refuses. Until 2026-10-04 the first read `unknown` (a `502` that struck the breaker) and the second `invalid-request` (no failover). |
 | **In-stream refusal on a 200 stream** (Codex `response.failed` or bare `error` event; classified by the `openai-oauth` driver hook, not the HTTP `rules` array) | Codes `invalid_prompt`, `invalid_request_error`, `context_length_exceeded`, `unsupported_parameter`, `unsupported_value`, `invalid_json_schema` → `invalid-request` (failover reads `client-error`; the breaker is **not** struck — a request-shaped refusal is bad at every account, but the account is not unwell). Codes `usage_limit_reached`, `rate_limit_exceeded` → `rate-limited`; the observer forces `rateLimit: null` so the verdict carries no estimated reset, and the breaker trips on the **first** hit (a stream-only rate limit is a fact about the account, not about the request). Code `account_deactivated`, and only from `response.error.code` of a frame whose own JSON `type` is `response.failed` (the one place the Codex CLI reads them; every other shape is retried or skipped there) `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` → `credits-exhausted`; the account moves to `exhausted` on the first hit (no clock, human action only). Any other code, or no code, → `server-error` (fail-closed; three in a row cool the account). The verdict's `errorClass` is the closed `codex:stream-error:<code>` signal (or `codex:stream-error:other`); the usage row carries the signal, never the upstream message. The code decides when there is one (top level, then the nested error object's `code`): a listed code maps as above, any other code is `server-error`. Exception: a quota code at `response.error.code` of a frame whose own JSON `type` is `response.failed` decides even beside a root `code` or `error`, which the Codex CLI ignores on that frame. Only when there is no code is the nested error object's `type` read, and only for the limit and deactivated codes above, never a quota code, which the Codex CLI's stream parser reads only as a code (the same lists the HTTP rules use, which read `type` even beside a code; in-stream, a code always decides): `invalid_request_error` is OpenAI's catch-all *type*, carried by account-level refusals such as `invalid_api_key` too, so a type never marks a refusal request-shaped. The flat event's own `type` is the event name `error` and is never read as a code. A frame too large for the observation cap is salvaged with its `error` and `code` kept (and MiniMax's `base_resp.status_code`, so an oversized in-body MiniMax failure still reads as one), so a large echoed prompt does not hide the code; an error object too large to keep is dropped and the failure classifies `server-error`, never success. The salvaged frame is read as `JSON.parse` reads it: a repeated `error`, `response` or `message` keeps its **last** copy (under a repeated parent, the members captured under the copy it replaced are released, not merged into it), and an escaped slot key (`"usage"` written `"\u0075sage"`) is matched as the key it decodes to — a key that is not pure ASCII, an invalid escape, or a raw key over 32 bytes matches no slot — so the code read is the code the frame ends with. Only the latest root `error` shape controls the placeholder: an object too large to keep is read as `{}`, while a later non-object replaces that flag and is omitted if it cannot fit. |
 | `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth), or — for an API key, or a no-auth endpoint that has grown something in front of it, neither of which has a login to re-run — to a `cooling_down` labeled **`credential-rejected`**, `ROUTING_AUTH_FAILURE_COOLDOWN_MS` long (15 min default, doubling per refused re-test up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`, 4 h), re-tested by one half-open probe when it ends and reported meanwhile as needing a human (see *A rejected key is a re-tested cooldown* below). Through v2.14.0 this row said `disabled`. A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way — every one, because the default attempt bound is the pool itself, not a number (`ROUTING_MAX_ATTEMPTS` unset). |
@@ -568,6 +591,13 @@ Rules:
   stays counted, deliberately: a dead subprocess may be this account's config directory or may be
   this one request, and an ambiguous fault is what the threshold is for.
   `model-unsupported` is the second kind that is retryable but blameless.
+- **A refusal the request itself provoked is a request wall, not a cooldown.** A failure marked
+  `requestAttributable` (the Agent SDK's `claude-sdk:extra-usage-gated`: an unscrubbed harness
+  preamble every subscription refuses alike) fails over once with no cooldown and no breaker strike;
+  a second such answer in the same chain (`REQUEST_WALL_AFTER`, 2) stops it with reason
+  `request-wall`, rendered with `wall: "request"` — never a router `429`. Before, the chain cooled
+  each account it tried, so one client's prompt walked the pool and other tenants saw `429` until
+  the cooldowns lapsed (plan 101, 05.14).
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.
   Replaying a partially delivered stream would produce a response the client cannot reconcile —
   duplicated tokens, a second `message_start`, a tool call emitted twice. The router surfaces the
@@ -677,7 +707,11 @@ transition it makes — including the one a rate-limit header folds in without a
 classified. Jitter comes from the same place, because the breaker itself is a pure function over an
 injected clock and reads no randomness: without a supplied fraction, every account tripped in the
 same second returns in the same millisecond and re-stampedes whatever knocked them over. Jitter only
-widens an *estimated* step; a provider-reported reset is the truth and is never nudged off it.
+widens an *estimated* step; a provider-reported reset is the truth and is never nudged off it — up
+to `ROUTING_MAX_REPORTED_RESET_SECONDS` (default 691200, eight days: the longest documented window
+is weekly). A reported reset past that ceiling cools the account to the ceiling and is labeled
+`estimated`, because the instant is then ours: a misread or ten-year `Retry-After` must not park an
+account for as long as it says (`routing/backoff.ts`).
 
 A **cooldown** is in-memory routing hygiene, not durable truth: after a restart the first failing
 request re-marks it. It expires with its own reset window (see the retention table in
@@ -819,6 +853,7 @@ Rules:
 | **Detect, don't guess** | The classification comes from the upstream signal — status code plus the provider's error body. This is a **driver-level** concern ([03-providers.md](03-providers.md)), because every provider words it differently. The router records *which* signal produced the classification, so a misclassification is debuggable. |
 | **A verdict outranks a header** | Limiter headers ride *every* response, including the `402` that says the balance is dead — a drained account very often answers `402` **and** `x-ratelimit-remaining-requests: 0` in the same breath. The classified failure is the verdict and lands first; the parsed headers are a reading and land second, where they may extend a cooldown but **never** overwrite `exhausted`, `needs_reauth`, or `disabled`. Without this, a dead balance becomes a countdown, gets retried on a timer, and the client is told `429 + Retry-After` for something no clock fixes. The reading is still recorded — refused, not discarded — so the console can show what the limiter said. |
 | **An instant is not a duration** | `x-ratelimit-reset` is documented as a duration (`6m0s`), OpenRouter sends epoch milliseconds, and some gateways send epoch **seconds** (`1784000000`). Read as a duration, epoch seconds parked an account until 2083. A bare number from 1e9 up to the epoch-millis floor (1e11) is read as an instant in seconds, labeled `estimated` because the unit is the router's inference. It is checked against the response's own `Date`: capped at a week past it (`9999999999` is 2286, a misread), and with no `Date` it is not trusted as a reset at all, so the breaker uses its own backoff (`providers/rate-limit/duration.ts`). |
+| **`Retry-After` is digits or a date** | RFC 9110 `delay-seconds` is digits (a fraction tolerated, as `retry-after-ms` and some gateways send one); anything else that is not an HTTP-date states no reset. `Number()` used to read `0x10` as 16 s and `1e9` as 31 years (`providers/rate-limit/parse.ts`, sweep 101, 04.2). |
 | **A verdict outranks a later verdict, too** | The same precedence holds between two classified failures. Requests run concurrently, so a `429` can classify *after* the `402` that already marked the account `exhausted` — and must not demote it back to `cooling_down`. Once an account is in a state no timer changes (`exhausted`, `needs_reauth`, `disabled`), later failures of any kind leave it standing; the first terminal verdict wins. |
 | **Remove immediately** | An `exhausted` account leaves every candidate set at once, for every key and every pool. |
 | **Surface loudly** | `exhausted` gets a **red banner on the dashboard**, not a status buried on a detail page. This is the failure an operator most needs to see, because it silently shrinks the pool while everything still appears to work. |
@@ -863,6 +898,24 @@ Two details of the `429`'s honesty:
   `Retry-After` — but the wait is a configured floor, default **30 seconds**
   (`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), because nothing is scheduled to clear the
   condition and a 1-second floor was a standing retry-per-second storm against it.
+
+### An attempt that throws after the upstream answered
+
+A driver hook that throws reading an answered upstream (provider drift: an unexpected header or body
+shape) is an attempt like any other, because the upstream may have billed it: one row attributed to
+the account (`upstream_error`, `errorClass` = the thrown class name), one breaker strike as a
+`server-error`, and the chain fails over (plan 101, 02.7). Its clocks are released and the body
+cancelled where it threw. A typed router error thrown after start stays the router's own answer.
+
+### What a chain that failed answers
+
+When every attempt failed on capacity — `overloaded`, `server-error`, `connection`, `timeout`, and
+nothing else — and no attempt left a more actionable answer, the `503 no_healthy_account` carries
+wall `capacity` (`retryable: true`) and a `Retry-After`: the soonest breaker cooldown among the
+accounts it tried, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` (plan 101, 13.8). Any other
+failure in the chain names no wait. When the planner stopped on a **request wall** — the request
+itself refused wherever it goes (`requestAttributable`, e.g. `claude-sdk:extra-usage-gated`) — the
+answer is the request's own `400` (wall `request`), never a `429` a retry would meet again (05.14).
 
 ### When the chain is empty
 
@@ -1004,6 +1057,8 @@ installs the resulting account state in the local warm catalog before completing
 | Inline outcome | Reports whether the recheck committed, when another is allowed, and any configured status it cleared. A CLI-managed account may also report its local Claude authentication check. No absent quota reading is invented. |
 | Last checked | The database records requestedAt for the durable generation, including automatic recovery; cooldown refusal returns its held timestamps. |
 | **Claude authentication** | Before the recovery commit, a reserved local `claude auth status` check receives the captured account facts; no database lock crosses the subprocess. Only a confirmed check against the exact observed `needs_reauth` may recover authentication. The check itself bills no turn. |
+| **Live-healthy accounts** | An account nothing holds out of rotation — overlaid status `active`, no breaker clock running, no spent window, no recovery generation still gating it — gets a **settled** generation: the epochs bump and the cooldown applies, but no permit is published and no probe is demanded. Through 2.55.0 every re-check published a pending generation, so "Re-check all" on five serving subscriptions gated each behind one permit and every other request waited `RECOVERY_REQUEST_WAIT_MS` and got `429` (plan 101, 03.1). Anything blocked or cooling still gets its one probe. |
+| **Re-check all** | Commits each account with bounded concurrency (`ACCOUNT_RECHECK_ALL_CONCURRENCY`, default 4), then installs the catalog **once**, then demands and audits per account: one five-table reload for the fleet rather than one per account. |
 | **The probe** | The pending generation is demanded at once; its permit is spent by a client request or, after `RECOVERY_REQUEST_WAIT_MS`, by the router's own probe (*The router sends the recovery probe itself*). The response returns before that probe is sent and does not report its verdict; the account's recovery state does. |
 | **Stored status authority** | Recheck preserves `disabled` and `needs_reauth`, and a committed recheck of a parked refreshable OAuth account buys one more refresh attempt, off-path. It clears only current `exhausted`; a successful guarded Claude auth check recovers `needs_reauth` before the atomic recovery request captures current intent. The catalog barrier precedes audit and response work. |
 | **Recovery admission** | A durable generation reserves at most one designated attempt across replicas. Pending/issued state gates further starts; only its captured old quota revisions may be bypassed. Success supersedes that captured blocking authority without changing provider utilization/reset, while a newer provider reading remains authoritative. PR147 is reviewed and merged; release/deployment remain pending. |
@@ -1025,7 +1080,7 @@ failover, and sends the smallest real completion the account's dialect can make.
 | What it does | One real, minimal completion (capped output) against this account's own credential, via the exact same attempt path a live request takes — same headers, same failure classification. |
 | Cost | Real, every time. An HTTP account spends a token or two of a real quota window; a Claude subscription spends a turn **and** spawns a `claude` subprocess. |
 | Confirmation | The Agent-SDK path refuses to run without an explicit `confirmed: true` on the request — the console shows a confirmation dialog naming the subprocess and the spend before it ever fires. Every other provider's press goes straight through. |
-| Throttled | Its own **server-side** per-account cooldown, longer than Re-check now's and never shared with it — a free button's presses must never spend a paid one's window, or the reverse. |
+| Throttled | Its own **server-side** per-account cooldown, longer than Re-check now's and never shared with it — a free button's presses must never spend a paid one's window, or the reverse. Only the operator's press stamps it: a router recovery probe or a background turn reuses the same probe but never spends the button's cooldown (plan 101, 03.8). |
 | Model | The operator names it, same as a client would. The account's declared set is not a substitute: it says what the upstream *accepts*, not which name this press should spend. |
 | Outcome | `ok` or `failed`, plus a short, safe message — a router-authored sentence, the account's own one-word reply, or a failure signal, never a raw upstream body or credential material. |
 | No fan-out | There is no all-accounts form. A button that spends a real request — and on the Agent-SDK path a subprocess — per account in a pool is not one this console offers. |
@@ -1130,16 +1185,20 @@ Recovery ownership and pending preparation leases are durable; an issued permit 
 
 A client that cancels a stream after the upstream has produced model output — a content, thinking, or tool-argument delta, not an envelope frame such as `message_start` or `ping` — settles the recovery attempt as `succeeded` and records health success: the account demonstrably served. A cancel before any model output proves nothing and settles `uncertain`. Either way the usage row is `client_error` / `client_cancelled`, and a cancel never strikes the account.
 
+The coordinator's tick (`RECOVERY_COORDINATOR_INTERVAL_MS`, 250 ms) touches Postgres only for work it holds: queued automatic requests and outcomes, and demanded accounts. The expired-permit sweep — the one read that ran on every tick unconditionally, 12.05 M calls and 64 % of all statements in prod — runs on its own cadence, `RECOVERY_EXPIRY_SWEEP_INTERVAL_MS` (default a tenth of `RECOVERY_MAXIMUM_OUTCOME_MS`, never faster than the tick), and at start; a failed sweep is retried on the next tick. A queued write that throws no longer aborts the tick: it is retried on later ticks and dropped with a warn after `RECOVERY_ENTRY_MAX_ATTEMPTS` (default 5), so one poisoned entry cannot keep every permit behind it from being exposed (plan 101, 10.9 / 12.13 / 03.11).
+
 A recovery generation captures, as bypassable evidence, only quota windows that are not provider-reported with a future reset. A window whose reset the provider itself reported and which has not arrived is the provider's answer, not stale guesswork; only an operator Re-check captures it. Automatic generations capturing it spent a certain-429 probe every cooldown for days (prod, 2026-10-06: two spent `seven_day` windows reset 2 days out).
 
 ### The hourly cooldown recheck
 
-The rule above is about the recovery permit, which retries every cooldown. `cooldown_recheck` is the owner-requested exception on a slower clock: it looks at an account whose provider-reported reset is still ahead, once per `COOLDOWN_RECHECK_INTERVAL_MINUTES`, because providers do reset windows early and a weekly window otherwise means days with no look. It holds no permit and clears no recovery state; its start guard admits `cooling_down` and spent windows and refuses every standing block and a `credential-rejected` key.
+The rule above is about the recovery permit, which retries every cooldown. `cooldown_recheck` is the owner-requested exception on a slower clock: it looks at an account whose provider-reported reset is still ahead, once per `COOLDOWN_RECHECK_INTERVAL_MINUTES`, because providers do reset windows early and a weekly window otherwise means days with no look. It holds no permit and clears no recovery state; its start guard admits `cooling_down` and spent windows and refuses every standing block and a `credential-rejected` key. A `2xx` probe does not reopen an account while a current provider-reported window is spent with its reset still ahead (`routing/cooldown-recheck.ts` `providerReportedSpent`): the probe model answering says nothing about a window charged to other models. Only a fresh reading that lifts the window, or its reset, reopens it (plan 101, 10.8: two opencode-go seats reopened 51 times in 37.5 h against a weekly window at 1.0, each followed by real `429`s).
 
 | Transport | Signal | Cost per account per interval |
 |---|---|---|
 | Agent SDK (`anthropic-oauth`) | Turn-free usage read. A window re-read below the threshold ends the cooldown; a cold credential is skipped | No turn, no billed usage. One `claude` subprocess |
 | HTTP, any other provider | One minimal real request through "Test now", audited `trigger: cooldown_recheck` | One small request. Billed only if the provider serves it, which is the case that ends the cooldown |
+
+A `2xx` does not reopen an account while a window **the provider reported** is still spent with its reset ahead: the probe model answered, which says nothing about a weekly limit charged to the models clients actually ask for (prod, opencode-go: `seven_day utilization=1.000` reported until 11-16, reopened 51 times in 37.5 h, each followed by real `429`s). The probe's own reading still lands first, so a provider that re-reads the window open does reopen it; an estimated reset is not protected this way, because second-guessing our own estimate is what the recheck is for.
 
 A still-limited answer records its window readings and moves nothing else. Every other failure settles through the recovery probe's verdict path: out of credits becomes `exhausted` and leaves this lane for the bounded re-test below, and a refused token parks `needs_reauth`, which earns its one refresh. A `5xx` or timeout counts against the streak, and can push a reset out only where our backoff is the later instant.
 
@@ -1154,7 +1213,7 @@ Rule 7, amended 2026-11-06 (developerz.ai#7868): `exhausted` keeps every propert
 | What runs | The operator's own **Re-check now** (`services/accounts/recheck.ts`), pressed by the `cooldown_recheck` task, audited `source: exhausted_recheck`. It clears the stored `exhausted` and demands one recovery probe; that probe's verdict — the next real request, or the router's own probe — puts a still-drained account straight back. Nothing else sends a request |
 | When | First `EXHAUSTED_RECHECK_FIRST_MINUTES` (60) after the task first sees the account `exhausted` — it looks once per `COOLDOWN_RECHECK_INTERVAL_MINUTES`, so the first re-test lands 1 to 2 h after the account went `exhausted` at the defaults — then a wait doubling per re-test, capped at `EXHAUSTED_RECHECK_MAX_MINUTES` (1440): 1, 2, 4, 8, 16, 24, 24 … hours. A refused claim (an operator's own check holds the lease, or the recheck cooldown runs) is no re-test: no count, no alert, asked again next tick |
 | Alert | Each re-test writes `exhausted account re-tested` at `warn` with `accountId`, `provider`, `retest` (count) and `nextRetestAt` — the line an alert rule matches ([08-observability.md](08-observability.md)). A re-test that could not run writes `exhausted account re-test failed` at `error` |
-| Doubling memory | Per replica, in memory (`services/routing/exhausted-retest.ts`). A re-tested account that reads healthy keeps its count until it has served a full cap, so a balance that drains again within a day resumes the doubling. A restart starts at the first wait — sooner, never later. Each replica may re-test once per wait: the recheck's durable cooldown (`ACCOUNT_RECHECK_COOLDOWN_SECONDS`, 60 s) only keeps two re-tests from landing together |
+| Doubling memory | Shared, in `account_exhausted_watches` (count, next due instant, last re-test), read at the start of each tick and written back per account the tick stepped; the pure step is `services/routing/exhausted-retest.ts`. Whichever replica wins the advisory lock continues the same ladder, and a restart resumes it rather than dropping to the first wait. A re-tested account that reads healthy keeps its count until it has served a full cap, so a balance that drains again within a day resumes the doubling. A refused claim and a re-test that threw both leave the stored watch untouched: nothing was re-tested, so the next tick asks again |
 
 ### A wall inside a 2xx
 

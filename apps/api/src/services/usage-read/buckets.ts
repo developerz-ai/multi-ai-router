@@ -1,6 +1,6 @@
 import { KeyOwnerKind } from "@multi-ai-router/core"
-import type { UsageGroupRow, UsageGroupSeriesPoint, UsageKeyAttribution } from "@multi-ai-router/db"
-import { breakdownRow } from "./summary-view"
+import type { UsageGroupRow, UsageKeyAttribution } from "@multi-ai-router/db"
+import { breakdownRow, type GroupedSeries } from "./summary-view"
 import type { KeyLabel, UsageOwnerRow, UsageToolRow } from "./types"
 
 /**
@@ -33,10 +33,10 @@ function bucketNote(id: string | null): BucketNote | undefined {
 export function ownerRows(
   rows: readonly UsageGroupRow[],
   axis: readonly string[],
-  points: readonly UsageGroupSeriesPoint[],
+  series: GroupedSeries,
 ): UsageOwnerRow[] {
   return rows.map((row) => {
-    const base = breakdownRow(row, axis, points)
+    const base = breakdownRow(row, axis, series)
     const note = bucketNote(row.id)
     if (note !== undefined) return { ...base, id: null, label: null, note, ownerKind: null }
     const id = row.id ?? ""
@@ -55,10 +55,10 @@ export function ownerRows(
 export function toolRows(
   rows: readonly UsageGroupRow[],
   axis: readonly string[],
-  points: readonly UsageGroupSeriesPoint[],
+  series: GroupedSeries,
 ): UsageToolRow[] {
   return rows.map((row) => {
-    const base = breakdownRow(row, axis, points)
+    const base = breakdownRow(row, axis, series)
     const note = bucketNote(row.id)
     if (note !== undefined) return { ...base, id: null, label: null, note }
     return { ...base, label: row.id, note: null }

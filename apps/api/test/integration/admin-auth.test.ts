@@ -754,3 +754,40 @@ test("OIDC starts enforce admission before creating new state", async () => {
   expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0)
   expect(h.store.rows.oauthStates).toHaveLength(2)
 })
+
+test("bogus callbacks from one IP hit 429 before the state store, with bounded audit rows", async () => {
+  const h = await harness({ maxFailedAttempts: 5 })
+  let consumes = 0
+  const consume = h.store.oauthStates.consume
+  h.store.oauthStates.consume = (state, now) => {
+    consumes++
+    return consume(state, now)
+  }
+  const statuses: number[] = []
+  for (let i = 0; i < 50; i++) {
+    statuses.push((await get(h.app, `${CALLBACK}?code=a&state=b${i}`)).status)
+  }
+  expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401])
+  expect(statuses.slice(5).every((status) => status === 429)).toBe(true)
+  expect(consumes).toBe(5)
+  const limited = await get(h.app, `${CALLBACK}?code=a&state=b`)
+  expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0)
+  expect(await limited.text()).toContain("Single sign-on verification failed")
+  expect(h.audits.filter((event) => event.kind === "admin.login_failed")).toHaveLength(6)
+})
+
+test("a `next` the SPA forwards to /oidc/start never steers a redirect", async () => {
+  const h = await harness()
+  for (const next of [
+    "/%5Cevil.example",
+    "//evil.example",
+    "/%09/evil.example",
+    "https://evil.example",
+  ]) {
+    const res = await get(h.app, `${START}?next=${next}`)
+    expect(res.status).toBe(302)
+    const location = new URL(res.headers.get("location") ?? "")
+    expect(location.origin).toBe(ISSUER)
+    expect(location.toString()).not.toContain("evil")
+  }
+})

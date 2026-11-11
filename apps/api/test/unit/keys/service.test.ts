@@ -223,3 +223,28 @@ describe("write schemas", () => {
     expect(updateKeyBody.safeParse({}).success).toBe(false)
   })
 })
+
+// 09 → 05.7: the console resends the stored `expiresAt` with every edit, so an expired key could
+// never be renamed. Only a changed expiry has to lie in the future.
+describe("expired keys", () => {
+  test("can be renamed when the edit resends the stored, already-past expiry", async () => {
+    const expiresAt = new Date(NOW.getTime() + 60_000)
+    const { service, store } = harness(new Date(NOW.getTime() + 120_000))
+    const mint = await createKeysService({
+      mutations: store.mutations,
+      onCommitted: () => {},
+      keys: store.keys,
+      cipher: createCredentialCipher({ key: new Uint8Array(32).fill(3) }),
+      audit: createAuditRecorder(store.audit),
+      now: () => NOW,
+    }).create({ name: "soon-expired", expiresAt })
+    if (!mint.ok) throw new Error(mint.failure.message)
+
+    const renamed = await service.update(mint.value.id, { name: "renamed", expiresAt })
+    expect(renamed.ok).toBe(true)
+
+    const moved = await service.update(mint.value.id, { expiresAt: new Date(NOW.getTime() - 1) })
+    expect(moved.ok).toBe(false)
+    if (!moved.ok) expect(moved.failure.code).toBe("expiry_in_past")
+  })
+})

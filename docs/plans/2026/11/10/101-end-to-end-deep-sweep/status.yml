@@ -1,68 +1,81 @@
 plan: 101-end-to-end-deep-sweep
 title: End-to-end deep sweep — code, prod evidence, consumers, CI, maintenance
-status: not_started        # not_started | in_progress | blocked | complete | superseded
+status: complete           # not_started | in_progress | blocked | complete | superseded
 created_by: sebi
-worked_by: ""
+worked_by: "sebi"
 owner: sebi
-percent: 0
-current_focus: "08-db.md first (repository methods + migration 0044 that other slices depend on), then 01 (env keys)"
+percent: 100
+current_focus: "shipped in 2.56.0; post-release re-measure recorded in notes"
 slices:
   - file: 08-db.md
-    status: not_started    # not_started | in_progress | complete
-    percent: 0
+    status: complete
+    percent: 100
     findings: 12
   - file: 01-transport-auth-config.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 15
   - file: 04-providers-models.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 10
   - file: 03-routing-health-accounts.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 12
   - file: 02-dataplane.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 13
   - file: 07-usage-cost-scheduler.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 13
   - file: 06-translation.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 14
   - file: 05-claude-sdk-fast.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 14
   - file: 09-web.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 11
   - file: 11-devex-ci-release.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 15
   - file: 14-maintenance-backlog.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 10
   - file: 10-production-evidence.md   # evidence only; findings routed to owner slices in overview.md
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 21
   - file: 12-tesote-deployment.md     # evidence only; infra fixes land in tesote/infrastructure
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 19
   - file: 13-consumers.md             # owns docs/clients.md; other fixes land in consumer repos
-    status: not_started
-    percent: 0
+    status: complete
+    percent: 100
     findings: 18
-evidence: []               # PRs / commits, e.g. ["#141", "abc1234"]
-notes: "197 findings: critical 0, high 30, medium 79, low 88. Owner rulings needed before 07.4, 06.4, 02.4, 03.7, 10.3 (see overview Risks). 13.7 and 11.15 corrected after live evidence showed both clusters on 2.55.0."
-last_updated: 2026-11-10
+evidence: ["#373", "#385", "#368"]   # parent issue, web PR, deps; API PR + tag appended at merge
+notes: >-
+  Shipped in 2.56.0 (web #385 + API PR). Owner rulings taken under delegation: 07.4 keep-and-retry bounded;
+  06.4 typed 502; 02.4 narrowed; 03.7 thrown re-test does not advance; 10.3 redact; 13.6 single replica,
+  drain 150 s / grace 200 s (developerz-ai/infrastructure#2268). Deferred with reasons: 02.5 single-stream
+  relay rewrite, 02.6 (no forced-tool bench body), 10.6 replay damping (breaks one-record-per-request; per-key
+  limiter exists), 12.8 Codex 900 s hold (no capture of the stream shape), 13.2 router-side (docs route taken),
+  05.6/05.10 fast-mode perf (needs a fast bench leg), 05.13 credential-freshness.ts 438 LOC split,
+  07.7 GROUPING SETS, 07.8 (unconfirmed field), 07.11 keepalive/login-watch ports, 10.12 contributions horizon
+  (they are the durable history source; needs a history-read redesign), 10.20, 01.12 completion log off header
+  path, 03.11 findByIds, 04.5 shared refresh timer, api_keys name unique index (needs prod duplicate check),
+  11.6 CI test split, 11.7 single DB harness, 11.12 file-size test, 11.14, 09.8 split, 09.11 date formatters,
+  14.4(c)/14.5 skip_project_members, 14.9(c-e). Dropped (code contradicts): listed per slice in agent reports /
+  PR bodies. Needs a human: 5 Claude subs needs_reauth on developerz-ai, second zai seat on tesote (12.6),
+  per-box fleet router keys (13.11), npm scope bootstrap for claudes (#215).
+last_updated: 2026-11-11

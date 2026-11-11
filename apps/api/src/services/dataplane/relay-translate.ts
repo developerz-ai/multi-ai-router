@@ -5,6 +5,7 @@ import type { RelayObserver } from "./relay"
 import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
 import { type CostReport, stampUsageFrame, usageFrameIndex } from "./relay-cost"
 import { collected, guard, parsed, translatedBody } from "./relay-translate-body"
+import { type HeldRefusalFacts, holdTranslated } from "./relay-translate-held"
 
 /**
  * The relay for a translated response — a sibling of `relay.ts`, never a mode inside it.
@@ -85,6 +86,12 @@ export interface TranslatedRelayInput {
    * the request id — to log. One line per provider change, none in steady state.
    */
   readonly onUnrecognizedStopReason?: (reason: string) => void
+  /** Names the refusal a held, non-streamed translation answers with when it cannot convert. */
+  readonly refusal?: HeldRefusalFacts
+  /** The buffered-read ceiling for a body read whole (`relay-body-read.ts`). */
+  readonly bufferedBodyMaxBytes?: number
+  /** One upstream SSE frame's ceiling; past it the stream ends with the parser's typed error. */
+  readonly maximumFrameLength?: number
   /** {@link DEFAULT_TRANSLATED_KEEPALIVE_MS}. Injected so a test drives it without waiting. */
   readonly keepaliveMs?: number
   /** Injected for the same reason. Defaults to the wall clock; nothing here reads one otherwise. */
@@ -121,11 +128,13 @@ export function relayTranslatedResponse(input: TranslatedRelayInput): Response {
   const streamed =
     input.upstreamStreams === true ||
     upstream.headers.get("content-type")?.includes(EVENT_STREAM) === true
+  // Read whole before converting, so the status is held until the conversion decides (06.4).
   if (streamed && input.collectStream === true) {
     headers.set("content-type", "application/json")
-    return new Response(translatedBody(input, upstream.body, collected), init)
+    return holdTranslated(translatedBody(input, upstream.body, collected), init, input.refusal)
   }
-  if (!streamed) return new Response(translatedBody(input, upstream.body, parsed), init)
+  if (!streamed)
+    return holdTranslated(translatedBody(input, upstream.body, parsed), init, input.refusal)
   // Said outright: the client's SDK decides how to read the body from this header, and the upstream
   // is not obliged to have sent one.
   headers.set("content-type", EVENT_STREAM)
@@ -140,7 +149,12 @@ function translatedStream(
   // Collected per chunk and written ahead of that chunk's frames: a comment carries no data, so its
   // order relative to the frames beside it is immaterial, and nothing is held past the chunk.
   let comments: string[] = []
-  const parser = createSseParser({ onComment: (text) => void comments.push(text) })
+  const parser = createSseParser({
+    onComment: (text) => void comments.push(text),
+    ...(input.maximumFrameLength === undefined
+      ? {}
+      : { maximumFrameLength: input.maximumFrameLength }),
+  })
   const translator = input.pair.stream(input.context)
   const encoder = new TextEncoder()
 
@@ -168,7 +182,7 @@ function translatedStream(
   const write = (controller: TransformStreamDefaultController<Uint8Array>, text: string): void => {
     if (text.length === 0) return
     const chunk = encoder.encode(text)
-    // Enqueue first. Everything after this line happens on time the client already has.
+    // Enqueue first; the observer work below still precedes the reader's next microtask.
     controller.enqueue(chunk)
     lastWrite = now()
     const first = !contentWritten
@@ -221,6 +235,13 @@ function translatedStream(
   const transform = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       const events = parser.push(chunk).flatMap((frame) => translator.push(frame))
+      // A frame past its ceiling: the parser stops, and the stream ends with its typed error.
+      const overflow = parser.failure()
+      if (overflow !== null) {
+        settle(overflow)
+        controller.error(overflow)
+        return
+      }
       keepalive(controller)
       // Before the write, so a chunk that *does* produce output resets the clock through `write`
       // rather than sending a comment it did not need.

@@ -70,6 +70,11 @@ export interface RecoveryWaiter {
   deadline(now: Date): Date
   /** Sleeps one interval within the budget; false, without sleeping, once it is spent. */
   pause(): Promise<boolean>
+  /**
+   * Past the budget, sleeps one more interval while a probe on the wire may still settle; false,
+   * without sleeping, once `probeBudgetMs` since the first pause is spent.
+   */
+  pauseForProbe(): Promise<boolean>
 }
 
 /** One budget per request, shared by every re-selection and chain retry it makes. */
@@ -79,39 +84,72 @@ export function createRecoveryWaiter(deps: {
   readonly sleep: Sleep
   readonly signal: AbortSignal
   readonly log?: Logger | undefined
+  /** Accumulates the time spent asleep, so overhead accounting can leave it out (12.4). */
+  readonly onWaited?: (milliseconds: number) => void
 }): RecoveryWaiter {
   const budgetMs = deps.options?.budgetMs ?? 0
+  const probeBudgetMs = Math.max(budgetMs, deps.options?.probeBudgetMs ?? 0)
   const intervalMs = Math.max(1, deps.options?.intervalMs ?? 250)
   let started: number | undefined
-  const remaining = () =>
-    started === undefined ? budgetMs : Math.max(0, budgetMs - (deps.clock.elapsed() - started))
+  const left = (total: number) =>
+    started === undefined ? total : Math.max(0, total - (deps.clock.elapsed() - started))
+  const logged = new Set<string>()
+  /** One interval inside `total`, measured from the request's first pause; logged once per kind. */
+  const sleepWithin = async (total: number, message: string): Promise<boolean> => {
+    const remaining = left(total)
+    if (remaining <= 0) return false
+    started ??= deps.clock.elapsed()
+    if (!logged.has(message)) {
+      logged.add(message)
+      deps.log?.info(message, { budgetMs: total })
+    }
+    const before = deps.clock.elapsed()
+    try {
+      await deps.sleep(Math.min(intervalMs, remaining), deps.signal)
+    } finally {
+      deps.onWaited?.(Math.max(0, deps.clock.elapsed() - before))
+    }
+    return true
+  }
   return {
-    deadline: (now) => new Date(now.getTime() + remaining()),
-    async pause() {
-      const left = remaining()
-      if (left <= 0) return false
-      if (started === undefined) {
-        started = deps.clock.elapsed()
-        deps.log?.info("waiting for a recovery permit", { budgetMs })
-      }
-      await deps.sleep(Math.min(intervalMs, left), deps.signal)
-      return true
-    },
+    deadline: (now) => new Date(now.getTime() + left(budgetMs)),
+    pause: () => sleepWithin(budgetMs, "waiting for a recovery permit"),
+    pauseForProbe: () => sleepWithin(probeBudgetMs, "riding a recovery probe in flight"),
   }
 }
 
-/** Re-select while the only obstacle is a router-owned hold the budget can outlast. */
+/** Whether a probe already on the wire holds an account this failed selection was waiting on. */
+export function ridesProbe(
+  decision: SelectionDecision,
+  probing: ((accountId: string) => boolean) | undefined,
+): boolean {
+  if (probing === undefined) return false
+  const binding = decision.binding
+  if (binding.state === "blocked")
+    return binding.reason === "probe-in-flight" && probing(binding.accountId)
+  return decision.rejected.some(
+    (entry) => entry.reason === "probe-in-flight" && probing(entry.accountId),
+  )
+}
+
+/**
+ * Re-select while the only obstacle is a router-owned hold the budget can outlast — and past the
+ * budget, while that hold is a probe already on the wire, ride its outcome (12.5).
+ */
 export async function selectThroughRecovery(
   select: () => SelectionResult,
   waiter: RecoveryWaiter,
   now: () => Date,
+  probing?: (accountId: string) => boolean,
 ): Promise<SelectionResult> {
   for (;;) {
     const selection = select()
-    if (selection.ok || !awaitsRouterRecovery(selection.decision, waiter.deadline(now()))) {
-      return selection
+    if (selection.ok) return selection
+    if (awaitsRouterRecovery(selection.decision, waiter.deadline(now()))) {
+      if (await waiter.pause()) continue
     }
-    if (!(await waiter.pause())) return selection
+    if (!ridesProbe(selection.decision, probing) || !(await waiter.pauseForProbe()))
+      return selection
   }
 }
 
@@ -158,6 +196,7 @@ export async function runChainThroughRecovery(
   lease: ReturnType<typeof holdLease>,
   fail: (error: RouterError) => never,
   rows: { attempted: boolean },
+  ridingProbe: () => boolean = () => false,
 ): Promise<Response | "retry"> {
   let response: Response
   try {
@@ -171,7 +210,7 @@ export async function runChainThroughRecovery(
     rows.attempted ||= !owesRefusalRecord(error)
     let again = false
     try {
-      again = await waiter.pause()
+      again = (await waiter.pause()) || (ridingProbe() && (await waiter.pauseForProbe()))
     } finally {
       if (again) lease.keep()
       else lease.settle()
@@ -193,15 +232,25 @@ export function createRequestRecovery(deps: {
   readonly signal: AbortSignal
   readonly log: Logger | undefined
   readonly lease: ActiveRequestLease | undefined
+  readonly probing?: ((accountId: string) => boolean) | undefined
+  readonly onWaited?: (milliseconds: number) => void
 }) {
   const waiter = createRecoveryWaiter({ ...deps, sleep: deps.sleep ?? sleepUnlessAborted })
   const held = holdLease(deps.lease)
   const rows = { attempted: false }
+  const { probing } = deps
   return {
     lease: held.lease,
     select: (select: () => SelectionResult) =>
-      selectThroughRecovery(select, waiter, deps.clock.now),
-    chain: (run: () => Promise<Response>, fail: (error: RouterError) => never) =>
-      runChainThroughRecovery(run, waiter, held, fail, rows),
+      selectThroughRecovery(select, waiter, deps.clock.now, probing),
+    /** `accountIds`: the chain's candidates — a refusal rides a probe only on one of them. */
+    chain: (
+      run: () => Promise<Response>,
+      fail: (error: RouterError) => never,
+      accountIds: readonly string[] = [],
+    ) =>
+      runChainThroughRecovery(run, waiter, held, fail, rows, () =>
+        accountIds.some((id) => probing?.(id) ?? false),
+      ),
   }
 }

@@ -5,12 +5,14 @@ on:
     branches: [main]
   pull_request:
 
-# One CI run per ref. A force-push or a new commit on an open PR cancels the
-# in-flight run instead of queueing behind it — the older result is already
-# stale by definition.
+# One CI run per ref. On a PR, a force-push or a new commit cancels the
+# in-flight run — the older result is already stale by definition. On main it
+# never does: release.yml's gate waits for this run's checks on the exact commit
+# a tag names, and a second merge cancelling them would leave that commit with
+# no verdict.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Pinned once here so lint/typecheck/test/build all agree on a runtime. Bun
@@ -63,9 +65,11 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - run: bun install --frozen-lockfile
       # Separate job from `lint` on purpose: Bun strips types at runtime and
-      # never type-checks, and Biome does not either. `tsc --noEmit` across the
-      # workspace projects (apps/api, apps/web, packages/*) is the ONLY thing in
-      # the pipeline that enforces the "strict, no `any`" rule from the spec.
+      # never type-checks, and Biome does not either. tsc over the solution
+      # build plus the non-composite test/bench/tooling projects is the ONLY
+      # thing in the pipeline that enforces the "strict, no `any`" rule — tests
+      # included (apps/api/test/integration/typecheck-coverage.test.ts holds
+      # every TypeScript file inside one of those projects).
       - run: bun run typecheck
 
   test:
@@ -81,8 +85,8 @@ jobs:
     # the only service container this repo needs.
     services:
       postgres:
-        # The schema supports 16+. CI covers managed deployments on 18; the bundled
-        # quickstart stays on patched 16 to preserve existing data volumes.
+        # PostgreSQL 18, the major both compose files ship. No other major is
+        # exercised here; image-pins.test.ts holds this to the compose pin's major.
         image: postgres:18.6@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
         env:
           POSTGRES_USER: router
@@ -130,13 +134,14 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-    # A gate, not a report — the opposite deal from `bench` below, on purpose. The assessment is
-    # live: it asks OSV.dev about the resolved packages in bun.lock at the moment the job runs, so
-    # an advisory published today turns the default branch red without anything in this repository
-    # changing.
+    # Gates main's colour and every release, not a merge: it is not a required check in branch
+    # protection, because the assessment is live — it asks OSV.dev about the resolved packages in
+    # bun.lock at the moment the job runs, so an advisory published today would otherwise block
+    # every unrelated PR until an override lands. release.yml's gate does require it to be green
+    # on the tagged commit, so a known-vulnerable dependency set is never published.
     #
     # There is no `continue-on-error` anywhere in this job, at job or step level. A finding fails
-    # the build, and so does an assessment that could not complete (exit 2): a gate that could not
+    # the job, and so does an assessment that could not complete (exit 2): a check that could not
     # reach the database has proved nothing about the dependency set, and a red "unknown" beats a
     # green "clean".
     steps:
@@ -259,15 +264,49 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc libc6-dev
       - run: bun run build
+
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    # Builds the release Dockerfile for amd64 and never pushes it. The Dockerfile asserts a lot at
+    # build time — the bun digest names its version, the `claude` binary is staged, the duplicate
+    # prune still matches, the ownership probe and `tini` run, the Claude profile check resolves in
+    # the pruned layout — and before this job those assertions first ran on a `v*` tag, after the
+    # version number was already burned. A merged PR that breaks one now fails here.
+    #
+    # On pushes to main it also writes the `linux-amd64` gha layer cache: caches written from the
+    # default branch are readable from tag refs, so release.yml's amd64 leg starts warm.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Build context is `.`; keep the checkout token out of it (as release.yml does).
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build the release image without pushing it
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: multi-ai-router:ci
+          build-args: |
+            ROUTER_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=linux-amd64
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=linux-amd64' || '' }}
+      # The image's own entrypoint chain, end to end: the bundled CLI the Agent SDK drives must
+      # start in the runtime layer, not just exist in the builder.
+      - name: the shipped claude CLI runs
+        run: docker run --rm --entrypoint claude multi-ai-router:ci --version
 # NOTE: this workflow deliberately publishes NOTHING.
 #
-# Image builds happen only on a tagged release (.github/workflows/release.yml,
-# triggered by `v*` tags). CI is purely the quality gate: lint, typecheck, test,
-# build, and the live dependency advisory assessment. An earlier revision also
-# pushed a `<sha>` + `main` image on every push to main; that was removed on
-# purpose. Do not reinstate it — a registry that accumulates an image per commit
-# makes "which tag is real" ambiguous, and the release tag is the only ref
-# anything should deploy.
-#
-# `build` above still runs on every push and PR, so a commit that cannot produce
-# the artifact fails here rather than at release time.
+# Image pushes happen only on a tagged release (.github/workflows/release.yml,
+# triggered by `v*` tags, and only after its gate sees this workflow green on the
+# tagged commit). CI is purely the quality gate: lint, typecheck, test, build,
+# ui-geometry, the image build (`image`, never pushed), and the live dependency
+# advisory assessment. An earlier revision also pushed a `<sha>` + `main` image
+# on every push to main; that was removed on purpose. Do not reinstate it — a
+# registry that accumulates an image per commit makes "which tag is real"
+# ambiguous, and the release tag is the only ref anything should deploy.

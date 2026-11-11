@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { createHttpDriver } from "../driver"
-import { type ClassificationRule, typeRule } from "../failure/classify"
+import { messageRule, typeRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
 import { parseDurationSeconds } from "../rate-limit/duration"
 import { parseRateLimitHeaders } from "../rate-limit/parse"
@@ -66,7 +66,7 @@ const SERVER_STATUSES = ["INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED"]
  * which is why this matches only phrasing a billing stop uses and a throttle never does.
  */
 const BILLING_STOPPED =
-  /enable billing|requires billing|billing account .{0,64}not found|has been suspended/i
+  /enable billing|requires billing|billing account [^.]{0,64}not found|has been suspended/i
 
 /**
  * Provenance: Google answers a rejected key on this surface with `UNAUTHENTICATED` (401), while the
@@ -78,21 +78,13 @@ const BILLING_STOPPED =
 const BAD_API_KEY = /api key not valid|api_key_invalid|api key expired/i
 
 /**
- * Both wording rules are guarded by an error status, for the same reason the `*-compatible` one is:
- * a completion that happens to contain the phrase must never read as a failure. The billing rule is
+ * Both wording rules read only the error statuses their refusals arrive on, for the same reason the
+ * `*-compatible` one does: a completion that happens to contain the phrase must never read as a
+ * failure, and a `404` echoing a model name must never read as a billing stop. The billing rule is
  * evaluated **first** — a billing stop wearing a 429 is still permanent, and only a human clears it.
  */
-function wordingRule(
-  kind: ClassificationRule["kind"],
-  signal: string,
-  pattern: RegExp,
-): ClassificationRule {
-  return {
-    kind,
-    signal,
-    when: (facts, status) => status >= 400 && pattern.test(facts.message ?? ""),
-  }
-}
+const BILLING_STATUSES = [400, 403, 429]
+const BAD_KEY_STATUSES = [400, 401, 403]
 
 /**
  * Provenance: Google APIs carry the canonical status name in `error.status` (google.rpc.Code),
@@ -156,10 +148,12 @@ export const geminiDriver = createHttpDriver({
   readFacts: readGeminiFacts,
   parseRateLimit: parseGeminiRateLimit,
   rules: [
-    wordingRule("credits-exhausted", "gemini:billing-stopped", BILLING_STOPPED),
+    messageRule("credits-exhausted", "gemini:billing-stopped", BILLING_STOPPED, {
+      statuses: BILLING_STATUSES,
+    }),
     typeRule("rate-limited", "gemini:RESOURCE_EXHAUSTED", RATE_LIMIT_STATUSES),
     typeRule("auth", "gemini:auth-status", AUTH_STATUSES),
-    wordingRule("auth", "gemini:api-key-invalid", BAD_API_KEY),
+    messageRule("auth", "gemini:api-key-invalid", BAD_API_KEY, { statuses: BAD_KEY_STATUSES }),
     typeRule("server-error", "gemini:server-status", SERVER_STATUSES),
   ],
 })

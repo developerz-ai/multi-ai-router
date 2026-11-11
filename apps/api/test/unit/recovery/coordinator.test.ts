@@ -190,6 +190,8 @@ test("uncertain issued permit retires without pending ownership or new issuance"
   f.deps.repository.listExpiredIssued = async () => [f.state()]
   f.deps.repository.markUncertain = async () => ({ ...f.state(), state: "uncertain" })
   f.coordinator.demand("account")
+  // The expiry sweep runs on its own cadence, not every tick (plan 101, 10.9).
+  f.advance(1_000)
   await f.coordinator.tick()
   expect(f.counts().issued).toBe(1)
   expect(f.installed).toHaveLength(1)
@@ -229,4 +231,66 @@ test("forget after authoritative deletion drops queued hints and outcomes", asyn
   await f.coordinator.tick()
   expect(f.counts().issued).toBe(0)
   expect(f.installed).toHaveLength(0)
+})
+
+// Plan 101, 10.9 / 12.13: the expired-permit lookup ran every 250 ms tick forever — 12.05 M calls,
+// 64 % of all statements in prod — with nothing outstanding.
+test("idle ticks read expired permits at most once per sweep interval", async () => {
+  const f = fixture()
+  let sweeps = 0
+  f.deps.repository.listExpiredIssued = async () => {
+    sweeps++
+    return []
+  }
+  // Fixture: tick interval 1 s, maximum outcome 10 s → sweep interval max(1 s, 10 s / 10) = 1 s.
+  // Ticks 100 ms apart model a fast tick against that interval.
+  for (let i = 0; i < 100; i++) {
+    await f.coordinator.tick()
+    f.advance(100)
+  }
+  expect(sweeps).toBe(10)
+})
+
+test("a failed sweep is retried on the next tick, not a whole interval later", async () => {
+  const f = fixture()
+  let calls = 0
+  f.deps.repository.listExpiredIssued = async () => {
+    calls++
+    if (calls === 1) throw new Error("database unavailable")
+    return []
+  }
+  await f.coordinator.tick()
+  await f.coordinator.tick()
+  expect(calls).toBe(2)
+  await f.coordinator.tick()
+  expect(calls).toBe(2)
+})
+
+// Plan 101, 03.11: a throw from one queued write aborted the whole tick; the same entry led the
+// next batch, so nothing behind it ever ran and no permit was exposed until restart.
+test("a poisoned automatic request does not block permit exposure behind it", async () => {
+  const f = fixture()
+  const warned: string[] = []
+  const coordinator = createRecoveryCoordinator({
+    ...f.deps,
+    warn: (message) => warned.push(message),
+  })
+  let begins = 0
+  f.deps.repository.beginAutomaticRecovery = async () => {
+    begins++
+    throw new Error("poisoned row")
+  }
+  coordinator.requestAutomatic({
+    accountId: "other",
+    expected: { lifecycleVersion: 1, authMaterial: "cipher", status: "active" },
+    expectedRecoveryRevision: null,
+    reason: "cooldown-expired",
+  })
+  coordinator.demand("account")
+  await coordinator.tick()
+  expect(f.installed).toHaveLength(1)
+  // Retried a bounded number of ticks, then dropped with a warn.
+  for (let i = 0; i < 10; i++) await coordinator.tick()
+  expect(begins).toBe(5)
+  expect(warned.some((message) => message.includes("dropped"))).toBe(true)
 })

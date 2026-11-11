@@ -69,7 +69,7 @@ export function foldRateLimit(
     planReadingMaxAgeMs,
   )
   const tripped = refusalStands(state.breaker, now)
-    ? lengthenRefusal(state.breaker, reading, now)
+    ? lengthenRefusal(state.breaker, reading, now, breaker.maxReportedResetSeconds)
     : recordFailure(state.breaker, reading, now, breaker)
   return { ...recorded, breaker: keepVerdictReason(state.breaker, tripped) }
 }

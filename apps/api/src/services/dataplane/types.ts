@@ -45,6 +45,20 @@ export interface RoutingCatalog {
   /** Every account the router knows about, disabled ones included — filtering is routing's job. */
   accounts(): readonly RoutableAccount[]
   pools(): readonly PoolSnapshot[]
+  /**
+   * One account by id from the installed catalog's index (`catalog/store.ts`). Optional so a test
+   * catalog may omit it; {@link accountLookup} falls back to a map built once per call.
+   */
+  account?(id: string): RoutableAccount | undefined
+}
+
+/** The by-id read a request makes: the catalog's own index, else one map of `accounts()`. */
+export function accountLookup(
+  catalog: RoutingCatalog,
+): (id: string) => RoutableAccount | undefined {
+  if (catalog.account !== undefined) return (id) => catalog.account?.(id)
+  const byId = new Map(catalog.accounts().map((account) => [account.id, account]))
+  return (id) => byId.get(id)
 }
 
 /** The upstream call, injected so a test needs no network and no live provider. */
@@ -104,6 +118,8 @@ export interface RequestSample {
    */
   readonly durationMs: number
   readonly streamed: boolean
+  /** Whether the model resolved against the routing catalog; absent before selection ran. */
+  readonly modelKnown?: boolean
 }
 
 /** Notified once per client request. Must not throw; it is never awaited. */

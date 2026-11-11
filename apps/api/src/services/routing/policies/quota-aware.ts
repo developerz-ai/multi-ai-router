@@ -39,12 +39,13 @@ export const quotaAware: Policy = ({ candidates, rotationCounter, now }) => {
     (left, right) =>
       right.headroom - left.headroom || compareDeclared(left.candidate, right.candidate),
   )
+  const rankedOrder = rotateTies(ranked, rotationCounter)
   const rotatedUnranked = rotate(sortDeclared(unranked), rotationCounter)
 
   const notes: PolicyNote[] = [
     {
       kind: "quota-ranked",
-      accountIds: ranked.map((entry) => entry.candidate.account.id),
+      accountIds: accountIds(rankedOrder),
       unknownAccountIds: accountIds(rotatedUnranked),
     },
   ]
@@ -52,9 +53,34 @@ export const quotaAware: Policy = ({ candidates, rotationCounter, now }) => {
   if (rotatedUnranked.length > 0) notes.push(degraded(accountIds(rotatedUnranked)))
 
   return {
-    ordered: [...ranked.map((entry) => entry.candidate), ...rotatedUnranked],
+    ordered: [...rankedOrder, ...rotatedUnranked],
     notes,
   }
+}
+
+/**
+ * Equal headroom is a tie, and a tie rotates: six fresh subscriptions all reading 0 % must not send
+ * every unbound session to the first declared one until its gauge moves (plan 101, 03.5). Only
+ * exact equality ties; the input is already sorted by headroom, then declared order.
+ */
+function rotateTies(
+  ranked: readonly { readonly candidate: Candidate; readonly headroom: number }[],
+  counter: number,
+): readonly Candidate[] {
+  const ordered: Candidate[] = []
+  let start = 0
+  while (start < ranked.length) {
+    let end = start + 1
+    while (end < ranked.length && ranked[end]?.headroom === ranked[start]?.headroom) end++
+    ordered.push(
+      ...rotate(
+        ranked.slice(start, end).map((entry) => entry.candidate),
+        counter,
+      ),
+    )
+    start = end
+  }
+  return ordered
 }
 
 function degraded(ids: readonly string[]): PolicyNote {

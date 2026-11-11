@@ -289,3 +289,25 @@ describe("the store itself", () => {
     expect(store.snapshot("sub", NOW)).toBeNull()
   })
 })
+
+// 101 finding 05.11: the fast transport reports utilization from headers on every response — a
+// gauge, not an alarm — and a later reading without the header keeps the last value.
+describe("a continuous reading from the fast transport", () => {
+  test("is labelled continuous and retained across a reading without utilization", () => {
+    const store = createSdkQuotaStore()
+    const first = ingest(store, {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      utilization: 0.23,
+      utilizationSource: "continuous",
+    })
+    expect(first?.windows[0]?.utilizationSource).toBe("continuous")
+    const second = ingest(store, {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      utilizationSource: "continuous",
+    })
+    expect(second?.windows[0]?.utilizationSource).toBe("continuous")
+    expect(second?.windows[0]?.utilization).toBe(0.23)
+  })
+})

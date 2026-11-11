@@ -1,7 +1,7 @@
 /**
  * Decides whether a `bun test` run is allowed to proceed without a database.
  *
- * Seven suites gate themselves on `DATABASE_URL` — migrations apply cleanly,
+ * Dozens of suites gate themselves on `DATABASE_URL` — migrations apply cleanly,
  * advisory-lock leader election admits exactly one holder (non-negotiable 13),
  * retention deletes stay bounded, the readiness probe answers a real database —
  * and `bun test` folds a skip into the same green summary as a pass. A run that
@@ -35,7 +35,7 @@ export interface DatabaseGateEnv {
  * what coverage they lost, not which paths to open.
  */
 const UNPROVEN = [
-  "migrations apply cleanly against PostgreSQL 16",
+  "migrations apply cleanly against PostgreSQL",
   "advisory-lock leader election admits exactly one holder",
   "retention deletes stay bounded to their batch limit",
   "the readiness probe answers against a real database",
@@ -43,7 +43,7 @@ const UNPROVEN = [
 
 const REMEDY = [
   "bin/setup                  starts the dev Postgres and writes DATABASE_URL to .env",
-  "DATABASE_URL=… bin/check   point at a Postgres 16+ you already run",
+  "DATABASE_URL=… bin/check   point at a Postgres you already run (CI tests 18)",
 ]
 
 /**

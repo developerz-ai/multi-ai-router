@@ -304,6 +304,7 @@ describe("Claude fast invoker", () => {
         resetsAt: undefined,
         overageStatus: "rejected",
         overageResetsAt: undefined,
+        utilizationSource: "continuous",
       },
     ])
   })

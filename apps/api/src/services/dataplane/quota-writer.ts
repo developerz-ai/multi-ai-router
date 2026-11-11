@@ -1,5 +1,9 @@
 import { describeError, type QuotaWindowState } from "@multi-ai-router/core"
-import type { AccountRepository } from "@multi-ai-router/db"
+import type {
+  AccountRepository,
+  ObservedQuotaWindowWrite,
+  QuotaWindowWrite,
+} from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
 import type { HealthObservation } from "./health-observation"
@@ -34,7 +38,12 @@ import { mergePendingQuota, type PendingQuotaReading } from "./quota-writer-obse
 
 export interface QuotaWindowWriterDeps {
   readonly accounts: Pick<AccountRepository, "upsertQuotaWindow"> &
-    Partial<Pick<AccountRepository, "upsertObservedQuotaWindow">>
+    Partial<
+      Pick<
+        AccountRepository,
+        "upsertObservedQuotaWindow" | "upsertQuotaWindows" | "upsertObservedQuotaWindows"
+      >
+    >
   readonly logger: Logger
   /** `QUOTA_WRITE_INTERVAL_MS`. How long a reading may sit in memory before it is durable. */
   readonly shutdownDrainMs?: number
@@ -87,53 +96,101 @@ export function createQuotaWindowWriter(deps: QuotaWindowWriterDeps): QuotaWindo
 
     let failedAccounts = 0
     let lastError: unknown = null
+    const retain = (accountId: string, reading: PendingQuotaReading, window: QuotaWindowState) =>
+      pending.set(
+        accountId,
+        mergePendingQuota(
+          { ...reading, windows: [window] },
+          pending.get(accountId) ?? { ...reading, windows: [] },
+        ),
+      )
 
-    for (const [accountId, reading] of batch) {
-      let failed = false
-      for (const window of reading.windows) {
-        if (!lifecycle.canWrite()) {
-          pending.set(
-            accountId,
-            mergePendingQuota(
-              { ...reading, windows: [window] },
-              pending.get(accountId) ?? { ...reading, windows: [] },
-            ),
-          )
-          continue
-        }
-        try {
-          if (reading.observation === undefined) {
-            await deps.accounts.upsertQuotaWindow(accountId, window)
-          } else {
-            if (deps.accounts.upsertObservedQuotaWindow === undefined)
-              throw new Error("observed quota persistence is not configured")
-            const row = await deps.accounts.upsertObservedQuotaWindow({
+    // One multi-row statement per kind and flush when the repository offers it (02.11): a slow
+    // Postgres no longer stretches a flush by one round trip per window.
+    const { upsertQuotaWindows, upsertObservedQuotaWindows } = deps.accounts
+    if (upsertQuotaWindows !== undefined && upsertObservedQuotaWindows !== undefined) {
+      if (!lifecycle.canWrite()) {
+        for (const [accountId, reading] of batch)
+          for (const window of reading.windows) retain(accountId, reading, window)
+        unsettled = 0
+        return
+      }
+      const plain: QuotaWindowWrite[] = []
+      const observed: ObservedQuotaWindowWrite[] = []
+      for (const [accountId, reading] of batch) {
+        for (const state of reading.windows) {
+          if (reading.observation === undefined) plain.push({ accountId, state })
+          else
+            observed.push({
               accountId,
-              state: window,
+              state,
               expected: {
                 ...reading.observation,
                 recoveryGeneration: reading.observation.recoveryGeneration ?? null,
               },
             })
-            if (row === undefined) continue
-          }
-          written += 1
-        } catch (error) {
-          // Retry at the next flush, merging with newer pending facts rather than overwriting them.
-          pending.set(
-            accountId,
-            mergePendingQuota(
-              { ...reading, windows: [window] },
-              pending.get(accountId) ?? { ...reading, windows: [] },
-            ),
-          )
-          writeFailures += 1
-          lastError = error
-          failed = true
         }
       }
-      unsettled -= 1
-      if (failed) failedAccounts += 1
+      const readings = new Map(batch)
+      const failedIds = new Set<string>()
+      const persist = async <Row extends QuotaWindowWrite>(
+        rows: readonly Row[],
+        write: (rows: readonly Row[]) => Promise<number>,
+      ): Promise<void> => {
+        if (rows.length === 0) return
+        try {
+          written += await write(rows)
+        } catch (error) {
+          // Retried whole at the next flush, merged behind any newer pending facts.
+          for (const row of rows) {
+            const reading = readings.get(row.accountId)
+            if (reading !== undefined) retain(row.accountId, reading, row.state)
+            failedIds.add(row.accountId)
+          }
+          writeFailures += rows.length
+          lastError = error
+        }
+      }
+      await persist(plain, upsertQuotaWindows)
+      await persist(observed, upsertObservedQuotaWindows)
+      unsettled = 0
+      failedAccounts = failedIds.size
+    } else {
+      for (const [accountId, reading] of batch) {
+        let failed = false
+        for (const window of reading.windows) {
+          if (!lifecycle.canWrite()) {
+            retain(accountId, reading, window)
+            continue
+          }
+          try {
+            if (reading.observation === undefined) {
+              await deps.accounts.upsertQuotaWindow(accountId, window)
+            } else {
+              if (deps.accounts.upsertObservedQuotaWindow === undefined)
+                throw new Error("observed quota persistence is not configured")
+              const row = await deps.accounts.upsertObservedQuotaWindow({
+                accountId,
+                state: window,
+                expected: {
+                  ...reading.observation,
+                  recoveryGeneration: reading.observation.recoveryGeneration ?? null,
+                },
+              })
+              if (row === undefined) continue
+            }
+            written += 1
+          } catch (error) {
+            // Retry at the next flush, merging with newer pending facts rather than overwriting.
+            retain(accountId, reading, window)
+            writeFailures += 1
+            lastError = error
+            failed = true
+          }
+        }
+        unsettled -= 1
+        if (failed) failedAccounts += 1
+      }
     }
 
     // One line per flush, whatever the batch size: a database that is down fails every row, and a

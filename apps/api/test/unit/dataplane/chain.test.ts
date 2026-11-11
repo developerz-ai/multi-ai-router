@@ -7,6 +7,7 @@ import {
   SESSION_RESTART_HEADER,
 } from "../../../src/services/dataplane"
 import { type ChainContext, runChain } from "../../../src/services/dataplane/chain"
+import type { ServableCandidate } from "../../../src/services/dataplane/plan"
 import { createRuntime } from "../../../src/services/dataplane/runtime"
 import type { TranslatedRequestBody } from "../../../src/services/dataplane/translate-body"
 import type { UsageRecord } from "../../../src/services/usage"
@@ -400,5 +401,76 @@ describe("leaving a bound account mid-chain is surfaced", () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get(SESSION_RESTART_HEADER)).toBeNull()
+  })
+})
+
+describe("an attempt that throws after the upstream answered (02.7)", () => {
+  test("is attributed to its account, struck on the breaker, and failed over", async () => {
+    const testClock = clock()
+    const drifted = account("drifted", { provider: "openrouter", apiKey: "sk-a", cipher: CRYPTOR })
+    const healthy = account("healthy", { provider: "openrouter", apiKey: "sk-b", cipher: CRYPTOR })
+    const plan = planCandidates(
+      [candidate(drifted.snapshot), candidate(healthy.snapshot)],
+      catalog([drifted, healthy]),
+      "anthropic",
+      "messages",
+    )
+    // Provider drift: the driver meets a header shape it did not expect, after a real `200`.
+    const servable = plan.servable.map(
+      (entry): ServableCandidate =>
+        entry.kind === "http" && entry.account.id === "drifted"
+          ? {
+              ...entry,
+              driver: {
+                ...entry.driver,
+                parseRateLimit: () => {
+                  throw new TypeError("unexpected header shape")
+                },
+              },
+            }
+          : entry,
+    )
+    const rows: UsageRecord[] = []
+    const health = createHealthStore({ jitter: () => 0 })
+    const runtime = createRuntime({
+      health,
+      cipher: CRYPTOR,
+      call: async () => jsonResponse(200, CHAT_REPLY),
+      sessionKeySource: "fingerprint",
+      clock: testClock,
+      timeoutMs: 30_000,
+      record: (row) => void rows.push(row),
+      correlationId: "11111111-1111-4111-8111-111111111111",
+      clientRequestId: null,
+      apiKeyId: "22222222-2222-4222-8222-222222222222",
+      sessionKey: "session-1",
+      model: "claude-opus-5",
+      ingressDialect: "anthropic",
+      operation: "messages",
+      requestStarted: testClock.elapsed(),
+    })
+
+    const response = await runChain({
+      runtime,
+      plan: servable,
+      request: new Request("http://router.test/v1/messages", { method: "POST", body: BODY }),
+      bodyBytes: new TextEncoder().encode(BODY),
+      modelSpan: null,
+      translation: { created: 0, model: "claude-opus-5", fallbackId: "msg_test" },
+      translated: costlyTranslation(testClock, 0),
+      failover: undefined,
+      log: undefined,
+    })
+    await response.text()
+
+    expect(response.status).toBe(200)
+    expect(rows[0]).toMatchObject({
+      accountId: "drifted",
+      outcome: "upstream_error",
+      errorClass: "TypeError",
+    })
+    expect(rows.at(-1)).toMatchObject({ accountId: "healthy", outcome: "success" })
+    expect(health.stateOf("drifted").breaker.consecutiveFailures).toBe(1)
+    expect(health.stateOf("drifted").inFlight).toBe(0)
   })
 })

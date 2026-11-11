@@ -76,7 +76,7 @@ beforeAll(async () => {
 
 describe.skipIf(!runnable)("the failure split against a live database", () => {
   test("counts every outcome separately, keeping quota and credits apart", async () => {
-    const rows = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO })
+    const rows = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO }, {})
     const mine = new Map(
       rows.filter((found) => found.attempts > 0).map((found) => [found.outcome, found.attempts]),
     )
@@ -88,7 +88,7 @@ describe.skipIf(!runnable)("the failure split against a live database", () => {
   })
 
   test("counts an attempt that never reached an account, which the rollup cannot", async () => {
-    const rows = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO })
+    const rows = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO }, {})
     const found = rows.find((count) => count.outcome === "scope_violation")
 
     // Grouped by key *and* account in `usage_daily`, this row has neither — and it is the
@@ -97,28 +97,34 @@ describe.skipIf(!runnable)("the failure split against a live database", () => {
   })
 
   test("the window is half-open, so a row stamped at `to` is outside it", async () => {
-    const inside = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO })
-    const wider = await createUsageReadRepository(db).outcomes({
-      from: FROM,
-      to: new Date(TO.getTime() + 1),
-    })
+    const inside = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO }, {})
+    const wider = await createUsageReadRepository(db).outcomes(
+      {
+        from: FROM,
+        to: new Date(TO.getTime() + 1),
+      },
+      {},
+    )
 
     expect(inside.some((count) => count.outcome === "router_error")).toBe(false)
     expect(wider.find((count) => count.outcome === "router_error")?.attempts).toBe(1)
   })
 
   test("an outcome that did not occur is absent, not a zero row", async () => {
-    const rows = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO })
+    const rows = await createUsageReadRepository(db).outcomes({ from: FROM, to: TO }, {})
 
     // The console shows the three headline classes at zero; it decides that, not the database.
     expect(rows.every((count) => count.attempts > 0)).toBe(true)
   })
 
   test("a window with nothing in it is an empty scan, not a throw", async () => {
-    const rows = await createUsageReadRepository(db).outcomes({
-      from: new Date("1998-01-01T00:00:00.000Z"),
-      to: new Date("1998-01-02T00:00:00.000Z"),
-    })
+    const rows = await createUsageReadRepository(db).outcomes(
+      {
+        from: new Date("1998-01-01T00:00:00.000Z"),
+        to: new Date("1998-01-02T00:00:00.000Z"),
+      },
+      {},
+    )
 
     expect(rows).toEqual([])
   })

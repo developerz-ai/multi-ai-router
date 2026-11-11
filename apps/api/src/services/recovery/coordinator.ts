@@ -1,6 +1,7 @@
 import type { AccountObservation, AccountRow } from "@multi-ai-router/db"
 import { createRecoveryLoop } from "./loop"
 import { createRecoveryQueues } from "./queues"
+import { createEntryIsolation, createExpirySweep, markExpiredUncertain } from "./tick-guards"
 import type {
   RecoveryCapability,
   RecoveryCoordinator,
@@ -26,6 +27,10 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
   let issuanceClosed = false
   let dirty = false
   let stopping: Promise<void> | undefined
+  const entryMaxAttempts = Math.max(1, deps.config.entryMaxAttempts ?? 5)
+  const expirySweepIntervalMs =
+    deps.config.expirySweepIntervalMs ??
+    Math.max(deps.config.intervalMs, Math.floor(deps.config.maximumOutcomeMs / 10))
   const coherent = async (): Promise<boolean> => {
     if (stopped) return false
     if (!dirty) return true
@@ -123,43 +128,57 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       deps.warn("recovery permits not settled; they wait out the maximum outcome bound", error)
     }
   }
+  const isolated = createEntryIsolation(entryMaxAttempts, deps.warn)
+  const sweep = createExpirySweep({
+    intervalMs: expirySweepIntervalMs,
+    now: () => deps.now().getTime(),
+    run: () =>
+      markExpiredUncertain(
+        deps.repository,
+        deps.config,
+        () => stopped,
+        (row) => {
+          dirty = true
+          deps.retire(row.accountId, row.generation)
+        },
+      ),
+  })
   const work = async (): Promise<void> => {
     await coherent()
     if (issuing()) await deps.reopen()
     for (const request of queues.automaticBatch(deps.config.batchSize)) {
       if (stopped) return
       dirty = true
-      await deps.repository.beginAutomaticRecovery({
-        ...request,
-        cooldownMs: deps.config.cooldownMs,
-        maximumOutcomeAgeMs: deps.config.maximumOutcomeMs,
-      })
-      queues.automaticCompleted(request)
+      await isolated(
+        request,
+        async () => {
+          await deps.repository.beginAutomaticRecovery({
+            ...request,
+            cooldownMs: deps.config.cooldownMs,
+            maximumOutcomeAgeMs: deps.config.maximumOutcomeMs,
+          })
+          queues.automaticCompleted(request)
+        },
+        () => queues.automaticCompleted(request),
+        "automatic recovery request",
+      )
     }
     for (const outcome of queues.batch(deps.config.batchSize)) {
       if (stopped) return
-      await writeOutcome(outcome)
+      await isolated(
+        outcome,
+        () => writeOutcome(outcome),
+        () => {
+          // The durable permit stays `issued` and expires to `uncertain` on the maximum bound.
+          queues.completed(outcome)
+          deps.retire(outcome.accountId, outcome.generation)
+        },
+        "recovery outcome write",
+      )
     }
     await coherent()
     if (stopped) return
-    const expiredRows = await deps.repository.listExpiredIssued({
-      limit: deps.config.batchSize,
-      maximumOutcomeAgeMs: deps.config.maximumOutcomeMs,
-    })
-    for (const row of expiredRows) {
-      if (stopped) return
-      if (row.permitId === null) continue
-      const expired = await deps.repository.markUncertain({
-        accountId: row.accountId,
-        generation: row.generation,
-        permitId: row.permitId,
-        maximumOutcomeAgeMs: deps.config.maximumOutcomeMs,
-      })
-      if (expired !== undefined) {
-        dirty = true
-        deps.retire(row.accountId, row.generation)
-      }
-    }
+    await sweep.runIfDue()
     if (stopped) return
     const demandedIds = queues.demandIds(deps.now().getTime(), deps.config.demandTtlMs)
     const issued = await deps.repository.listIssuedForOwner({

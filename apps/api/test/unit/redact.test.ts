@@ -547,6 +547,35 @@ describe("redact — values that hide their payload from Object.entries", () => 
   })
 })
 
+describe("redact — a provider key-management URL (10.3)", () => {
+  // The production line: OpenRouter quotes the key's hash in its key-limit refusal, and
+  // `account test failed` logged it verbatim. The hash names the credential (non-negotiable 3).
+  const hash = "3f4d48ef".repeat(8)
+  const message = `Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/${hash}`
+
+  test("the key hash is scrubbed and the provider and workspace stay", () => {
+    expect(redactValue(message)).toBe(
+      `Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/${REDACTED}`,
+    )
+  })
+
+  test("under any field name, at any depth", () => {
+    const line = JSON.stringify(redact({ detail: message, nested: { reason: message } }))
+    expect(line).not.toMatch(/[0-9a-f]{64}/i)
+  })
+
+  test("a repeated value is scrubbed every time, however often a clean one came first", () => {
+    for (let i = 0; i < 3; i++) {
+      expect(redactValue("POST")).toBe("POST")
+      expect(redactValue(message)).not.toContain(hash)
+    }
+  })
+
+  test("a short numeric key id is not a hash and stays", () => {
+    expect(redactValue("GET /api/keys/42")).toBe("GET /api/keys/42")
+  })
+})
+
 describe("createLogger", () => {
   test("emits one redacted JSON line per event, with the bound fields", () => {
     const lines: string[] = []
@@ -579,6 +608,36 @@ describe("createLogger", () => {
       accountId: "acct-1",
     })
     expect(lines[0]).not.toContain("at_live_abcdef123456")
+  })
+
+  test("a child's bound fields are scrubbed once, and its lines match an unbound logger's", () => {
+    const viaChild: string[] = []
+    const direct: string[] = []
+    const now = () => new Date(0)
+    const bound = { requestId: "req-1", token: "at-live", note: "Bearer at_live_abcdef123456" }
+    createLogger({ level: "info", now, write: (line) => viaChild.push(line) })
+      .child(bound)
+      .child({ component: "transport" })
+      .info("done", { authorization: "Bearer abc", status: 200 })
+    createLogger({ level: "info", now, write: (line) => direct.push(line) }).info("done", {
+      ...bound,
+      component: "transport",
+      authorization: "Bearer abc",
+      status: 200,
+    })
+
+    expect(viaChild).toEqual(direct)
+    expect(viaChild[0]).not.toContain("at_live_abcdef123456")
+    expect(viaChild[0]).not.toContain("at-live")
+  })
+
+  test("a per-line field overrides a bound one of the same name", () => {
+    const lines: string[] = []
+    createLogger({ level: "info", write: (line) => lines.push(line) })
+      .child({ component: "transport" })
+      .info("x", { component: "dataplane" })
+
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({ component: "dataplane" })
   })
 
   test("drops everything below the configured level", () => {

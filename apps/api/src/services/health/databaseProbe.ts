@@ -21,9 +21,12 @@ export interface DatabaseProbeOptions {
 export function createDatabaseProbe(options: DatabaseProbeOptions): () => Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-  return async (): Promise<boolean> => {
+  const probe = async (): Promise<boolean> => {
+    const query = options.handle.sql`select 1`
     try {
-      await withTimeout(options.handle.sql`select 1`, timeoutMs)
+      // On the deadline the query is cancelled, not abandoned: a wedged database polled every
+      // second would otherwise queue one more statement per poll on the pool requests share.
+      await withTimeout(query, timeoutMs, () => query.cancel())
       return true
     } catch (error) {
       // The connection string carries a password, so only the failure class is logged.
@@ -34,12 +37,30 @@ export function createDatabaseProbe(options: DatabaseProbeOptions): () => Promis
       return false
     }
   }
+
+  // Single-flight: concurrent `/readyz` polls share one `select 1` rather than one each.
+  let flight: Promise<boolean> | undefined
+  return () => {
+    if (flight !== undefined) return flight
+    const owned = probe().finally(() => {
+      if (flight === owned) flight = undefined
+    })
+    flight = owned
+    return owned
+  }
 }
 
-async function withTimeout<T>(work: PromiseLike<T>, timeoutMs: number): Promise<T> {
+async function withTimeout<T>(
+  work: PromiseLike<T>,
+  timeoutMs: number,
+  onTimeout: () => void,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error("database probe timed out")), timeoutMs)
+    timer = setTimeout(() => {
+      onTimeout()
+      reject(new Error("database probe timed out"))
+    }, timeoutMs)
   })
   try {
     return await Promise.race([work, deadline])

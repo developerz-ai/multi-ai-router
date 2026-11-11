@@ -1,6 +1,6 @@
 import type { QuotaWindowState } from "@multi-ai-router/core"
 import { reportedReset } from "./backoff"
-import type { AttemptFailure } from "./failover"
+import type { AttemptFailure } from "./failure-kind"
 import { retiredEvidence } from "./quota-evidence"
 
 /**

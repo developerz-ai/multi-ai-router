@@ -92,7 +92,12 @@ describe("readingReopened", () => {
   })
 })
 
-function routable(id: string, provider: string, status: AccountStatus = "active") {
+function routable(
+  id: string,
+  provider: string,
+  status: AccountStatus = "active",
+  quotaWindows: readonly QuotaWindowState[] = [],
+) {
   return {
     id,
     lifecycleVersion: 0,
@@ -104,6 +109,7 @@ function routable(id: string, provider: string, status: AccountStatus = "active"
       provider: provider as ReturnType<typeof account>["provider"],
       status,
       supportedModels: ["declared-model"],
+      quotaWindows: [...quotaWindows],
     }),
   } as unknown as RoutableAccount
 }
@@ -211,6 +217,37 @@ describe("the cooldown_recheck task", () => {
 
     expect(h.store.stateOf("a").breaker).toEqual(before)
     expect(h.store.stateOf("a").breaker.cooldownUntil).toEqual(at(3 * DAY))
+  })
+
+  // 10.8 (prod, opencode-go 589105ca / ae852ac0): `seven_day utilization=1.000`, provider-reported
+  // reset days out — and `verdict=reopened` 26 times in 37.5 h, each followed by real 429s. The
+  // probe model is not the one the weekly limit is charged to, so its 2xx proves nothing about it.
+  test("a 2xx probe does not reopen a seat whose provider-reported window is still spent", async () => {
+    const h = harness([routable("a", "openai-oauth", "active", [spent()])])
+    h.cool("a")
+    const before = h.store.stateOf("a").breaker
+
+    const result = await h.run()
+
+    expect(h.sent).toHaveLength(1)
+    expect(h.store.stateOf("a").breaker).toEqual(before)
+    expect(result).toEqual({ outcome: "success", itemsProcessed: 1 })
+  })
+
+  test("a 2xx probe whose own reading re-reads the window open does reopen", async () => {
+    const h = harness([routable("a", "openai-oauth", "active", [spent()])], undefined, {
+      reading: {
+        limited: false,
+        resetSource: "provider-reported",
+        windows: [],
+        quotaWindows: [spent({ utilization: 0.2, lastCheckedAt: at(1_000) })],
+      },
+    })
+    h.cool("a")
+
+    await h.run()
+
+    expect(h.store.stateOf("a").breaker.status).toBe("active")
   })
 
   test("a 429 with no reading at all leaves it intact too", async () => {

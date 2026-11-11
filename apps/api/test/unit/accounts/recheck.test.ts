@@ -207,11 +207,33 @@ describe("recheck", () => {
     })
   }
 
-  test("recheck-all installs each committed row before its audit", async () => {
+  test("recheck-all installs every committed row once, before any audit", async () => {
     const h = harness(60, [row("a", "exhausted"), row("b", "exhausted")])
     const all = await h.service.recheckAll()
     expect(all.ok && all.value.every((entry) => entry.clearedStatus === "exhausted")).toBe(true)
-    expect(h.order).toEqual(["barrier", "audit", "barrier", "audit"])
+    // Plan 101, 03.4: one catalog reload for the fleet, not one per account.
+    expect(h.order).toEqual(["barrier", "audit", "audit"])
+  })
+
+  test("recheck-all over ten accounts reloads the catalog once and keeps input order", async () => {
+    const rows = Array.from({ length: 10 }, (_, index) => row(`acct-${index}`))
+    const h = harness(60, rows)
+    const all = await h.service.recheckAll()
+    if (!all.ok) throw new Error("expected normal reply")
+    expect(h.order.filter((step) => step === "barrier")).toHaveLength(1)
+    expect(h.order[0]).toBe("barrier")
+    expect(all.value.map((entry) => entry.accountId)).toEqual(rows.map((entry) => entry.id))
+    expect(all.value.every((entry) => entry.rechecked)).toBe(true)
+  })
+
+  test("recheck-all with nothing committed reloads nothing", async () => {
+    const h = harness()
+    await h.service.recheck("a")
+    await h.service.recheck("b")
+    h.order.length = 0
+    const all = await h.service.recheckAll()
+    expect(all.ok).toBe(true)
+    expect(h.order).toEqual([])
   })
 
   test("unknown account returns 404 without committing", async () => {

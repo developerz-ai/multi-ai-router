@@ -498,7 +498,12 @@ each driver declares a `quotaRead` beside `opencode-go`'s, in a sibling file (`m
 | `kimi` | `GET https://api.kimi.com/coding/v1/usages` (undocumented) | `usages.limit_5h` → `five_hour`, `usages.limit_7d` → `seven_day`; utilization `used_ratio`; reset `reset_time` | the `usage` / `limits` spellings of the same windows |
 
 Every window is `advisory: true`, every reading `limited: false`, and an unreadable body is a
-`quota:unreadable` warning: the same rules as `opencode-go` above. The z.ai weekly `nextResetTime`
+`quota:unreadable` warning: the same rules as `opencode-go` above. A reading that parses and states
+no plan window at all — z.ai's `limits: []`, or only the MCP `TIME_LIMIT` — is a key without a
+Coding Plan: the reader answers `NO_PLAN` and the read is `skipped` (`quota:no-plan`), not a failure
+logged every tick (tesote, sweep 101, 12.10 — the live shape that account gets is still uncaptured;
+a token window this build cannot read stays `quota:unreadable`). Success bodies, here and on the
+model listing, are read up to `MODEL_LISTING_MAX_BYTES` (default 8 MB) and refused past it. The z.ai weekly `nextResetTime`
 read live was `2026-11-10T02:02:31.996Z` — the `1310` message's `2026-11-10 10:02:31` read as UTC+8,
 to the second, which also confirms `drivers/zai.ts`'s offset.
 
@@ -513,6 +518,16 @@ says *now*, the reading says *until when*, and the cooldown is labeled `provider
 reading alone still cools nothing — a plan with Credits behind it serves past a spent window — and
 a stated reset (a header, z.ai's message stamp) is never replaced. Only a fresh reading lends: one younger than two `PLAN_QUOTA_READ_INTERVAL_MINUTES`, so a plan whose endpoint stopped answering or was cancelled stops stretching throttles after one missed tick. The exits stay the reset itself
 and the hourly `cooldown_recheck` for a window reopened early.
+
+**The estimated re-test cadences are pinned provider constants, not config** (sweep 101, 04.9,
+decided on the merits). Kimi's 15 / 60 min and OpenRouter's 60 min key-cap re-test live in their
+driver files beside the provenance of the window they estimate, like every other vendor fact here.
+They are a floor for a refusal that names no instant, and they yield: to any reset the response
+states, to a fresh plan reading's reset (above), and to the breaker's own ceiling. An operator knob
+per vendor would tune a guess about one vendor's undocumented window from outside the file that
+documents it, and the only cost it could save is one probe per interval on a spent account. The
+retention windows, intervals and limits non-negotiable 11 covers are the router's own policy; a
+vendor's window length is the vendor's fact, and drift is a one-file fix like every pinned code.
 
 `minimax-m3.1-flash` is listed in the anthropic surface's `thinkingRequiredModels`: Go relays
 MiniMax's own `2013` refusal of `thinking: disabled`, so the same rule as the `minimax` driver
@@ -582,19 +597,19 @@ and the router keeps selecting a credential that can no longer serve a request.
 
 | Provider | Signal the driver keys on | Why it is not just the status code |
 |---|---|---|
-| `anthropic-api` | message matches `credit balance is too low`; or `error.type` is `billing_error` | Anthropic answers a spent console balance with **`400 invalid_request_error`**. Read the status alone and it classifies as a client mistake |
+| `anthropic-api` | `400` · `error.type: invalid_request_error` · message **starts** `Your credit balance is too low`; or `error.type` is `billing_error` | Anthropic answers a spent console balance with **`400 invalid_request_error`**. Read the status alone and it classifies as a client mistake |
 | `openai-oauth` | `detail.code` / `error.code` / `type` in `usage_limit_reached`, `rate_limit_exceeded` (→ `rate-limited`); `account_deactivated`, `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` (→ `credits-exhausted`: on a `429`, by code, and as a `type` only `insufficient_quota`; in a stream, only from `response.error.code` of a frame whose own JSON `type` is `response.failed`) | Codex answers a spent balance with **`429`**, as OpenAI's API does, and the Codex CLI treats those four quota codes as fatal (`QuotaExceeded`, openai/codex `codex-rs/codex-api/src/sse/responses_error.rs`). The stream hook shares the lists ([05-routing-and-failover.md](05-routing-and-failover.md)) |
 | `openai-api` | `error.code` / `error.type` in `insufficient_quota`, `billing_hard_limit_reached`, `account_deactivated` | OpenAI returns **`429`** for a spent balance — the same status it uses for real rate limiting. Status alone marks a dead account `cooling_down` and retries it on a timer forever |
-| `openrouter` | message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through with another status. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test. A `400`/`404` saying `is not a valid model ID` is `model-unsupported`: the next account gets its turn |
-| `zai` | `error.code` in `1113`, `1112`; or message matches `insufficient balance` / `balance is insufficient` / `account balance` | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
-| `kimi` | `error.type` is `exceeded_current_quota_error`; or message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human |
+| `openrouter` | on `402`/`403`, message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or on `403`, message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through as a `403`. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test. A `400`/`404` saying `is not a valid model ID` or `is no longer available` (a delisted model, prod 2026-11-09) is `model-unsupported`: the next account gets its turn and this one is not struck |
+| `zai` | `error.code` in `1113`, `1112`; or, on `400`/`402`/`429`, message matches `insufficient balance` / `balance is insufficient` (never a bare `account balance`, which also merely describes one) | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
+| `kimi` | `error.type` is `exceeded_current_quota_error` **unless the message reports a spent usage window** (read first — see the mirror-image table); or, on `400`/`402`/`429`, message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human. Since 2026-11-09 Kimi also sends that type on the weekly-window `429`; read on the type alone it parked a healthy account `exhausted` five times in 37 h and answered 28 requests `402` (sweep 101, 10.1) |
 | `minimax` | `base_resp.status_code` is `1008`. A spent Token Plan window — `429`, message `… Token Plan usage limit reached … (2056)` — is `rate-limited` (`minimax:token-plan-limit`), never a dead balance, though it names Credits | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |
 | `gemini` | message matches `enable billing` / `requires billing` / `billing account … not found` / `has been suspended` — and **nothing else** | Google's `RESOURCE_EXHAUSTED` (429) covers a per-minute limit *and* a spent free-tier day, and its message says "check your plan and billing details". Both refill on a clock, so both are `cooling_down`. Keying on the word "billing" would flip every throttled request to `exhausted` and pull a healthy key out of the pool. Only a project with billing off, a billing account that no longer resolves, or a suspended project is permanent |
 | `groq` | `error.code` is `blocked_api_access` — on an HTTP **400** | Groq's only documented billing-dead signal is a spend limit, and it wears the status of a malformed request. Read the status alone and a blocked organization is debugged as a bad request while it fails every call it is handed |
-| `deepseek` | HTTP `402`; message matches `insufficient balance` | The one vendor here that answers a spent balance with the status that means it. The wording rule exists for the relayed case and to record a signal better than `http-status:402` |
+| `deepseek` | HTTP `402`; on `402`/`400`, message **starts** `insufficient balance` | The one vendor here that answers a spent balance with the status that means it. The wording rule exists for the relayed case and to record a signal better than `http-status:402` |
 | `together` | HTTP `402` — a monthly spending cap | Documented and unambiguous. What is *not* documented is the status a zero prepaid balance returns, and Together is fully prepaid, so the shared wording rule stands behind the status |
 | `cerebras` | HTTP `402`, and nothing else | Cerebras' error page lists statuses only. A spent free-tier **day**, by contrast, is a `429` — clock-recoverable, never `exhausted` |
-| `opencode-go` | HTTP `402`; message matches `insufficient account funds` | Observed live on a key with no pay-as-you-go balance. **Unobserved:** what a spent plan window answers with Extra Usage on and no balance; if it is this `402`, a clock-recoverable window lands in `exhausted` |
+| `opencode-go` | HTTP `402`; message matches `insufficient account funds`. A team-owned key the Go plan does not cover — `403` *"Go Teams covers workspace members, not service accounts…"* / *"This API key belongs to the team…"* — is `credits-exhausted` (`opencode-go:plan-not-entitled`) | Observed live on a key with no pay-as-you-go balance. **Unobserved:** what a spent plan window answers with Extra Usage on and no balance; if it is this `402`, a clock-recoverable window lands in `exhausted`. The entitlement `403` was `auth`, whose `credential-rejected` re-test spends a live client request: one seat failed a real request about every 4 h with a `502` (prod 2026-11-09/10, sweep 101, 10.7). The key is valid and only a human changes the plan, so it parks `exhausted` and is re-tested only by the bounded background re-check |
 | `xai`, `mistral` | one shared wording rule, behind a guard that reads any `429` as a cooldown | Neither publishes a status for a depleted balance or a spend-suspended workspace. Encoding a guess is how a healthy account gets parked at `402`, so neither driver encodes one; the shared phrasing is the whole of it, and the signal it records says so |
 | `ollama` | the same shared wording rule, behind the `429` throttle guard | A local endpoint has no balance to drain, so nothing here is Ollama's own vocabulary — but a hosted or proxied surface reached through this id can refuse one, and its limits are hourly and daily. The throttle guard leads so a spent hour can never read as a dead balance |
 | `openai-compatible`, `anthropic-compatible` | one shared wording rule — `insufficient quota/credits/balance`, `out of credits`, `quota exceeded/exhausted` — guarded by an error status | The endpoint behind these is unknown. Guessing at a vendor's error vocabulary produces confident misclassifications, so this is deliberately the *only* wording either matches. The status guard is what stops a completion containing the word "quota" reading as a billing stop. **No 429 guard here**, unlike the pinned vendors: behind an escape hatch may sit an OpenAI-shaped endpoint, where a `429` genuinely *is* a spent balance |
@@ -602,6 +617,24 @@ and the router keeps selecting a credential that can no longer serve a request.
 Each classification also records **which signal decided it** (`openai:insufficient_quota`,
 `minimax:base_resp-1008`, …) so a misclassification is debuggable rather than a mystery. Expect
 drift: a vendor renaming a code is a one-file fix, and that is the whole point of pinning them.
+
+**A wording rule never reads the client's own words.** Upstream `4xx` messages echo client-chosen
+text — `404 "model: <name>"`, `"The model \`<name>\` does not exist"`, a block `type` in quotes — and a
+rule free to read any status turned a model named `credit balance is too low` into a dead balance,
+parking a whole pool of undeclared accounts `exhausted` one request at a time (sweep 101, 04.1).
+So the guard is part of the mechanism (`failure/classify.ts`), not of each driver:
+
+- `messageRule` takes the **statuses** its provenance sentence was observed on (required) and,
+  where the vendor types its errors, the **types**; a driver anchors a phrase with `^` where the
+  vendor's sentence starts the message.
+- Before any rule runs, the message is cut to its first 2 KB and every quoted span (`"…"`, `` `…` ``,
+  `'…'` that is not an apostrophe, `“…”`, `‘…’`) is removed — echoed values are always quoted or
+  follow `model:`. The classification still carries the upstream's whole message.
+- The shared `genericCreditsRule` never reads a `404`, nor a body whose `code`/`type` names a
+  missing model (`model_not_found`, `not_found_error`, `NotFoundError`).
+- Kimi's model refusal (`403 "You do not have access to model <name>"`) is read first, as `auth`
+  (`kimi:model-access-denied`), so its echoed tail never reaches the limit or balance wording; Kimi's
+  limit wording reads only `403`/`429`, its balance wording only `400`/`402`/`429`.
 
 ### The mirror image: a spent *plan window* that reads like something permanent
 
@@ -612,7 +645,7 @@ in the same driver files.
 
 | Provider | What arrives | What the status alone would do | What the driver does |
 |---|---|---|---|
-| `kimi` | `403` · `error.type: permission_error` · one of three wordings: *"You've reached your weekly (7-day) usage limit."* · *"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends."* · *"You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."* No instant, no rate-limit headers. | `403` defaults to `auth`. Through v2.14.0 only the billing-cycle sentence was matched, so the 5-hour one parked a healthy `kimi` account in production on 2026-10-02 until a human pressed Re-check. | Matches the **wording**, not the type — `permission_error` is also Kimi's genuine "this key may not do that", which really is an auth failure and must keep falling through. A limit `reached` within one clause of `usage limit`, a pause `until` a usage limit `resets`, or a quota that `will reset` / `will be refreshed`. A suspension, ban or disabled account is read first and stays `auth` (`kimi:account-suspended`) — unless the body carries both a reached limit and a clock that reopens it ("temporarily", "until … resets / ends"), which is a pause, not a removal; a terms breach laid at the account's door in the same sentence as the suspension ("for violating", "violation of", "due to a violation") outranks that clock, and terms wording that attributes nothing is boilerplate wherever it sits. Signals `kimi:billing-cycle-limit`, `kimi:usage-limit-weekly`, `kimi:usage-limit-5-hour`, and `kimi:usage-limit` for a window not yet seen, all → `rate-limited` with an **estimated** reset (60 / 60 / 15 / 15 min) so the cooldown has a length and the client is told it is ours. |
+| `kimi` | `403` · `error.type: permission_error` — and, since 2026-11-09, the weekly one also as `429` · `error.type: exceeded_current_quota_error` · one of three wordings: *"You've reached your weekly (7-day) usage limit."* · *"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends."* · *"You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."* No instant, no rate-limit headers. | `403` defaults to `auth`. Through v2.14.0 only the billing-cycle sentence was matched, so the 5-hour one parked a healthy `kimi` account in production on 2026-10-02 until a human pressed Re-check. | Matches the **wording**, not the type — `permission_error` is also Kimi's genuine "this key may not do that", which really is an auth failure and must keep falling through. A limit `reached` within one clause of `usage limit`, a pause `until` a usage limit `resets`, or a quota that `will reset` / `will be refreshed`. A suspension, ban or disabled account is read first and stays `auth` (`kimi:account-suspended`) — unless the body carries both a reached limit and a clock that reopens it ("temporarily", "until … resets / ends"), which is a pause, not a removal; a terms breach laid at the account's door in the same sentence as the suspension ("for violating", "violation of", "due to a violation") outranks that clock, and terms wording that attributes nothing is boilerplate wherever it sits. Signals `kimi:billing-cycle-limit`, `kimi:usage-limit-weekly`, `kimi:usage-limit-5-hour`, and `kimi:usage-limit` for a window not yet seen, all → `rate-limited` with an **estimated** reset (60 / 60 / 15 / 15 min) so the cooldown has a length and the client is told it is ours; a fresh plan reading's reset replaces the estimate (`routing/plan-reset.ts`). Read on `403`/`429` only, and **ahead of** `exceeded_current_quota_error` — the type Kimi now also puts on the weekly `429`. |
 | `zai` | `429` · `error.code: 1310` · *"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-08-01 10:03:40"* | `429` already reads as `rate-limited`, so the *kind* was never wrong. The **reset** was: z.ai sends no `retry-after` and no `x-ratelimit-*` at all, so the breaker fell back to its exponential backoff, capped at five minutes. A **weekly** window would be re-probed every five minutes for the days it had left to run | Reads the instant out of the message and reports it as `provider-reported`. Signal: `zai:window-exhausted` |
 
 The z.ai stamp carries no offset and is **UTC+8**, established by comparing z.ai's own request-id
@@ -762,8 +795,15 @@ operator knows which knob actually moves a custom model's window:
    whose reference states `max_completion_tokens` *instead of* `max_tokens` declares
    `chatCeiling` on its openai-chat surface and is named in the registry test that pins the opt-in
    set; one that accepts both needs nothing.
-6. Ship. Routing, keys, pools, usage, and the admin UI need no changes; the console reads the
-   registry from `/api/admin/providers` rather than keeping its own list.
+6. Ship. The console reads the registry from `/api/admin/providers` rather than keeping its own
+   list. A fact about the provider that a service needs is a `ProviderDriver` member, read through
+   the registry — `catalogSweep: "manual"` (the hourly catalog sweep skips it; OpenRouter),
+   `idleProbeModel` (the idle keepalive's model), `shippedPrices: "notional"` (Kimi's list-price
+   attribution) — never a provider-id comparison in that service (non-negotiable 12).
+   **Not yet true everywhere:** `services/cost/prices.ts` (`kimi`),
+   `services/routing/failover.ts` (`anthropic-oauth` session restart) and
+   `scheduler/tasks/idle-account-probe.ts` (`IDLE_PROBE_MODELS`) still name providers; the driver
+   fields they should read exist (sweep 101, 04.3).
 
 A provider that needs something the shared body cannot express supplies its own `readFacts` or
 `parseRateLimit` (MiniMax does), or implements `ProviderDriver` directly. That escape hatch is why

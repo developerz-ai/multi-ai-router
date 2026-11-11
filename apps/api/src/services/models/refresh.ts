@@ -1,5 +1,6 @@
 import type { ModelListingSource } from "@multi-ai-router/core"
 import type { AccountRow, ModelCatalogRepository } from "@multi-ai-router/db"
+import { providerCatalogSweep } from "../../providers"
 import { describeProvider } from "../accounts/providers"
 import { catalogEntry } from "./entries"
 import { listUpstreamModels, type UpstreamListingDeps } from "./listing"
@@ -34,6 +35,8 @@ export type CatalogRefreshOutcome =
       readonly models: number
       /** Which voice the rows came from. Stated by the subscription path, where it can vary. */
       readonly source?: ModelListingSource
+      /** Set when the upstream said its listing continues past the page asked for. */
+      readonly detail?: string
     }
   /** Nothing was asked: this Account has no listing to read right now. Not a failure. */
   | { readonly kind: "skipped"; readonly reason: string; readonly detail?: string }
@@ -60,10 +63,10 @@ export type CatalogRefreshOutcome =
  *   and `needs_reauth` accounts still have a catalog, and a listing costs no tokens and spends no
  *   quota window, so there is nothing to save by skipping them and a recovered credential shows up
  *   sooner.
- * - **`openrouter`** is excluded by instruction, and the instruction is right: it is an aggregator
- *   of several hundred models it does not itself serve, and mirroring another aggregator's catalog
- *   hourly would make this router's listing mostly a stale copy of someone else's. The manual
- *   discover button still asks it whenever an operator wants the answer.
+ * - **A `manual` provider** (`ProviderDriver.catalogSweep`, an aggregator such as OpenRouter) is
+ *   asked only by the discover button: mirroring another aggregator's catalog hourly would make this
+ *   router's listing mostly a stale copy of someone else's. The driver says so; this file names no
+ *   provider (non-negotiable 12).
  * - **A `needs_reauth` subscription** is excluded where a `needs_reauth` HTTP account is not,
  *   because asking it is not free: it spawns the `claude` CLI against a directory whose credential
  *   is already known to be dead, to be told so again. The catalog it has stands until a human
@@ -71,7 +74,7 @@ export type CatalogRefreshOutcome =
  */
 export function isRefreshable(account: Pick<AccountRow, "provider" | "status">): boolean {
   if (account.status === "disabled") return false
-  if (account.provider === "openrouter") return false
+  if (providerCatalogSweep(account.provider) === "manual") return false
   const { transport } = describeProvider(account.provider)
   if (transport === "agent-sdk") return account.status !== "needs_reauth"
   return transport === "http"
@@ -122,14 +125,16 @@ export async function refreshAccountCatalog(
   const entries = listed.entries.map((entry) => catalogEntry(account.provider, entry))
   await deps.catalog.replaceForAccount(account.id, entries, now)
 
-  return { kind: "refreshed", models: entries.length }
+  return listed.truncated === true
+    ? { kind: "refreshed", models: entries.length, detail: "listing truncated at one page" }
+    : { kind: "refreshed", models: entries.length }
 }
 
 /** In the same order {@link isRefreshable} checks, so the reason names the rule that actually fired. */
 function skipReason(account: Pick<AccountRow, "provider" | "status">): string {
   if (account.status === "disabled") return "account:disabled"
-  if (account.provider === "openrouter") return "openrouter:aggregator"
   const { transport } = describeProvider(account.provider)
+  if (providerCatalogSweep(account.provider) === "manual") return `${transport}:manual-listing`
   if (transport === "agent-sdk") return "agent-sdk:needs-reauth"
   return `${transport}:no-driver`
 }

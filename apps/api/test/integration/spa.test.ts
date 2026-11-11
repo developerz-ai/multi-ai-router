@@ -192,7 +192,8 @@ describe("a path that could never be a client route", () => {
     ]
   }
 
-  test("hands out the shell, never a file outside the root, for every traversal spelling", async () => {
+  // A dot-segment or an `assets/` miss is a 404 since 12.15 / 09.2; anything else is the shell.
+  test("hands out the shell or a 404, never a file outside the root, for every traversal spelling", async () => {
     const app = harness()
 
     for (const path of traversals()) {
@@ -200,7 +201,10 @@ describe("a path that could never be a client route", () => {
       const body = await res.text()
 
       expect(body).not.toContain(SECRET)
-      expect({ path, status: res.status, body }).toEqual({ path, status: 200, body: INDEX_HTML })
+      expect({
+        path,
+        ok: res.status === 404 || (res.status === 200 && body === INDEX_HTML),
+      }).toEqual({ path, ok: true })
     }
   })
 
@@ -221,8 +225,36 @@ describe("a path that could never be a client route", () => {
     for (const path of unnameable) {
       const res = await app.request(path)
       const body = await res.text()
+      // Under `assets/` a miss is a 404 (09.2); elsewhere the shell.
+      const expected = path.startsWith("/assets/")
+        ? { status: 404 }
+        : { status: 200, body: INDEX_HTML }
 
-      expect({ path, status: res.status, body }).toEqual({ path, status: 200, body: INDEX_HTML })
+      expect({
+        path,
+        ...(res.status === 404 ? { status: 404 } : { status: res.status, body }),
+      }).toEqual({
+        path,
+        ...expected,
+      })
+    }
+  })
+
+  // 09.2: a tab left open across a release imports a hashed bundle that no longer exists. The shell
+  // as `text/html` fails the module load in a way the console cannot tell from a broken build.
+  test("a missing hashed asset is a 404, never the shell", async () => {
+    const res = await harness().request("/assets/UsageRoute-0ldh4sh.js")
+
+    expect(res.status).toBe(404)
+    expect(await res.text()).not.toBe(INDEX_HTML)
+  })
+
+  // 12.15: `GET /.git/config` answered 200, telling every scanner the file exists.
+  test("a dot-path is a 404, never the shell", async () => {
+    const app = harness()
+    for (const path of ["/.git/config", "/.git/HEAD", "/.env", "/x/.well-known/y"]) {
+      const res = await app.request(path)
+      expect({ path, status: res.status }).toEqual({ path, status: 404 })
     }
   })
 

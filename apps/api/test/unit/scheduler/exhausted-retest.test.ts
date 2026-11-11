@@ -12,7 +12,11 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountStatus } from "@multi-ai-router/core"
 import { createLogger } from "../../../src/logging/logger"
-import { createExhaustedRetest } from "../../../src/scheduler/tasks/exhausted-retest"
+import {
+  createExhaustedRetest,
+  type ExhaustedWatchStore,
+  memoryExhaustedWatchStore,
+} from "../../../src/scheduler/tasks/exhausted-retest"
 import type { RoutableAccount } from "../../../src/services/dataplane/types"
 import {
   type ExhaustedWatch,
@@ -78,7 +82,10 @@ function routable(id: string, status: AccountStatus = "exhausted"): RoutableAcco
   } as unknown as RoutableAccount
 }
 
-function lane(accounts: readonly RoutableAccount[]) {
+function lane(
+  accounts: readonly RoutableAccount[],
+  store: ExhaustedWatchStore = memoryExhaustedWatchStore(),
+) {
   const rechecked: string[] = []
   const refuse = new Set<string>()
   const lines: Record<string, unknown>[] = []
@@ -90,6 +97,7 @@ function lane(accounts: readonly RoutableAccount[]) {
       return refuse.has(accountId) ? ("refused" as const) : ("rechecked" as const)
     },
     schedule: SCHEDULE,
+    store,
   })
   const tick = (atMs: number) =>
     retest({
@@ -161,13 +169,19 @@ describe("the exhausted re-test lane", () => {
     ])
   })
 
-  test("a failed re-test is logged and the clock still advances", async () => {
+  // 03.7 (ruled): a thrown re-test may never have taken the claim, so it is treated like a refused
+  // one — the stored count and wait stand and the next tick asks again.
+  test("a failed re-test is logged and does not advance the clock", async () => {
     const lines: Record<string, unknown>[] = []
+    let fail = true
+    const store = memoryExhaustedWatchStore()
     const retest = createExhaustedRetest({
       recheck: async (): Promise<"rechecked"> => {
-        throw new Error("recovery repository unavailable")
+        if (fail) throw new Error("recovery repository unavailable")
+        return "rechecked"
       },
       schedule: SCHEDULE,
+      store,
     })
     const accounts = [routable("drained")]
     const tick = (atMs: number) =>
@@ -181,8 +195,57 @@ describe("the exhausted re-test lane", () => {
 
     await tick(T0)
     expect(await tick(T0 + HOUR)).toBe(0)
-    await tick(T0 + 2 * HOUR)
+    expect(await store.list()).toEqual([
+      { accountId: "drained", retests: 0, dueAt: new Date(T0 + HOUR), lastRetestAt: null },
+    ])
+    fail = false
+    expect(await tick(T0 + 2 * HOUR)).toBe(1)
 
     expect(lines.filter((line) => line.msg === "exhausted account re-test failed")).toHaveLength(1)
+    const alerts = lines.filter((line) => line.msg === "exhausted account re-tested")
+    expect(alerts).toEqual([
+      expect.objectContaining({ retest: 1, nextRetestAt: new Date(T0 + 4 * HOUR).toISOString() }),
+    ])
+  })
+})
+
+/** 07.6: the ladder outlives a replica hand-off and a restart. */
+describe("the persisted ladder", () => {
+  test("two instances alternating over one store produce the single-instance re-test instants", async () => {
+    const single = lane([routable("drained")])
+    for (let hour = 0; hour <= 72; hour += 1) await single.tick(T0 + hour * HOUR)
+
+    const store = memoryExhaustedWatchStore()
+    const a = lane([routable("drained")], store)
+    const b = lane([routable("drained")], store)
+    for (let hour = 0; hour <= 72; hour += 1) await (hour % 2 === 0 ? a : b).tick(T0 + hour * HOUR)
+
+    const instants = (lines: Record<string, unknown>[]) =>
+      lines.filter((line) => line.msg === "exhausted account re-tested").map((line) => line.retest)
+    expect([...instants(a.lines), ...instants(b.lines)].sort()).toEqual(instants(single.lines))
+    expect(a.rechecked.length + b.rechecked.length).toBe(single.rechecked.length)
+  })
+
+  test("a fresh instance over a store holding retests: 3 waits for dueAt", async () => {
+    const store = memoryExhaustedWatchStore()
+    await store.save("drained", {
+      retests: 3,
+      dueAt: new Date(T0 + 8 * HOUR),
+      lastRetestAt: new Date(T0),
+    })
+    const restarted = lane([routable("drained")], store)
+    for (let hour = 1; hour < 8; hour += 1) await restarted.tick(T0 + hour * HOUR)
+    expect(restarted.rechecked).toEqual([])
+
+    await restarted.tick(T0 + 8 * HOUR)
+    expect(restarted.rechecked).toEqual(["drained"])
+    expect((await store.list())[0]).toMatchObject({ retests: 4 })
+  })
+
+  test("a watch for an account no longer in the catalog is removed", async () => {
+    const store = memoryExhaustedWatchStore()
+    await store.save("gone", { retests: 1, dueAt: new Date(T0), lastRetestAt: null })
+    await lane([routable("drained")], store).tick(T0)
+    expect((await store.list()).map((row) => row.accountId)).toEqual(["drained"])
   })
 })

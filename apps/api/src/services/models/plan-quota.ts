@@ -3,6 +3,7 @@ import { httpDriver } from "../../providers"
 import type { CredentialCipher } from "../crypto/cipher"
 import { type FetchLike, type HealthStore, type RoutableAccount, runAttempt } from "../dataplane"
 import { accountHealthFacts } from "../dataplane/health-observation"
+import { DEFAULT_LISTING_MAX_BYTES, readJsonCapped } from "./capped-json"
 
 /**
  * **Ask one Account's upstream how much of its plan is spent.** One GET, one credential, one answer,
@@ -33,6 +34,8 @@ export interface PlanQuotaDeps {
   readonly fetch: FetchLike
   readonly health: Pick<HealthStore, "captureAttempt" | "applyRateLimit">
   readonly now: () => Date
+  /** Ceiling on the reading's body (`MODEL_LISTING_MAX_BYTES`). Default 8 MB. */
+  readonly maxResponseBytes?: number
 }
 
 /**
@@ -87,22 +90,23 @@ export async function readPlanQuota(
       }
     }
 
+    const body = await readJsonCapped(
+      outcome.response,
+      deps.maxResponseBytes ?? DEFAULT_LISTING_MAX_BYTES,
+    )
     const at = deps.now()
-    const signal = driver.quotaRead.read(await readJson(outcome.response), at)
-    if (signal === null) return { kind: "failed", reason: "quota:unreadable" }
+    const json = body.ok ? body.value : undefined
+    const signal = driver.quotaRead.read(json, at)
+    if (signal === null) {
+      return driver.quotaRead.noPlan?.(json) === true
+        ? { kind: "skipped", reason: "quota:no-plan" }
+        : { kind: "failed", reason: "quota:unreadable" }
+    }
     deps.health.applyRateLimit(account.id, signal, at, observation)
     return { kind: "read" }
   } catch (error) {
     // A credential that will not decrypt, chiefly. One account's fault must not end the sweep.
     return { kind: "failed", reason: describeError(error, Number.POSITIVE_INFINITY) }
-  }
-}
-
-async function readJson(response: Response): Promise<unknown> {
-  try {
-    return await response.json()
-  } catch {
-    return undefined
   }
 }
 

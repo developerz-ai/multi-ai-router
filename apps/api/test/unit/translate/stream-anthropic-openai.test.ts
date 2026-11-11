@@ -5,7 +5,10 @@
 
 import { describe, expect, test } from "bun:test"
 import type { SseEvent, SseFrame } from "../../../src/services/translate/index"
-import { anthropicToOpenAiChatStream } from "../../../src/services/translate/index"
+import {
+  anthropicToOpenAiChatStream,
+  anthropicToOpenAiResponsesStream,
+} from "../../../src/services/translate/index"
 import { anthropicFrame, anthropicUsageWire, payloads } from "./fixtures"
 
 const CREATED = 1_700_000_000
@@ -434,5 +437,45 @@ describe("failure mid-stream", () => {
     const stream = translator()
     expect(stream.push({ event: "content_block_delta", data: "{not json" })).toEqual([])
     expect(stream.push({ event: null, data: '{"type":"content_block_delta"}' })).toEqual([])
+  })
+})
+
+// 06.7: a compatible upstream may state the whole call on the start event and stream no delta.
+describe("a tool_use whose input is stated on content_block_start", () => {
+  const start = (input: unknown) =>
+    anthropicFrame("content_block_start", {
+      index: 0,
+      content_block: { type: "tool_use", id: "toolu_1", name: "get_weather", input },
+    })
+  const stop = anthropicFrame("content_block_stop", { index: 0 })
+
+  test("openai-chat: the stated object is the call's arguments", () => {
+    const stream = translator()
+    stream.push(messageStart)
+    stream.push(start({ city: "NY" }))
+    const events = stream.push(stop)
+    expect((payloads(events)[0] as Chunk).choices[0]?.delta).toEqual({
+      tool_calls: [{ index: 0, function: { arguments: '{"city":"NY"}' } }],
+    })
+  })
+
+  test("openai-chat: an empty stated input with no delta is still `{}`", () => {
+    const stream = translator()
+    stream.push(messageStart)
+    stream.push(start({}))
+    const events = stream.push(stop)
+    expect((payloads(events)[0] as Chunk).choices[0]?.delta).toEqual({
+      tool_calls: [{ index: 0, function: { arguments: "{}" } }],
+    })
+  })
+
+  test("openai-responses: the stated object is the call's arguments", () => {
+    const stream = anthropicToOpenAiResponsesStream({ created: CREATED })
+    stream.push(messageStart)
+    stream.push(start({ city: "NY" }))
+    const done = payloads(stream.push(stop)).find(
+      (event) => (event as { type?: string }).type === "response.function_call_arguments.done",
+    ) as { arguments?: string } | undefined
+    expect(done?.arguments).toBe('{"city":"NY"}')
   })
 })

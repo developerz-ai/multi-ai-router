@@ -46,8 +46,9 @@ export interface ReadinessProbes {
  *
  * - `ok` — at least one account can take a request.
  * - `none` — nothing configured yet. Expected on a fresh install; the operator adds an account.
- * - `blocked` — accounts exist but every one is disabled, exhausted, cooling down, or needs
- *   re-authenticating. This is the state that means something is wrong *right now*.
+ * - `blocked` — accounts exist but every one is disabled, exhausted, or needs re-authenticating.
+ *   This is the state that means something is wrong *right now*. A cooling account still counts
+ *   as available: a clock clears it with nobody intervening (`accountProbe.ts`).
  */
 export type AccountReadiness = "ok" | "none" | "blocked"
 

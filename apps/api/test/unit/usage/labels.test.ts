@@ -14,7 +14,7 @@ test("tombstones are read only after the live key read has resolved", async () =
   let tombstoneCalls = 0
   const labels = catalogLabels({
     keys: {
-      list: () => new Promise((resolve) => (release = resolve as typeof release)) as never,
+      listSummaries: () => new Promise((resolve) => (release = resolve as typeof release)) as never,
     },
     tombstones: {
       listAll: async () => {
@@ -38,7 +38,7 @@ test("a key present in both reads keeps its live name and attribution but reads 
   // still names it; the tombstone says it is going, so retired wins.
   const labels = catalogLabels({
     keys: {
-      list: async () =>
+      listSummaries: async () =>
         [
           { ...row("both", "live-name"), prefix: "mar_live_aaaa", owner: "alice", tool: "cli" },
         ] as never,
@@ -64,7 +64,7 @@ test("a key present in both reads keeps its live name and attribution but reads 
 
 test("a live-only key is not retired and a tombstone-only key is", async () => {
   const labels = catalogLabels({
-    keys: { list: async () => [row("live", "kept")] as never },
+    keys: { listSummaries: async () => [row("live", "kept")] as never },
     tombstones: { listAll: async () => [row("gone", "purged")] as never },
     catalog: { accounts: () => [], pools: () => [] },
   })

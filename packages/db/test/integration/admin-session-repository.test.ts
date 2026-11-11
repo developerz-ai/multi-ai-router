@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test"
-import { inArray } from "drizzle-orm"
+import { inArray, sql } from "drizzle-orm"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import {
@@ -150,5 +150,43 @@ describe.skipIf(!runnable)("session touch cannot restore revoked authority", () 
       true,
     )
     expect(await repository.find(stored.idHash)).toEqual(recent)
+  })
+})
+
+describe.skipIf(!runnable)("revoking sessions by identity", () => {
+  test("deleteByUsername ends every session of that identity and no other", async () => {
+    const mine = [
+      row("revoke-a", { username: "local-admin-test@example.test" }),
+      row("revoke-b", { username: "local-admin-test@example.test" }),
+    ]
+    const theirs = row("revoke-other", { username: "operator@example.test" })
+    for (const r of [...mine, theirs]) await repository.create(r)
+
+    expect(await repository.deleteByUsername("local-admin-test@example.test")).toBe(2)
+    for (const r of mine) expect(await repository.find(r.idHash)).toBeUndefined()
+    expect(await repository.find(theirs.idHash)).toEqual(theirs)
+    expect(await repository.deleteByUsername("local-admin-test@example.test")).toBe(0)
+  })
+
+  test("deleteAll ends every session", async () => {
+    // Inside a rolled-back transaction: the dev database is shared, and a real delete-all would
+    // sign out the operator's own console and any other suite's sessions.
+    const rollback = new Error("rollback")
+    let deleted = -1
+    let left = -1
+    const outcome = await db
+      .transaction(async (tx) => {
+        const scoped = createAdminSessionRepository(tx)
+        await scoped.create(row("all-a"))
+        await scoped.create(row("all-b", { username: "operator@example.test" }))
+        deleted = await scoped.deleteAll()
+        const [count] = await tx.select({ n: sql<number>`count(*)::int` }).from(adminSessions)
+        left = count?.n ?? -1
+        throw rollback
+      })
+      .catch((error: unknown) => error)
+    expect(outcome).toBe(rollback)
+    expect(deleted).toBeGreaterThanOrEqual(2)
+    expect(left).toBe(0)
   })
 })

@@ -8,11 +8,15 @@ import {
   toErrorResponse,
 } from "../errors/render"
 import { retryAfterHeaderSeconds } from "../errors/router-object"
-import type { Logger } from "../logging/logger"
+import type { LogFields, Logger } from "../logging/logger"
 import { captureException } from "../observability"
+import {
+  RequestAdmissionUnavailableError,
+  RouterShutdownError,
+} from "../services/dataplane/active-requests"
 import { ROUTER_ATTEMPTS_HEADER } from "../services/dataplane/router-headers"
 import type { AppEnv } from "../types"
-import { failureContext } from "./logger"
+import { deferFailureLine, failureContext } from "./logger"
 
 /**
  * The one place a thrown value becomes an HTTP response.
@@ -25,6 +29,11 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
   return (err, c) => {
     const response = toErrorResponse(err, dialectForPath(c.req.path), c.get("requestId") ?? null)
     const log = c.get("log") ?? fallbackLog
+    // One transport line per request: the failure folds into the logger's completion line, and is
+    // written here only when no request logger is tracking this request (10.15).
+    const emit = (level: "info" | "warn" | "error", fields: LogFields): void => {
+      if (!deferFailureLine(c.req.raw, { level, fields })) log[level]("request failed", fields)
+    }
 
     const fields = {
       method: c.req.method,
@@ -48,21 +57,25 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
       // class refused and nothing about which field — 213 such lines in one production week carried
       // zero diagnostic content. Every `RouterError` message is router-authored and already the
       // client-facing body (`errors/render.ts`), so the line learns nothing the caller was not told.
-      log[level]("request failed", {
+      emit(level, {
         ...fields,
         errorClass: err.name,
         errorCode: err.code,
         error: err,
         ...(reason === undefined ? {} : { reason }),
       })
+    } else if (isShutdownRefusal(err)) {
+      // Expected while the process drains: the request was turned away on purpose, so it is
+      // neither a defect nor worth a stack — `info`, and kept out of GlitchTip below.
+      emit("info", { ...fields, errorClass: err.name })
     } else {
       // The message and stack are for the operator only — they never reach the response body.
-      log.error("request failed", { ...fields, errorClass: err.name, stack: err.stack })
+      emit("error", { ...fields, errorClass: err.name, stack: err.stack })
     }
 
     // A 5xx reaches GlitchTip; a 4xx (quota exhausted, scope violation, rate-limited) is an
     // operational state, not a defect, and stays in logs only. No-op when no SENTRY_DSN is set.
-    if (response.status >= 500) {
+    if (response.status >= 500 && !isShutdownRefusal(err)) {
       captureException(err, {
         tags: {
           errorClass: err.name,
@@ -77,6 +90,10 @@ export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
 
     return send(c, response)
   }
+}
+
+function isShutdownRefusal(error: Error): boolean {
+  return error instanceof RouterShutdownError || error instanceof RequestAdmissionUnavailableError
 }
 
 export function notFoundHandler(): NotFoundHandler<AppEnv> {

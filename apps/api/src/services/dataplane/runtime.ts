@@ -64,8 +64,14 @@ export interface RuntimeInput {
   /** Binds an upstream's encrypted reasoning to the account that issued it (`crypto/reasoning-seal.ts`). */
   readonly reasoningSealer?: ReasoningSealer
   readonly bodyReadMs?: number
+  /** Time spent asleep in the recovery wait so far; read at record time, since it accrues later. */
+  readonly recoveryWaitMs?: () => number
   readonly errorMaxBytes?: number
   readonly responseObservationMaxBytes?: number
+  /** `UPSTREAM_BUFFERED_BODY_MAX_BYTES` (`relay-body-read.ts`). Absent: the module default. */
+  readonly bufferedBodyMaxBytes?: number
+  /** `MAX_TRANSLATION_SSE_FRAME_BYTES`: one translated SSE frame's ceiling. Absent: unbounded. */
+  readonly translationFrameMaxBytes?: number
   readonly record: (record: UsageRecord) => void
   readonly recordTerminal?: (record: UsageRecord) => void
   readonly selectTerminal?: (winner: UsageRecord | undefined) => void
@@ -185,6 +191,7 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
         finishedAt: input.clock.now(),
         latencyMs: elapsed - attemptStarted,
         bodyReadMs: input.bodyReadMs ?? 0,
+        recoveryWaitMs: input.recoveryWaitMs?.() ?? 0,
         totalMs: elapsed - input.requestStarted,
         upstreamMs,
         // Measured from when the request entered the router, not from when this attempt began:

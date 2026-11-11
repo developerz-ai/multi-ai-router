@@ -4,9 +4,13 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-# Read-only: no --write. Use `bunx biome check --write .` to actually fix.
+# Same runtime as CI and the image, or say so: a different bun runs these silently.
+bin/lib/require-bun
+
+# Read-only: no --write. `bin/fmt` is the writing counterpart.
 bun run lint
 
 # Bun never type-checks at runtime and Biome does not either, so tsc is the only
-# thing enforcing the strict/no-`any` rule. Must match CI's typecheck job: `tsc --build`.
+# thing enforcing the strict/no-`any` rule — tests, bench and tooling included.
+# Same script as CI's typecheck job.
 bun run typecheck

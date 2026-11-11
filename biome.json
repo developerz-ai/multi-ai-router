@@ -25,7 +25,8 @@
     "rules": {
       "preset": "recommended",
       "suspicious": {
-        "noExplicitAny": "error"
+        "noExplicitAny": "error",
+        "noConsole": "error"
       },
       "style": {
         "useConst": "error",
@@ -33,6 +34,19 @@
       }
     }
   },
+  "overrides": [
+    {
+      "includes": [
+        "bin/**",
+        "native/**",
+        "apps/api/bench/**",
+        "apps/api/smoke/**",
+        "apps/api/advisory/**",
+        "apps/web/ui-geometry/**"
+      ],
+      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+    }
+  ],
   "assist": {
     "enabled": true,
     "actions": { "source": { "organizeImports": "on" } }

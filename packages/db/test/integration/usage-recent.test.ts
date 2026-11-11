@@ -1,10 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test"
+import { drizzle } from "drizzle-orm/postgres-js"
 import type { Database } from "../../src/client"
 import { createUsageRecentRepository } from "../../src/repositories/usage-recent-repository"
 import {
   createUsageRecordRepository,
   type UsageRecordInsert,
 } from "../../src/repositories/usage-repository"
+import * as schema from "../../src/schema/index"
 import { usageHistoryFixture } from "./usage-history-fixture"
 
 /**
@@ -14,8 +16,9 @@ import { usageHistoryFixture } from "./usage-history-fixture"
  * planner can answer, and both are the kind that fail loudly in production and silently in a mock:
  *
  * - **A caller's `x-request-id` is not a uuid.** `correlation_id` is a `uuid` column, and handing
- *   `req-42` to a `uuid` comparison is a Postgres *error*, not a non-match. The `::text` cast is
- *   what makes the lookup accept the value it exists to accept.
+ *   `req-42` to a `uuid` comparison is a Postgres *error*, not a non-match. The repository only
+ *   emits the uuid arm for a value that parses as one, and compares the column uncast so
+ *   `usage_records_correlation_idx` serves it.
  * - **`created_at` alone does not order a feed.** Attempts of one failover chain are written from
  *   one batch and can share a millisecond; the `id` tiebreaker is what stops a page reshuffling
  *   between two refreshes.
@@ -147,5 +150,27 @@ describe.skipIf(!runnable)("the live request feed against a live database", () =
       model: MODEL,
       clientRequestId: null,
     })
+  })
+
+  test("a uuid lookup compares the column uncast, so the correlation index can serve it", async () => {
+    const captured: { sql: string; params: unknown[] }[] = []
+    const logged = drizzle(fixture.get().sql, {
+      schema,
+      logger: { logQuery: (query, params) => captured.push({ sql: query, params }) },
+    })
+    await createUsageRecentRepository(logged).recent({ limit: 10, requestId: CHAIN })
+    const query = captured.at(-1)
+    expect(query?.sql).not.toContain('"correlation_id"::text')
+    const plan = await fixture.get().sql.begin(async (tx) => {
+      await tx.unsafe("set local enable_seqscan = off")
+      const rows = await tx.unsafe(`explain ${query?.sql}`, (query?.params ?? []) as never[])
+      return rows.map((r) => String(Object.values(r)[0])).join("\n")
+    })
+    expect(plan).toContain("usage_records_correlation_idx")
+
+    // A non-uuid emits only the client-id arm: no uuid cast to error on.
+    captured.length = 0
+    await createUsageRecentRepository(logged).recent({ limit: 10, requestId: CLIENT_ID })
+    expect(captured.at(-1)?.sql).not.toContain('"correlation_id" =')
   })
 })

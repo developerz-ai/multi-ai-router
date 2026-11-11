@@ -320,11 +320,11 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
     await catalog.recordAttempt(account.id, attemptedAt)
 
     const seeded = async () => {
-      const catalogRows = await live.sql<unknown[]>`
+      const catalogRows = await live.sql<Record<string, unknown>[]>`
         select account_id, model_id, refreshed_at from model_catalog
         where account_id = ${account.id}::uuid
       `
-      const attempts = await live.sql<unknown[]>`
+      const attempts = await live.sql<Record<string, unknown>[]>`
         select account_id, last_attempted_at from model_catalog_attempts
         where account_id = ${account.id}::uuid
       `

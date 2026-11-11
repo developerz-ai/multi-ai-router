@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/core",
-  "version": "2.55.0",
+  "version": "2.56.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -17,8 +17,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --build",
-    "test": "bun test"
+    "build": "tsc --build"
   },
   "dependencies": {
     "zod": "^4.6.7"

@@ -41,7 +41,8 @@ layering.
 ```
 
 Cardinality summary: `Provider 1→many Account`, `Account many↔many Pool`,
-`ApiKey many↔many Pool`, `UsageRecord many→1 ApiKey / Account / Session`,
+`ApiKey many↔many Pool`, `UsageRecord many→1 ApiKey / Account` (a UsageRecord carries a
+`session_key` text label, not a relation to Session),
 `Session many→1 Account` (at most one at a time — a Session is never bound to two Accounts; on the
 SDK path it moves between them only by carrying its transcript, see below).
 
@@ -83,6 +84,8 @@ account per provider. The `label` is what distinguishes them to a human.
 | `weight` | number | Bias for the `weighted` policy. The account's own default; a Pool membership carries its own and wins where it is set |
 | `priority` | number | Strict order for the `priority-failover` policy. Same relationship to a membership's own value |
 | `health` | in-memory | Cooldown expiry, recent failures, in-flight count, quota headroom. Snapshotted and injected into selection |
+| `lastUsedAt` | timestamp, optional | When the account last served a usage-flushed attempt. Read by the weekly idle probe and shown on the console — both coarse — so the usage flush stamps it at most once per `lastUsedMinIntervalMs` (60 s by default) per account, and the column is deliberately unindexed: an indexed stamp made every flush a non-HOT rewrite of the whole account row (0044) |
+| *(exhausted re-test ladder)* | separate `account_exhausted_watches` table | Rule 7's bounded re-test of an `exhausted` account: re-tests spent, next due instant, last re-test. Persisted (0044) so replicas taking turns on `cooldown_recheck` share one doubling clock and a restart resumes it instead of starting over at the first step. One row per watched account, cascaded with it |
 
 The account-delete response includes `cleanup: removed | deferred | not_applicable` separately from
 `deleted: true`. Deletion is already durable when cleanup is deferred. The console closes the
@@ -403,15 +406,18 @@ a stale `startedAt` instead of failing silently. Contract and rationale:
 | Field | Type | Notes |
 |---|---|---|
 | `id` | id | |
-| `task` | enum | Which periodic task: janitor sweep, usage rollup, OAuth-state purge, quota floor refresh |
+| `task` | enum | Which periodic task — one value of the `scheduled_task` enum (14 today: janitor sweep, usage rollup, OAuth-state purge, quota floor refresh, config-dir reap, admin-session purge, idle-account probe, model-catalog refresh, SDK transcript sweep, credential keepalive, login-lifetime watch, weekly usage report, cooldown recheck, plan quota read) |
 | `startedAt` | timestamp | Set when the advisory lock is acquired. A replica that fails the lock writes nothing |
 | `finishedAt` | timestamp, optional | Null while running — and still null long after, on a run that was killed halfway |
 | `outcome` | enum | `success` \| `failed` \| `partial` (batch limit reached, more work remains for the next run) |
 | `itemsProcessed` | number | Rows deleted or aggregated, per the task's own unit. What the one-line summary log reports |
 | `error` | string, optional | Message only, redacted. Never credential material |
 
-Append-only, and swept by the janitor on `RETENTION_TASK_RUNS_DAYS` (30 days) — six tasks on
-cadences from five minutes to six hours write about a thousand rows a day between them. **A run
+Append-only, and swept by the janitor on `RETENTION_TASK_RUNS_DAYS` (30 days) — fourteen tasks on
+cadences from a few minutes to a week write a few thousand rows a day between them. "Is a run of
+this task still open?" (asked before every tick) rides a partial index on the open rows
+(`scheduled_task_runs_open_idx`, 0044), and the tasks screen reads every task's last run and last
+success in two statements (`latestPerTask`). **A run
 with no `finishedAt` is never swept, however old it is**: that row is the only evidence a task
 wedged or a process died holding the lock, and it is also the one row with no measurable end.
 

@@ -286,3 +286,46 @@ test("shutdown during SDK guardian preparation retains no health inFlight or fic
   expect(health.stateOf("offline").breaker.consecutiveFailures).toBe(0)
   expect(concurrency.inFlight).toBe(0)
 })
+
+test("a count_tokens estimate releases its active-request lease (02.3)", async () => {
+  // A subscription-only scope answers count_tokens with the router's own estimate. Before the fix
+  // that exit never released its lease, so `maximumEntries` estimates closed the data plane.
+  const registry = createActiveRequestRegistry({ maximumEntries: 1 })
+  const rows: UsageRecord[] = []
+  const dispatcher = createDispatcher({
+    activeRequests: registry,
+    catalog: catalog([subscriptionAccount("sub")]),
+    cipher: cipher(),
+    health: createHealthStore(),
+    usage: { record: (row) => void rows.push(row) },
+    fetch: async () => {
+      throw new Error("an estimate never reaches an upstream")
+    },
+  })
+  const estimate = () =>
+    dispatcher.dispatch({
+      ingress: "anthropic",
+      operation: "count-tokens",
+      requestId: callerId,
+      key: {
+        id: "key",
+        name: "estimate",
+        prefix: "estimate",
+        scope: { kind: "accounts", accountIds: ["sub"] },
+        rateLimitRequests: null,
+        rateLimitWindowSeconds: null,
+        expiresAt: null,
+      },
+      request: new Request("http://router.test/v1/messages/count_tokens", {
+        method: "POST",
+        body: payload,
+      }),
+    })
+  for (let index = 0; index < 3; index++) {
+    const response = await estimate()
+    expect(response.status).toBe(200)
+    await response.text()
+    expect(registry.size).toBe(0)
+  }
+  expect(rows.map((row) => row.outcome)).toEqual(["success", "success", "success"])
+})

@@ -38,6 +38,8 @@ export interface SdkRule {
   readonly status: number
   readonly clientMessage: string
   readonly match: (text: Haystack) => boolean
+  /** Copied onto the classification: see `FailureClassification.requestAttributable`. */
+  readonly requestAttributable?: true
 }
 
 export type Matcher = (text: Haystack) => boolean

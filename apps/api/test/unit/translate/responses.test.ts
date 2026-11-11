@@ -1334,3 +1334,38 @@ describe("round trip through the full mapped sequence", () => {
     expect(events).toHaveLength(4)
   })
 })
+
+describe("responses -> openai-chat never ends on a null finish (06.5)", () => {
+  const completed = (status: unknown) =>
+    ({
+      event: "response.completed",
+      data: JSON.stringify({ type: "response.completed", response: { id: "r", status } }),
+    }) as const
+
+  test("a `cancelled` terminal event finishes `stop` and reports the status", () => {
+    const translator = openAiResponsesToOpenAiChatStream({ created: 1, id: "x", model: "m" })
+    const events = translator.push(completed("cancelled"))
+    const finishes = events
+      .filter((event) => event.data !== "[DONE]")
+      .map((event) => (JSON.parse(event.data) as { choices: { finish_reason: unknown }[] }).choices)
+      .flatMap((choices) => choices.map((choice) => choice.finish_reason))
+    expect(finishes).toContain("stop")
+    expect(finishes).not.toContain(null)
+    expect(translator.unrecognizedStopReason()).toBe("cancelled")
+  })
+
+  test("a body with status `cancelled` or none finishes `stop` and reports it", () => {
+    for (const [status, reported] of [
+      ["cancelled", "cancelled"],
+      [undefined, "absent"],
+    ] as const) {
+      const out = openAiResponsesToOpenAiChatResponse(
+        { id: "r", model: "m", status, output: [] },
+        { created: 1 },
+      )
+      const body = out.body as { choices: { finish_reason: unknown }[] }
+      expect(body.choices[0]?.finish_reason).toBe("stop")
+      expect(out.unrecognizedStopReason).toBe(reported)
+    }
+  })
+})

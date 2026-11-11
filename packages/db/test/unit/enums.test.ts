@@ -25,13 +25,13 @@ import { usageRecords } from "../../src/schema/usage-records"
 
 describe("postgres enums track @multi-ai-router/core", () => {
   test("every shared enum is built from core's option list, in order", () => {
-    expect(providerId.enumValues).toEqual(ProviderId.options)
-    expect(accountStatus.enumValues).toEqual(AccountStatus.options)
-    expect(routingPolicy.enumValues).toEqual(RoutingPolicy.options)
-    expect(keyScope.enumValues).toEqual(KeyScope.options)
-    expect(keyOwnerKind.enumValues).toEqual(KeyOwnerKind.options)
-    expect(utilizationSource.enumValues).toEqual(UtilizationSource.options)
-    expect(resetSource.enumValues).toEqual(ResetSource.options)
+    expect([...providerId.enumValues]).toEqual([...ProviderId.options])
+    expect([...accountStatus.enumValues]).toEqual([...AccountStatus.options])
+    expect([...routingPolicy.enumValues]).toEqual([...RoutingPolicy.options])
+    expect([...keyScope.enumValues]).toEqual([...KeyScope.options])
+    expect([...keyOwnerKind.enumValues]).toEqual([...KeyOwnerKind.options])
+    expect([...utilizationSource.enumValues]).toEqual([...UtilizationSource.options])
+    expect([...resetSource.enumValues]).toEqual([...ResetSource.options])
   })
 })
 

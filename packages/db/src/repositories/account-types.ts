@@ -10,7 +10,8 @@ import type { AccountRow, ModelAliasMap, SupportedModelList } from "../schema/ac
 import type { QuotaWindowRow } from "../schema/quota-windows"
 import type { AddedAccountRepositoryMethods } from "./account-lifecycle-types"
 import type { BackgroundAccountSubject } from "./background-account-eligibility"
-import type { AccountQuotaObservation } from "./observed-quota-window"
+import type { AccountQuotaObservation, ObservedQuotaWindowWrite } from "./observed-quota-window"
+import type { QuotaWindowWrite } from "./quota-window-mutations"
 
 export interface AccountRepository extends AddedAccountRepositoryMethods {
   /** Durable identity/state check at a background upstream admission boundary. */
@@ -32,6 +33,13 @@ export interface AccountRepository extends AddedAccountRepositoryMethods {
    * answer "does this id exist" is credential material read for no reason.
    */
   listIds(): Promise<string[]>
+  /**
+   * {@link AccountRepository.list} without the credential and configuration columns: identity,
+   * status and labels only. For the readers that filter or label accounts and never touch a
+   * credential — background sweeps, pool member labels — so the ciphertext is not hauled into
+   * their heap on every tick. Oldest first, same filters as `list`.
+   */
+  listSummaries(filter?: AccountListFilter): Promise<AccountSummaryRow[]>
   /**
    * Field-wise edit. `input.authMaterial`, when present, must already be an
    * encryption envelope — rotating a credential is an update like any other and
@@ -113,6 +121,19 @@ export interface AccountRepository extends AddedAccountRepositoryMethods {
   }): Promise<QuotaWindowRow | undefined>
   upsertQuotaWindow(accountId: string, state: QuotaWindowState): Promise<QuotaWindowRow>
   /**
+   * {@link AccountRepository.upsertQuotaWindow} for a whole flush: one transaction, one
+   * multi-row upsert (more only when one `(account, window)` repeats), the same per-row merge
+   * rule. Readings for a deleted account are dropped, not failed. Returns how many rows changed —
+   * a refused stale reading is not counted. All-or-nothing: a throw means nothing was written.
+   */
+  upsertQuotaWindows(writes: readonly QuotaWindowWrite[]): Promise<number>
+  /**
+   * {@link AccountRepository.upsertObservedQuotaWindow} for a whole flush, in three statements.
+   * A reading whose observation no longer matches the account is skipped (not counted), exactly
+   * as the single-row form returns `undefined`. All-or-nothing on a throw.
+   */
+  upsertObservedQuotaWindows(writes: readonly ObservedQuotaWindowWrite[]): Promise<number>
+  /**
    * Every persisted window for a set of accounts, in one query, ordered by
    * account then window so grouping is stable across calls.
    *
@@ -193,6 +214,12 @@ export interface UpdateAccountInput {
   readonly billing?: AccountBilling
   readonly status?: AccountStatus
 }
+
+/** The ciphertext-free projection {@link AccountRepository.listSummaries} returns. */
+export type AccountSummaryRow = Pick<
+  AccountRow,
+  "id" | "label" | "provider" | "status" | "lastUsedAt" | "createdAt"
+>
 
 export interface AccountListFilter {
   /** Absent means every account, disabled ones included — this is the admin list. */

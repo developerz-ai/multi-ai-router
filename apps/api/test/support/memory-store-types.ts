@@ -20,6 +20,8 @@ export type MemoryAccounts = Pick<
   AccountRepository,
   | "upsertQuotaWindow"
   | "upsertObservedQuotaWindow"
+  | "upsertQuotaWindows"
+  | "upsertObservedQuotaWindows"
   | "saveRefreshedCredential"
   | "reviveRefreshedCredential"
   | "spendAuthRefresh"
@@ -34,6 +36,7 @@ export type MemoryAccounts = Pick<
   | "commitAuthorization"
   | "create"
   | "list"
+  | "listSummaries"
   | "readEligibleBackgroundAccount"
   | "findById"
   | "findByIds"
@@ -48,6 +51,8 @@ export type MemoryKeys = Pick<
   ApiKeyRepository,
   | "create"
   | "list"
+  | "listSummaries"
+  | "findUsableWithTargetsByPrefix"
   | "findById"
   | "findByName"
   | "update"

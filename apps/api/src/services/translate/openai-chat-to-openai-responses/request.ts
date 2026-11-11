@@ -1,15 +1,15 @@
+import { parseOpenAiChatRequest } from "../parse-ingress"
 import type {
   ParsedOpenAiChatContent,
   ParsedOpenAiChatRequest,
   ParsedOpenAiChatToolCall,
 } from "../shared/openai-chat"
-import { openAiChatRequestSchema } from "../shared/openai-chat"
 import type {
   OpenAiResponsesItem,
   OpenAiResponsesPart,
   OpenAiResponsesRequest,
 } from "../shared/openai-responses"
-import { assertNoStopSequence, parseRequest, rejectField } from "../shared/reject"
+import { assertNoLegacyFunctions, assertNoStopSequence, rejectField } from "../shared/reject"
 import { responseFormatToResponsesText } from "../shared/structured-output"
 import { toolChoiceToOpenAiResponses, toolsToOpenAiResponses } from "../shared/tools"
 
@@ -53,8 +53,15 @@ const TEXT_JOIN = "\n\n"
 
 /** @throws TranslationError (400) naming the field that has no openai-responses representation. */
 export function openAiChatToOpenAiResponsesRequest(body: unknown): OpenAiResponsesRequest {
-  const request = parseRequest(openAiChatRequestSchema, body, "openai-chat")
+  return openAiChatToOpenAiResponsesRequestFromParsed(parseOpenAiChatRequest(body))
+}
+
+/** {@link openAiChatToOpenAiResponsesRequest} over a body already parsed once for every candidate (`dataplane/translate-body.ts`). */
+export function openAiChatToOpenAiResponsesRequestFromParsed(
+  request: ParsedOpenAiChatRequest,
+): OpenAiResponsesRequest {
   assertTranslatableToOpenAiResponses(request)
+  assertNoLegacyFunctions(request)
 
   const instructions: string[] = []
   const input: OpenAiResponsesItem[] = []

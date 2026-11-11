@@ -4,7 +4,6 @@ import {
   boolean,
   check,
   doublePrecision,
-  index,
   integer,
   pgTable,
   text,
@@ -74,8 +73,11 @@ export const quotaWindows = pgTable(
   },
   (table) => [
     check("quota_windows_revision_nonnegative", sql`${table.revision} >= 0`),
+    check(
+      "quota_windows_evidence_state_known",
+      sql`${table.evidenceState} in ('current', 'expired', 'superseded_by_recovery')`,
+    ),
     uniqueIndex("quota_windows_account_window_key").on(table.accountId, table.window),
-    index("quota_windows_resets_at_idx").on(table.resetsAt),
   ],
 )
 

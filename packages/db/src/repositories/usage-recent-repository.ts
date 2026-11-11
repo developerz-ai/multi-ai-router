@@ -136,24 +136,26 @@ export function createUsageRecentRepository(db: Database): UsageRecentRepository
   }
 }
 
+/** Canonical textual uuid, any version — the only shape a `uuid` column can equal. */
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
  * Either id, without asking the operator which one they hold.
  *
- * `correlation_id` is a `uuid` column, so it is compared as text — a non-uuid
- * string handed to a `uuid` comparison is a Postgres *error*, not a non-match,
- * and "req-42" is exactly the value this lookup exists to accept. The
- * `client_request_id` half is guarded by `is not null` so it rides the partial
- * index rather than falling back to a sequential scan. The operator's value
- * crosses with its own `::text` — the raw-fragment convention: a parameter here
- * has no column encoder, so its type is named rather than inferred. Cast on the
- * parameter side only, which leaves both index shapes untouched.
+ * The column is compared in its own type, never cast: `correlation_id::text = $1` is an
+ * expression on the column, which no btree serves, and with one unindexable arm the `OR` cannot
+ * become a BitmapOr — the plan left walks the whole retained table backwards for a 1–3 row
+ * answer. So the branch happens here: a value that parses as a uuid is compared to
+ * `correlation_id` as a uuid (`usage_records_correlation_idx`); anything else cannot equal a uuid
+ * and only the `client_request_id` arm is emitted — a non-uuid such as "req-42" handed to a
+ * `uuid` comparison would be a Postgres *error*, not a non-match. That arm is guarded by
+ * `is not null` so it rides the partial `usage_records_client_request_idx`.
  */
 function matchesRequestId(requestId: string) {
-  return or(
-    sql`${usageRecords.correlationId}::text = ${requestId}::text`,
-    and(
-      isNotNull(usageRecords.clientRequestId),
-      sql`${usageRecords.clientRequestId} = ${requestId}::text`,
-    ),
+  const byClientId = and(
+    isNotNull(usageRecords.clientRequestId),
+    sql`${usageRecords.clientRequestId} = ${requestId}::text`,
   )
+  if (!UUID_TEXT.test(requestId)) return byClientId
+  return or(sql`${usageRecords.correlationId} = ${requestId}::uuid`, byClientId)
 }

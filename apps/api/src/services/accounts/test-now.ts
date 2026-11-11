@@ -211,7 +211,15 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
       ) {
         return ok(refused(accountId, previous))
       }
-      lastChecked.set(accountId, now)
+      // Only the operator's press spends the operator's cooldown: a router recovery probe or a
+      // background turn stamping it refused a Test now nobody had pressed (plan 101, 03.8).
+      if (input.recovery === undefined && backgroundExpectedAccount === undefined) {
+        // An entry past its cooldown refuses nothing, so it is dropped: the map holds only
+        // accounts pressed inside the window, never one per id ever seen (plan 101, 03.9).
+        for (const [id, at] of lastChecked)
+          if (now.getTime() - at.getTime() >= cooldownMs) lastChecked.delete(id)
+        lastChecked.set(accountId, now)
+      }
 
       const startGuard = input.recovery?.startGuard ?? backgroundGuard
       const fold =

@@ -1,0 +1,54 @@
+# shellcheck shell=sh
+# Sourced by bin/setup and bin/db (from the repo root): one answer to "which
+# port is the dev Postgres on" and one wait-until-ready loop.
+#
+# `DEV_DB_PORT=5434 bin/setup` exists for a developer whose 5433 is taken. The
+# port has to outlive that one command: bin/db re-derived it from a bare
+# `${DEV_DB_PORT:-5433}`, so `bin/db migrate` targeted whatever owned 5433 and
+# `bin/db reset` destroyed the volume and then failed to re-bind. bin/setup now
+# writes DEV_DB_PORT into .env — which docker compose also reads for its
+# `${DEV_DB_PORT:-5433}` interpolation — and both scripts resolve it here.
+
+DEV_DB_COMPOSE="docker compose -f docker-compose.dev.yml"
+
+# The explicit variable wins; then the port the running container actually
+# publishes; then what bin/setup recorded in .env; then the default.
+dev_db_port() {
+  if [ -n "${DEV_DB_PORT:-}" ]; then
+    printf '%s\n' "$DEV_DB_PORT"
+    return
+  fi
+  published="$($DEV_DB_COMPOSE port postgres 5432 2>/dev/null | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)"
+  if [ -n "$published" ]; then
+    printf '%s\n' "$published"
+    return
+  fi
+  if [ -f .env ]; then
+    recorded="$(sed -n 's/^[[:space:]]*DEV_DB_PORT[[:space:]]*=[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' .env | tail -n 1)"
+    if [ -n "$recorded" ]; then
+      printf '%s\n' "$recorded"
+      return
+    fi
+  fi
+  printf '5433\n'
+}
+
+dev_db_url() {
+  printf 'postgres://router:router@localhost:%s/router\n' "$1"
+}
+
+# Returns non-zero when the server is still not ready after ~60 s, so a caller
+# can fail instead of migrating against nothing.
+dev_db_wait() {
+  printf '   waiting for postgres'
+  for _ in $(seq 1 60); do
+    if $DEV_DB_COMPOSE exec -T postgres pg_isready -U router -d router >/dev/null 2>&1; then
+      printf '\n'
+      return 0
+    fi
+    printf '.'
+    sleep 1
+  done
+  printf '\n'
+  return 1
+}

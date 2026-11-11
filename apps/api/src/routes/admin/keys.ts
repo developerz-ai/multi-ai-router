@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from "hono"
+import { DEFAULT_ADMIN_JSON_MAX_BYTES } from "../../config/admin-bodies"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
 import { readJsonBody, validate, validateId } from "../../services/admin"
 import { createKeyBody, type KeysService, keyListQuery, updateKeyBody } from "../../services/keys"
@@ -43,7 +44,9 @@ export function adminKeyRoutes(deps: AdminKeyRoutesDeps): Hono<AdminAuthEnv> {
   routes.post("/", async (c) => {
     const body = validate(
       createKeyBody,
-      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
     )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.create(body.value), 201)
@@ -60,7 +63,9 @@ export function adminKeyRoutes(deps: AdminKeyRoutesDeps): Hono<AdminAuthEnv> {
     if (!id.ok) return render(c, id)
     const body = validate(
       updateKeyBody,
-      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
     )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.update(id.value, body.value))

@@ -145,7 +145,8 @@ test("concurrent identical cache misses share one bounded lookup", async () => {
     cipher: cipher(),
     loadScope: unscopedLoader,
     now: () => NOW,
-    cache: { maxEntries: 1 },
+    // The pending ceiling is its own setting (01.1); it used to be the cache size.
+    cache: { maxPendingLoads: 1 },
   })
   const pending = Array.from({ length: 10 }, () => verifier.verify(key))
   expect(calls).toBe(1)

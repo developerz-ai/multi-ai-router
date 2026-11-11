@@ -1,3 +1,4 @@
+import { type ParsedOpenAiResponsesRequest, parseOpenAiResponsesRequest } from "../parse-ingress"
 import type { AnthropicImageBlock, AnthropicRequest, AnthropicTextBlock } from "../shared/anthropic"
 import { DEFAULT_MAX_TOKENS } from "../shared/anthropic"
 import type { AnthropicTurn } from "../shared/anthropic-turns"
@@ -11,23 +12,17 @@ import {
 import { AUTOMATIC_CACHE } from "../shared/cache-control-schema"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type { ParsedOpenAiResponsesContent } from "../shared/openai-responses"
-import { openAiResponsesRequestSchema, UNSUPPORTED } from "../shared/openai-responses"
+import { UNSUPPORTED } from "../shared/openai-responses"
 import { anthropicReasoningFromEffort } from "../shared/reasoning-effort"
+import { assertPlainTextFormat, rejectField } from "../shared/reject"
 import {
-  assertPlainTextFormat,
   assertStatelessResponses,
   dropEncryptedReasoning,
-  parseRequest,
-  rejectField,
   rejectStatefulItem,
-} from "../shared/reject"
-import {
-  inputFromArguments,
-  toolChoiceFromOpenAiResponses,
-  toolChoiceToAnthropic,
-  toolsFromOpenAiResponses,
-  toolsToAnthropic,
-} from "../shared/tools"
+} from "../shared/reject-responses"
+import { responsesToolsAsChat } from "../shared/responses-tools"
+import { anthropicToolPolicy } from "../shared/tool-choice"
+import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../shared/tools"
 
 /**
  * A Responses body → a `POST /v1/messages` body. Pure: no clock, no store, no network, no logger
@@ -81,7 +76,14 @@ export function openAiResponsesToAnthropicRequest(
   body: unknown,
   options: OpenAiResponsesToAnthropicOptions = {},
 ): AnthropicRequest {
-  const request = parseRequest(openAiResponsesRequestSchema, body, "openai-responses")
+  return openAiResponsesToAnthropicRequestFromParsed(parseOpenAiResponsesRequest(body), options)
+}
+
+/** {@link openAiResponsesToAnthropicRequest} over a body already parsed once for every candidate (`dataplane/translate-body.ts`). */
+export function openAiResponsesToAnthropicRequestFromParsed(
+  request: ParsedOpenAiResponsesRequest,
+  options: OpenAiResponsesToAnthropicOptions = {},
+): AnthropicRequest {
   const onDrop = options.onDrop ?? IGNORE_DROPS
   assertStatelessResponses(request, onDrop)
   assertPlainTextFormat(request)
@@ -160,6 +162,12 @@ export function openAiResponsesToAnthropicRequest(
     rejectField("input", "carries no user or assistant turn: an anthropic request needs one")
   }
 
+  const tooling = responsesToolsAsChat(request.tools, request.tool_choice, onDrop)
+  const policy = anthropicToolPolicy(
+    tooling.tool_choice === undefined ? undefined : toolChoiceToAnthropic(tooling.tool_choice),
+    request.parallel_tool_calls,
+    tooling.tools !== undefined && tooling.tools.length > 0,
+  )
   return {
     model: request.model,
     messages,
@@ -168,25 +176,11 @@ export function openAiResponsesToAnthropicRequest(
     temperature: request.temperature ?? undefined,
     top_p: request.top_p ?? undefined,
     stream: request.stream ?? undefined,
-    tools:
-      request.tools === undefined
-        ? undefined
-        : toolsToAnthropic(toolsFromOpenAiResponses(request.tools)),
-    tool_choice:
-      request.parallel_tool_calls === undefined ||
-      request.parallel_tool_calls === null ||
-      request.tools === undefined ||
-      request.tools.length === 0
-        ? request.tool_choice === undefined
-          ? undefined
-          : toolChoiceToAnthropic(toolChoiceFromOpenAiResponses(request.tool_choice))
-        : {
-            ...(request.tool_choice === undefined
-              ? { type: "auto" as const }
-              : toolChoiceToAnthropic(toolChoiceFromOpenAiResponses(request.tool_choice))),
-            disable_parallel_tool_use: !request.parallel_tool_calls,
-          },
+    tools: tooling.tools === undefined ? undefined : toolsToAnthropic(tooling.tools),
+    tool_choice: policy.tool_choice,
     ...anthropicReasoningFromEffort(request.reasoning?.effort, "reasoning.effort", onDrop),
+    // Last, so it wins over `reasoning.effort`: a forced tool call and thinking cannot share a request.
+    ...(policy.thinking === undefined ? {} : { thinking: policy.thinking }),
     ...(options.automaticCache === true ? { cache_control: AUTOMATIC_CACHE } : {}),
   }
 }

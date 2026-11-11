@@ -1,46 +1,42 @@
 import { isRouterError } from "@multi-ai-router/core"
-import type { Logger } from "../../logging/logger"
-import type { ModelCatalogStore } from "../models/store"
 import {
   type AttemptFailure,
   type Candidate,
-  type FailoverOptions,
+  type FailureKind,
   inPlaceReason,
   markStreamed,
   NO_ATTEMPTS,
   noteOverload,
+  noteRequestAttributable,
   planNextAttempt,
   recordAttempt,
 } from "../routing"
-import type { TranslationContext } from "../translate"
 import type { AttemptOutcome } from "./attempt"
+import { thrownAttemptFailure } from "./attempt-failure"
 import { attemptLifetime } from "./attempt-lifetime"
 import { attemptQuota } from "./attempt-quota"
-import type { ByteSpan } from "./body/scanner"
 import { bodyFor } from "./chain-body"
 import {
   assertUnstartedCancellation,
   cancelledBeforeRelay,
   isCancelledOutcome,
 } from "./chain-cancellation"
+import { capacityRetryAfterSeconds } from "./chain-capacity"
+import type { ChainContext } from "./chain-context"
 import { logCandidateDropped, logPreparationThrew, logUnstartedDrop } from "./chain-drop-log"
 import { type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
 import { finishFailedAttempt } from "./chain-failed-attempt"
 import { finishChain } from "./chain-finish"
-import { invalidPreparation } from "./chain-preparation"
+import { invalidPreparation, recordUnrepresentable } from "./chain-preparation"
 import { recordChainFailure } from "./chain-recovery"
 import { createChainRefusals } from "./chain-refusals"
 import { finishSuccessfulAttempt } from "./chain-success"
 import { dispatch } from "./dispatch"
-import { forcedToolOfBody } from "./forced-tool-coercion"
+import { forcedToolOn } from "./forced-tool-coercion"
 import { accountHealthFacts } from "./health-observation"
 import { pause } from "./pause"
-import type { ServableCandidate } from "./plan"
 import { admitHalfOpenProbe } from "./probe"
-import { attemptRecord } from "./records"
 import { ClientCancelledError } from "./relay-cancellation"
-import type { DispatchRuntime } from "./runtime"
-import type { TranslatedRequestBody } from "./translate-body"
 
 /**
  * The failover chain: dispatch to the head, advance on a retryable failure, stop honestly.
@@ -61,35 +57,7 @@ import type { TranslatedRequestBody } from "./translate-body"
  * another request is already spending the single probe that account earns.
  */
 
-export interface ChainContext {
-  readonly modelMetadata?: Pick<ModelCatalogStore, "describe"> | undefined
-
-  readonly runtime: DispatchRuntime
-  readonly plan: readonly ServableCandidate[]
-  /** The client's request: method, headers, and abort signal are taken from it. */
-  readonly request: Request
-  readonly bodyBytes: Uint8Array
-  readonly modelSpan: ByteSpan | null
-  /** The client's top-level `stream: true`, from the routing scan (`body/scanner.ts`). */
-  readonly streamRequested?: boolean
-  /** The clock stamp, fallback ids, and configured ceiling every conversion of this request reads. */
-  readonly translation: TranslationContext
-  /** The converted upstream body, built lazily and only for a candidate that needs one. */
-  readonly translated: TranslatedRequestBody
-  readonly failover: FailoverOptions | undefined
-  /**
-   * Selection already refused this session's binding (`rebind` on a cooling account, out of scope,
-   * exhausted, gone) — the reason, for the restart header a turn that could not carry the session
-   * answers with (`session-restart.ts`).
-   */
-  readonly bindingRefused?: string
-  readonly log: Logger | undefined
-  /**
-   * Ceiling on the upstream's own words quoted on a failed-attempt log line — `LOG_REASON_MAX_CHARS`,
-   * threaded through `DispatchOptions.log`. Absent means {@link DEFAULT_LOG_REASON_MAX_CHARS}.
-   */
-  readonly reasonMaxChars?: number
-}
+export type { ChainContext } from "./chain-context"
 
 export async function runChain(ctx: ChainContext): Promise<Response> {
   // Mutable for one reason: a half-open candidate another request is already probing is removed, so
@@ -104,6 +72,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   /** The most actionable failure any attempt has produced so far. See `chain-error.ts`. */
   let held: ChainFailure | null = null
   let upstreamMs = 0
+  const failureKinds: FailureKind[] = []
+  let requestWall = false
 
   for (;;) {
     if (ctx.request.signal.aborted) {
@@ -113,7 +83,10 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       throw ctx.request.signal.reason ?? new ClientCancelledError()
     }
     const decision = planNextAttempt(ordered, progress, lastFailure, ctx.failover)
-    if (decision.action === "stop") break
+    if (decision.action === "stop") {
+      requestWall = decision.reason === "request-wall"
+      break
+    }
     // An `overloaded` retry waits out the provider's busy backend first (`routing/failover.ts`).
     if (decision.action === "retry-in-place" && decision.delayMs !== undefined) {
       await pause(decision.delayMs, ctx.request.signal)
@@ -160,16 +133,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       if (!isRouterError(error)) throw error
       held = foldChainFailure(held, routerFailure(error))
       lastFailure = { kind: "client-error", message: error.message }
-      runtime.record(
-        attemptRecord({
-          ...runtime.preflightAttribution(),
-          timing: runtime.timing(at.startedAt, at.started, upstreamMs),
-          outcome: "client_error",
-          streamed: false,
-          httpStatus: null,
-          errorClass: error.name,
-        }),
-      )
+      recordUnrepresentable(runtime, error, at)
       continue
     }
 
@@ -202,18 +166,27 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         quota,
       )
     } catch (error) {
-      quota?.close()
       lifetime.assertRunning()
-      // Preparation has no upstream verdict and cannot outrank an earlier provider response.
-      lifetime.end()
-      probe.release()
-      if (ctx.request.signal.aborted) throw ctx.request.signal.reason ?? new ClientCancelledError()
-      held = foldChainFailure(held, isRouterError(error) ? routerFailure(error) : null)
-      progress = priorProgress
-      ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
-      refusals.recordPreparation()
-      logPreparationThrew(ctx.log, accountId, decision.attempt, error)
-      continue
+      // The upstream was contacted, then the router threw reading its answer: that is an attempt,
+      // and it fails over through the same tail as any other failure (02.7). A router verdict
+      // (a typed error) stays the router's own answer, as before.
+      if (lifetime.started() && !ctx.request.signal.aborted && !isRouterError(error))
+        outcome = thrownAttemptFailure(error)
+      else {
+        quota?.close()
+        // Preparation has no upstream verdict and cannot outrank an earlier provider response.
+        lifetime.end()
+        if (recovery?.started()) recovery.finish("uncertain")
+        probe.release()
+        if (ctx.request.signal.aborted)
+          throw ctx.request.signal.reason ?? new ClientCancelledError()
+        held = foldChainFailure(held, isRouterError(error) ? routerFailure(error) : null)
+        progress = priorProgress
+        ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
+        refusals.recordPreparation()
+        logPreparationThrew(ctx.log, accountId, decision.attempt, error)
+        continue
+      }
     }
     lifetime.assertRunning(outcome.kind === "success" ? outcome.response : undefined)
     assertUnstartedCancellation(outcome, lifetime.started(), ctx.request.signal)
@@ -298,6 +271,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     upstreamMs += runtime.clock.elapsed() - upstreamStarted
 
     lastFailure = outcome.failure
+    failureKinds.push(outcome.failure.kind)
+    progress = noteRequestAttributable(progress, outcome.failure)
     progress = noteOverload(progress, accountId, outcome.failure.kind)
     held = finishFailedAttempt(
       ctx,
@@ -310,16 +285,14 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   }
 
   runtime.activeRequest?.release()
-  return finishChain(held, lastFailure, refusals.failIfAny, runtime.selectTerminal)
-}
-
-/** The coercion target, only for a vendor that thinks by default and ignores a forced tool. */
-function forcedToolOn(
-  servable: ServableCandidate,
-  upstreamBody: Uint8Array | null,
-): { forcedTool: string } | Record<string, never> {
-  if (servable.kind !== "http" || servable.dialect !== "anthropic") return {}
-  if (!servable.driver.thinkingOnByDefault?.(servable.account.driver)) return {}
-  const forcedTool = forcedToolOfBody(upstreamBody)
-  return forcedTool === undefined ? {} : { forcedTool }
+  return finishChain(held, lastFailure, refusals.failIfAny, runtime.selectTerminal, {
+    requestWall,
+    capacityRetryAfterSeconds: capacityRetryAfterSeconds({
+      kinds: failureKinds,
+      triedAccountIds: progress.attemptedAccountIds,
+      health: runtime.health,
+      now: runtime.clock.now(),
+      unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds,
+    }),
+  })
 }

@@ -9,7 +9,7 @@ import { attributionOf, ownerRows, toolRows } from "./buckets"
 import { foldFailures } from "./failures"
 import { historyBreakdown, historySeriesBy, rawBreakdown } from "./group-reads"
 import { resolveReadWindow } from "./read-window"
-import { alignSeries, breakdownRow, keyNames, label } from "./summary-view"
+import { alignSeries, breakdownRow, groupSeries, keyNames, label } from "./summary-view"
 import type { UsageLabelSets, UsageSummary } from "./types"
 import type { UsageWindowQuery } from "./window"
 
@@ -81,7 +81,7 @@ export async function readSummary(
       routerOverheadP95Ms: measured.get(row.id)?.routerOverheadP95Ms ?? null,
     }))
   })
-  const groupSeries = await Promise.all(
+  const seriesByDimension = await Promise.all(
     dimensions.map((dimension, index) =>
       historySeriesBy(
         deps.history,
@@ -96,7 +96,8 @@ export async function readSummary(
     ),
   )
   const [keys, accounts, pools, models, owners, tools] = limited
-  const [keySeries, accountSeries, poolSeries, modelSeries, ownerSeries, toolSeries] = groupSeries
+  const [keySeries, accountSeries, poolSeries, modelSeries, ownerSeries, toolSeries] =
+    seriesByDimension.map((points) => groupSeries(axis, points))
   return {
     window: window.label,
     bucket: window.bucket,
@@ -127,18 +128,20 @@ export async function readSummary(
     },
     axis,
     series: alignSeries(axis, series),
-    byKey: label(keys ?? [], keyNames(deps.labels.keys), axis, keySeries ?? []).map((row) => ({
-      ...row,
-      retired: row.id !== null && deps.labels.keys.get(row.id)?.retired === true,
-    })),
-    byAccount: label(accounts ?? [], deps.labels.accounts, axis, accountSeries ?? []),
-    byPool: label(pools ?? [], deps.labels.pools, axis, poolSeries ?? []),
+    byKey: label(keys ?? [], keyNames(deps.labels.keys), axis, keySeries ?? new Map()).map(
+      (row) => ({
+        ...row,
+        retired: row.id !== null && deps.labels.keys.get(row.id)?.retired === true,
+      }),
+    ),
+    byAccount: label(accounts ?? [], deps.labels.accounts, axis, accountSeries ?? new Map()),
+    byPool: label(pools ?? [], deps.labels.pools, axis, poolSeries ?? new Map()),
     byModel: (models ?? []).map((row) => ({
-      ...breakdownRow(row, axis, modelSeries ?? []),
+      ...breakdownRow(row, axis, modelSeries ?? new Map()),
       label: row.id,
       note: row.id === null ? "none" : null,
     })),
-    byOwner: ownerRows(owners ?? [], axis, ownerSeries ?? []),
-    byTool: toolRows(tools ?? [], axis, toolSeries ?? []),
+    byOwner: ownerRows(owners ?? [], axis, ownerSeries ?? new Map()),
+    byTool: toolRows(tools ?? [], axis, toolSeries ?? new Map()),
   }
 }

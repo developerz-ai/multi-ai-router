@@ -65,6 +65,11 @@ export interface ClaudeCliFromEnvDeps {
   readonly audit: AuditRecorder
   readonly env: Pick<Env, "claudeCliPath" | "retention"> & {
     readonly background?: Env["background"]
+    /** CLI deadlines (`CLAUDE_LOGIN_*_TIMEOUT_SECONDS`); absent keeps the CLI module's defaults. */
+    readonly claudeSdkPacing?: Pick<
+      Env["claudeSdkPacing"],
+      "loginUrlTimeoutMs" | "loginExchangeTimeoutMs" | "authStatusTimeoutMs"
+    >
   }
   readonly logger: Logger
   readonly now: () => Date
@@ -86,6 +91,7 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
       ? undefined
       : createOwnedLoginSpawn(ownership.config, ownership.manager.ownerLaunch)
   const credentials = createCredentialGuard()
+  const pacing = deps.env.claudeSdkPacing
   const cliPath = (): string | null => {
     const resolution = resolveClaudeCli(createCliProbe({ override: deps.env.claudeCliPath }))
     return resolution.ok ? resolution.path : null
@@ -105,6 +111,12 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
       return createClaudeCliLogin({
         cliPath: path,
         ...(spawn === undefined ? {} : { spawn }),
+        ...(pacing === undefined
+          ? {}
+          : {
+              authorizeUrlTimeoutMs: pacing.loginUrlTimeoutMs,
+              exchangeTimeoutMs: pacing.loginExchangeTimeoutMs,
+            }),
       }).start(input)
     },
   }
@@ -114,9 +126,11 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
       const path = cliPath()
       return path === null
         ? Promise.resolve(null)
-        : createClaudeAuthCheck({ cliPath: path, ...(spawn === undefined ? {} : { spawn }) }).check(
-            configDir,
-          )
+        : createClaudeAuthCheck({
+            cliPath: path,
+            ...(spawn === undefined ? {} : { spawn }),
+            ...(pacing === undefined ? {} : { timeoutMs: pacing.authStatusTimeoutMs }),
+          }).check(configDir)
     },
   }
 

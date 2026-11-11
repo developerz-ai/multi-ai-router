@@ -23,7 +23,8 @@ import { createSnapshotRefresh } from "../snapshots/refresh"
  * a query that could have started before the discovery committed.
  *
  * A failed refresh keeps the previous snapshot: a slightly stale catalog beats an empty one, and an
- * empty one reads as "this router serves nothing".
+ * empty one reads as "this router serves nothing". On the timer the failure goes to
+ * `onRefreshError`, so a stale catalog is a log line, never a silence.
  */
 
 export interface ModelCatalogStore {
@@ -59,12 +60,22 @@ export interface ModelCatalogStoreDeps {
   readonly now?: () => Date
   /** Injected so a test is deterministic; production leaves it alone. */
   readonly jitter?: (intervalMs: number) => number
+  /** A timer tick's refresh failed; the previous rows stay and the next tick retries. */
+  readonly onRefreshError?: (error: unknown) => void
 }
 
-/** `accountId -> upstream model -> what is known`. Empty until the first successful load. */
-type Snapshot = ReadonlyMap<string, ReadonlyMap<string, ModelDescriptor>>
+interface AccountModels {
+  /** Upstream model, lower-cased -> what is known. */
+  readonly byModel: ReadonlyMap<string, ModelDescriptor>
+  /** The same rows in sweep order, built once per load: `modelsOf` allocates nothing per call. */
+  readonly list: readonly ModelDescriptor[]
+}
+
+/** `accountId -> its models`. Empty until the first successful load. */
+type Snapshot = ReadonlyMap<string, AccountModels>
 
 const EMPTY: Snapshot = new Map()
+const NONE: readonly ModelDescriptor[] = Object.freeze([])
 
 export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatalogStore {
   const now = deps.now ?? (() => new Date())
@@ -79,9 +90,9 @@ export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatal
 
   const schedule = (): void => {
     timer = setTimeout(() => {
-      // Swallowed on purpose: a periodic refresh that throws must not take the process down, and
-      // the next tick retries. The snapshot stays as it was.
-      void refresh().catch(() => undefined)
+      // Never rethrown: a periodic refresh that throws must not take the process down, and the
+      // next tick retries. The snapshot stays as it was; the failure goes to `onRefreshError`.
+      void refresh().catch((error: unknown) => deps.onRefreshError?.(error))
       if (timer !== null) schedule()
     }, jitter(deps.refreshIntervalMs))
     timer.unref?.()
@@ -89,8 +100,8 @@ export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatal
 
   return {
     describe: (accountId, upstreamModel) =>
-      snapshot.get(accountId)?.get(upstreamModel.trim().toLowerCase()) ?? null,
-    modelsOf: (accountId) => [...(snapshot.get(accountId)?.values() ?? [])],
+      snapshot.get(accountId)?.byModel.get(upstreamModel.trim().toLowerCase()) ?? null,
+    modelsOf: (accountId) => snapshot.get(accountId)?.list ?? NONE,
     refresh,
     refreshAfterMutation,
     start: () => {
@@ -111,9 +122,9 @@ export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatal
  * rendered an unknown window for the second spelling would look like a gap in the sweep.
  */
 function index(rows: readonly ModelCatalogRow[]): Snapshot {
-  const byAccount = new Map<string, Map<string, ModelDescriptor>>()
+  const tables = new Map<string, Map<string, ModelDescriptor>>()
   for (const row of rows) {
-    const table = byAccount.get(row.accountId) ?? new Map<string, ModelDescriptor>()
+    const table = tables.get(row.accountId) ?? new Map<string, ModelDescriptor>()
     table.set(row.modelId.trim().toLowerCase(), {
       id: row.modelId,
       contextTokens: row.contextTokens,
@@ -123,7 +134,11 @@ function index(rows: readonly ModelCatalogRow[]): Snapshot {
       resolvedModel: row.resolvedModel,
       ...normalizeReasoning(row.reasoning),
     })
-    byAccount.set(row.accountId, table)
+    tables.set(row.accountId, table)
+  }
+  const byAccount = new Map<string, AccountModels>()
+  for (const [accountId, byModel] of tables) {
+    byAccount.set(accountId, { byModel, list: Object.freeze([...byModel.values()]) })
   }
   return byAccount
 }

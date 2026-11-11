@@ -2,6 +2,7 @@ import type { AttemptOutcome } from "./attempt"
 import type { ChainContext } from "./chain"
 import { relaySuccess, type SuccessClock } from "./chain-relay"
 import type { ServableCandidate } from "./plan"
+import { decidedTranslation } from "./relay-translate-held"
 import { servedByHeaders, withHeaders } from "./router-headers"
 import { withSessionRestart } from "./session-restart"
 
@@ -14,7 +15,7 @@ export function finishSuccessfulAttempt(
   at: SuccessClock,
   /** Why this turn may have lost its bound session, or undefined when it never had one to lose. */
   restart: string | undefined,
-): Response {
+): Promise<Response> | Response {
   if (servable.kind !== "sdk")
     ctx.runtime.health.applyRateLimit(
       servable.account.id,
@@ -22,9 +23,25 @@ export function finishSuccessfulAttempt(
       ctx.runtime.clock.now(),
       at.observation,
     )
+  const answer = relaySuccess(ctx, servable, attempt, outcome.response, at)
+  // A held translation decides its status before anything is committed (`relay-translate-held.ts`).
+  const held = decidedTranslation(answer)
+  if (held !== undefined)
+    return held.then((decided) => stamp(ctx, servable, attempt, outcome, decided, restart))
+  return stamp(ctx, servable, attempt, outcome, answer, restart)
+}
+
+function stamp(
+  ctx: ChainContext,
+  servable: ServableCandidate,
+  attempt: number,
+  outcome: Extract<AttemptOutcome, { kind: "success" }>,
+  answer: Response,
+  restart: string | undefined,
+): Response {
   // The attempt count is the dispatcher's, the one source for success and failure alike.
   const relayed = withHeaders(
-    relaySuccess(ctx, servable, attempt, outcome.response, at),
+    answer,
     servedByHeaders({
       accountId: servable.account.id,
       provider: servable.account.driver.provider,

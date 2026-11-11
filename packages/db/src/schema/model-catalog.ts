@@ -1,14 +1,5 @@
 import type { ModelContextSource, ModelListingSource, ModelReasoning } from "@multi-ai-router/core"
-import {
-  index,
-  integer,
-  jsonb,
-  pgTable,
-  primaryKey,
-  text,
-  timestamp,
-  uuid,
-} from "drizzle-orm/pg-core"
+import { integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 
 /**
@@ -96,8 +87,6 @@ export const modelCatalog = pgTable(
   (table) => [
     // One row per (account, model): re-listing a model updates it, never duplicates it.
     primaryKey({ columns: [table.accountId, table.modelId] }),
-    // The catalog listing's only query groups every row by model id across accounts.
-    index("model_catalog_model_id_idx").on(table.modelId),
   ],
 )
 

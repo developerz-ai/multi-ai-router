@@ -73,9 +73,13 @@ export function rendezvousRank(
   accountIds: readonly string[],
 ): readonly string[] {
   const seed = sessionSeed(sessionKey)
-  return [...accountIds].sort((left, right) => {
-    const delta = scoreWithSeed(seed, right) - scoreWithSeed(seed, left)
-    if (delta !== 0) return delta
-    return left < right ? -1 : left > right ? 1 : 0
-  })
+  // Scored once each, not per comparison (plan 101, 03.6).
+  return accountIds
+    .map((id) => ({ id, score: scoreWithSeed(seed, id) }))
+    .sort((left, right) => {
+      const delta = right.score - left.score
+      if (delta !== 0) return delta
+      return left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+    })
+    .map((entry) => entry.id)
 }

@@ -1,6 +1,7 @@
 import type { readAdminBodiesEnv } from "./admin-bodies"
 import type { readBackgroundEnv } from "./background"
 import type { ClaudeLoginConfig } from "./claude-login"
+import type { ClaudeSdkPacingConfig } from "./claude-sdk-pacing"
 import type { readCliOwnershipEnv } from "./cli-ownership"
 import type { AdminAuthConfig, AdminOidcConfig } from "./env-admin-types"
 import type { LogLevel } from "./env-defaults"
@@ -10,11 +11,32 @@ import type { DatabasePoolConfig, RetentionConfig } from "./env-storage-types"
 import type { readMetricInventoryEnv } from "./metric-inventory"
 import type { readRecoveryEnv } from "./recovery"
 import type { readRelayLifetimesEnv } from "./relay-lifetimes"
+import type { RuntimeLimitsConfig } from "./runtime-limits"
 import type { readUpstreamStreamEnv } from "./upstream-stream"
 import type { readUsageReadEnv } from "./usage-read"
 import type { UsageReportConfig } from "./usage-report"
 
 export interface Env {
+  /** SDK stream pacing, deny hold and login deadlines — `config/claude-sdk-pacing.ts`. */
+  readonly claudeSdkPacing: ClaudeSdkPacingConfig
+  /** Negative-cache bound, miss-load ceiling and stale-on-error window — `config/runtime-limits.ts`. */
+  readonly keyVerification: RuntimeLimitsConfig["keyVerification"]
+  /** `TRUST_PROXY_HOPS`: which `X-Forwarded-For` entry, counted from the right, is the client. */
+  readonly trustProxyHops: number
+  readonly metricsMaxSeriesPerMetric: number
+  readonly healthDatabaseProbeTimeoutMs: number
+  readonly sentryExitFlushMs: number
+  readonly healthCliProbeCacheMs: number
+  readonly accountRecheckAllConcurrency: number
+  readonly routingLimits: RuntimeLimitsConfig["routingLimits"]
+  readonly usageRetryBufferMax: number
+  readonly modelListingMaxBytes: number
+  readonly upstreamBufferedBodyMaxBytes: number
+  readonly migrationLockTimeoutMs: number
+  readonly accountLastUsedStampIntervalSeconds: number
+  readonly usageBackfillFullScanHours: number
+  readonly oidcCache: RuntimeLimitsConfig["oidcCache"]
+  readonly schedulerLimits: RuntimeLimitsConfig["schedulerLimits"]
   readonly recovery: ReturnType<typeof readRecoveryEnv>["recovery"]
   readonly cliOwnership: ReturnType<typeof readCliOwnershipEnv>["cliOwnership"]
   readonly port: number

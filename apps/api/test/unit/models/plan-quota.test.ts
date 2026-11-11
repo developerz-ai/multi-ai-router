@@ -132,6 +132,27 @@ describe("reading a plan's quota, failures first", () => {
     expect(health.stateOf("acc-1").lastSignalAt).toBeNull()
   })
 
+  // Sweep 101, 12.10: a z.ai key with no token window is a skip, not `quota:unreadable` every tick.
+  test("a reading that states no plan window is a skip, and installs nothing", async () => {
+    const { deps, health } = harness(async () =>
+      json({ code: 200, success: true, data: { limits: [] } }),
+    )
+    expect(await readPlanQuota(deps, routable({ provider: "zai" }))).toEqual({
+      kind: "skipped",
+      reason: "quota:no-plan",
+    })
+    expect(health.stateOf("acc-1").lastSignalAt).toBeNull()
+  })
+
+  // Sweep 101, 04.6: only the attempt timeout bounded a success body.
+  test("a reading larger than the ceiling is refused, never buffered whole", async () => {
+    const { deps } = harness(async () => json({ padding: "x".repeat(4096), ...SPENT }))
+    expect(await readPlanQuota({ ...deps, maxResponseBytes: 1024 }, routable())).toEqual({
+      kind: "failed",
+      reason: "quota:unreadable",
+    })
+  })
+
   test("a provider with no usage endpoint is never asked", async () => {
     const { deps, seen } = harness(async () => json(SPENT))
     const outcome = await readPlanQuota(deps, routable({ provider: "deepseek" }))

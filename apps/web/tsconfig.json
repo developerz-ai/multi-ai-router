@@ -18,8 +18,9 @@
     "rootDir": "src",
     "outDir": "dist-types"
   },
-  // `vite.config.ts` and `test/` sit outside rootDir on purpose: the config is
-  // type-checked by Vite's own esbuild pass, the tests by `bun test`.
+  // `vite.config.ts` and `test/` sit outside rootDir on purpose: both are
+  // type-checked by tsconfig.tests.json (`bun run typecheck`) — neither Vite's
+  // esbuild pass nor `bun test` checks types.
   "include": ["src"],
   // The shared domain vocabulary — `AccountStatus`, `ResetSource` — is defined
   // once in core and imported here, never restated.

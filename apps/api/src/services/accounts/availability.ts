@@ -207,8 +207,17 @@ export function withAvailability(
   return {
     ...service,
     list: async (query) => {
-      const result = await service.list(query)
-      return result.ok ? { ok: true, value: await overlay(result.value) } : result
+      // `?status=` names the status the operator sees, which is the overlaid one: filtering the
+      // stored column first would list a cooling account under `active` and miss it under
+      // `cooling_down`. So read unfiltered by status, overlay, then filter.
+      const { status, ...stored } = query
+      const result = await service.list(stored)
+      if (!result.ok) return result
+      const views = await overlay(result.value)
+      return {
+        ok: true,
+        value: status === undefined ? views : views.filter((view) => view.status === status),
+      }
     },
     get: async (id) => overlayOne(await service.get(id)),
   }

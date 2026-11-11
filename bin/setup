@@ -35,9 +35,28 @@ else
   printf '%s\n' "CLI shared-root ownership requires Linux; use the router container for Claude subscription accounts on this host."
 fi
 
-DEV_DB_PORT="${DEV_DB_PORT:-5433}"
+# shellcheck source=bin/lib/dev-db-env
+. bin/lib/dev-db-env
+DEV_DB_PORT="$(dev_db_port)"
 export DEV_DB_PORT
-DEV_DATABASE_URL="postgres://router:router@localhost:${DEV_DB_PORT}/router"
+DEV_DATABASE_URL="$(dev_db_url "$DEV_DB_PORT")"
+
+step "Checking the dev database port"
+# A developer very often already runs Postgres — a system install, or another
+# project's container. Detect the collision before .env is written — it records
+# the port — with an actionable message instead of letting docker fail with
+# "port is already allocated".
+#
+# Our own container holding the port is not a collision, and treating it as one
+# broke the promise at the top of this file: a second `bin/setup` — exactly what
+# `bin/check` tells you to run — died on the database it had itself started.
+# `docker compose up -d` against a running service is a no-op, so let it through.
+if docker compose -f docker-compose.dev.yml ps --services --status running 2>/dev/null |
+     grep -qx postgres; then
+  ok "the dev postgres container is already running"
+elif command -v ss >/dev/null && ss -lnt "sport = :${DEV_DB_PORT}" 2>/dev/null | grep -q LISTEN; then
+  die "port ${DEV_DB_PORT} is already in use. Re-run with a free one: DEV_DB_PORT=5434 bin/setup"
+fi
 
 step "Environment"
 if [ -f .env ]; then
@@ -91,33 +110,17 @@ else
     "$DEV_DATABASE_URL" >> .env
   ok "DATABASE_URL written to .env — ${DEV_DATABASE_URL}"
 fi
+# Recorded so bin/db, and docker compose's own interpolation of
+# docker-compose.dev.yml, use the port this run used without being told again.
+if ! grep -Eq '^[[:space:]]*DEV_DB_PORT[[:space:]]*=' .env; then
+  printf 'DEV_DB_PORT=%s\n' "$DEV_DB_PORT" >> .env
+  ok "DEV_DB_PORT=${DEV_DB_PORT} recorded in .env"
+fi
 
 step "Starting the dev database"
-# A developer very often already runs Postgres — a system install, or another
-# project's container. Detect the collision here with an actionable message
-# instead of letting docker fail with "port is already allocated".
-#
-# Our own container holding the port is not a collision, and treating it as one
-# broke the promise at the top of this file: a second `bin/setup` — exactly what
-# `bin/check` tells you to run — died on the database it had itself started.
-# `docker compose up -d` against a running service is a no-op, so let it through.
-if docker compose -f docker-compose.dev.yml ps --services --status running 2>/dev/null |
-     grep -qx postgres; then
-  ok "the dev postgres container is already running"
-elif command -v ss >/dev/null && ss -lnt "sport = :${DEV_DB_PORT}" 2>/dev/null | grep -q LISTEN; then
-  die "port ${DEV_DB_PORT} is already in use. Re-run with a free one: DEV_DB_PORT=5434 bin/setup"
-fi
 docker compose -f docker-compose.dev.yml up -d
-printf '   waiting for postgres'
-for _ in $(seq 1 60); do
-  if docker compose -f docker-compose.dev.yml exec -T postgres pg_isready -U router -d router >/dev/null 2>&1; then
-    printf '\n'; ok "postgres healthy on localhost:${DEV_DB_PORT}"
-    break
-  fi
-  printf '.'; sleep 1
-done
-docker compose -f docker-compose.dev.yml exec -T postgres pg_isready -U router -d router >/dev/null 2>&1 \
-  || die "postgres did not become ready — check: docker compose -f docker-compose.dev.yml logs postgres"
+dev_db_wait || die "postgres did not become ready — check: docker compose -f docker-compose.dev.yml logs postgres"
+ok "postgres healthy on localhost:${DEV_DB_PORT}"
 
 step "Applying migrations"
 # Migrations also run at boot; doing them here means `bin/dev` starts clean and

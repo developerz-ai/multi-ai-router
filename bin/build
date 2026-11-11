@@ -11,6 +11,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+# Same runtime as CI and the image, or say so: a different bun runs these silently.
+bin/lib/require-bun
+
 # Start clean: a stale dist/ silently shipping a previous build's SPA is the kind
 # of bug that only shows up in production.
 rm -rf dist

@@ -69,4 +69,10 @@ export interface DatabasePoolConfig {
    * `SIGKILL`. `0` destroys the pool at once.
    */
   readonly closeTimeoutSeconds: number
+  /** `DB_STATEMENT_TIMEOUT_MS`: Postgres `statement_timeout` per pooled session; `0` is off. */
+  readonly statementTimeoutMs: number
+  /** `DB_LOCK_TIMEOUT_MS`: Postgres `lock_timeout`; `0` is off. */
+  readonly lockTimeoutMs: number
+  /** `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`: `idle_in_transaction_session_timeout`; `0` is off. */
+  readonly idleInTransactionTimeoutMs: number
 }

@@ -61,7 +61,7 @@ describe.skipIf(!historyUrl)("rolling legacy writer protection", () => {
       row.createdAt?.toISOString(),
     )
     await fixture.history().backfill({ limit: 1 })
-    expect(await fixture.history().totals(fixture.window)).toMatchObject({
+    expect(await fixture.history().totals(fixture.window, {})).toMatchObject({
       attempts: 1,
       requests: 0,
       tokensIn: 3,
@@ -112,7 +112,7 @@ describe.skipIf(!historyUrl)("rolling legacy writer protection", () => {
       cause: { code: "P0001", message: "legacy usage baseline is sealed" },
     })
     expect(await fixture.db().delete(usageDaily).returning()).toHaveLength(0)
-    expect((await fixture.history().totals(fixture.window)).attempts).toBe(8)
+    expect((await fixture.history().totals(fixture.window, {})).attempts).toBe(8)
     await fixture.history().deleteOlderThan(new Date("1984-01-05"), 100)
     expect(await fixture.db().select().from(usageDaily)).toHaveLength(0)
   })

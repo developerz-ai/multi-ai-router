@@ -70,18 +70,27 @@ export function parseEpochMillis(value: string): Date | null {
  * our inference, not the provider's statement, so callers label the reset `estimated`.
  *
  * Checked against the response's own `Date`, the one clock a parser has: an instant more than
- * {@link EPOCH_SECONDS_CEILING_MS} past it is capped there (`9999999999` is 2286 — a misread, not a
- * window), and with no `Date` to check against the value is not trusted as a reset at all, so the
- * breaker falls to its own backoff rather than a park nobody can bound.
+ * `ceilingMs` past it is capped there (`9999999999` is 2286 — a misread, not a window), and with no
+ * `Date` to check against the value is not trusted as a reset at all, so the breaker falls to its
+ * own backoff rather than a park nobody can bound.
+ *
+ * This is the parser's own sanity bound on a unit it guessed, and only that. The operator's ceiling
+ * on *every* reported reset — header, `Retry-After`, body stamp — is `ROUTING_MAX_REPORTED_RESET_SECONDS`,
+ * applied once where a reset becomes a cooldown (`services/routing/backoff.ts`, `reportedReset`), so
+ * a configured ceiling below this one still wins.
  */
 const EPOCH_SECONDS_FLOOR = 1_000_000_000
 
 /** No limiter documents a window longer than a week; past it, an inferred instant is a misread. */
-const EPOCH_SECONDS_CEILING_MS = 7 * 86_400_000
+export const EPOCH_SECONDS_CEILING_MS = 7 * 86_400_000
 
-export function parseEpochSeconds(value: string, reference: Date | null): Date | null {
+export function parseEpochSeconds(
+  value: string,
+  reference: Date | null,
+  ceilingMs: number = EPOCH_SECONDS_CEILING_MS,
+): Date | null {
   if (!isEpochSeconds(value) || reference === null) return null
-  const ceiling = reference.getTime() + EPOCH_SECONDS_CEILING_MS
+  const ceiling = reference.getTime() + ceilingMs
   return new Date(Math.min(Number(value.trim()) * 1000, ceiling))
 }
 

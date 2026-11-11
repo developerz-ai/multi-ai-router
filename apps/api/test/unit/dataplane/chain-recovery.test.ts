@@ -37,6 +37,8 @@ function fakeHealth(): { store: HealthStore; calls: HealthCalls } {
     recordSuccess: (id: string) => calls.success.push(id),
     recordFailure: (id: string) => calls.failure.push(id),
     applyRateLimit: (id: string) => calls.rateLimit.push(id),
+    // A refused model is remembered (10.16); not a breaker verdict, so not counted here.
+    refuseModel: () => {},
   } as unknown as HealthStore
   return { store, calls }
 }

@@ -16,7 +16,9 @@ tone:
 triage:
   ask_for_repro: true
   required_fields: [steps, expected, actual, version]
-  qualify_into: [bug, feature, dupe, question, docs]
+  # `chore`: owner-written deferral lists and upkeep notes are neither bugs nor features, and
+  # forcing them through the bug intake asks an owner for a repro of a chore.
+  qualify_into: [bug, feature, dupe, question, docs, chore]
   close_unanswered_repro_after_days: 14
   stale_after_days: 30
   stale_action: comment_then_close
@@ -30,10 +32,17 @@ triage:
 
 handoff:
   mode: fleet
+  # `hitl` is this repo's "waiting on a human decision" label. Both issue sweeps (stale above and
+  # the platform's inactive close) exempt the policy's handoff label beside `ready-for-agent` /
+  # `ready-for-human`, so naming it here keeps a decision from being closed by a clock. Under
+  # `mode: fleet` nothing applies this label; it only exempts.
+  label: hitl
   ask_reporter_first: false
 
 pr:
-  wait_for_other_bots: [coderabbit]
+  # Empty: the native review is the only reviewer. CodeRabbit has not reviewed here since
+  # 2026-10-15, and waiting on it delayed every review to the wait ceiling.
+  wait_for_other_bots: []
   # Named so the agent knows which red check is the author's to fix. Re-check against the
   # repo's protection and `.github/workflows/` when either changes; this list is not the ruleset.
   required_checks:
@@ -43,6 +52,7 @@ pr:
     - "bench"
     - "build"
     - "ui-geometry"
+    - "image"
   auto_merge: true
   # An outside contributor's pull request and a member's wait for a member.
   auto_merge_scope: own_and_dependency_bots
@@ -50,7 +60,8 @@ pr:
   close_awaiting_author_after_days: 21
 
 review:
-  force: true # without this the native review defers to CodeRabbit where CodeRabbit is active
+  # The native review is the only reviewer. Kept on so a re-enabled CodeRabbit never silences it.
+  force: true
 
 release:
   # `none`: there is no release manager. Empty channels: the agent publishes nothing itself.

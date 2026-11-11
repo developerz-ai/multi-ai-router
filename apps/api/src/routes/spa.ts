@@ -13,7 +13,8 @@ import type { AppEnv } from "../types"
  * Two behaviours, and both are what makes a client-routed app work over plain HTTP:
  *
  * - **Files win.** `assets/<name>-<hash>.js` is answered from disk with its own MIME type.
- * - **Everything else is `index.html`.** `/accounts` is a route in the SolidJS router, not a file;
+ * - **Everything else is `index.html`** — except a missing `assets/` file and a dot-path, which
+ *   are `404`s. `/accounts` is a route in the SolidJS router, not a file;
  *   a reload on it must return the shell and let the client decide. That is the history-API
  *   fallback, and without it every deep link is a 404.
  *
@@ -99,8 +100,8 @@ export function spaRoutes(deps: SpaRoutesDeps): Hono<AppEnv> {
 
   // Two registrations, in this order: the file server answers what exists, and hands anything
   // missing to the shell by calling `next()`.
-  routes.on(DOCUMENT_METHODS, "*", exceptApiPaths(unnameableFallsThrough(file)))
-  routes.on(DOCUMENT_METHODS, "*", exceptApiPaths(shell))
+  routes.on(DOCUMENT_METHODS, "*", exceptApiPaths(exceptDotPaths(unnameableFallsThrough(file))))
+  routes.on(DOCUMENT_METHODS, "*", exceptApiPaths(exceptDotPaths(exceptAssets(shell))))
 
   return routes
 }
@@ -130,6 +131,26 @@ function isUnnameablePath(error: unknown): boolean {
 /** Wraps a static handler so a path the API owns is passed straight through, never answered. */
 function exceptApiPaths(handler: MiddlewareHandler): MiddlewareHandler {
   return (c, next) => (isApiPath(c.req.path) ? next() : handler(c, next))
+}
+
+/**
+ * A missing hashed asset is a `404`, not the shell. A tab left open across a release imports
+ * `assets/Route-<oldhash>.js`; answered with `index.html` as `text/html`, the module load fails in a
+ * way the console cannot tell from a broken build, and it goes blank. A `404` is what lets it see a
+ * stale bundle and reload (09.2).
+ */
+function exceptAssets(handler: MiddlewareHandler): MiddlewareHandler {
+  return (c, next) => (c.req.path.startsWith(IMMUTABLE_ASSET_PREFIX) ? next() : handler(c, next))
+}
+
+/**
+ * A path with a dot-segment (`/.git/config`, `/.env`) is a scanner, never a console route, and the
+ * build ships no such file. Answering it `200` with the shell told every scanner the file exists
+ * (12.15); it falls through to the `404` instead.
+ */
+function exceptDotPaths(handler: MiddlewareHandler): MiddlewareHandler {
+  return (c, next) =>
+    c.req.path.split("/").some((segment) => segment.startsWith(".")) ? next() : handler(c, next)
 }
 
 function isApiPath(path: string): boolean {

@@ -18,9 +18,13 @@ import { deleteOldestBatch } from "./bounded-delete"
  */
 export interface AuditRepository {
   append(input: AppendAuditEventInput): Promise<AuditEventRow>
-  /** Newest first. The admin activity feed. */
-  list(limit: number): Promise<AuditEventRow[]>
-  listForSubject(subjectId: string, limit: number): Promise<AuditEventRow[]>
+  /**
+   * Newest first. The admin activity feed. `kind` narrows to one event kind in SQL, riding
+   * `audit_events_kind_created_idx` — a filter applied after the limit would return short pages.
+   */
+  list(limit: number, kind?: string): Promise<AuditEventRow[]>
+  /** One subject's events, newest first, optionally of one `kind`. Rides `audit_events_subject_idx`. */
+  listForSubject(subjectId: string, limit: number, kind?: string): Promise<AuditEventRow[]>
   /**
    * The newest event of any of `kinds` per subject, for every subject in `subjectIds` that has one.
    * `excludeDetailKey` drops events whose `detail` carries that key — how a caller tells an
@@ -78,14 +82,24 @@ export function createAuditRepository(db: DatabaseExecutor): AuditRepository {
       return row
     },
 
-    list: (limit) =>
-      db.select().from(auditEvents).orderBy(desc(auditEvents.createdAt)).limit(limit),
-
-    listForSubject: (subjectId, limit) =>
+    list: (limit, kind) =>
       db
         .select()
         .from(auditEvents)
-        .where(eq(auditEvents.subjectId, subjectId))
+        .where(kind === undefined ? undefined : eq(auditEvents.kind, kind))
+        .orderBy(desc(auditEvents.createdAt))
+        .limit(limit),
+
+    listForSubject: (subjectId, limit, kind) =>
+      db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.subjectId, subjectId),
+            kind === undefined ? undefined : eq(auditEvents.kind, kind),
+          ),
+        )
         .orderBy(desc(auditEvents.createdAt))
         .limit(limit),
 

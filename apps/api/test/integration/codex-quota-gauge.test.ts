@@ -22,7 +22,7 @@ import {
 import { createAuditRecorder } from "../../src/services/admin"
 import type { HealthStore, RoutingCatalog } from "../../src/services/dataplane"
 import { createMemoryConfigDirs } from "../support/config-dirs"
-import { account, jsonResponse, NOW, type TestClock } from "../unit/dataplane/fixtures"
+import { account, NOW, type TestClock } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness } from "./harness"
 
 /**
@@ -112,10 +112,38 @@ async function newCodexAccount() {
   })
 }
 
-function codexResponse(status: number, headers: Record<string, string>, body?: unknown): Response {
-  return new Response(body === undefined ? "" : JSON.stringify(body), {
+/**
+ * What the Codex backend answers: an SSE stream that ends in `response.completed`, whatever the
+ * client asked for (the surface answers only as a stream). A `chat.completion` JSON body is not a
+ * Codex answer; folded for a non-streaming client it has no final event, and the router now answers
+ * that with a typed `502` instead of a `200` whose body broke off (plan 101, 06.4).
+ */
+function codexResponse(status: number, headers: Record<string, string>): Response {
+  const event = (type: string, fields: object) =>
+    `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`
+  const item = {
+    type: "message",
+    id: "msg_1",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "ok", annotations: [] }],
+  }
+  const body =
+    event("response.created", { response: { id: "resp_1", status: "in_progress", output: [] } }) +
+    event("response.output_item.done", { output_index: 0, item }) +
+    event("response.completed", {
+      response: {
+        id: "resp_1",
+        object: "response",
+        status: "completed",
+        model: "codex-1",
+        output: [item],
+        usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+      },
+    })
+  return new Response(body, {
     status,
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "text/event-stream", ...headers },
   })
 }
 
@@ -272,15 +300,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", (
     let readNow: () => Date = () => NOW
     const { app, health, clock } = harness({
       accounts: [acc],
-      responses: [
-        () =>
-          codexResponse(200, codexHeaders(readNow, 12, 300), {
-            id: "msg_1",
-            object: "chat.completion",
-            model: "codex-1",
-            choices: [],
-          }),
-      ],
+      responses: [() => codexResponse(200, codexHeaders(readNow, 12, 300))],
     })
     readNow = clock.now
     const res = await app.request("/v1/chat/completions", {
@@ -314,16 +334,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", (
           // not the no-Date path. `parseCodexQuotaHeaders` short-circuits on a missing Date
           // before it ever looks at the x-codex-* headers — without `date`, this test would
           // pass against a parser that was broken on every path, not just the one being guarded.
-          jsonResponse(
-            200,
-            {
-              id: "msg_1",
-              object: "chat.completion",
-              model: "codex-1",
-              choices: [],
-            },
-            { date: readNow().toUTCString() },
-          ),
+          codexResponse(200, { date: readNow().toUTCString() }),
       ],
     })
     readNow = clock.now
@@ -344,20 +355,8 @@ describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", (
     const { app, upstream, clock } = harness({
       accounts: [acc],
       responses: [
-        () =>
-          codexResponse(200, codexHeaders(readNow, 5, 300), {
-            id: "msg_1",
-            object: "chat.completion",
-            model: "codex-1",
-            choices: [],
-          }),
-        () =>
-          codexResponse(200, codexHeaders(readNow, 5, 300), {
-            id: "msg_2",
-            object: "chat.completion",
-            model: "codex-1",
-            choices: [],
-          }),
+        () => codexResponse(200, codexHeaders(readNow, 5, 300)),
+        () => codexResponse(200, codexHeaders(readNow, 5, 300)),
       ],
     })
     readNow = clock.now
@@ -382,20 +381,8 @@ describe.skipIf(!process.env.DATABASE_URL)("Codex usage gauge — end to end", (
     const { app, health, catalog, clock } = harness({
       accounts: [acc],
       responses: [
-        () =>
-          codexResponse(200, codexHeaders(readNow, 100, 300), {
-            id: "msg_1",
-            object: "chat.completion",
-            model: "codex-1",
-            choices: [],
-          }),
-        () =>
-          codexResponse(200, codexHeaders(readNow, 100, 300), {
-            id: "msg_2",
-            object: "chat.completion",
-            model: "codex-1",
-            choices: [],
-          }),
+        () => codexResponse(200, codexHeaders(readNow, 100, 300)),
+        () => codexResponse(200, codexHeaders(readNow, 100, 300)),
       ],
     })
     readNow = clock.now

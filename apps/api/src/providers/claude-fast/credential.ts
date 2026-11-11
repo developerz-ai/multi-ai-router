@@ -20,7 +20,7 @@ export interface FastCredential {
   readonly accountUuid: string
 }
 
-/** No default HOME lookup, no refresh-token reads/writes, no caching stale rotated credentials. */
+/** No default HOME lookup, no refresh-token reads/writes. Caching is `credential-cache.ts`, keyed by the file. */
 export async function readFastCredential(configDir: string): Promise<FastCredential | null> {
   try {
     const [secret, identity] = await Promise.all([

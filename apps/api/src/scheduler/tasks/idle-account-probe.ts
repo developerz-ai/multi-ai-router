@@ -1,7 +1,11 @@
-import { describeError } from "@multi-ai-router/core"
+import { describeError, ProviderId } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
-import type { SdkUsageGaugeProbeOutcome, UpstreamFailureKind } from "../../providers"
+import {
+  providerIdleProbeModel,
+  type SdkUsageGaugeProbeOutcome,
+  type UpstreamFailureKind,
+} from "../../providers"
 import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask, TaskOutcome } from "../types"
 import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-warmth"
@@ -12,14 +16,14 @@ import { isCold, keepAlive, readUsage, type Tally, warm } from "./idle-account-w
  * revalidated at the final transport admission boundary after all queue waits.
  * A keepalive warms an access token; it never extends a subscription's login lifetime.
  */
-export const IDLE_PROBE_MODELS: Readonly<Record<string, string>> = {
-  "anthropic-oauth": "claude-haiku-4-5-20251001",
-  "anthropic-api": "claude-haiku-4-5-20251001",
-  "openai-oauth": "gpt-5",
-  "openai-api": "gpt-5",
-  minimax: "MiniMax-M2",
-  zai: "glm-4.6",
-}
+export const IDLE_PROBE_MODELS: Readonly<Record<string, string>> = Object.fromEntries(
+  ProviderId.options.flatMap((provider) => {
+    // Each driver declares its own probe model (non-negotiable 12): this table is derived, never
+    // edited, so adding a provider touches only its file in `providers/`.
+    const model = providerIdleProbeModel(provider)
+    return model === undefined ? [] : [[provider, model]]
+  }),
+)
 
 /**
  * What the sweep reads off one test. `message` is the test's own router-authored sentence and

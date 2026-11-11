@@ -188,7 +188,8 @@ describe.skipIf(!url)("quota observations and stale floor CAS", () => {
       expected: { revision: selected.revision, resetsAt: reset },
       now: new Date(),
     })
-    expect(retired?.retiredAt).toBeInstanceOf(Date)
+    if (retired === undefined) throw new Error("window not retired")
+    expect(retired.retiredAt).toBeInstanceOf(Date)
     expect(await repo.upsertQuotaWindow(id, reading(old, 1, futureReset))).toEqual(retired)
     expect(await repo.upsertQuotaWindow(id, reading(fresh, 1, futureReset))).toEqual(retired)
     expect(

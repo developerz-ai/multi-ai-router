@@ -1,4 +1,5 @@
 import { createSseParser, frameJson } from "../sse/parse"
+import { isRecord } from "./is-record"
 
 /**
  * A whole Responses SSE stream, folded back into the one Responses object a non-streaming client
@@ -26,13 +27,13 @@ export function collectResponsesStream(bytes: Uint8Array): Record<string, unknow
   let terminal: Record<string, unknown> | null = null
 
   for (const frame of frames) {
-    const event = asRecord(frameJson(frame))
-    if (event === null) continue
+    const event = frameJson(frame)
+    if (!isRecord(event)) continue
     const type = typeof event.type === "string" ? event.type : frame.event
     if (type === "response.output_item.done" && typeof event.output_index === "number") {
       items.set(event.output_index, event.item)
     } else if (type !== null && TERMINAL.has(type)) {
-      terminal = asRecord(event.response)
+      terminal = isRecord(event.response) ? event.response : null
     }
   }
   if (terminal === null) return null
@@ -41,10 +42,4 @@ export function collectResponsesStream(bytes: Uint8Array): Record<string, unknow
   if (Array.isArray(output) && output.length > 0) return terminal
   const ordered = [...items.entries()].sort(([a], [b]) => a - b).map(([, item]) => item)
   return { ...terminal, output: ordered }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
 }

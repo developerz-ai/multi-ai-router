@@ -1,32 +1,61 @@
 /**
- * The environment one Agent SDK subprocess is launched with — everything this host has, minus the
- * variables that would make it dangerous, plus the one that makes it this Account's.
+ * The environment one Agent SDK subprocess is launched with — an explicit allowlist of the host
+ * variables a native binary and its runtime need, plus the one that makes it this Account's.
  *
- * Two failures this prevents, both silent:
+ * **An allowlist, not a strip list** (101 finding 05.3). A strip list is a blocklist: it passed
+ * `USAGE_REPORT_DISCORD_WEBHOOK_URL` — a credential by `docs/idea/07-security.md` — and would pass
+ * any operator-level secret (`PGPASSWORD`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, `NODE_OPTIONS`) the
+ * day it is set. Only the names in {@link ALLOWED_ENV_NAMES} and the {@link ALLOWED_ENV_PREFIXES}
+ * cross; everything else is dropped by default.
+ *
+ * The strip lists below stay, applied on top of the allowlist, so the two fail independently and
+ * the security gate keeps asserting the names that matter most:
  *
  * - **Loop-back.** An inherited `ANTHROPIC_BASE_URL` (or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`)
  *   points the CLI back through our own router — a request that re-enters the data plane, consumes
- *   a second Account, and bills twice, or recurses. Operators set those variables routinely, and
- *   nothing about the resulting request looks wrong from the outside
- *   (docs/idea/11-anthropic-agent-sdk.md#traps-all-load-bearing).
+ *   a second Account, and bills twice, or recurses (docs/idea/11-anthropic-agent-sdk.md#traps-all-load-bearing).
  * - **Cross-tenant credentials.** A host-level `CLAUDE_CODE_OAUTH_TOKEN` overrides the Account's own
  *   login, so every subscription request would silently run as whoever set it — the exact
  *   contamination `CLAUDE_CONFIG_DIR` isolation exists to prevent (§3).
+ * - **The router's own secrets.** The `claude` CLI has no use for them, and the only thing that
+ *   could read them is a tool executing on this host — which the tool allowlist already refuses
+ *   (`allowlist.ts`).
  *
- * The router's own secrets go too. The `claude` CLI has no use for them, and the only thing that
- * could read them is a tool executing on this host — which the allowlist already refuses
- * (`allowlist.ts`). Stripping them anyway costs nothing and means the two mechanisms fail
- * independently.
- *
- * **Stripping is a prefix rule, not a list of names, for the `ANTHROPIC_` family.** A list is a
- * blocklist that goes stale the day Anthropic adds a variable; the prefix is closed over whatever
- * they add. (The allowlist in `allowlist.ts` is the opposite shape for the opposite reason: there
- * the safe default is "deny", here it is "strip".)
- *
- * `PATH` and `HOME` survive on purpose — the SDK spawns a native binary and resolves a JavaScript
- * runtime, and both need them. The SDK **replaces** the child environment with whatever it is
- * given rather than merging, so an environment built here is the whole of what the subprocess sees.
+ * The SDK **replaces** the child environment with whatever it is given rather than merging, so an
+ * environment built here is the whole of what the subprocess sees.
  */
+
+/**
+ * Host variables a subprocess may inherit, by exact name (case-sensitive, as POSIX names are).
+ * Path and identity for the binary and its runtime, locale and time zone, temp directories, the
+ * CA bundle, and the proxy settings the CLI needs to reach Anthropic from behind an egress proxy.
+ */
+export const ALLOWED_ENV_NAMES: readonly string[] = Object.freeze([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "LANGUAGE",
+  "TZ",
+  "TERM",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+])
+
+/** Host variables a subprocess may inherit, by prefix: the `LC_*` locale categories. */
+export const ALLOWED_ENV_PREFIXES: readonly string[] = Object.freeze(["LC_"])
 
 /** Names the CLI to this Account's isolated credential store. Always set here, never inherited. */
 export const CLAUDE_CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
@@ -45,17 +74,15 @@ export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
   // Subscription credentials the SDK owns. Ours is the config directory, never a token.
   "CLAUDE_CODE_OAUTH_TOKEN",
   CLAUDE_CONFIG_DIR_VAR,
-  // The router's own secrets. Nothing in the subprocess has a reason to read them. The list is
-  // every secret-bearing name the env schema (`apps/api/src/config/env.ts`) reads; adding a secret
-  // there means adding it here, which is why the strip is asserted in the security gate test.
+  // The router's own secrets: every secret-bearing name the env schema (`apps/api/src/config/`)
+  // reads. The allowlist already drops them; naming them keeps the security gate asserting each.
   "ENCRYPTION_KEY",
   "DATABASE_URL",
-  "ADMIN_PASSWORD",
-  "ADMIN_PASSWORD_HASH",
   "ADMIN_OIDC_CLIENT_SECRET",
   "ADMIN_API_TOKEN",
   "METRICS_TOKEN",
   "SENTRY_DSN",
+  "USAGE_REPORT_DISCORD_WEBHOOK_URL",
   "CLOUD_ML_REGION",
   "ANTHROPIC_VERTEX_PROJECT_ID",
 ])
@@ -101,7 +128,8 @@ export interface SubprocessEnvOptions {
 }
 
 /**
- * The child environment, with `CLAUDE_CONFIG_DIR` set last so no inherited value can win.
+ * The child environment: allowlisted inherited names only, minus the strip lists, with
+ * `CLAUDE_CONFIG_DIR` set last so no inherited value can win.
  *
  * Returns `Record<string, string>`: an `undefined` value is indistinguishable from "unset" to the
  * spawner but not to a reader, and dropping it here means the returned object is exactly what the
@@ -112,12 +140,19 @@ export function subprocessEnv(options: SubprocessEnvOptions): Record<string, str
   const env: Record<string, string> = {}
 
   for (const [name, value] of Object.entries(inherited)) {
-    if (value === undefined || isStripped(name)) continue
+    if (value === undefined || !isAllowed(name) || isStripped(name)) continue
     env[name] = value
   }
 
   env[CLAUDE_CONFIG_DIR_VAR] = options.configDir
   return env
+}
+
+function isAllowed(name: string): boolean {
+  return (
+    ALLOWED_ENV_NAMES.includes(name) ||
+    ALLOWED_ENV_PREFIXES.some((prefix) => name.startsWith(prefix))
+  )
 }
 
 function isStripped(name: string): boolean {

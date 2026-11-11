@@ -23,6 +23,12 @@ export interface AccountCliOwnership {
     configDir: string | null
   }): Promise<"removed" | "deferred" | "not_applicable">
   withMetadataOwner<T>(accountId: string, task: () => Promise<T>): Promise<T>
+  /**
+   * Whether this process revoked the Account's directory. Revocation is permanent (the tombstone
+   * forbids reprovision), so a cache of anything read under the Account's fence — the fast
+   * transport's credential (`claude-fast/credential-cache.ts`) — must refuse once this is true.
+   */
+  isRevoked?(accountId: string): boolean
   closeAdmission(): void
   stop(): Promise<void>
 }
@@ -36,6 +42,7 @@ export function createAccountCliOwnership(
   const live = new Map<string, Set<OwnerLaunch>>()
   const scopes = new Set<OwnerLaunch>()
   const metadata = new Set<OwnerLaunch>()
+  const revoked = new Set<string>()
   const managedOwner = (id: string, metadataOwner = false): OwnerLaunch => {
     if (closed) throw new Error("credential owner admission is closed")
     const scope = createOwnerLaunch(config, id, metadataOwner)
@@ -105,8 +112,11 @@ export function createAccountCliOwnership(
         clearTimeout(timer)
       }
     },
+    isRevoked: (id) => revoked.has(id),
     async revokeDeletedAccount({ id, configDir }) {
       validate(id, configDir)
+      // Before the operation: a revoke that fails half-way still must not keep serving a cache.
+      revoked.add(id)
       for (const owner of live.get(id) ?? []) if (!metadata.has(owner)) owner.cancel()
       if (configDir !== null && (await operation(config, "revoke", id, [])) !== 0)
         throw new Error("credential directory revocation unavailable")

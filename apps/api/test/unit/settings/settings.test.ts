@@ -275,6 +275,26 @@ describe("the audit feed", () => {
     if (capped.ok) expect(capped.value.events).toHaveLength(1)
   })
 
+  // 01.10: the kind was filtered in memory over the newest 200 rows, so an older event of that kind
+  // was unreachable behind a flood of another (e.g. `admin.login_failed`).
+  test("an older event of a kind is found behind 250 newer events of another", async () => {
+    const flood = Array.from({ length: 250 }, (_, i) =>
+      event({
+        id: `f${i}`,
+        kind: "admin.login_failed",
+        createdAt: at(i),
+        subjectId: OTHER_SUBJECT,
+      }),
+    )
+    const { service } = harness({
+      auditLog: [...flood, event({ id: "old", kind: "key.revealed", createdAt: at(400) })],
+    })
+    const result = await service.audit({ limit: 50, kind: "key.revealed" })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.events.map((row) => row.id)).toEqual(["old"])
+  })
+
   test("carries the detail object through as stored — it was redacted on the way in", async () => {
     const { service } = harness({
       auditLog: [

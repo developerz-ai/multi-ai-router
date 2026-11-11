@@ -1,4 +1,5 @@
 import type { ClassificationRule } from "../failure/classify"
+import { COMPATIBLE_BODY_RESET } from "../rate-limit/compatible-body"
 import type { UpstreamErrorFacts } from "../types"
 
 /**
@@ -53,13 +54,31 @@ function wordsDeadBalance(message: string, status: number, statedReset: boolean)
   )
 }
 
+/**
+ * A model-not-found refusal is about the *name*, and the name is the client's: "The model
+ * `insufficient balance` does not exist" must never read as a dead balance (sweep 101, 04.1). So the
+ * wording never reads a `404`, nor a body whose code or type names a missing model. Quoted echoes
+ * are already stripped before any rule runs (`failure/classify.ts`, `wordingOf`); this covers the
+ * unquoted ones.
+ */
+const MODEL_NOT_FOUND: readonly string[] = ["model_not_found", "not_found_error", "NotFoundError"]
+
+function namesMissingModel(facts: UpstreamErrorFacts, status: number): boolean {
+  if (status === 404) return true
+  return [facts.code, facts.type].some(
+    (value) => value !== undefined && MODEL_NOT_FOUND.includes(value),
+  )
+}
+
 export const genericCreditsRule: ClassificationRule = {
   kind: "credits-exhausted",
   signal: "compatible:out-of-credits-wording",
   when: (facts, status, stated) =>
     status >= 400 &&
     (namesCreditCode(facts) ||
-      (status < 500 && wordsDeadBalance(facts.message ?? "", status, stated.reset))),
+      (status < 500 &&
+        !namesMissingModel(facts, status) &&
+        wordsDeadBalance(facts.message ?? "", status, stated.reset))),
 }
 
 /**
@@ -81,9 +100,5 @@ export const throttleStatusRule: ClassificationRule = {
 export const reportedQuotaResetRule: ClassificationRule = {
   kind: "rate-limited",
   signal: "compatible:reported-body-reset",
-  when: (facts, status) =>
-    status === 429 &&
-    /quota (?:has been )?exhausted\. The quota will reset at \d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\./i.test(
-      facts.message ?? "",
-    ),
+  when: (facts, status) => status === 429 && COMPATIBLE_BODY_RESET.test(facts.message ?? ""),
 }

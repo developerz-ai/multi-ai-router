@@ -1,10 +1,10 @@
 import type { ReasoningSeal } from "../../crypto/reasoning-seal"
+import { parseAnthropicRequest } from "../parse-ingress"
 import type {
   ParsedAnthropicBlock,
   ParsedAnthropicMessage,
   ParsedAnthropicRequest,
 } from "../shared/anthropic"
-import { anthropicRequestSchema } from "../shared/anthropic"
 import {
   documentText,
   dropBlock,
@@ -13,7 +13,7 @@ import {
   systemText,
   toolResultParts,
 } from "../shared/anthropic-blocks"
-import { isClearedSystemTurn, systemTurnText } from "../shared/anthropic-system-turns"
+import { clearedSystemTurns, systemTurnText } from "../shared/anthropic-system-turns"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   OpenAiResponsesItem,
@@ -24,7 +24,6 @@ import { anthropicAskedForReasoning, openAiEffortFromAnthropic } from "../shared
 import {
   assertNoAnthropicStructuredOutput,
   assertNoStopSequence,
-  parseRequest,
   rejectField,
 } from "../shared/reject"
 import { replayedReasoningItem } from "../shared/sealed-reasoning"
@@ -95,7 +94,14 @@ export function anthropicToOpenAiResponsesRequest(
   body: unknown,
   options: AnthropicToOpenAiResponsesOptions = {},
 ): OpenAiResponsesRequest {
-  const request = parseRequest(anthropicRequestSchema, body, "anthropic")
+  return anthropicToOpenAiResponsesRequestFromParsed(parseAnthropicRequest(body), options)
+}
+
+/** {@link anthropicToOpenAiResponsesRequest} over a body already parsed once for every candidate (`dataplane/translate-body.ts`). */
+export function anthropicToOpenAiResponsesRequestFromParsed(
+  request: ParsedAnthropicRequest,
+  options: AnthropicToOpenAiResponsesOptions = {},
+): OpenAiResponsesRequest {
   const onDrop = options.onDrop ?? IGNORE_DROPS
 
   // openai-responses states no stop parameter at all, and `shared/reject.ts` owns that rule for both
@@ -108,10 +114,11 @@ export function anthropicToOpenAiResponsesRequest(
   assertNoAnthropicStructuredOutput(request)
 
   const input: OpenAiResponsesItem[] = []
+  const cleared = clearedSystemTurns(request.messages)
   for (const [index, message] of request.messages.entries()) {
     const at = `messages[${index}]`
     if (message.role !== "system") appendMessage(input, message, at, onDrop, options.reasoningSeal)
-    else if (!isClearedSystemTurn(request.messages, index)) {
+    else if (!cleared(index)) {
       // In place, as `developer`: the top-level `system` is the only `instructions`.
       const text = systemTurnText(message, at, onDrop, TARGET)
       if (text.length > 0) {

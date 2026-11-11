@@ -1,3 +1,4 @@
+import { createExhaustedWatchRepository } from "@multi-ai-router/db"
 import { IDLE_PROBE_MODELS, schedulerFromEnv } from "../scheduler"
 import { createLastLoginLookup } from "../services/accounts/last-login"
 import { describeProvider } from "../services/accounts/providers"
@@ -107,6 +108,8 @@ export function createRuntimeScheduler(
       accounts: () => catalog.accounts(),
       snapshot: (id) => recoveryComponents.access.currentSnapshot(id),
       rows: accounts,
+      // The exhausted re-test ladder survives a restart (07.6).
+      exhaustedWatches: createExhaustedWatchRepository(deps.database),
       health,
       send: recoveryProbeSender(admin.testNow),
       startGuard: cooldownRecheckGuard,

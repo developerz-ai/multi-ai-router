@@ -1,0 +1,12 @@
+{
+  // Repo tooling written in TypeScript that no package project owns: the trace
+  // diagnostics under bin/lib and the native helper's build script. Bun runs
+  // them unchecked, so this project is their only type check. Run by
+  // `bun run typecheck`.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true
+  },
+  "include": ["bin/lib/**/*.ts", "native/build.ts"]
+}

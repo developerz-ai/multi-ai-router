@@ -4,6 +4,7 @@ import { adminApiTokenProblem } from "../services/admin-auth"
 import { ADMIN_BODY_ENV_FIELDS } from "./admin-bodies"
 import { BACKGROUND_ENV_FIELDS } from "./background"
 import { CLAUDE_LOGIN_ENV_FIELDS } from "./claude-login"
+import { CLAUDE_SDK_PACING_ENV_FIELDS } from "./claude-sdk-pacing"
 import { CLI_OWNERSHIP_ENV_FIELDS } from "./cli-ownership"
 import { LOG_LEVELS } from "./env-defaults"
 import {
@@ -25,6 +26,7 @@ import { METRIC_INVENTORY_ENV_FIELDS } from "./metric-inventory"
 import { validateNumericBounds } from "./numeric-bounds"
 import { RECOVERY_ENV_FIELDS } from "./recovery"
 import { RELAY_LIFETIME_ENV_FIELDS } from "./relay-lifetimes"
+import { RUNTIME_LIMIT_ENV_FIELDS } from "./runtime-limits"
 import { UPSTREAM_STREAM_ENV_FIELDS } from "./upstream-stream"
 import { USAGE_READ_ENV_FIELDS } from "./usage-read"
 import { USAGE_REPORT_ENV_FIELDS } from "./usage-report"
@@ -52,6 +54,8 @@ export const ENV_FIELDS = {
   ...METRIC_INVENTORY_ENV_FIELDS,
   ...CLI_OWNERSHIP_ENV_FIELDS,
   ...RECOVERY_ENV_FIELDS,
+  ...CLAUDE_SDK_PACING_ENV_FIELDS,
+  ...RUNTIME_LIMIT_ENV_FIELDS,
   PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
   SERVER_IDLE_TIMEOUT_SECONDS: serverIdleTimeoutSeconds.optional(),
   SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
@@ -232,6 +236,8 @@ export const ENV_FIELDS = {
     .refine((value) => value <= 1_048_576, "must be at most 1048576")
     .optional(),
   TRANSLATE_DEFAULT_MAX_TOKENS: atLeastOne.optional(),
+  MAX_TRANSLATION_SSE_FRAME_BYTES: atLeastOne.optional(),
+  TRANSLATION_DROP_LOG_WINDOW_SECONDS: atLeastOne.optional(),
   MAX_TRANSLATION_PENDING_BYTES: atLeastOne
     .refine((value) => value >= 1024 && value <= 33_554_432, "must be between 1024 and 33554432")
     .optional(),

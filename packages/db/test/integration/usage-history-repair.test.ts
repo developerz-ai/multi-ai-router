@@ -35,15 +35,15 @@ describe.skipIf(!historyUrl)("atomic receipt reconciliation", () => {
       )
     try {
       await expect(fixture.history().rollupDay(new Date("1984-01-11"))).rejects.toThrow()
-      expect((await fixture.history().totals(fixture.window)).tokensIn).toBe(99)
+      expect((await fixture.history().totals(fixture.window, {})).tokensIn).toBe(99)
     } finally {
       await fixture.get().sql.unsafe("drop trigger fail_history_repair on usage_attempt_daily_v2")
       await fixture.get().sql.unsafe("drop function fail_history_repair()")
     }
     expect(await fixture.history().rollupDay(new Date("1984-01-11"))).toBe(1)
-    expect((await fixture.history().totals(fixture.window)).tokensIn).toBe(3)
+    expect((await fixture.history().totals(fixture.window, {})).tokensIn).toBe(3)
     expect(await fixture.history().rollupDay(new Date("1984-01-11"))).toBe(1)
-    expect((await fixture.history().totals(fixture.window)).tokensIn).toBe(3)
+    expect((await fixture.history().totals(fixture.window, {})).tokensIn).toBe(3)
   })
   test("empty complete V2 day removes stale groups and future/open days are never reconciled", async () => {
     await fixture
@@ -76,18 +76,21 @@ describe.skipIf(!historyUrl)("atomic receipt reconciliation", () => {
     const row = historyAttempt({ createdAt: new Date("1984-01-15T12:00:00Z") })
     try {
       const snapshot = await fixture.history().withSnapshot(async (history, raw) => {
-        const before = await history.totals(fixture.window)
+        const before = await history.totals(fixture.window, {})
         await createUsageRecordRepository(second.db).insertBatch({
           attempts: [row],
           terminals: [historyTerminal(row)],
         })
-        expect(await history.totals(fixture.window)).toEqual(before)
+        expect(await history.totals(fixture.window, {})).toEqual(before)
         expect(
-          (await raw.totals({ from: new Date("1984-01-15"), to: new Date("1984-01-16") })).attempts,
+          (await raw.totals({ from: new Date("1984-01-15"), to: new Date("1984-01-16") }, {}))
+            .attempts,
         ).toBe(0)
         return before
       })
-      expect((await fixture.history().totals(fixture.window)).attempts).toBe(snapshot.attempts + 1)
+      expect((await fixture.history().totals(fixture.window, {})).attempts).toBe(
+        snapshot.attempts + 1,
+      )
     } finally {
       await second.close()
     }
@@ -106,7 +109,7 @@ describe.skipIf(!historyUrl)("atomic receipt reconciliation", () => {
         (
           await fixture
             .history()
-            .totals({ from: new Date("1984-01-18"), to: new Date("1984-01-19") })
+            .totals({ from: new Date("1984-01-18"), to: new Date("1984-01-19") }, {})
         ).attempts,
       ).toBe(2)
     } finally {
@@ -170,8 +173,11 @@ describe.skipIf(!historyUrl)("atomic receipt reconciliation", () => {
       await fixture.db().select().from(usageRecords).where(eq(usageRecords.id, row.id)),
     ).toHaveLength(1)
     expect(
-      (await fixture.history().totals({ from: new Date("1984-01-24"), to: new Date("1984-01-26") }))
-        .attempts,
+      (
+        await fixture
+          .history()
+          .totals({ from: new Date("1984-01-24"), to: new Date("1984-01-26") }, {})
+      ).attempts,
     ).toBe(0)
   })
 })

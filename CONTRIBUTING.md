@@ -27,7 +27,7 @@ Other commands you'll use often:
 
 | Task | Command |
 |---|---|
-| Single test by pattern | `bun test <pattern>` |
+| Single test by pattern | `bin/test <pattern>` |
 | Lint only | `bin/lint` |
 | Format | `bin/fmt` |
 | Dev DB shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
@@ -68,14 +68,23 @@ Other commands you'll use often:
   --oneline` is the style guide.
 - PR description explains *why*, not just *what* — the diff already shows
   what changed.
-- A merge needs **every applicable gate** green: the `ci` workflow's required
-  checks read at merge time — lint, typecheck, test, advisory, ui-geometry and
-  build — the required review approval, and branch protection on `main`. The
-  `bench` job reports and never fails CI, but a regression in
-  `router_overhead_seconds` is still a bug, so run `bin/bench`. `bin/check`
-  runs the offline subset locally (lint, typecheck, test, build): the advisory
-  gate needs the network and the ui-geometry layout gate needs a browser, so
-  neither belongs in a local gate. Read the required checks at merge time
+- A merge needs the required status checks on `main` green, with the branch
+  up to date with `main` (protection is strict): `bench`, `build`, `image`,
+  `lint`, `test`, `typecheck` and `ui-geometry`. No review approval is required.
+  Gates — a red one fails the workflow: `lint`, `typecheck`, `test`, `build`,
+  `ui-geometry`, `image` and `advisory`. `advisory` is not a required check
+  for a merge, but it turns `main` red and the release gate refuses a tag
+  without it, so a red one is a finding to fix before the next release.
+  `bench` is a report: its job is `continue-on-error: true` and does not fail
+  the workflow, yet it is a required check, so a red `bench` check can still
+  hold the merge until it is re-run green, and a regression in
+  `router_overhead_seconds` is a bug either way, so run
+  `bin/bench`. `bin/check` runs the offline subset locally (lint, typecheck,
+  test, build): the advisory gate needs the network and the ui-geometry
+  layout gate needs a browser, so neither belongs in a local gate. The list
+  is recorded in [`.github/SETTINGS.md`](.github/SETTINGS.md); read the
+  required checks at merge time
+  (`gh api repos/developerz-ai/multi-ai-router/branches/main/protection`)
   rather than trusting a remembered job list.
 
 ## Version bumps

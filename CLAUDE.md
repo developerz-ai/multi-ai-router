@@ -56,7 +56,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 | Lint/format | Biome |
 | Tests | `bun test` — unit (pure, no I/O) + integration (HTTP + mocked upstreams) |
 | CI | GitHub Actions on GitHub-hosted runners (amd64 + native arm64) |
-| Distribution | `ghcr.io/developerz-ai/multi-ai-router`, multi-arch. **Images publish only on a `v*` tag** (`release.yml`); pushes to `main` run the quality gate and publish nothing. `docker compose up -d` starts router + Postgres 16, healthcheck gating the router |
+| Distribution | `ghcr.io/developerz-ai/multi-ai-router`, multi-arch. **Images publish only on a `v*` tag** (`release.yml`); pushes to `main` run the quality gate and publish nothing. `docker compose up -d` starts router + Postgres 18, healthcheck gating the router |
 
 Postgres is the house standard and the current decision — earlier drafts said SQLite; **any doc still saying SQLite, single-file DB, or `DATABASE_PATH` is stale, fix it.** Migrations run at boot, idempotent, and fail the boot rather than start half-migrated. `DATABASE_URL` ships in the bundled compose file so the operator still sets three env vars by hand.
 
@@ -70,7 +70,7 @@ Postgres is the house standard and the current decision — earlier drafts said 
 |---|---|
 | Local dev (API + web, watch) | `bin/dev` |
 | Full test (unit + integration) | `bin/test` |
-| Single test by pattern | `bun test <pattern>` |
+| Single test by pattern | `bin/test <pattern>` |
 | Lint and typecheck only | `bin/lint` |
 | Format | `bin/fmt` |
 | Fresh clone → running stack | `bin/setup` |
@@ -143,7 +143,7 @@ Changes are made the way a senior engineer on this codebase would make them.
 
 ## Reverse-engineered flows
 
-**Claude Max/Pro login and refresh stay with the SDK / CLI** in a per-Account `CLAUDE_CONFIG_DIR`. Opt-in fast-mode wire research is documented in `docs/research/claude-wire.md`; retain redacted summaries only, never real credentials or raw captures in git.
+**Claude Max/Pro login and refresh stay with the SDK / CLI** in a per-Account `CLAUDE_CONFIG_DIR`. Fast-mode wire research is documented in `docs/research/claude-wire.md`; retain redacted summaries only, never real credentials or raw captures in git.
 
 - Client ids, scopes, authorization/token endpoints, required headers: **pinned constants, one file per provider** in `providers/`.
 - Each constant carries a comment recording provenance (where the value came from) and blast radius (what breaks if the provider changes it).
@@ -167,7 +167,7 @@ SolidJS SPA, `@solidjs/router`, TanStack Solid Query for server state. Vite buil
 
 ## NEVER
 
-- Read a Claude credential outside its selected Account ownership fence, independently refresh it, or patch the CLI. Direct inference is restricted to the documented opt-in fast transport.
+- Read a Claude credential outside its selected Account ownership fence, independently refresh it, or patch the CLI. Direct inference is restricted to the documented fast transport (default on, `CLAUDE_FAST_MODE`).
 - Let the Agent SDK execute a tool on the router host, enable its internal-MCP execution mode, rely on a blocklist or a default instead of a named allowlist, or drop `settingSources: []`. Tool calls go to the client — see non-negotiable 2.
 - Return an upstream credential, refresh token, or OAuth code in any response, log, or error. (Router keys are admin-retrievable by design — that is the one exception, and only on the authenticated admin plane.)
 - Substitute, downgrade, or "optimize" the model the client asked for.

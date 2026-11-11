@@ -1,8 +1,9 @@
 # 11 — Claude subscriptions via the Claude Agent SDK
 
 The SDK remains the default inference transport and owns login/refresh in every mode.
-[Opt-in fast mode](claude-fast-mode.md) adds direct HTTP inference for a calibrated profile;
-the SDK-only statements below describe the default transport.
+[Fast mode](claude-fast-mode.md) — on by default (`CLAUDE_FAST_MODE=true`) — adds direct HTTP
+inference for a calibrated profile and falls back to the SDK before inference; the SDK-only
+statements below describe the SDK transport, which `CLAUDE_FAST_MODE=false` makes the only one.
 
 
 Status: **built and served end to end.** `anthropic-oauth` has a driver
@@ -360,10 +361,16 @@ downstream, have no production evidence — the races are proven in code, not at
 incident. The gate
 still sits **beside** `concurrency.ts` rather than inside it, because that gate is a memory bound
 that only the `query()` paths hold; freshness is still taken first and the slot second. The
-re-ask is the same **bounded wait**, taken with the slot in hand — not a free recheck: it
-re-enters the wait loop and can park the caller for up to `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS`
-(default 20 000 ms) while holding the per-Account and global slot, so sizing concurrency must
-count contended window time as slot time too. The fixed order still cannot deadlock, because
+re-ask carries the caller's first claim (`ensureFresh(accountId, signal, held)`,
+`turn-admission.ts`): while that claim still owns the window it is answered with a no-op claim at
+once. Before 101 finding 05.1 the re-ask could not tell its own holder from a foreign one, so the
+**first** request into every refresh window waited the full `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS`
+(20 s) on itself, then logged "claude credential refresh did not land; proceeding anyway". Prod
+logged it 7 of 7 cycles at each ~8 h expiry (10.10), with 5–13 queued requests behind it. A caller
+that does *not* own the window still waits, with the slot in hand, for up to that cap — sizing
+concurrency must count contended window time as slot time. Each admission's `release` is built from
+its own claims and slot (101 finding 05.5): a busy-session retry takes a second admission, and the
+first attempt's late epilogue can only release the first one, never the retry's claim mid-refresh. The fixed order still cannot deadlock, because
 every wait in it is bounded and every holder releases: a freshness waiter exits at the cap with
 a no-op claim, and a slot holder always finishes its turn and hands both permits back — no two
 callers can end up each holding what the other waits for.
@@ -700,7 +707,7 @@ Decisions taken while building it, each narrower than the spec text above:
 | Decision | Why |
 |---|---|
 | The row is keyed by `(apiKeyId, sessionKey)`; the fingerprint is an **alias** into it, not a second row | One truth to invalidate. The header key names the row, the Account-scoped fingerprint finds it again when a headerless client's byte-level key shifts underneath it |
-| The binding lookup is **gated on the catalog holding a subscription Account** | Only this path ever writes one. Without the gate a router serving plain HTTP would pay an indexed query per request for a table that is empty for it |
+| The binding lookup is **gated on the key's scope reaching a subscription Account** | Only this path ever writes one. Without the gate a router serving plain HTTP — or a key scoped to HTTP accounts or pools beside subscriptions elsewhere — would pay an indexed query per new session for a table that is empty for it (plan 101, 02.8). Edge, accepted: a session bound earlier to a subscription that is now out of the key's scope is not read, so its turn carries no `x-router-session-restart` header; selection could not have honored that binding anyway |
 | Misses are cached, with their own shorter TTL (`SESSION_CACHE_NEGATIVE_TTL_SECONDS`) | A subscription-serving router still carries HTTP traffic whose sessions will never have a row. The short clock is what still lets a binding minted on another replica appear |
 | A binding is written only once the SDK **names a session id** | An Account with no session id to resume is a pin with no payoff, and pinning one costs the next turn a failover that a cooling-down Account would otherwise still have |
 | `assistantUuids[i]` is written one **past** the end of the hashes it accompanies | That is the index the client will send this answer back at next turn — the position an undo has to be able to name. Absent, an undo starts fresh rather than forking at a guessed point |
@@ -781,7 +788,10 @@ most of every window and degrades to round-robin. **This is why the console and 
 themselves are reported, persisted, and reloaded (their names and resets are what prove the events
 arrive), but a percentage is only ever a threshold-triggered reading. Verified against the 0.3.261
 CLI: it reads `anthropic-ratelimit-unified-<claim>-utilization` off the API response, which the API
-sends only past a threshold. `—` means "no reading", by design, not a dropped event.
+sends only past a threshold. `—` means "no reading", by design, not a dropped event. Fast mode reads
+the same headers itself on every response and marks its readings `utilizationSource: "continuous"`
+(`claude-fast/quota.ts`); `ingest` stores those as a gauge, not an alarm, and a later reading
+without the header keeps the last value (101 finding 05.11).
 
 **The continuous source, as built: the SDK's own usage gauge** (`providers/claude-sdk/usage-gauge.ts`).
 SDK 0.3.261's query object exposes `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` —
@@ -1229,7 +1239,7 @@ ships Bun as the runtime, so `bun` is the decision; the point is that it is writ
 | Cancellation | One `AbortController` per request, wired to the HTTP signal and the SDK; aborting terminates the subprocess. No separate `interrupt()`/`kill()` in Meridian. Ours is bridged in `options.ts`: the data plane's composed signal (deadline ∪ client) drives a controller the SDK owns. The SDK answers that abort with **its own echo, not the signal's reason** — a plain `Error("Operation aborted")` from its transport's `write()`, stamped `errorClass: "aborted"` — which is neither an `AbortError` nor identifiable by reason, so `dataplane/sdk-cancellation.ts` recognizes the echo (`providers/claude-sdk/errors.ts`: `isSdkAbortEcho`) **only while the composed signal is actually aborted**, and attributes it to the first cause like any wrapped abort: a client disconnect records the `499` `client_cancelled` row the HTTP relay writes for a hang-up (`chain-cancellation.ts`) and never touches account health; a deadline records a timeout. Before that rule, a Claude Code client cancelling in flight — which it routinely does around `/context` and other background requests — read as `claude-sdk:unclassified`: a `502`, `outcome: upstream_error`, and a breaker strike against an account that had done nothing wrong (production, 2.25.8, #297). The same wording on a **live** signal is the SDK aborting on its own and stays an upstream error |
 | Client disconnect | Detect closed-stream writes, stop the loop, abort, detach. Never orphan a subprocess — and never retain the signal either, which is why `QueryLaunch` exposes `detach()` alongside `abort()` |
 | Orphan reaping | A subprocess per request makes PID 1's other job load-bearing: anything the `claude` process spawns is re-parented to PID 1 when it outlives its parent, and a PID 1 that never calls `wait()` leaves a zombie entry behind each one. `bun` is not an init, so the image's `ENTRYPOINT` runs it under `tini -s`, which reaps and still forwards `SIGTERM` to the router's own drain ([09-deployment.md](09-deployment.md#pid-1-and-the-claude-subprocess)) |
-| Timeouts | Client keep-alive ≈ 15 s; **upstream** idle guard ≈ 90 s → 504. Independent, both needed |
+| Timeouts | Client keep-alive ≈ 15 s; **upstream** idle guard ≈ 90 s → 504. Independent, both needed. Config, not constants: `CLAUDE_SDK_STREAM_HEARTBEAT_SECONDS` (15, must stay under `SERVER_IDLE_TIMEOUT_SECONDS`), `CLAUDE_SDK_STREAM_IDLE_SECONDS` (90), `CLAUDE_SDK_DENY_HOLD_SECONDS` (60, the `PreToolUse` hold, rounded up to whole seconds), `CLAUDE_LOGIN_URL_TIMEOUT_SECONDS` (30), `CLAUDE_LOGIN_EXCHANGE_TIMEOUT_SECONDS` (60), `CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS` (15). **Teardown** is bounded too: closing a turn's SDK iterator waits at most `CLAUDE_SDK_TEARDOWN_TIMEOUT_MS` (30 s; an idle query uses its own `timeoutMs`), then the subprocess is killed and the slot and claims are handed back — before 101 finding 05.8 a `return()` that never settled kept the permit for the process lifetime |
 | Retries | Bounded, and **forbidden once bytes are on the wire** — the same rule as [05-routing-and-failover.md](05-routing-and-failover.md) |
 
 **Error classification.** SDK failures arrive as strings — a throw out of `query()`, or a `result`
@@ -1249,7 +1259,7 @@ error types:
 | Credits exhausted | `credit balance is too low` (the CLI's own error constant, 0.3.220 and 2.1.261), `organization is out of usage credits`, `usage limit is set to $N` (an admin-provisioned cap) or `api_error_status` 402 | `402`, Account → `exhausted` — permanent until a human tops up, **never** timer-retried (CLAUDE.md non-negotiable 7). Fail over: the next Account may be funded |
 | Stale SDK session | `No conversation found with session ID`, `No message found with message.uuid` (a fork whose rewind point is gone — same recovery, and before it was named here it fell to `unknown`, which does not retry, so the binding survived to fail the next turn too). Also the backstop for a carried transcript the CLI could not find (§4) | Evict the Session mapping, replay once |
 | Busy session | `is currently running as a background agent` (0.3.x), `is running as a background session` (2.1.x, on **stderr** behind an `exit 1` — listing only the older phrase sent this to `subprocess-exit` and cost a conversation its account mid-turn, 2026-09-06), `is running in the background` (2.1.289, same stderr path, as `"<title>" is running in the background (<job>).` — or `That session …` only when the session is untitled; matching the untitled subject alone left titled Claude Code sessions at 502 when a resume arrived while the previous turn's process was still exiting, prod 2026-10-07). Should now be rare rather than routine: the concurrent-turn case is detached before it reaches the CLI (§4) | **One in-place retry as a fork** (`invoker.ts`): same Account, `forkSession: true` at the tip — the fork inherits the full transcript warm, where a failover would replay it cold. Legal because the refusal is thrown before any stream output and the renderer never throws after the first byte. A fork that comes back busy is a real `503` for the chain |
-| Extra Usage gated | `third-party apps now draw from your extra usage`, or `extra usage` together with `claude.ai/settings/usage` — Anthropic's answer to a request it metered as a third-party app (production, 2026-09-05) | **429**, `rate-limited`: cool this Account down and fail over to the next. Ordered **before** the bare `api_error_status` 400, which had it reading as `invalid-request` — not retryable, so the chain stopped with five healthy subscriptions unasked and the client was told its request was malformed. The client-facing sentence names Extra Usage and `claude.ai/settings/usage`, because that is the remedy; the fix that stops it arising is the fingerprint scrub (§8) |
+| Extra Usage gated | `third-party apps now draw from your extra usage`, or `extra usage` together with `claude.ai/settings/usage` — Anthropic's answer to a request it metered as a third-party app (production, 2026-09-05) | **429**, `rate-limited`, marked request-attributable: fail over to the next Account with **no cooldown and no breaker strike** — the refusal is provoked by the request's content, not the account. A second Account answering it in the same chain ends the chain as a request wall (`wall: "request"`), never a router `429` (plan 101, 05.14, ruled; `routing/failover.ts`). Through 2.55.0 this cooled every Account the chain tried. Ordered **before** the bare `api_error_status` 400, which had it reading as `invalid-request` — not retryable, so the chain stopped with five healthy subscriptions unasked and the client was told its request was malformed. The client-facing sentence names Extra Usage and `claude.ai/settings/usage`, because that is the remedy; the fix that stops it arising is the fingerprint scrub (§8). The classification carries `requestAttributable: true` (101 finding 05.14): the refusal is the request's, not the account's capacity, so the attempt failure must not cool or strike the account; the routing side reads it in `toAttemptFailure` |
 | Overage required | `extra usage` + `1m`, or the CLI's verbatim long-context sentences (`Extra usage is required for long context`, `Usage credits are required for long context`, `out of extra usage`) | Drop the extended-context variant, cool down — the included window still refills on a clock, so this is never `exhausted` |
 | Subprocess crash | `exited with code N` + stderr | 502. Meridian maps a generic exit-1 to 401 on a heuristic — **do not copy that**; classify honestly and log the stderr tail |
 | Oversized prompt | `prompt is too long`, `context_length_exceeded`, `exceed context limit`, or `terminal_reason: prompt_too_long` | **400**, `invalid-request`: waiting does not fix it, and an identical retry would burn a full turn on every account in the pool and strike every breaker to fail identically (Meridian #919). No failover, no breaker strike |

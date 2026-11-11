@@ -128,6 +128,16 @@ export function memoryTaskRepository(): MemoryTaskRepository {
     lastSuccess: async (task: ScheduledTaskName) =>
       [...rows].reverse().find((row) => row.task === task && row.outcome === "success"),
 
+    latestPerTask: async () => {
+      const lastRun = new Map<ScheduledTaskName, ScheduledTaskRunRow>()
+      const lastSuccess = new Map<ScheduledTaskName, ScheduledTaskRunRow>()
+      for (const row of rows) {
+        lastRun.set(row.task, row)
+        if (row.outcome === "success") lastSuccess.set(row.task, row)
+      }
+      return { lastRun, lastSuccess }
+    },
+
     // The real sweep's two rules, kept here so a test can assert them without a database: oldest
     // first up to `limit`, and a run with no `finishedAt` is never taken however old it is.
     deleteOlderThan: async (cutoff: Date, limit: number) => {
