@@ -602,6 +602,14 @@ Rules:
   Replaying a partially delivered stream would produce a response the client cannot reconcile —
   duplicated tokens, a second `message_start`, a tool call emitted twice. The router surfaces the
   truncation as an error and lets the client decide. This is a hard rule, not a tunable.
+  A driver may name an upstream's own stream cap (`ResponseObservationDescriptor.streamCap`): the
+  Codex backend drops a Responses stream at about fifteen minutes with no `response.completed`
+  (tesote: 119 attempts at 895–905 s, http 200, tokens_out 0). A stream that drops without
+  completing after at least `UPSTREAM_STREAM_CAP_MIN_SECONDS` (default 840) is recorded as
+  `codex:stream-cap` — still `upstream_error`, still a `502` to a client already streaming, never
+  retried — and its failure line carries `eventTypes`, the count of each Responses event type that
+  arrived (names only), so an operator can tell a long reasoning turn from a stream that sent
+  nothing. The router adds no cut of its own (plan 101, 12.8).
 - The failure that surfaces is the **most actionable** attempt's — never simply the last one — with
   the attempt count in the error metadata and in the `UsageRecord`. Every attempt is still recorded;
   only one of them answers the client. See [Which failure the client hears](#which-failure-the-client-hears).
@@ -1185,7 +1193,7 @@ Recovery ownership and pending preparation leases are durable; an issued permit 
 
 A client that cancels a stream after the upstream has produced model output — a content, thinking, or tool-argument delta, not an envelope frame such as `message_start` or `ping` — settles the recovery attempt as `succeeded` and records health success: the account demonstrably served. A cancel before any model output proves nothing and settles `uncertain`. Either way the usage row is `client_error` / `client_cancelled`, and a cancel never strikes the account.
 
-The coordinator's tick (`RECOVERY_COORDINATOR_INTERVAL_MS`, 250 ms) touches Postgres only for work it holds: queued automatic requests and outcomes, and demanded accounts. The expired-permit sweep — the one read that ran on every tick unconditionally, 12.05 M calls and 64 % of all statements in prod — runs on its own cadence, `RECOVERY_EXPIRY_SWEEP_INTERVAL_MS` (default a tenth of `RECOVERY_MAXIMUM_OUTCOME_MS`, never faster than the tick), and at start; a failed sweep is retried on the next tick. A queued write that throws no longer aborts the tick: it is retried on later ticks and dropped with a warn after `RECOVERY_ENTRY_MAX_ATTEMPTS` (default 5), so one poisoned entry cannot keep every permit behind it from being exposed (plan 101, 10.9 / 12.13 / 03.11).
+The coordinator's tick (`RECOVERY_COORDINATOR_INTERVAL_MS`, 250 ms) touches Postgres only for work it holds: queued automatic requests and outcomes, and demanded accounts. The expired-permit sweep — the one read that ran on every tick unconditionally, 12.05 M calls and 64 % of all statements in prod — runs on its own cadence, `RECOVERY_EXPIRY_SWEEP_INTERVAL_MS` (default a tenth of `RECOVERY_MAXIMUM_OUTCOME_MS`, never faster than the tick), and at start; a failed sweep is retried on the next tick. A queued write that throws no longer aborts the tick: it is retried on later ticks and dropped with a warn after `RECOVERY_ENTRY_MAX_ATTEMPTS` (default 5), so one poisoned entry cannot keep every permit behind it from being exposed (plan 101, 10.9 / 12.13 / 03.11). Account rows are read once per tick phase (`findByIds` over the issued rows, then over the pending rows after all are assigned), not once per row and again to expose a fresh permit.
 
 A recovery generation captures, as bypassable evidence, only quota windows that are not provider-reported with a future reset. A window whose reset the provider itself reported and which has not arrived is the provider's answer, not stale guesswork; only an operator Re-check captures it. Automatic generations capturing it spent a certain-429 probe every cooldown for days (prod, 2026-10-06: two spent `seven_day` windows reset 2 days out).
 

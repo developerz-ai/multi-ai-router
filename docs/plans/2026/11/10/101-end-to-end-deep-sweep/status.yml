@@ -63,19 +63,21 @@ slices:
     status: complete
     percent: 100
     findings: 18
-evidence: ["#373", "#385", "#368"]   # parent issue, web PR, deps; API PR + tag appended at merge
+evidence: ["#373", "#368", "#385", "#386", "v2.56.0", "developerz-ai/infrastructure#2268", "developerz-ai/infrastructure#2269", "developerz-ai/infrastructure#2270", "tesote/infrastructure#766", "tesote/infrastructure#767", "tesote/infrastructure#768", "tesote/infrastructure#769", "tesote/tesote.ai#3481", "developerz-ai/developerz.ai#8649", "developerz-ai/developerz.ai#8655", "developerz-ai/developerz.ai#8657"]
 notes: >-
-  Shipped in 2.56.0 (web #385 + API PR). Owner rulings taken under delegation: 07.4 keep-and-retry bounded;
-  06.4 typed 502; 02.4 narrowed; 03.7 thrown re-test does not advance; 10.3 redact; 13.6 single replica,
-  drain 150 s / grace 200 s (developerz-ai/infrastructure#2268). Deferred with reasons: 02.5 single-stream
-  relay rewrite, 02.6 (no forced-tool bench body), 10.6 replay damping (breaks one-record-per-request; per-key
-  limiter exists), 12.8 Codex 900 s hold (no capture of the stream shape), 13.2 router-side (docs route taken),
-  05.6/05.10 fast-mode perf (needs a fast bench leg), 05.13 credential-freshness.ts 438 LOC split,
-  07.7 GROUPING SETS, 07.8 (unconfirmed field), 07.11 keepalive/login-watch ports, 10.12 contributions horizon
-  (they are the durable history source; needs a history-read redesign), 10.20, 01.12 completion log off header
-  path, 03.11 findByIds, 04.5 shared refresh timer, api_keys name unique index (needs prod duplicate check),
-  11.6 CI test split, 11.7 single DB harness, 11.12 file-size test, 11.14, 09.8 split, 09.11 date formatters,
-  14.4(c)/14.5 skip_project_members, 14.9(c-e). Dropped (code contradicts): listed per slice in agent reports /
-  PR bodies. Needs a human: 5 Claude subs needs_reauth on developerz-ai, second zai seat on tesote (12.6),
-  per-box fleet router keys (13.11), npm scope bootstrap for claudes (#215).
+  Shipped in 2.56.0 (web #385 + #386) and 2.57.0 (wave 3: the 2.56.0 deferrals). Owner rulings taken under
+  delegation: 07.4 keep-and-retry bounded; 06.4 typed 502; 02.4 narrowed; 03.7 thrown re-test does not advance;
+  10.3 redact; 13.6 single replica, drain 150 s (developerz-ai/infrastructure#2268, tesote/infrastructure#766).
+  Won't fix, decided: 10.6 replay damping (breaks one-record-per-request; per-key limiter is the control);
+  10.12 usage_contributions horizon (durable history source; DB 1.2 GB is fine); 11.6 CI runner split (renames
+  the required `test` check); 11.7 single test-DB harness (large refactor, CI already isolates per job);
+  10.20 legacy reads (usage_daily still feeds lifetime totals; `sessions` is live) and account tombstone;
+  14.4(c)/14.5 skip_project_members stays false; 02.5 single-stream relay rewrite and 02.6 (not hotspots);
+  13.2 router side (clients use GET /v1/models; dz preflight fixed in dz#8649). Still over 300 LOC, frozen by
+  file-size.test.ts: response-salvage.ts (shared-closure state), claude-sdk render/envelope.ts, tools/early-stop.ts.
+  Needs a human: 5 Claude subs needs_reauth on developerz-ai (interactive login), second zai seat on tesote (12.6),
+  per-box fleet router keys (13.11, Vaultwarden + fleet reinstall), tesote CHAT_UPSTREAM_API_KEY secret split
+  (source env not on this host), npm scope bootstrap for claudes (#215).
+  Post-release, developerz-ai prod (first 27 min on 2.56.0): translate overhead p50 13→11 ms, p99 42→27 ms
+  (still over the 5 ms budget); recovery-coordinator poll 0 calls (was 64 % of statements); 0 generic 5xx/402.
 last_updated: 2026-11-11

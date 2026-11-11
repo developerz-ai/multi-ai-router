@@ -3,7 +3,11 @@ import { QuotaWindowRow } from "../../components/QuotaWindowRow"
 import { StatusDot } from "../../components/StatusDot"
 import type { AccountView } from "../../lib/api/types"
 import { formatRelative } from "../../lib/format"
-import { describeQuotaWindows } from "../../lib/quota-windows"
+import {
+  describeQuotaWindowReset,
+  describeQuotaWindowStatic,
+  orderedQuotaWindows,
+} from "../../lib/quota-windows"
 import styles from "./UsageQuota.module.scss"
 
 export interface UsageQuotaProps {
@@ -67,13 +71,13 @@ export function UsageQuota(props: UsageQuotaProps) {
         <ul class={styles.accounts}>
           <For each={metered()}>
             {(account) => {
-              // Derived per row, where a tick updates text in place instead of recreating the
-              // block — the row's own memo re-runs, the `<li>` above it survives.
+              // Described from the account's data alone: the clock tick reaches only each row's
+              // reset half, below, so the gauges are not rebuilt every tick.
               const windows = createMemo(() =>
-                describeQuotaWindows(
-                  { status: account.status, windows: account.availability?.quotaWindows ?? [] },
-                  props.nowMs,
-                ),
+                orderedQuotaWindows(account.availability?.quotaWindows ?? []).map((view) => ({
+                  view,
+                  display: describeQuotaWindowStatic(view),
+                })),
               )
               return (
                 <li class={styles.account}>
@@ -83,16 +87,30 @@ export function UsageQuota(props: UsageQuotaProps) {
                     <span class={styles.provider}>{account.provider}</span>
                   </div>
 
-                  {/* `Index`, not `For`: these descriptions are rebuilt on every clock tick, so
-                      keying by reference would dispose and recreate every gauge underneath. */}
+                  {/* `Index`, not `For`: a data change rebuilds the descriptions, and keying by
+                      reference would dispose and recreate every gauge underneath. */}
                   <ul class={styles.windows}>
                     <Index each={windows()}>
-                      {(window) => <QuotaWindowRow owner={account.label} window={window()} />}
+                      {(window) => (
+                        <QuotaWindowRow
+                          owner={account.label}
+                          reset={describeQuotaWindowReset(
+                            account.status,
+                            window().view,
+                            props.nowMs,
+                          )}
+                          window={window().display}
+                        />
+                      )}
                     </Index>
                   </ul>
 
                   <p class={styles.checked}>
-                    Last reading {formatRelative(lastChecked(windows()), props.nowMs)}
+                    Last reading{" "}
+                    {formatRelative(
+                      lastChecked(windows().map((window) => window.display)),
+                      props.nowMs,
+                    )}
                   </p>
                 </li>
               )

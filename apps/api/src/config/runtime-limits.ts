@@ -30,6 +30,7 @@ export const RUNTIME_LIMIT_ENV_FIELDS = {
   // Upstream model listings and plan-quota reads.
   MODEL_LISTING_MAX_BYTES: atLeastOne.optional(),
   UPSTREAM_BUFFERED_BODY_MAX_BYTES: atLeastOne.optional(),
+  UPSTREAM_STREAM_CAP_MIN_SECONDS: atLeastOne.optional(),
   // Database housekeeping.
   DB_MIGRATION_LOCK_TIMEOUT_MS: atLeastOne.optional(),
   ACCOUNT_LAST_USED_STAMP_INTERVAL_SECONDS: wholeNumber.optional(),
@@ -75,6 +76,9 @@ export function readRuntimeLimitsEnv(raw: RuntimeLimitEnv) {
     modelListingMaxBytes: raw.MODEL_LISTING_MAX_BYTES ?? 8_388_608,
     // An upstream body the router must read whole (translated JSON, folded or coerced streams).
     upstreamBufferedBodyMaxBytes: raw.UPSTREAM_BUFFERED_BODY_MAX_BYTES ?? 33_554_432,
+    // An upstream-dropped, never-completed stream at least this old is the provider's own cap
+    // (Codex ~900 s), not a fault of the account (`dataplane/stream-cap.ts`).
+    upstreamStreamCapMinSeconds: raw.UPSTREAM_STREAM_CAP_MIN_SECONDS ?? 840,
     // How long a boot migration waits for a lock before failing rather than queueing every query.
     migrationLockTimeoutMs: raw.DB_MIGRATION_LOCK_TIMEOUT_MS ?? 10_000,
     // `accounts.last_used_at` is stamped at most once per interval per account.

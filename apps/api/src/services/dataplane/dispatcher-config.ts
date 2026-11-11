@@ -45,6 +45,8 @@ export interface DispatchOptions {
   readonly upstreamStream?: StreamDeadlines
   readonly upstreamErrorMaxBytes?: number
   readonly responseObservationMaxBytes?: number
+  /** `UPSTREAM_STREAM_CAP_MIN_SECONDS` in ms: when an upstream-dropped stream is the provider's cap. */
+  readonly upstreamStreamCapMinMs?: number
   /** `UPSTREAM_BUFFERED_BODY_MAX_BYTES`: an upstream body the router must read whole (02.9). */
   readonly bufferedBodyMaxBytes?: number
   /** `MAX_TRANSLATION_SSE_FRAME_BYTES`: one translated upstream SSE frame (06 slice). */

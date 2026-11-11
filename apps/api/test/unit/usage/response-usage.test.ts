@@ -192,3 +192,46 @@ test("DeepSeek's prompt_cache_hit_tokens counts as a cache read", () => {
     ).counts,
   ).toEqual({ tokensIn: 36, tokensOut: 5, cacheReadTokens: 64, cacheWriteTokens: 0 })
 })
+
+// 07.8: the TTL split is read beside the write total, never instead of it.
+test("an Anthropic cache write carries its stated 1-hour part, bounded by the write", () => {
+  expect(
+    json(
+      "anthropic",
+      '{"usage":{"input_tokens":10,"output_tokens":2,"cache_creation_input_tokens":300,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":200}}}',
+    ).counts,
+  ).toEqual({
+    tokensIn: 10,
+    tokensOut: 2,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 300,
+    cacheWrite1hTokens: 200,
+  })
+  const malformed = json(
+    "anthropic",
+    '{"usage":{"input_tokens":10,"output_tokens":2,"cache_creation_input_tokens":300,"cache_creation":{"ephemeral_1h_input_tokens":"x"}}}',
+  )
+  expect(malformed.usageInvalid).toBe(false)
+  expect(malformed.counts.cacheWriteTokens).toBe(300)
+  expect(malformed.counts.cacheWrite1hTokens).toBeUndefined()
+})
+
+test("a streamed split from message_start survives a message_delta that restates only output", () => {
+  const observer = createResponseObserver({
+    dialect: "anthropic",
+    operation: "messages",
+    contentType: "text/event-stream",
+    maximumObservationBytes: 4096,
+  })
+  observer.observe(
+    encoder.encode(
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":50,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":50}}}}\n\n' +
+        'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":9}}\n\n',
+    ),
+  )
+  expect(observer.finish().counts).toMatchObject({
+    cacheWriteTokens: 50,
+    cacheWrite1hTokens: 50,
+    tokensOut: 9,
+  })
+})

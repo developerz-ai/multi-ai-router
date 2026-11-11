@@ -16,7 +16,7 @@ export type DatabaseExecutor = Pick<
 >
 
 export interface DatabaseOptions {
-  /** PostgreSQL 16+ connection string, from `DATABASE_URL`. */
+  /** PostgreSQL 18 connection string, from `DATABASE_URL`. */
   readonly url: string
   /**
    * Pool size. Connections are pooled and kept warm — nothing dials on the hot path.

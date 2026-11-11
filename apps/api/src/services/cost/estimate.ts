@@ -89,11 +89,13 @@ export function estimateCost(input: CostInput): CostEstimate {
   const tier = rates.longContext
   const card: RateCard = tier !== undefined && promptTokens >= tier.fromPromptTokens ? tier : rates
 
+  const oneHour = Math.min(tokens.cacheWrite1hTokens ?? 0, tokens.cacheWriteTokens)
   const dollars =
     (tokens.tokensIn * card.inputPerMtok +
       tokens.tokensOut * card.outputPerMtok +
       tokens.cacheReadTokens * card.cacheReadPerMtok +
-      tokens.cacheWriteTokens * card.cacheWritePerMtok) /
+      (tokens.cacheWriteTokens - oneHour) * card.cacheWritePerMtok +
+      oneHour * (card.cacheWrite1hPerMtok ?? card.cacheWritePerMtok)) /
     PER_MTOK
 
   // A count an upstream reported wrong can price past what the column holds. Unknown is both the

@@ -3,7 +3,7 @@ import { Badge } from "../../components/Badge"
 import { Button } from "../../components/Button"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { cx } from "../../lib/cx"
-import { formatAbsolute } from "../../lib/reset-countdown"
+import { formatAbsolute } from "../../lib/format"
 import {
   credentialOf,
   describeLoginExpiry,

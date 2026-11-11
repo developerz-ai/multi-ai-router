@@ -51,7 +51,8 @@ export interface RecoveryCoordinatorConfig {
 }
 export interface RecoveryCoordinatorDeps {
   readonly repository: RecoveryRepository
-  readonly accounts: { findById(id: string): Promise<AccountRow | undefined> }
+  /** One batched read per tick phase (`expose.ts` `readAccounts`). */
+  readonly accounts: { findByIds(ids: readonly string[]): Promise<AccountRow[]> }
   readonly config: RecoveryCoordinatorConfig
   readonly now: () => Date
   readonly schedule: (work: () => void, delayMs: number) => () => void

@@ -12,7 +12,7 @@ import {
   describePasteShape,
   isSubmittablePaste,
 } from "../../lib/connect-capture"
-import { formatAbsolute } from "../../lib/reset-countdown"
+import { formatAbsolute } from "../../lib/format"
 import { CaptureNotes } from "./ConnectCaptureNotes"
 import styles from "./ConnectDialog.module.scss"
 import { ConnectFooter } from "./ConnectFooter"

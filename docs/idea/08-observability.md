@@ -147,7 +147,7 @@ reads as a promise. Every rule names the module that owns it.
 | Override | Operator rates are scoped to an Account or apply to a provider globally. Account exact/family overrides precede provider exact/family overrides, then eligible shipped rates. Account-scoped rows cascade on deletion and never become global. The warm book refresh after a successful settings edit includes a post-commit snapshot before returning. Settings shows unpriced configured upstream models and unknown model catalogs |
 | Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. A family released after the image was built, or an older snapshot the vendor no longer lists, prices as unknown rather than as the nearest thing to it |
 | Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
-| Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's two are derived from the published multiples its pricing page states, rather than restated per row; a response never says which cache TTL was written, so the 5-minute default is assumed and writes read low, never high |
+| Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's are derived from the published multiples its pricing page states (read 0.1x, or the footnoted lower multiple; write 1.25x for the 5-minute TTL, 2x for the 1-hour TTL), rather than restated per row. The usage object states the TTL split (`usage.cache_creation.ephemeral_1h_input_tokens`), so a 1-hour write is priced at 2x at estimate time; the split is not persisted — the row keeps one `cacheWriteTokens` counter and its `cost_estimate` already carries the split. A write with no stated split, and any operator override (which has no 1-hour field), prices at the 5-minute rate, so writes read low, never high |
 | Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
 
 The shipped set is the twelve wired vendor tables answering for fourteen providers:
@@ -384,6 +384,19 @@ once (~62k shared buffers, 14 facts scans per summary at fixture scale), and the
 group sort still spills (~52k rows over the default `work_mem`). If a deployment outgrows the
 budgets on this shape, the next levers — in order — are consolidating the per-dimension scans
 into one `grouping sets` pass, a coarser series grain, and the rollup grain itself.
+
+The first lever exists at the repository: `UsageHistoryRepository.summaryAggregates(window,
+limit, filter, attribution)` returns `totals` and all six breakdowns from one statement — facts
+read once, folded to the (key, account, pool, model) grain, labelled once with both the owner and
+tool bucket, aggregated over `GROUPING SETS ((), (api_key_id), …, (tool_grp))`, each set ranked
+and cut exactly as `breakdown` does. A differential integration test pins it equal to the seven
+separate reads (full days, partial edges, filters, cut and uncut limits, tie order). Prod (10.11)
+measured ~20 aggregates per load at 140–490 ms each; seven of them become one. `readSummary`
+reads its totals and breakdowns through it (`services/usage-read/summary-facts.ts`
+`groupedFacts`; the seven-statement `perDimensionFacts` stays as the differential baseline in
+`summary-facts.test.ts`). `bin/bench-usage` at fixture scale, 2026-11-11 on a loaded host (load
+~13): shared buffers 884,708 → 513,186, wall 20.4 s → 12.8 s. The six per-dimension series reads
+remain separate; they are the next consolidation candidate.
 
 `bin/bench-usage` seeds the fixture into a throwaway database, runs the real `readSummary`, and
 re-runs every statement under EXPLAIN (ANALYZE, BUFFERS). It exits non-zero when the wall clock
@@ -978,7 +991,7 @@ identity beyond its label.
 | Name | Type | Labels | Meaning |
 |---|---|---|---|
 | `router_build_info` | gauge | `version`, `revision` | Always `1`; the labels are the payload. First in the exposition. Join on it — `router_build_info * on() group_left(version) …` — to annotate a graph with the build that produced it, instead of putting a `version` label on every other series and multiplying their cardinality to say the same thing once. `revision` is the commit sha the image was built from, because a version is not an identity: a rebuilt `latest`, an rc cut twice and a locally built image all report the same one. `unknown` when nothing stamped the build (`ROUTER_REVISION`) — never a fabricated sha |
-| `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests. `model` is the requested name when it resolved against the routing catalog, `other` when it did not |
+| `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests. `model` is the requested name when it resolved against the routing catalog, `other` when it did not. Every request that reaches an inference route counts once, including one refused **before** dispatch — an unknown key (`key_id="none"`), a key store that could not answer — under its own `outcome`, so an alert on this counter sees them (`middleware/requestCounting.ts`). A body Bun refuses over `maxRequestBodySize` never reaches the app and is not counted |
 | `router_pool_serving_members` | gauge | `pool_id` | Members of each pool whose account is currently `active` on this replica, health overlaid, computed at scrape time from the warm snapshot. Every pool, no inventory needed. **Alert at `0`**: the pool has no member left to serve, so every request to it fails over or is refused (13.14). Pair with the absent-success alert below |
 | `router_request_duration_seconds` | histogram | `ingress_dialect`, `model`, `streamed` | End-to-end client request latency, upstream time included |
 | **`router_overhead_seconds`** | histogram | `ingress_dialect`, `path` (`passthrough`\|`translate`\|`agent_sdk`) | **Time spent in the router, excluding upstream.** First-class: shown on the dashboard next to upstream latency, because "the router is slow" and "the provider is slow" are different problems. A regression here is a bug, not a tuning opportunity ([06-protocol-translation.md](06-protocol-translation.md)) |
@@ -1206,7 +1219,7 @@ Every candidate the request chain drops without an upstream attempt logs one `in
 |---|---|
 | `error` | A request the router could not serve; a failed OAuth refresh; a decrypt failure; a scheduled task that threw |
 | `warn` | A failover, a circuit breaker opening, an account entering `needs_reauth` or `exhausted`, a rejected translation, a translation that dropped fields, a shed usage record |
-| `info` | Exactly one transport line per client request: `request completed`, or `request failed` at the error handler's level for a request it rendered — never both. A successful request to a `LOG_QUIET_PATHS` path (the Prometheus scrape included) drops to `debug`; a failing one does not. A streamed response's line carries `streamed: true` and `timeToHeadersMs` instead of `durationMs` — the body is still flowing when the line is written; its whole lifetime is on the `UsageRecord`. One line per scheduled task run; startup and config summary |
+| `info` | Exactly one transport line per client request: `request completed`, or `request failed` at the error handler's level for a request it rendered — never both. A successful request to a `LOG_QUIET_PATHS` path (the Prometheus scrape included) drops to `debug`; a failing one does not. The line is written when the response **settles** — its last byte written, or the client gone (`closedByClient: true`) — never between the handler returning and the headers going out, so its cost is off the time-to-headers path. `durationMs` is therefore the whole response; a streamed one also carries `streamed: true` and `timeToHeadersMs`. One line per scheduled task run; startup and config summary |
 | `debug` | Selection decisions, candidate sets, translation event counts |
 | `trace` | **DEFERRED** |
 

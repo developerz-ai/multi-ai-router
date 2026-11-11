@@ -7,8 +7,9 @@ import type {
 import { axisBucketWidth, buildAxis } from "./axis"
 import { attributionOf, ownerRows, toolRows } from "./buckets"
 import { foldFailures } from "./failures"
-import { historyBreakdown, historySeriesBy, rawBreakdown } from "./group-reads"
+import { historySeriesBy, rawBreakdown } from "./group-reads"
 import { resolveReadWindow } from "./read-window"
+import { groupedFacts, type SummaryFactsReader } from "./summary-facts"
 import { alignSeries, breakdownRow, groupSeries, keyNames, label } from "./summary-view"
 import type { UsageLabelSets, UsageSummary } from "./types"
 import type { UsageWindowQuery } from "./window"
@@ -30,6 +31,8 @@ export async function readSummary(
     now: () => Date
     maxChartPoints?: number
     breakdownMaxRows?: number
+    /** Totals + per-dimension breakdowns. Absent: one `GROUPING SETS` statement (`groupedFacts`). */
+    facts?: SummaryFactsReader
   },
   query: UsageWindowQuery,
   filter: UsageFilter,
@@ -43,16 +46,12 @@ export async function readSummary(
   const width = axisBucketWidth(window, maxChartPoints)
   // One mapping for every owner/tool query below, so their group keys cannot disagree.
   const attribution = attributionOf(deps.labels.keys)
-  const [totals, latency, series, outcomes, rows] = await Promise.all([
-    deps.history.totals(window, filter),
+  const readFacts = deps.facts ?? groupedFacts(deps.history)
+  const [{ totals, breakdowns: rows }, latency, series, outcomes] = await Promise.all([
+    readFacts({ window, filter, dimensions, limit: maxRows + 1, attribution }),
     deps.raw.latency(window, filter),
     deps.history.series(window, window.bucket, width, filter),
     deps.raw.outcomes(window, filter),
-    Promise.all(
-      dimensions.map((d) =>
-        historyBreakdown(deps.history, window, d, maxRows + 1, filter, attribution),
-      ),
-    ),
   ])
   const axis = buildAxis(window, width)
   const retainedAttempts = outcomes.reduce((sum, row) => sum + row.attempts, 0)

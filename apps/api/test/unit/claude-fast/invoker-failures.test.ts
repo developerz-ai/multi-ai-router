@@ -212,3 +212,64 @@ describe("the fast credential is read under the fence only when it changed (05.2
     expect(h.reads()).toBe(1)
   })
 })
+
+describe("a native schema reduction is reported once per window", () => {
+  const bounded = {
+    type: "object",
+    properties: { tags: { type: "array", items: { type: "string" }, maxItems: 3 } },
+    required: ["tags"],
+    additionalProperties: false,
+  }
+  const structured = {
+    tools: [{ name: "router_structured_output", input_schema: bounded }],
+    tool_choice: { type: "tool", name: "router_structured_output" },
+  }
+
+  test("two requests with the same reduced schema: one warn, then debug", async () => {
+    const { logger, warnings } = recordingLogger()
+    let clock = 1_000
+    const invoke = createFastInvoker({
+      concurrency: createSdkConcurrency({ global: 1, perAccount: 1 }),
+      errorMaxBytes: 4096,
+      credential: async () => credential,
+      resolveModel: (_, model) => model,
+      sdk: async () => new Response("sdk"),
+      fetch: async () => new Response(wire, { headers: { "content-type": "text/event-stream" } }),
+      now: () => clock,
+      dropLogWindowMs: 60_000,
+      logger,
+    })
+    await (await invoke(input(structured))).text()
+    await (await invoke(input(structured))).text()
+    const lines = warnings.filter((w) => w.message === "translation dropped fields")
+    expect(lines).toHaveLength(1)
+    expect(lines[0]?.fields).toMatchObject({
+      egress: "claude-native-schema",
+      dropped: 1,
+    })
+    expect(String(lines[0]?.fields.fields)).toContain("properties.tags.maxItems")
+    clock += 60_000
+    await (await invoke(input(structured))).text()
+    expect(warnings.filter((w) => w.message === "translation dropped fields")).toHaveLength(2)
+  })
+
+  test("a schema that rides the tool reports nothing", async () => {
+    const { logger, warnings } = recordingLogger()
+    const invoke = createFastInvoker({
+      concurrency: createSdkConcurrency({ global: 1, perAccount: 1 }),
+      errorMaxBytes: 4096,
+      credential: async () => credential,
+      resolveModel: (_, model) => model,
+      sdk: async () => new Response("sdk"),
+      fetch: async () => new Response(wire, { headers: { "content-type": "text/event-stream" } }),
+      logger,
+    })
+    const open = { ...bounded, additionalProperties: true }
+    await (
+      await invoke(
+        input({ ...structured, tools: [{ name: "router_structured_output", input_schema: open }] }),
+      )
+    ).text()
+    expect(warnings.filter((w) => w.message === "translation dropped fields")).toHaveLength(0)
+  })
+})

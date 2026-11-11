@@ -46,12 +46,22 @@ export function formatPercent(numerator: number, denominator: number): string {
   return share < 1 && share > 0 ? `${share.toFixed(2)}%` : `${share.toFixed(1)}%`
 }
 
-/** Absolute local time, viewer's zone. The half of a timestamp that is a fact. */
+/**
+ * Absolute local time, viewer's zone — the one spelling of an instant in the console. A reset is
+ * always shown as absolute time *and* countdown, and the absolute half reads the same on every
+ * surface: short date and time, the form the accounts table's reset and login cells use, where
+ * the width is tightest. Two spellings of one instant on one row read as two different instants.
+ */
+export function formatAbsolute(epochMs: number, locale?: string): string {
+  return new Date(epochMs).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" })
+}
+
+/** `formatAbsolute` for a wire instant; null or unparseable is a dash. */
 export function formatTimestamp(iso: string | null, locale?: string): string {
   if (iso === null) return "—"
   const parsed = Date.parse(iso)
   if (Number.isNaN(parsed)) return "—"
-  return new Date(parsed).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" })
+  return formatAbsolute(parsed, locale)
 }
 
 /** Date only — for expiry and created columns, where the minute is noise. */

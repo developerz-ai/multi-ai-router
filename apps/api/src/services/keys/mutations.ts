@@ -1,5 +1,5 @@
 import { generateRouterKey, routerKeyDisplayPrefix } from "@multi-ai-router/core"
-import type { AdminMutationScope, ApiKeyRow } from "@multi-ai-router/db"
+import type { ApiKeyRow } from "@multi-ai-router/db"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "../admin/audit"
 import { mutationResult } from "../admin/mutation-result"
 import { type AdminResult, conflict, invalid, notFound, ok } from "../admin/result"
@@ -15,13 +15,13 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
   return {
     create: async (body) => {
       const result = await mutationResult(() =>
-        deps.mutations.run({ kind: "key", id: null, name: body.name }, async (tx) => {
+        // No name lock: `api_keys(name)` is unique (0045), and a clash surfaces as
+        // `ApiKeyNameTakenError`, mapped to 409 by `mutationResult`.
+        deps.mutations.run({ kind: "key", id: null }, async (tx) => {
           const scope = await resolveScopeInput(tx, body.scope ?? { kind: "all" })
           if (!scope.ok) return scope
           const expiry = checkExpiry(body.expiresAt, deps.now())
           if (!expiry.ok) return expiry
-          if (await nameTaken(tx, body.name))
-            return conflict(`a key named "${body.name}" already exists`)
 
           const value = generate()
           const prefix = routerKeyDisplayPrefix(value)
@@ -67,66 +67,60 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
 
     update: async (id, body) => {
       const result = await mutationResult(() =>
-        deps.mutations.run(
-          { kind: "key", id, ...(body.name === undefined ? {} : { name: body.name }) },
-          async (tx) => {
-            const current = await tx.keys.findById(id)
-            if (current === undefined) return notFound(`no key with id "${id}"`)
-            // Only a *changed* expiry must lie in the future: the console resends the stored value
-            // with every edit, and an already-expired key must still be renameable (09 → 05.7).
-            const expiryChanged = body.expiresAt?.getTime() !== current.expiresAt?.getTime()
-            const expiry = checkExpiry(
-              expiryChanged ? (body.expiresAt ?? undefined) : undefined,
-              deps.now(),
-            )
-            if (!expiry.ok) return expiry
-            let scope: ResolvedScope | null = null
-            if (body.scope !== undefined) {
-              const resolved = await resolveScopeInput(tx, body.scope)
-              if (!resolved.ok) return resolved
-              scope = resolved.value
-            }
-            if (body.name !== undefined && (await nameTaken(tx, body.name, id))) {
-              return conflict(`a key named "${body.name}" already exists`)
-            }
-            const row = await tx.keys.update(
-              id,
-              {
-                ...(body.name === undefined ? {} : { name: body.name }),
-                ...(scope === null ? {} : { scope: scope.kind }),
-                ...(body.owner === undefined ? {} : { owner: body.owner }),
-                ...(body.ownerKind === undefined ? {} : { ownerKind: body.ownerKind }),
-                ...(body.tool === undefined ? {} : { tool: body.tool }),
-                ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
-                ...(body.rateLimit === undefined
-                  ? {}
-                  : {
-                      rateLimitRequests: body.rateLimit?.requests ?? null,
-                      rateLimitWindowSeconds: body.rateLimit?.windowSeconds ?? null,
-                    }),
-                ...(body.expiresAt === undefined ? {} : { expiresAt: body.expiresAt }),
-              },
-              deps.now(),
-            )
-            if (row === undefined) return notFound(`no key with id "${id}"`)
-            if (scope !== null) await tx.keys.replaceScopeTargets(id, scope)
-            await createAuditRecorder(tx.audit).record({
-              kind: AUDIT_KINDS.keyUpdated,
-              subjectType: AUDIT_SUBJECTS.key,
-              subjectId: row.id,
-              detail: {
-                name: row.name,
-                fields: Object.keys(body).sort(),
-                scope: row.scope,
-                owner: row.owner,
-                ownerKind: row.ownerKind,
-                tool: row.tool,
-                purpose: row.purpose,
-              },
-            })
-            return ok({ row, targets: await readKeyTargets(tx.keys, id) })
-          },
-        ),
+        deps.mutations.run({ kind: "key", id }, async (tx) => {
+          const current = await tx.keys.findById(id)
+          if (current === undefined) return notFound(`no key with id "${id}"`)
+          // Only a *changed* expiry must lie in the future: the console resends the stored value
+          // with every edit, and an already-expired key must still be renameable (09 → 05.7).
+          const expiryChanged = body.expiresAt?.getTime() !== current.expiresAt?.getTime()
+          const expiry = checkExpiry(
+            expiryChanged ? (body.expiresAt ?? undefined) : undefined,
+            deps.now(),
+          )
+          if (!expiry.ok) return expiry
+          let scope: ResolvedScope | null = null
+          if (body.scope !== undefined) {
+            const resolved = await resolveScopeInput(tx, body.scope)
+            if (!resolved.ok) return resolved
+            scope = resolved.value
+          }
+          const row = await tx.keys.update(
+            id,
+            {
+              ...(body.name === undefined ? {} : { name: body.name }),
+              ...(scope === null ? {} : { scope: scope.kind }),
+              ...(body.owner === undefined ? {} : { owner: body.owner }),
+              ...(body.ownerKind === undefined ? {} : { ownerKind: body.ownerKind }),
+              ...(body.tool === undefined ? {} : { tool: body.tool }),
+              ...(body.purpose === undefined ? {} : { purpose: body.purpose }),
+              ...(body.rateLimit === undefined
+                ? {}
+                : {
+                    rateLimitRequests: body.rateLimit?.requests ?? null,
+                    rateLimitWindowSeconds: body.rateLimit?.windowSeconds ?? null,
+                  }),
+              ...(body.expiresAt === undefined ? {} : { expiresAt: body.expiresAt }),
+            },
+            deps.now(),
+          )
+          if (row === undefined) return notFound(`no key with id "${id}"`)
+          if (scope !== null) await tx.keys.replaceScopeTargets(id, scope)
+          await createAuditRecorder(tx.audit).record({
+            kind: AUDIT_KINDS.keyUpdated,
+            subjectType: AUDIT_SUBJECTS.key,
+            subjectId: row.id,
+            detail: {
+              name: row.name,
+              fields: Object.keys(body).sort(),
+              scope: row.scope,
+              owner: row.owner,
+              ownerKind: row.ownerKind,
+              tool: row.tool,
+              purpose: row.purpose,
+            },
+          })
+          return ok({ row, targets: await readKeyTargets(tx.keys, id) })
+        }),
       )
       if (!result.ok) return result
       deps.onCommitted(id, "update")
@@ -179,15 +173,6 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
       return result
     },
   }
-}
-
-async function nameTaken(
-  tx: AdminMutationScope,
-  name: string,
-  exceptId?: string,
-): Promise<boolean> {
-  const existing = await tx.keys.findByName(name)
-  return existing !== undefined && existing.id !== exceptId
 }
 
 /** A key minted already expired works for exactly no requests; say so at the door. */

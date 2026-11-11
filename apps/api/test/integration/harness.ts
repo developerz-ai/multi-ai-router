@@ -155,6 +155,8 @@ export function harness(options: HarnessOptions) {
       health,
       now: testClock.now,
       serverIdleTimeoutSeconds: options.serverIdleTimeoutSeconds ?? 60,
+      // As `main.ts` wires it: a request refused before dispatch still counts.
+      onUndispatched: (sample) => metrics.observeRequest(sample),
       ...(options.models === undefined
         ? {}
         : {

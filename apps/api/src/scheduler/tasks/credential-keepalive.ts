@@ -1,5 +1,5 @@
 import { describeError } from "@multi-ai-router/core"
-import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import type { AccountRepository, AccountSummaryRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 import type { CredentialMetadata } from "../../providers/claude-sdk/credential-metadata"
 import { describeProvider } from "../../services/accounts/providers"
@@ -37,9 +37,16 @@ import { type KeepAliveResult, keepAlive, type Tally } from "./idle-account-warm
  */
 
 export interface CredentialKeepaliveDeps {
-  readonly accounts: Pick<AccountRepository, "list" | "readEligibleBackgroundAccount">
+  /**
+   * Summaries to select from; the full row (its fence fields) is loaded only for an account a turn
+   * is actually spent on, so ciphertext is not pulled for every subscription every few minutes.
+   */
+  readonly accounts: Pick<
+    AccountRepository,
+    "listSummaries" | "findById" | "readEligibleBackgroundAccount"
+  >
   /** Credential metadata under this account's config directory. Never a token. */
-  readonly readMetadata: (account: AccountRow) => Promise<CredentialMetadata>
+  readonly readMetadata: (account: AccountSummaryRow) => Promise<CredentialMetadata>
   readonly test: IdleAccountProbeDeps["test"]
   readonly models: Readonly<Record<string, string>>
   readonly policy: KeepalivePolicy
@@ -58,7 +65,7 @@ export function createCredentialKeepaliveTask(deps: CredentialKeepaliveDeps): Sc
 
     run: async ({ now, logger, signal }): Promise<TaskOutcome> => {
       try {
-        const accounts = await deps.accounts.list({})
+        const accounts = await deps.accounts.listSummaries()
         const candidates: KeepaliveCandidate[] = []
         for (const account of accounts) {
           if (!describeProvider(account.provider).requiresConfigDir) continue
@@ -116,7 +123,9 @@ async function keepOne(
   const model = deps.models[account.provider]
   if (model === undefined || before.accessTokenExpiresAt === null) return false
 
-  const result: KeepAliveResult = await keepAlive(deps, account, model, logger, tally)
+  const row = await deps.accounts.findById(account.id)
+  if (row === undefined) return false
+  const result: KeepAliveResult = await keepAlive(deps, row, model, logger, tally)
   // Nothing was spawned — not eligible right now, or a turn is already in flight. No backoff: a
   // turn that never ran says nothing about whether the next one would refresh.
   if (result === "skipped") return false
@@ -145,7 +154,7 @@ async function keepOne(
 /** Unreadable is unknown — logged, never cold. The message names a path or errno at most. */
 async function readQuietly(
   deps: Pick<CredentialKeepaliveDeps, "readMetadata">,
-  account: AccountRow,
+  account: AccountSummaryRow,
   logger: Logger,
 ): Promise<CredentialMetadata | null> {
   try {

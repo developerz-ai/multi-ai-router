@@ -136,4 +136,12 @@ export interface ResponseObservationDescriptor {
     payload: unknown,
     event: string | undefined,
   ) => FailureClassification | null
+  /**
+   * The upstream ends a long stream itself, by dropping it with no terminal frame, at a cap of its
+   * own. A transport failure of a stream that never completed, after at least the router's cap
+   * minimum (`UPSTREAM_STREAM_CAP_MIN_SECONDS`), is recorded under `signal` rather than the
+   * generic `upstream_error`, and the failure line counts the event types that arrived. The router
+   * adds no cut of its own.
+   */
+  readonly streamCap?: { readonly signal: string }
 }

@@ -84,16 +84,28 @@ export function readResponseUsage(
   }
   if (numericInput === undefined && (numericCache !== undefined || numericWrite !== undefined))
     return { counts: previous, invalid: true }
+  // The TTL split rides beside the write total. A malformed split only loses the split — the write
+  // is still counted, priced at the 5-minute rate as before — rather than invalidating the reading.
+  const oneHour = responseObject(usage.cache_creation)?.ephemeral_1h_input_tokens
+  const numericOneHour = isCount(oneHour) ? (oneHour as number) : undefined
   // `message_start` is a complete input bundle: a field it leaves out is zero for that message. A
   // `message_delta` only restates what it names — several Anthropic-compatible upstreams repeat
   // `input_tokens` there without the cache fields — so an absent field keeps the earlier reading.
   const bundle = type === "message_start" && numericInput !== undefined
+  const cacheWriteTokens = numericWrite ?? (bundle ? 0 : previous.cacheWriteTokens)
+  const split =
+    numericWrite !== undefined
+      ? numericOneHour
+      : bundle
+        ? undefined
+        : (numericOneHour ?? previous.cacheWrite1hTokens)
   return {
     counts: {
       tokensIn: numericInput ?? previous.tokensIn,
       tokensOut: Math.max(numericOutput ?? 0, previous.tokensOut),
       cacheReadTokens: numericCache ?? (bundle ? 0 : previous.cacheReadTokens),
-      cacheWriteTokens: numericWrite ?? (bundle ? 0 : previous.cacheWriteTokens),
+      cacheWriteTokens,
+      ...(split === undefined ? {} : { cacheWrite1hTokens: Math.min(split, cacheWriteTokens) }),
     },
     invalid: false,
   }

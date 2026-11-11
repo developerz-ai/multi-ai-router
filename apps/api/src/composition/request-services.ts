@@ -141,6 +141,7 @@ export function createRequestServices(
         forgetCredential: (accountId) => fastCredentials.forget(accountId),
         nativeSchemaTimeoutMs: env.claudeSdkPacing.fastNativeSchemaTimeoutMs,
         nativeSchemaMemoSize: env.claudeSdkPacing.fastNativeSchemaMemoSize,
+        dropLogWindowMs: env.translation.dropLogWindowSeconds * 1_000,
         logger,
         resolveModel: (accountId, model) => {
           if (model.startsWith("claude-")) return model

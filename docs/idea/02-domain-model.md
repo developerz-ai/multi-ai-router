@@ -249,7 +249,7 @@ Verification path: indexed lookup by display prefix → decrypt → constant-tim
 | Field | Type | Notes |
 |---|---|---|
 | `id` | id | |
-| `name` | string | **Required**, human-chosen: `sebastian-laptop`, `ci-agent-3` |
+| `name` | string | **Required**, human-chosen: `sebastian-laptop`, `ci-agent-3`. Unique — the admin service refuses a clash under an advisory lock, and since `0045` a unique index (`api_keys_name_key`) holds it for every writer; the repository surfaces a clash as `ApiKeyNameTakenError` |
 | `value` | encrypted | The full `mar_live_…` string. Retrievable by the admin at any time |
 | `prefix` | string | Short display prefix, indexed — makes verification a lookup, not a table scan |
 | `scope` | enum | `all` \| `pools` \| `accounts` — full vs. limited, see below |

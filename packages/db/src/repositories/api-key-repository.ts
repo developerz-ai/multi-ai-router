@@ -1,133 +1,35 @@
-import type { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
 import { and, asc, eq, getTableColumns, gt, inArray, isNull, or, type SQL, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
-import {
-  type ApiKeyAccountRow,
-  type ApiKeyPoolRow,
-  apiKeyAccounts,
-  apiKeyPools,
-} from "../schema/api-key-scope"
-import { type ApiKeyRow, apiKeys } from "../schema/api-keys"
+import { apiKeyAccounts, apiKeyPools } from "../schema/api-key-scope"
+import { apiKeys } from "../schema/api-keys"
+import { postgresFailure } from "./admin-mutation-conflict"
+import { type ApiKeyListFilter, ApiKeyNameTakenError, type ApiKeyRepository } from "./api-key-types"
 
-/**
- * Repositories own SQL. Services call these methods and never write a query
- * inline — this file is the only place that knows `api_keys`, `api_key_pools`,
- * and `api_key_accounts` are tables.
- *
- * The verification lookup is a cache *miss* path: the data plane answers from a
- * warm in-memory cache and only lands here on a miss, as a single indexed query.
- *
- * **Ciphertext in, ciphertext out.** `value` crosses this boundary as the
- * AES-256-GCM envelope; encryption and the constant-time comparison both happen
- * above. Keys are encrypted rather than hashed on purpose — the admin can
- * decrypt and re-copy one at any time, and there is no shown-once flow anywhere
- * (docs/idea/04-api-keys-and-access.md#key-visibility--encrypted-not-hashed).
- */
-export interface ApiKeyRepository {
-  /**
-   * Rows whose display prefix matches and that are still usable at `now`.
-   * A prefix is not unique by construction, so the caller decrypts each
-   * candidate and compares in constant time — the index narrows, it never decides.
-   */
-  findUsableByPrefix(prefix: string, now: Date): Promise<ApiKeyRow[]>
-  /**
-   * {@link ApiKeyRepository.findUsableByPrefix} with each candidate's scope targets folded in, as
-   * one statement: a scoped key's cache miss used to cost the prefix query plus two membership
-   * queries. Pool ids keep the scope's listed order (`position`, then id); account ids are
-   * unordered. Both arrays are empty for a key whose scope is `all`.
-   */
-  findUsableWithTargetsByPrefix(prefix: string, now: Date): Promise<ApiKeyWithTargets[]>
-  findById(id: string): Promise<ApiKeyRow | undefined>
-  markRevoked(id: string, now: Date): Promise<void>
-  touchLastUsed(id: string, now: Date): Promise<void>
+/** The repository's interface, inputs and row shapes live in `api-key-types.ts`. */
+export {
+  type ApiKeyListFilter,
+  type ApiKeyListRow,
+  ApiKeyNameTakenError,
+  type ApiKeyRepository,
+  type ApiKeyWithTargets,
+  type CreateApiKeyInput,
+  type ScopeTargetRows,
+  type ScopeTargets,
+  type UpdateApiKeyInput,
+} from "./api-key-types"
 
-  // --- admin plane ----------------------------------------------------------
-  create(input: CreateApiKeyInput): Promise<ApiKeyRow>
-  /** Oldest first, so the admin list is stable across calls. Filters are exact matches, ANDed. */
-  list(filter?: ApiKeyListFilter): Promise<ApiKeyRow[]>
-  /**
-   * {@link ApiKeyRepository.list} without `value`: every reader of the list (the admin keys
-   * table, recovery reach, usage labels) renders or filters metadata, and the ciphertext belongs
-   * to the reveal path (`findById`) alone.
-   */
-  listSummaries(filter?: ApiKeyListFilter): Promise<ApiKeyListRow[]>
-  findByName(name: string): Promise<ApiKeyRow | undefined>
-  /** Never touches `value` or `prefix`: editing a key does not rotate it. */
-  update(id: string, patch: UpdateApiKeyInput, now: Date): Promise<ApiKeyRow | undefined>
-  // There is deliberately no `delete`: removing an `api_keys` row writes a tombstone in the same
-  // statement, and that lives in `ApiKeyTombstoneRepository` (`deleteKey`, `purgeRevoked`).
-
-  listPoolTargets(apiKeyId: string): Promise<ApiKeyPoolRow[]>
-  listAccountTargets(apiKeyId: string): Promise<ApiKeyAccountRow[]>
-  /** All scope rows for a set of keys, for the admin list view. */
-  listTargetsForKeys(apiKeyIds: readonly string[]): Promise<ScopeTargetRows>
-  /** Keys whose scope names this pool — what a pool deletion would silently narrow. */
-  listKeysScopedToPool(poolId: string): Promise<ApiKeyRow[]>
-  /** Keys whose scope names this account. */
-  listKeysScopedToAccount(accountId: string): Promise<ApiKeyRow[]>
-  /**
-   * Scope targets are replaced as a whole set inside one transaction: a key is
-   * never briefly scoped to nothing, which on the data plane would read as a
-   * scope violation rather than an edit in progress.
-   */
-  replaceScopeTargets(apiKeyId: string, targets: ScopeTargets): Promise<void>
+/** Rethrows a unique violation on the name as {@link ApiKeyNameTakenError}; anything else as is. */
+async function nameChecked<T>(name: string | undefined, write: Promise<T>): Promise<T> {
+  try {
+    return await write
+  } catch (error) {
+    const failure = postgresFailure(error)
+    if (name !== undefined && failure?.code === "23505" && failure.constraint === NAME_KEY)
+      throw new ApiKeyNameTakenError(name)
+    throw error
+  }
 }
-
-export interface CreateApiKeyInput {
-  /** Required, human-chosen: `sebastian-laptop`, `ci-agent-3`. */
-  readonly name: string
-  /** AES-256-GCM envelope of the full `mar_live_…` value. Never plaintext. */
-  readonly value: string
-  /** The clear, indexed display prefix — `routerKeyDisplayPrefix` in core. */
-  readonly prefix: string
-  readonly scope?: KeyScope
-  /** Attribution labels — usage reporting only, never read on the request path. */
-  readonly owner?: string | null
-  readonly ownerKind?: KeyOwnerKind | null
-  readonly tool?: string | null
-  readonly purpose?: string | null
-  readonly rateLimitRequests?: number | null
-  readonly rateLimitWindowSeconds?: number | null
-  readonly expiresAt?: Date | null
-}
-
-export interface UpdateApiKeyInput {
-  readonly name?: string
-  readonly scope?: KeyScope
-  readonly owner?: string | null
-  readonly ownerKind?: KeyOwnerKind | null
-  readonly tool?: string | null
-  readonly purpose?: string | null
-  readonly rateLimitRequests?: number | null
-  readonly rateLimitWindowSeconds?: number | null
-  readonly expiresAt?: Date | null
-}
-
-/** Attribution filters for the admin list. Exact match; both may combine. */
-export interface ApiKeyListFilter {
-  readonly owner?: string
-  readonly tool?: string
-}
-
-/** Empty on both sides when the scope is `all`. */
-export interface ScopeTargets {
-  readonly poolIds?: readonly string[]
-  readonly accountIds?: readonly string[]
-}
-
-/** An `api_keys` row without the encrypted `value`. */
-export type ApiKeyListRow = Omit<ApiKeyRow, "value">
-
-export interface ApiKeyWithTargets {
-  readonly key: ApiKeyRow
-  readonly poolIds: readonly string[]
-  readonly accountIds: readonly string[]
-}
-
-export interface ScopeTargetRows {
-  readonly pools: readonly ApiKeyPoolRow[]
-  readonly accounts: readonly ApiKeyAccountRow[]
-}
+const NAME_KEY = "api_keys_name_key"
 
 /** `undefined` (no WHERE) when the filter names nothing. Exact matches, ANDed. */
 function listFilter(filter: ApiKeyListFilter | undefined): SQL | undefined {
@@ -192,22 +94,25 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
     },
 
     create: async (input) => {
-      const rows = await db
-        .insert(apiKeys)
-        .values({
-          name: input.name,
-          value: input.value,
-          prefix: input.prefix,
-          ...(input.scope === undefined ? {} : { scope: input.scope }),
-          owner: input.owner ?? null,
-          ownerKind: input.ownerKind ?? null,
-          tool: input.tool ?? null,
-          purpose: input.purpose ?? null,
-          rateLimitRequests: input.rateLimitRequests ?? null,
-          rateLimitWindowSeconds: input.rateLimitWindowSeconds ?? null,
-          expiresAt: input.expiresAt ?? null,
-        })
-        .returning()
+      const rows = await nameChecked(
+        input.name,
+        db
+          .insert(apiKeys)
+          .values({
+            name: input.name,
+            value: input.value,
+            prefix: input.prefix,
+            ...(input.scope === undefined ? {} : { scope: input.scope }),
+            owner: input.owner ?? null,
+            ownerKind: input.ownerKind ?? null,
+            tool: input.tool ?? null,
+            purpose: input.purpose ?? null,
+            rateLimitRequests: input.rateLimitRequests ?? null,
+            rateLimitWindowSeconds: input.rateLimitWindowSeconds ?? null,
+            expiresAt: input.expiresAt ?? null,
+          })
+          .returning(),
+      )
       const row = rows[0]
       if (row === undefined) throw new Error("apiKeyRepository.create: statement returned no row")
       return row
@@ -233,26 +138,29 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
     // Spread-per-field: an absent key stays absent, `null` survives as an
     // explicit clear. `value` and `prefix` are deliberately not editable.
     update: async (id, patch, now) => {
-      const rows = await db
-        .update(apiKeys)
-        .set({
-          ...(patch.name === undefined ? {} : { name: patch.name }),
-          ...(patch.scope === undefined ? {} : { scope: patch.scope }),
-          ...(patch.owner === undefined ? {} : { owner: patch.owner }),
-          ...(patch.ownerKind === undefined ? {} : { ownerKind: patch.ownerKind }),
-          ...(patch.tool === undefined ? {} : { tool: patch.tool }),
-          ...(patch.purpose === undefined ? {} : { purpose: patch.purpose }),
-          ...(patch.rateLimitRequests === undefined
-            ? {}
-            : { rateLimitRequests: patch.rateLimitRequests }),
-          ...(patch.rateLimitWindowSeconds === undefined
-            ? {}
-            : { rateLimitWindowSeconds: patch.rateLimitWindowSeconds }),
-          ...(patch.expiresAt === undefined ? {} : { expiresAt: patch.expiresAt }),
-          updatedAt: now,
-        })
-        .where(eq(apiKeys.id, id))
-        .returning()
+      const rows = await nameChecked(
+        patch.name,
+        db
+          .update(apiKeys)
+          .set({
+            ...(patch.name === undefined ? {} : { name: patch.name }),
+            ...(patch.scope === undefined ? {} : { scope: patch.scope }),
+            ...(patch.owner === undefined ? {} : { owner: patch.owner }),
+            ...(patch.ownerKind === undefined ? {} : { ownerKind: patch.ownerKind }),
+            ...(patch.tool === undefined ? {} : { tool: patch.tool }),
+            ...(patch.purpose === undefined ? {} : { purpose: patch.purpose }),
+            ...(patch.rateLimitRequests === undefined
+              ? {}
+              : { rateLimitRequests: patch.rateLimitRequests }),
+            ...(patch.rateLimitWindowSeconds === undefined
+              ? {}
+              : { rateLimitWindowSeconds: patch.rateLimitWindowSeconds }),
+            ...(patch.expiresAt === undefined ? {} : { expiresAt: patch.expiresAt }),
+            updatedAt: now,
+          })
+          .where(eq(apiKeys.id, id))
+          .returning(),
+      )
       return rows[0]
     },
 

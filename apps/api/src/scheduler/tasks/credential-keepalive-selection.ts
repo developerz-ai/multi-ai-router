@@ -1,4 +1,4 @@
-import type { AccountRow } from "@multi-ai-router/db"
+import type { AccountSummaryRow } from "@multi-ai-router/db"
 import type { CredentialMetadata } from "../../providers/claude-sdk/credential-metadata"
 
 /**
@@ -24,7 +24,8 @@ import type { CredentialMetadata } from "../../providers/claude-sdk/credential-m
  */
 
 export interface KeepaliveCandidate {
-  readonly account: AccountRow
+  /** The ciphertext-free projection: selection needs id and status only. */
+  readonly account: AccountSummaryRow
   readonly metadata: CredentialMetadata
 }
 

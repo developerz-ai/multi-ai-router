@@ -1,11 +1,13 @@
 import type { Dialect } from "@multi-ai-router/core"
 import { Hono } from "hono"
 import { holdIdleClock } from "../../middleware/idleClock"
+import { countUndispatched, markDispatched } from "../../middleware/requestCounting"
 import { type RouterKeyEnv, routerKeyAuth } from "../../middleware/routerKeyAuth"
 import type {
   CatalogListingDeps,
   Dispatcher,
   HealthStore,
+  RequestObserver,
   RouterKeyVerifier,
   RoutingCatalog,
   UpstreamOperation,
@@ -80,6 +82,11 @@ export interface DataPlaneRoutesDeps {
    * answer no longer needs it off (`middleware/idleClock.ts`).
    */
   readonly serverIdleTimeoutSeconds: number
+  /**
+   * Counts an inference request that ended before the dispatcher saw it (a refused key, a key
+   * store that could not answer) in `router_requests_total` — `middleware/requestCounting.ts`.
+   */
+  readonly onUndispatched?: RequestObserver
 }
 
 /** Where these routes mount. Absolute paths, so the mount point is the root. */
@@ -107,8 +114,10 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
   const hold = holdIdleClock(deps.serverIdleTimeoutSeconds)
 
   for (const route of INGRESS) {
-    routes.post(route.path, guard, hold, (c) =>
-      deps.dispatcher.dispatch({
+    const counted = countUndispatched(route.dialect, deps.onUndispatched)
+    routes.post(route.path, counted, guard, hold, (c) => {
+      markDispatched(c.req.raw)
+      return deps.dispatcher.dispatch({
         ingress: route.dialect,
         ...(route.operation === undefined ? {} : { operation: route.operation }),
         request: c.req.raw,
@@ -122,8 +131,8 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
                 clientRequestId: c.get("clientRequestId") ?? null,
               },
             }),
-      }),
-    )
+      })
+    })
   }
 
   // The warm model catalog rides along so a Claude subscription — which has no `supported_models`

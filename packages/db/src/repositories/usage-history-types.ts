@@ -1,4 +1,5 @@
 import type { UsageExportRow } from "./usage-export-repository"
+import type { UsageSummaryAggregates } from "./usage-history-summary"
 import type {
   UsageAttributedDimension,
   UsageColumnDimension,
@@ -46,6 +47,17 @@ export interface UsageHistoryRepository {
     filter: UsageFilter,
     attribution: UsageKeyAttribution,
   ): Promise<UsageGroupRow[]>
+  /**
+   * `totals` and all six `breakdown`s (each cut at `limit`, owner/tool via `attribution`) in one
+   * statement over one `facts` scan — identical results, one round trip instead of seven.
+   * `attribution.ids` must be unique.
+   */
+  summaryAggregates(
+    window: UsageWindow,
+    limit: number,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
+  ): Promise<UsageSummaryAggregates>
   series(
     window: UsageWindow,
     bucket: "hour" | "day",

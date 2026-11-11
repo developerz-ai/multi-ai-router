@@ -1,22 +1,14 @@
-import type { AccountObservation, AccountRow } from "@multi-ai-router/db"
+import { createExposer, observation, readAccounts, standingBlock } from "./expose"
 import { createRecoveryLoop } from "./loop"
 import { createRecoveryQueues } from "./queues"
 import { createEntryIsolation, createExpirySweep, markExpiredUncertain } from "./tick-guards"
 import type {
-  RecoveryCapability,
   RecoveryCoordinator,
   RecoveryCoordinatorDeps,
   RecoveryOutcome,
   RecoveryRow,
 } from "./types"
 
-function observation(row: AccountRow): AccountObservation {
-  return {
-    lifecycleVersion: row.lifecycleVersion,
-    authMaterial: row.authMaterial,
-    status: row.status,
-  }
-}
 export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): RecoveryCoordinator {
   const bootId = crypto.randomUUID()
   const queues = createRecoveryQueues(deps.config.demandCapacity, deps.config.outcomeCapacity)
@@ -43,47 +35,17 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       return false
     }
   }
-  const expose = async (row: RecoveryRow): Promise<void> => {
-    if (stopped || row.state !== "issued" || row.ownerBootId !== bootId || row.permitId === null)
-      return
-    if (offered.get(row.accountId) === row.permitId) return
-    const account = await deps.accounts.findById(row.accountId)
-    if (
-      stopped ||
-      account === undefined ||
-      account.status === "disabled" ||
-      account.status === "needs_reauth" ||
-      account.status === "exhausted"
-    )
-      return
-    const hydrated = await deps.repository.hydrateIssued({
-      accountId: row.accountId,
-      generation: row.generation,
-      permitId: row.permitId,
-      ownerBootId: bootId,
-      expectedEpoch: row.ownershipEpoch,
-      expected: observation(account),
-      maximumOutcomeAgeMs: deps.config.maximumOutcomeMs,
-    })
-    if (hydrated === undefined || !(await coherent()) || stopped) return
-    const capability: RecoveryCapability = {
-      revision: hydrated.revision,
-      accountId: row.accountId,
-      generation: row.generation,
-      permitId: row.permitId,
-      ownerBootId: bootId,
-      ownershipEpoch: row.ownershipEpoch,
-      expected: observation(account),
-      quotaRevisions: { ...row.quotaRevisions },
-    }
-    // Install is synchronous and must be idempotent; a consumed permit cannot be reset.
-    if (!deps.install(capability)) {
+  const expose = createExposer({
+    deps,
+    bootId,
+    offered,
+    stopped: () => stopped,
+    coherent,
+    markDirty: () => {
       dirty = true
-      return
-    }
-    offered.set(row.accountId, row.permitId)
-    queues.satisfied(row.accountId)
-  }
+    },
+    satisfied: (accountId) => queues.satisfied(accountId),
+  })
   const issuing = (): boolean => !stopped && !issuanceClosed
   const writeOutcome = async (outcome: RecoveryOutcome): Promise<void> => {
     const { ownershipEpoch, ...rest } = outcome
@@ -186,15 +148,22 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       ownerBootId: bootId,
       accountIds: demandedIds,
     })
+    const issuedAccounts = await readAccounts(
+      deps.accounts,
+      issued.map((row) => row.accountId),
+    )
     for (const row of issued) {
       if (stopped) return
-      await expose(row)
+      await expose(row, issuedAccounts.get(row.accountId))
     }
     if (!issuing()) return
     const pending = await deps.repository.listPending({
       limit: deps.config.batchSize,
       accountIds: demandedIds,
     })
+    // Assign every demanded row first, then read their accounts once: the read still follows the
+    // assignment it is checked against, and `issue` fences the observation durably anyway.
+    const assignments: { row: RecoveryRow; assigned: RecoveryRow }[] = []
     for (const row of pending) {
       if (!issuing()) return
       if (!queues.demanded(row.accountId, deps.now().getTime(), deps.config.demandTtlMs)) continue
@@ -205,15 +174,21 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
         ownerBootId: bootId,
         leaseMs: deps.config.preparationLeaseMs,
       })
-      if (!issuing() || assigned === undefined || assigned.ownerBootId !== bootId) continue
-      const account = await deps.accounts.findById(row.accountId)
+      if (assigned !== undefined && assigned.ownerBootId === bootId)
+        assignments.push({ row, assigned })
+    }
+    if (!issuing()) return
+    const pendingAccounts = await readAccounts(
+      deps.accounts,
+      assignments.map(({ row }) => row.accountId),
+    )
+    for (const { row, assigned } of assignments) {
+      const account = pendingAccounts.get(row.accountId)
       if (
         !issuing() ||
         account === undefined ||
         account.lifecycleVersion !== assigned.lifecycleVersion ||
-        account.status === "disabled" ||
-        account.status === "needs_reauth" ||
-        account.status === "exhausted"
+        standingBlock(account)
       )
         continue
       dirty = true
@@ -228,7 +203,7 @@ export function createRecoveryCoordinator(deps: RecoveryCoordinatorDeps): Recove
       // Issuance acknowledgment loss is resolved by listIssued on the next tick, never reissued.
       if (committed !== undefined) {
         dirty = true
-        await expose(committed)
+        await expose(committed, account)
       }
     }
     await coherent()

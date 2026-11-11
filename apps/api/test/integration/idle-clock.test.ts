@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
 import { jsonResponse } from "../unit/dataplane/fixtures"
 import { bearer, harness, KEY, MESSAGE, post } from "./harness"
 
@@ -17,9 +17,13 @@ const IDLE_SECONDS = 1
 const HOLD_MS = 6_000
 const TEST_TIMEOUT_MS = 20_000
 
+// The waits are real: Bun's idle sweep runs on the wall clock (about every 4 s), so HOLD_MS cannot
+// shrink and no fake clock reaches it. The cases share nothing but this list, so they run
+// concurrently and the file costs one hold instead of one per case; servers are stopped once, at
+// the end, because a per-test hook would stop a server another case is still using.
 const servers: ReturnType<typeof Bun.serve>[] = []
 
-afterEach(() => {
+afterAll(() => {
   for (const server of servers.splice(0)) server.stop(true)
 })
 
@@ -42,7 +46,7 @@ function serveWithUsage(responses: Parameters<typeof harness>[0]["responses"]) {
 const ANSWER = { id: "msg_1", type: "message", content: [{ type: "text", text: "late" }] }
 
 describe("a non-streamed data-plane request outlives the server's idle clock", () => {
-  test(
+  test.concurrent(
     "an upstream that answers only after the idle timeout still reaches the client",
     async () => {
       const base = serve([
@@ -58,7 +62,7 @@ describe("a non-streamed data-plane request outlives the server's idle clock", (
 
   // The Codex shape: headers at once, the one JSON body folded from an upstream stream that takes
   // minutes. The handler has returned, so the clock must stay off until the body is written.
-  test(
+  test.concurrent(
     "a body that arrives after the idle timeout, behind early headers, still reaches the client",
     async () => {
       const bytes = new TextEncoder().encode(JSON.stringify(ANSWER))
@@ -84,7 +88,7 @@ describe("a non-streamed data-plane request outlives the server's idle clock", (
 })
 
 describe("the server's idle clock still governs everything else", () => {
-  test(
+  test.concurrent(
     "a keep-alive socket left idle after a held response is reaped again",
     async () => {
       const base = serve([() => jsonResponse(200, ANSWER)])
@@ -122,7 +126,7 @@ describe("the server's idle clock still governs everything else", () => {
     TEST_TIMEOUT_MS,
   )
 
-  test(
+  test.concurrent(
     "a stream that goes silent past the idle timeout is still cut by the server's clock",
     async () => {
       // A content event commits the stream (`success-wall.ts`; a `ping` is a preamble since 2.53.0).
@@ -162,7 +166,7 @@ describe("the server's idle clock still governs everything else", () => {
 // upstream that thought longer than the listener's idle timeout was cut with *nothing* written —
 // Envoy logged `502 UPE`, the router `client_cancelled` with no tokens.
 describe("an event stream stays off the idle clock until its first byte", () => {
-  test(
+  test.concurrent(
     "an upstream silent past the idle timeout before its first event still reaches the client",
     async () => {
       const events = [

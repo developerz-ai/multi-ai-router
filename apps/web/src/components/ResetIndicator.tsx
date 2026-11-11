@@ -1,8 +1,13 @@
 import type { AccountStatus, ResetSource } from "@multi-ai-router/core"
 import { createMemo, Index, Show } from "solid-js"
 import type { QuotaWindowView } from "../lib/api/types"
-import { describeQuotaWindows } from "../lib/quota-windows"
-import { describeReset, formatAbsolute } from "../lib/reset-countdown"
+import { formatAbsolute } from "../lib/format"
+import {
+  describeQuotaWindowReset,
+  describeQuotaWindowStatic,
+  orderedQuotaWindows,
+} from "../lib/quota-windows"
+import { describeReset } from "../lib/reset-countdown"
 import { Badge } from "./Badge"
 import { QuotaWindowRow } from "./QuotaWindowRow"
 import styles from "./ResetIndicator.module.scss"
@@ -36,10 +41,9 @@ export interface ResetIndicatorProps {
  * no gauge that reads empty without saying why — are decided in `describeQuotaWindows` and
  * rendered by `QuotaWindowRow`, which the usage screen shares. Neither lives in this template.
  *
- * `Index` rather than `For`: the clock ticks once a second and the descriptions are rebuilt with
- * it, so keying by reference would dispose and recreate every row — and every gauge and badge
- * under it — every second, dismissing tooltips mid-read and restarting the fill transition. The
- * window list is positionally stable, so keying by index updates text in place instead.
+ * The clock ticks once a second, and only each row's reset half is rebuilt with it; the gauge,
+ * notes and series are described once per data change. `Index` keeps each row mounted while its
+ * window's data is replaced in place.
  */
 export function ResetIndicator(props: ResetIndicatorProps) {
   const display = createMemo(() =>
@@ -49,9 +53,7 @@ export function ResetIndicator(props: ResetIndicatorProps) {
     ),
   )
 
-  const windows = createMemo(() =>
-    describeQuotaWindows({ status: props.status, windows: props.quotaWindows ?? [] }, props.nowMs),
-  )
+  const windows = createMemo(() => orderedQuotaWindows(props.quotaWindows ?? []))
 
   return (
     <div class={styles.root}>
@@ -93,7 +95,17 @@ export function ResetIndicator(props: ResetIndicatorProps) {
       <Show when={windows().length > 0}>
         <ul class={styles.windows}>
           <Index each={windows()}>
-            {(window) => <QuotaWindowRow owner={props.label} window={window()} />}
+            {(window) => {
+              // Built from the window's data alone, so the per-second tick touches only `reset`.
+              const display = createMemo(() => describeQuotaWindowStatic(window()))
+              return (
+                <QuotaWindowRow
+                  owner={props.label}
+                  reset={describeQuotaWindowReset(props.status, window(), props.nowMs)}
+                  window={display()}
+                />
+              )
+            }}
           </Index>
         </ul>
       </Show>

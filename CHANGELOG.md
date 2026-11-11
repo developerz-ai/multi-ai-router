@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.57.0] — 2026-11-11
+
+Sweep 101 wave 3 (#373): the findings 2.56.0 deferred.
+
+### Changed
+
+- **Key names are unique in the database** (migration `0045`, `api_keys_name_key`). A boot with existing duplicates fails with `MigrationPreconditionError` naming each one; key create/rename clashes are decided by the index (`409`, unchanged wording) (08.10).
+- **Every data-plane request is counted in `router_requests_total`**, including ones refused before dispatch (unknown key → `key_revoked`, `key_id="none"`; key store down → its typed `503`) (12.3 follow-up).
+- **The request log line is written when the response settles**, not at its headers; `durationMs` is the whole response and streamed lines carry `timeToHeadersMs` (01.12).
+- Console dates use one short date-time format everywhere (09.11).
+
+### Fixed
+
+- **Codex streams the upstream ends at its ~15-minute cap are labelled `codex:stream-cap`** (with the Responses event types that arrived) instead of a bare `upstream_error`; no router-side cut (12.8). Threshold `UPSTREAM_STREAM_CAP_MIN_SECONDS` (default 840).
+- Anthropic 1-hour cache writes are priced at their own rate when the response states the split (07.8).
+
+### Performance
+
+- The usage summary reads totals and all six breakdowns in one `GROUPING SETS` statement (07.7 / 10.11): −42 % shared buffers on the 30-day bench fixture.
+- Fast transport builds the request body in one serialisation pass and parses each SDK chunk once (05.6, 05.10): ~⅓ less work at 850 KB and 3 MB.
+- Recovery coordinator batches its account reads (03.11); warm stores share one jittered refresh timer (04.5); the console re-renders only the countdown on each clock tick (09.8).
+
+### Internal
+
+- File-size gate (`file-size.test.ts`, ≤300 lines, shrinking allowlist) (11.12); `credential-freshness.ts`, `recovery/coordinator.ts`, `main.ts`, `core/errors.ts`, `api-key-repository.ts` split. Fast-transport bench leg `apps/api/bench/claude-fast.ts`. Docs say PostgreSQL 18, the only major CI tests (11.14).
+
 ## [2.56.0] — 2026-11-11
 
 Sweep 101 (#373): 197 findings from code, both production deployments, consumers and CI. Ledger: `docs/plans/2026/11/10/101-end-to-end-deep-sweep/`.
@@ -2152,3 +2178,4 @@ your tooling config.
 
 [2.55.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.55.0
 [2.56.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.56.0
+[2.57.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.0

@@ -47,7 +47,7 @@ import { MESSAGE, post, settle } from "./harness"
  * is covered in `packages/db/test/integration/api-key-scope-position.test.ts`;
  * this file owns the router's behavior.
  */
-// Needs a real PostgreSQL 16+ (migrations plus the admin mutation machinery);
+// Needs a real PostgreSQL 18 (migrations plus the admin mutation machinery);
 // mocked upstreams only, same rule as every integration suite.
 const url = process.env.DATABASE_URL ?? ""
 const runnable = url !== ""

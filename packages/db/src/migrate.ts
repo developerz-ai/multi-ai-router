@@ -36,6 +36,18 @@ export interface MigrateOptions {
 
 export const MIGRATION_LOCK_TIMEOUT_DEFAULT_MS = 10_000
 
+/**
+ * A migration refused to run because the data in front of it breaks its precondition (SQLSTATE
+ * `MR001`, raised by the migration itself — e.g. duplicate key names before 0045's unique index).
+ * The message names what to fix; nothing was changed.
+ */
+export class MigrationPreconditionError extends Error {
+  override readonly name = "MigrationPreconditionError"
+  constructor(detail: string, options: { cause: unknown }) {
+    super(`a migration's precondition failed and nothing was applied: ${detail}`, options)
+  }
+}
+
 /** A migration DDL could not take its table lock within `lockTimeoutMs` (SQLSTATE `55P03`). */
 export class MigrationLockTimeoutError extends Error {
   override readonly name = "MigrationLockTimeoutError"
@@ -85,8 +97,10 @@ export async function runMigrations(options: MigrateOptions): Promise<void> {
     try {
       await handle.sql`select set_config('lock_timeout', ${String(lockTimeoutMs)}, false)`
       await migrate(handle.db, { migrationsFolder: folder }).catch((error: unknown) => {
-        if (sqlState(error) === "55P03")
-          throw new MigrationLockTimeoutError(lockTimeoutMs, { cause: error })
+        const state = sqlState(error)
+        if (state === "55P03") throw new MigrationLockTimeoutError(lockTimeoutMs, { cause: error })
+        if (state === "MR001")
+          throw new MigrationPreconditionError(innermostMessage(error), { cause: error })
         throw error
       })
     } finally {
@@ -95,6 +109,15 @@ export async function runMigrations(options: MigrateOptions): Promise<void> {
   } finally {
     await handle.close()
   }
+}
+
+/** The driver's own message — drizzle's wrapper message is the failed statement, not the reason. */
+function innermostMessage(error: unknown): string {
+  let message = error instanceof Error ? error.message : String(error)
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    if (typeof Reflect.get(current, "code") === "string") message = current.message
+  }
+  return message
 }
 
 /** drizzle wraps the driver error; the SQLSTATE is on it or on its cause. */

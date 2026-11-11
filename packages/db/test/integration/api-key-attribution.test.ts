@@ -5,7 +5,7 @@ import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
 
 /**
- * Attribution columns against a real PostgreSQL 16+: what migration 0033 leaves
+ * Attribution columns against a real PostgreSQL 18: what migration 0033 leaves
  * behind on pre-existing rows, and that the repository's owner/tool filters are
  * exact-match predicates (no index backs them; the fleet is small). Own database, dropped afterwards —
  * a shared development database must look untouched.

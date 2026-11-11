@@ -1,6 +1,11 @@
-import type { AccountStatus, QuotaWindowKind, UtilizationSource } from "@multi-ai-router/core"
+import type { AccountStatus, QuotaWindowKind } from "@multi-ai-router/core"
 import type { QuotaUtilizationSource, QuotaWindowView } from "./api/types"
 import { MEASURED_NOTE, measuredFraction, measuredSeries, measuredText } from "./quota-measured"
+import {
+  type UtilizationQualifier,
+  utilizationNote,
+  utilizationQualifier,
+} from "./quota-utilization"
 import {
   describeInstant,
   NEEDS_TOPUP,
@@ -8,6 +13,12 @@ import {
   type ResetQualifier,
   resetQualifier,
 } from "./reset-countdown"
+
+export {
+  type UtilizationQualifier,
+  utilizationNote,
+  utilizationQualifier,
+} from "./quota-utilization"
 
 // Per-window quota, prepared for rendering. Pure: the caller passes `nowMs`, so this is testable
 // against a fixed clock and re-renders on a timer the caller owns.
@@ -71,60 +82,6 @@ export function quotaWindowTitle(window: QuotaWindowKind): string {
   return NAMING[window].title
 }
 
-/**
- * Why a gauge reads what it reads. Keyed exhaustively over core's enum plus `gauge` for the same
- * drift reason as `NAMING`; a value outside both is answered by `utilizationNote`'s fallback.
- */
-const UTILIZATION_NOTE: Readonly<Record<UtilizationSource | "gauge", string>> = {
-  // `continuous` is what the SDK's plan-usage readings arrive as — the subscription's own usage
-  // endpoint, a real percentage at any point in the window. `gauge` is kept as its synonym in
-  // case core names it that later; both render the same way.
-  continuous:
-    "From the subscription's usage endpoint — the provider's own accounting, reported as a percentage of the window at any point in it.",
-  gauge:
-    "From the subscription's usage endpoint — the provider's own accounting, reported as a percentage of the window at any point in it.",
-  "threshold-triggered":
-    "The provider only reports near the limit, so an empty gauge here is normal, not a fault.",
-  // `none` is per-window state, not a provider verdict: no reading has ever arrived for THIS
-  // window (claude-sdk's `utilizationSourceOf` maps "no value yet" to `none`). A provider with
-  // genuinely no signal has no windows at all, so its rows are never invented and this note
-  // never shows for it. Claiming "the provider exposes no signal" for a never-read Claude sub
-  // sent operators hunting a provider problem that did not exist (#69).
-  none: "No reading yet — readings arrive as the account serves traffic, or on a Test now.",
-}
-
-/** The fallback names the fact it lacks: a reading arrived, and this build cannot say from where. */
-const UNLABELLED_NOTE =
-  "Reported for this window by a source this console version does not label. The figure is the provider's; only its origin is unnamed."
-
-export function utilizationNote(source: QuotaUtilizationSource): string {
-  return Object.hasOwn(UTILIZATION_NOTE, source)
-    ? UTILIZATION_NOTE[source as UtilizationSource | "gauge"]
-    : UNLABELLED_NOTE
-}
-
-/**
- * The one word beside the figure saying whose number it is. `reported` for the provider's own
- * reading (gauge or continuous), `measured` for the router's count against a configured ceiling,
- * `unlabelled` for a source this build does not know — and null where there is no figure at all,
- * so an empty gauge never carries a qualifier claiming otherwise.
- */
-export type UtilizationQualifier = "reported" | "measured" | "unlabelled"
-
-export function utilizationQualifier(
-  window: Pick<QuotaWindowView, "utilization" | "utilizationSource">,
-  measured: number | null,
-): UtilizationQualifier | null {
-  if (window.utilization !== null && Number.isFinite(window.utilization)) {
-    const source = window.utilizationSource
-    if (source === "gauge" || source === "continuous" || source === "threshold-triggered") {
-      return "reported"
-    }
-    return "unlabelled"
-  }
-  return measured === null ? null : "measured"
-}
-
 export interface QuotaWindowDisplay {
   readonly window: QuotaWindowKind
   readonly label: string
@@ -162,6 +119,12 @@ export interface QuotaWindowsInput {
   readonly windows: readonly QuotaWindowView[]
 }
 
+/** The part of a window's description that changes with its data, not with the clock. */
+export type QuotaWindowStatic = Omit<QuotaWindowDisplay, "reset" | "resetsAtMs">
+
+/** The clock-driven part: the reset sentence and the instant it is about. */
+export type QuotaWindowReset = Pick<QuotaWindowDisplay, "reset" | "resetsAtMs">
+
 /**
  * Every window this account holds, in reading order.
  *
@@ -169,15 +132,21 @@ export interface QuotaWindowsInput {
  * absent. Padding the list with five unknown rows would make an account that reports one window
  * look like one that reports five and failed at four.
  */
+export function orderedQuotaWindows(
+  windows: readonly QuotaWindowView[],
+): readonly QuotaWindowView[] {
+  const byKind = new Map(windows.map((window) => [window.window, window]))
+  return QUOTA_WINDOW_DISPLAY_ORDER.map((kind) => byKind.get(kind)).filter(isPresent)
+}
+
+/** `orderedQuotaWindows`, each fully described at `nowMs`. */
 export function describeQuotaWindows(
   input: QuotaWindowsInput,
   nowMs: number,
 ): readonly QuotaWindowDisplay[] {
-  const byKind = new Map(input.windows.map((window) => [window.window, window]))
-
-  return QUOTA_WINDOW_DISPLAY_ORDER.map((kind) => byKind.get(kind))
-    .filter(isPresent)
-    .map((window) => describeQuotaWindow(input.status, window, nowMs))
+  return orderedQuotaWindows(input.windows).map((window) =>
+    describeQuotaWindow(input.status, window, nowMs),
+  )
 }
 
 export function describeQuotaWindow(
@@ -185,28 +154,18 @@ export function describeQuotaWindow(
   window: QuotaWindowView,
   nowMs: number,
 ): QuotaWindowDisplay {
-  const resetsAtMs = parseInstant(window.resetsAt)
+  return {
+    ...describeQuotaWindowStatic(window),
+    ...describeQuotaWindowReset(status, window, nowMs),
+  }
+}
+
+/**
+ * Everything but the reset. Split from the clock-driven half because `/accounts` ticks once a
+ * second: the labels, notes, gauge and series are rebuilt only when the window's data changes.
+ */
+export function describeQuotaWindowStatic(window: QuotaWindowView): QuotaWindowStatic {
   const measured = measuredFraction(window)
-
-  // `exhausted` is the one status that overrides the window's own instant, and it is checked
-  // first: a row whose stored `resetsAt` survived from before the credits ran out would otherwise
-  // count down to a recovery that will not happen. Every other status defers to the window —
-  // an `active` subscription's five-hour window still refills on its own clock, and printing "—"
-  // beside a gauge that is visibly moving is the other way to be wrong here.
-  const baseReset =
-    status === "exhausted" ? NEEDS_TOPUP : describeInstant(resetsAtMs, window.resetSource, nowMs)
-
-  // A window that has told us nothing — no provider reading, no measurement of our own, no known
-  // reset — on an account that is otherwise healthy is NOT "retrying": nothing is. The backoff
-  // sentence belongs to a blocked account's recovery loop, and printing it here invents one (#69).
-  const reset: ResetDisplay =
-    status === "active" &&
-    window.utilization === null &&
-    measured === null &&
-    baseReset.kind === "unknown"
-      ? { ...baseReset, text: "Unknown — no reading yet" }
-      : baseReset
-
   return {
     window: window.window,
     label: quotaWindowLabel(window.window),
@@ -225,20 +184,48 @@ export function describeQuotaWindow(
         ? MEASURED_NOTE
         : utilizationNote(window.utilizationSource),
     utilizationQualifier: utilizationQualifier(window, measured),
-    reset,
-    // Carried only where the *description* is about that instant. "Unknown" beside a printed
-    // timestamp, or "needs top-up" beside one, are two ways of contradicting the sentence next
-    // to it — so the instant travels with `countdown` and `due` and with nothing else.
-    resetsAtMs: reset.kind === "countdown" || reset.kind === "due" ? resetsAtMs : null,
     resetLabel: resetQualifier(window.resetSource),
     spent: window.spent,
     lastCheckedAtMs: parseInstant(window.lastCheckedAt),
     // Carried only where the bar itself is ours. Beside a provider-reported percentage the curve
     // would describe a different measurement than the number above it.
-    tokenSeries:
-      window.utilization === null && measuredFraction(window) !== null
-        ? measuredSeries(window)
-        : [],
+    tokenSeries: window.utilization === null && measured !== null ? measuredSeries(window) : [],
+  }
+}
+
+/** The reset sentence at `nowMs`, and the instant beside it where the sentence is about one. */
+export function describeQuotaWindowReset(
+  status: AccountStatus,
+  window: QuotaWindowView,
+  nowMs: number,
+): QuotaWindowReset {
+  const resetsAtMs = parseInstant(window.resetsAt)
+
+  // `exhausted` is the one status that overrides the window's own instant, and it is checked
+  // first: a row whose stored `resetsAt` survived from before the credits ran out would otherwise
+  // count down to a recovery that will not happen. Every other status defers to the window —
+  // an `active` subscription's five-hour window still refills on its own clock, and printing "—"
+  // beside a gauge that is visibly moving is the other way to be wrong here.
+  const baseReset =
+    status === "exhausted" ? NEEDS_TOPUP : describeInstant(resetsAtMs, window.resetSource, nowMs)
+
+  // A window that has told us nothing — no provider reading, no measurement of our own, no known
+  // reset — on an account that is otherwise healthy is NOT "retrying": nothing is. The backoff
+  // sentence belongs to a blocked account's recovery loop, and printing it here invents one (#69).
+  const reset: ResetDisplay =
+    status === "active" &&
+    window.utilization === null &&
+    measuredFraction(window) === null &&
+    baseReset.kind === "unknown"
+      ? { ...baseReset, text: "Unknown — no reading yet" }
+      : baseReset
+
+  return {
+    reset,
+    // Carried only where the *description* is about that instant. "Unknown" beside a printed
+    // timestamp, or "needs top-up" beside one, are two ways of contradicting the sentence next
+    // to it — so the instant travels with `countdown` and `due` and with nothing else.
+    resetsAtMs: reset.kind === "countdown" || reset.kind === "due" ? resetsAtMs : null,
   }
 }
 
@@ -257,7 +244,7 @@ export function formatUtilization(value: number | null): string {
 
 /** The one place a spent window becomes a tone. Utilization alone is not it — a reading of 1.0 on
  * a refilled window is not blocking anything, which is why `spent` is computed server-side. */
-export function quotaWindowTone(display: QuotaWindowDisplay): "danger" | "warn" | "neutral" {
+export function quotaWindowTone(display: QuotaWindowStatic): "danger" | "warn" | "neutral" {
   if (display.spent) return "danger"
   if (display.utilization !== null && display.utilization >= 0.8) return "warn"
   return "neutral"

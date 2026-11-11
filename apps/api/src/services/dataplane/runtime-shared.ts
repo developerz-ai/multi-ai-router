@@ -32,6 +32,9 @@ export function sharedRuntimeInput(
       ? {}
       : { errorMaxBytes: options.upstreamErrorMaxBytes }),
     responseObservationMaxBytes: options.responseObservationMaxBytes ?? 65_536,
+    ...(options.upstreamStreamCapMinMs === undefined
+      ? {}
+      : { streamCapMinMs: options.upstreamStreamCapMinMs }),
     ...(options.bufferedBodyMaxBytes === undefined
       ? {}
       : { bufferedBodyMaxBytes: options.bufferedBodyMaxBytes }),

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  formatAbsolute,
   formatCost,
   formatCount,
   formatDate,
@@ -98,6 +99,13 @@ describe("timestamps", () => {
 
   test("a valid ISO instant renders as something", () => {
     expect(formatTimestamp("2026-07-24T12:00:00.000Z").length).toBeGreaterThan(0)
+  })
+
+  test("one spelling of an instant: the wire form and the epoch form read the same", () => {
+    // A reset cell and a last-used title on one account row used to print one instant two ways.
+    const iso = "2026-07-24T12:00:00.000Z"
+    expect(formatTimestamp(iso, "en-US")).toBe(formatAbsolute(Date.parse(iso), "en-US"))
+    expect(formatAbsolute(Date.parse(iso), "en-GB")).toMatch(/^24\/07\/2026/)
   })
 })
 

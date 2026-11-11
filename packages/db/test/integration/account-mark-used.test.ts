@@ -9,7 +9,7 @@ import {
 import { accounts } from "../../src/schema/accounts"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * `markUsed` interpolates its instant into a raw `sql` template, where no column encoder applies —
  * the one place a `Date` reaches the driver unconverted, and the one failure a unit test cannot

@@ -9,7 +9,7 @@ import {
 import { accounts } from "../../src/schema/accounts"
 
 /**
- * Needs a real PostgreSQL 16+.
+ * Needs a real PostgreSQL 18.
  *
  * `updateStatusWhen` is the router's own verdict about an upstream written to the same column an
  * operator sets by hand, so its whole value is the predicate: `disabled` is the operator's word and

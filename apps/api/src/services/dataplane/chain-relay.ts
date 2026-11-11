@@ -1,18 +1,15 @@
-import type { Logger } from "../../logging/logger"
-import type { TranslationContext } from "../translate/registry"
 import { createResponseObserver } from "../usage"
 import { RouterShutdownError } from "./active-requests"
 import { logStreamFailure } from "./attempt-log"
 import { reasoningSealFor } from "./chain-body"
+import type { AttemptRelay, SuccessClock } from "./chain-relay-types"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { coerceForcedToolResponse } from "./forced-tool-coercion"
 import { breakerOptionsFor } from "./health"
-import type { HealthObservation } from "./health-observation"
 import { observingModelOutput } from "./model-output"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { withReasoningSeal } from "./reasoning-seal-context"
 import { attemptCost, attemptRecord } from "./records"
-import type { RecoveryAttempt } from "./recovery-access"
 import { relayResponse } from "./relay"
 import { ClientCancelledError } from "./relay-cancellation"
 import { type CostReport, usageCostFields } from "./relay-cost"
@@ -21,56 +18,9 @@ import { endsWithRouterError } from "./relay-stream-end"
 import { createRelayTerminal } from "./relay-terminal"
 import { relayTranslatedResponse } from "./relay-translate"
 import { refusedStatus } from "./relay-translate-held"
-import type { DispatchRuntime } from "./runtime"
+import { streamCapSignal } from "./stream-cap"
 
-export interface AttemptClock {
-  readonly startedAt: Date
-  readonly started: number
-  readonly upstreamMs: number
-}
-
-/**
- * An `AttemptClock` plus the moment this attempt's upstream span opened — the reading the chain
- * takes once the request body exists and before either transport is called.
- *
- * It is a separate reading from `started` because the two answer different questions. `started`
- * bounds the *attempt*, so `latencyMs` includes the conversion the router ran for it;
- * `upstreamStarted` bounds the *wait*, so `routerOverheadMs` does not. A failure closes its span in
- * the chain; a success cannot, because the stream settles long after the chain returned — so it
- * carries the open end here and `settle` closes it at the last relayed byte.
- */
-export interface SuccessClock extends AttemptClock {
-  readonly releaseProbe?: () => void
-  readonly rateLimited?: boolean
-  readonly isRateLimited?: () => boolean
-  readonly onSettled?: () => void
-  readonly recovery?: RecoveryAttempt
-  readonly upstreamStarted: number
-  /** The tool this attempt's request forces on a vendor that ignores a force (`forced-tool-coercion.ts`). */
-  readonly forcedTool?: string
-  readonly observation?: HealthObservation
-}
-
-/**
- * The slice of the chain's context an attempt's accounting reads. `ChainContext` satisfies it
- * structurally, so the chain passes itself and nothing has to be threaded or rebuilt.
- */
-export interface AttemptRelay {
-  readonly runtime: DispatchRuntime
-  readonly translation: TranslationContext
-  readonly translated?: Pick<
-    import("./translate-body").TranslatedRequestBody,
-    "includeUsage" | "clientStreams"
-  >
-  readonly log: Logger | undefined
-  /**
-   * The bound for `upstreamMessage` on a settle-path warn line — the operator's
-   * `LOG_REASON_MAX_CHARS`. Absent falls back to {@link DEFAULT_LOG_REASON_MAX_CHARS}, the
-   * value every other quoted reason in the process uses.
-   */
-  readonly reasonMaxChars?: number
-  readonly request?: Request
-}
+export type { AttemptClock, AttemptRelay, SuccessClock } from "./chain-relay-types"
 
 export function relaySuccess(
   ctx: AttemptRelay,
@@ -105,16 +55,26 @@ export function relaySuccess(
   // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
   const observedType = sendsSse ? "text/event-stream" : response.headers.get("content-type")
   const framesMidBody = observedType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
+  const descriptor = observingModelOutput(
+    servable.dialect,
+    servable.driver.responseObservation,
+    () => {
+      modelOutput = true
+    },
+  )
   const observation = createResponseObserver({
     dialect: servable.dialect,
     operation: ctx.runtime.operation,
     contentType: observedType,
     maximumObservationBytes: ctx.runtime.responseObservationMaxBytes ?? 65_536,
-    descriptor: observingModelOutput(servable.dialect, servable.driver.responseObservation, () => {
-      modelOutput = true
-    }),
+    descriptor,
   })
   const terminal = createRelayTerminal()
+  const capSignal = (error: unknown) =>
+    streamCapSignal(servable.driver.responseObservation, error, observation.terminal, {
+      streamMs: ctx.runtime.clock.elapsed() - at.upstreamStarted,
+      minMs: ctx.runtime.streamCapMinMs,
+    })
   const clientStreams = ctx.translated?.clientStreams() === true
   let firstByteAt: number | undefined
   let relayedBytes = 0
@@ -130,7 +90,7 @@ export function relaySuccess(
     if (settled) return
     settled = true
     at.onSettled?.()
-    if (error !== undefined) terminal.error(error, modelOutput)
+    if (error !== undefined) terminal.error(error, modelOutput, capSignal(error))
     const facts = eof ? observation.finish() : observation.snapshot()
     const verdict = terminal.finish(facts)
     ctx.request?.signal.removeEventListener("abort", requestAborted)
@@ -180,6 +140,7 @@ export function relaySuccess(
           facts.provider?.message,
           ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
           error,
+          descriptor.eventTypes?.(),
         )
       }
     } finally {

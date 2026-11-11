@@ -73,7 +73,7 @@ export function createRelayTerminal() {
      * account behind another probe would be the router's fault, not the account's. A cancel before
      * any model output proves nothing either way and stays `uncertain`.
      */
-    error(error: unknown, modelOutput = false) {
+    error(error: unknown, modelOutput = false, transportClass?: string) {
       if (error instanceof TranslationStreamError) {
         capture({
           outcome: "router_error",
@@ -99,7 +99,8 @@ export function createRelayTerminal() {
         const timedOut = error instanceof Error && error.name === "TimeoutError"
         capture({
           outcome: timedOut ? "upstream_timeout" : "upstream_error",
-          errorClass: timedOut ? "upstream_timeout" : "upstream_error",
+          // A driver's stream-cap signal names an upstream-dropped stream (`stream-cap.ts`).
+          errorClass: timedOut ? "upstream_timeout" : (transportClass ?? "upstream_error"),
           failure: {
             kind: timedOut ? "timeout" : "connection",
             message: "upstream transport failure",

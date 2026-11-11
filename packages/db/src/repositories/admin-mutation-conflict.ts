@@ -13,7 +13,8 @@ export class AdminMutationConflictError extends Error {
   }
 }
 
-function postgresFailure(error: unknown): { code: string; constraint?: string } | undefined {
+/** The SQLSTATE and constraint of a Postgres failure, through drizzle's wrapper. */
+export function postgresFailure(error: unknown): { code: string; constraint?: string } | undefined {
   if (typeof error !== "object" || error === null) return undefined
   if ("code" in error && typeof error.code === "string") {
     return {

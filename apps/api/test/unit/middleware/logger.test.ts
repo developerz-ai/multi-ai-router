@@ -13,6 +13,16 @@ import { createLogger } from "../../../src/logging/logger"
 import { deferFailureLine, requestLogger } from "../../../src/middleware/logger"
 import type { AppEnv } from "../../../src/types"
 
+/**
+ * The completion line is written when the response settles (01.12), so a test reads the body —
+ * exactly what a real client does — before it looks for the line.
+ */
+async function settled(response: Response | Promise<Response>): Promise<Response> {
+  const resolved = await response
+  await resolved.text()
+  return resolved
+}
+
 async function completed(headers: Record<string, string>) {
   const lines: Record<string, unknown>[] = []
   const log = createLogger({
@@ -23,7 +33,7 @@ async function completed(headers: Record<string, string>) {
   hono.use("*", requestLogger(log))
   hono.post("/v1/chat/completions", (c) => c.json({ ok: true }))
 
-  await hono.request("/v1/chat/completions", { method: "POST", headers })
+  await settled(hono.request("/v1/chat/completions", { method: "POST", headers }))
   return lines.find((line) => line.msg === "request completed") ?? {}
 }
 
@@ -114,7 +124,7 @@ describe("quiet paths", () => {
     // `hono.request` is typed `Promise<Response> | Response`, so it cannot carry a `.then`;
     // awaiting it is the only form that holds for both branches.
     return async (path = "/readyz") => {
-      await hono.request(path)
+      await settled(hono.request(path))
       return lines.find((line) => line.msg === "request completed") ?? {}
     }
   }
@@ -147,7 +157,7 @@ describe("quiet paths", () => {
     hono.use("*", requestLogger(log, { quietPaths: ["/healthz"] }))
     hono.get("/healthz", (c) => c.json({ ok: true }))
 
-    await hono.request("/healthz")
+    await settled(hono.request("/healthz"))
 
     expect(lines).toHaveLength(0)
   })
@@ -181,10 +191,12 @@ describe("one transport line per request", () => {
   test("a rejected request writes exactly one line, carrying the failure and the timing", async () => {
     const { hono, lines } = harness()
 
-    await hono.request("/v1/messages", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-session-id": "ses_abc" },
-    })
+    await settled(
+      hono.request("/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-session-id": "ses_abc" },
+      }),
+    )
 
     // Production fingerprint: every rejection logged `request failed` and `request completed`.
     expect(lines).toHaveLength(1)
@@ -209,14 +221,15 @@ describe("one transport line per request", () => {
     ).toBe(false)
   })
 
-  test("a streamed response names its timing as time-to-headers, not as the request's duration", async () => {
+  test("a streamed response carries both its time-to-headers and its whole duration", async () => {
     const { hono, lines } = harness()
 
-    await hono.request("/v1/stream")
+    await settled(hono.request("/v1/stream"))
 
     expect(lines).toHaveLength(1)
     expect(lines[0]).toMatchObject({ msg: "request completed", streamed: true })
     expect(typeof lines[0]?.timeToHeadersMs).toBe("number")
-    expect(lines[0]).not.toHaveProperty("durationMs")
+    // Written at settle (01.12), so the duration is the stream's, not time-to-headers.
+    expect(typeof lines[0]?.durationMs).toBe("number")
   })
 })

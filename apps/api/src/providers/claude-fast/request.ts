@@ -7,7 +7,18 @@ import { CLAUDE_FAST_CLI_VERSION, stableUuid, stampIntegrity, versionSuffix } fr
 import { HUMAN_IDENTITY, SDK_IDENTITY } from "./profile"
 import { adaptFastToolChoice } from "./tool-choice"
 
-const block = z.looseObject({ type: z.string() })
+/**
+ * A content block: any object with a string `type`. Checked in place rather than through a
+ * `looseObject`, which rebuilds every block of a history that can hold thousands (101 finding
+ * 05.6); the blocks this module mutates are copied first, so sharing the parsed ones is safe.
+ */
+const block = z.custom<{ type: string } & Record<string, unknown>>(
+  (value) =>
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { type?: unknown }).type === "string",
+)
 const request = z.looseObject({
   model: z.string().optional(),
   max_tokens: z.number().int().positive(),
@@ -24,12 +35,22 @@ const request = z.looseObject({
   stream: z.boolean().nullish(),
 })
 export type FastRequest = z.infer<typeof request>
+/**
+ * Requests whose raw body never names `cache_control`: `prepareFastRequest` skips the deep walk
+ * for an existing breakpoint on these. A side table rather than a field, because every unknown
+ * field of the request is copied onto the wire body.
+ */
+const WITHOUT_CACHE_CONTROL = new WeakSet<FastRequest>()
 export function readFastRequest(bytes: Uint8Array | null): FastRequest {
   try {
-    const result = request.safeParse(
-      JSON.parse(new TextDecoder().decode(bytes ?? new Uint8Array())),
-    )
-    if (result.success) return result.data
+    const text = new TextDecoder().decode(bytes ?? new Uint8Array())
+    const result = request.safeParse(JSON.parse(text))
+    if (result.success) {
+      // A key spelled with a `\u` escape still parses as `cache_control`, so any escape keeps the walk.
+      if (!text.includes("cache_control") && !text.includes("\\u"))
+        WITHOUT_CACHE_CONTROL.add(result.data)
+      return result.data
+    }
   } catch {
     /* No parser error may retain request content. */
   }
@@ -75,21 +96,22 @@ export function prepareFastRequest(input: {
   const firstText = textOf(firstUser?.content)
   const namespace = `${input.accountId}\0${input.apiKeyId}\0${input.sessionKey}`
   const sessionId = stableUuid(namespace)
-  let lastHuman = 0
-  let prompts = 0
-  for (const [index, message] of original.messages.entries()) {
+  // The human prompts so far, in order: a generic client's prompt id is stable across the tool
+  // turns that answer one prompt and changes with the next. Only the human messages are hashed —
+  // tool results and assistant turns, the bulk of a long history, cannot change which prompt this
+  // is (101 finding 05.6: the whole-history `JSON.stringify` cost 1–3 ms per request).
+  const humans: FastRequest["messages"] = []
+  for (const message of original.messages)
     if (
       message.role === "user" &&
       (typeof message.content === "string" ||
         !message.content.some((entry) => entry.type === "tool_result"))
-    ) {
-      lastHuman = index
-      prompts++
-    }
-  }
+    )
+      humans.push(message)
+  const prompts = humans.length
   const promptId =
     (nativeText && /\bcc_prompt_id=([0-9a-f-]{36});/i.exec(nativeText)?.[1]) ||
-    stableUuid(`${namespace}\0${JSON.stringify(original.messages.slice(0, lastHuman + 1))}`)
+    stableUuid(`${namespace}\0${JSON.stringify(humans)}`)
   const incomingOrigin = nativeText && /\bcc_turn_origin=([a-z_]{1,32});/.exec(nativeText)?.[1]
   const subagent = nativeText?.includes("cc_is_subagent=true;") === true
   // Native helpers deliberately omit origin; generic calls have no private CLI attribution to retain.
@@ -117,13 +139,24 @@ export function prepareFastRequest(input: {
     (origin
       ? ` cc_turn_origin=${origin}; cc_prompt_index=${promptIndex}; cc_turn_index=${turnIndex};`
       : "")
-  const messages = original.messages.map((message) => ({
-    ...message,
-    content:
-      typeof message.content === "string"
-        ? message.content
-        : message.content.map((entry) => ({ ...entry })),
-  }))
+  // Only the last message is mutated below (its tail takes a cache breakpoint), so only it is
+  // copied; earlier messages are shared with the parsed request, which a native-schema retry
+  // prepares again from and so must stay unmutated.
+  const tail = original.messages.at(-1)
+  const messages = [
+    ...original.messages.slice(0, -1),
+    ...(tail === undefined
+      ? []
+      : [
+          {
+            ...tail,
+            content:
+              typeof tail.content === "string"
+                ? tail.content
+                : tail.content.map((entry) => ({ ...entry })),
+          },
+        ]),
+  ]
   // The native tool-provenance header lists tools already used, not the available schema.
   const toolNames = original.messages.flatMap((message) =>
     message.role === "assistant" && Array.isArray(message.content)
@@ -166,7 +199,8 @@ export function prepareFastRequest(input: {
   const body: Record<string, unknown> = { ...adaptation.body }
   if (
     body.cache_control === undefined &&
-    !hasCacheControl({ system: outputSystem, messages, tools: body.tools })
+    (WITHOUT_CACHE_CONTROL.has(original) ||
+      !hasCacheControl({ system: outputSystem, messages, tools: body.tools }))
   ) {
     const cache = { type: "ephemeral", ttl: "1h" }
     const identityEntry = outputSystem[1]

@@ -7,6 +7,12 @@ export interface TokenCounts {
   readonly tokensOut: number
   readonly cacheReadTokens: number
   readonly cacheWriteTokens: number
+  /**
+   * The part of `cacheWriteTokens` written with the 1-hour TTL, where the upstream states it
+   * (Anthropic `usage.cache_creation.ephemeral_1h_input_tokens`). Priced at estimate time and not
+   * persisted: the row keeps one write counter, its cost already carries the split.
+   */
+  readonly cacheWrite1hTokens?: number
 }
 export const ZERO_TOKENS: TokenCounts = Object.freeze({
   tokensIn: 0,

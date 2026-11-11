@@ -208,9 +208,9 @@ a key with no verified copy gets `503 key_verification_unavailable` + `Retry-Aft
 A key the store answers as gone, or one revoked on this replica, is never served stale.
 
 Key create, edit, revoke and delete operations commit their row, scope targets and redacted audit
-record together. Name checks for API create/rename operations are serialized inside that transaction;
-low-level repository callers remain responsible for uniqueness, and existing duplicate names are not
-rewritten. A successful mutation invalidates authorization before response mapping. Ordinary edits
+record together. Key names are unique in the database (`api_keys(name)`, migration 0045): a create or rename that
+clashes — including the loser of two concurrent ones — is a `409` naming the key, decided by the
+index rather than by a check-then-write in the service. A successful mutation invalidates authorization before response mapping. Ordinary edits
 preserve the consumed rate-limit window; revocation and deletion also discard its retained state.
 
 ### Accepted in both dialects

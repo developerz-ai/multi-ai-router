@@ -1,5 +1,5 @@
 import { describeError } from "@multi-ai-router/core"
-import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import type { AccountRepository, AccountSummaryRow } from "@multi-ai-router/db"
 import type { CredentialMetadata } from "../../providers/claude-sdk/credential-metadata"
 import type { LastLoginLookup } from "../../services/accounts/last-login"
 import {
@@ -23,8 +23,9 @@ import type { ScheduledTask, TaskOutcome } from "../types"
  */
 
 export interface LoginLifetimeWatchDeps {
-  readonly accounts: Pick<AccountRepository, "list">
-  readonly readMetadata: (account: AccountRow) => Promise<CredentialMetadata>
+  /** The ciphertext-free projection: the watch reads timestamps, never a credential column. */
+  readonly accounts: Pick<AccountRepository, "listSummaries">
+  readonly readMetadata: (account: AccountSummaryRow) => Promise<CredentialMetadata>
   readonly lastLogins: LastLoginLookup
   readonly policy: LoginLifetimePolicy
   readonly intervalMs: number
@@ -37,7 +38,7 @@ export function createLoginLifetimeWatchTask(deps: LoginLifetimeWatchDeps): Sche
 
     run: async ({ now, logger, signal }): Promise<TaskOutcome> => {
       try {
-        const subscriptions = (await deps.accounts.list({})).filter(
+        const subscriptions = (await deps.accounts.listSummaries()).filter(
           (account) =>
             describeProvider(account.provider).requiresConfigDir &&
             account.status !== "disabled" &&

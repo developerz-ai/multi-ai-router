@@ -2,6 +2,7 @@ import type { Dialect } from "@multi-ai-router/core"
 import type { ResponseObservationDescriptor } from "../../providers/types"
 import type { ObservationDescriptor } from "../usage/response-observer-types"
 import { responseObject } from "../usage/response-usage"
+import { createEventTally } from "./stream-cap"
 
 const CHAT_DELTA_TEXT = ["content", "reasoning_content", "reasoning", "refusal"] as const
 
@@ -47,15 +48,19 @@ export function observingModelOutput(
   dialect: Dialect,
   descriptor: ResponseObservationDescriptor | undefined,
   onOutput: () => void,
-): ObservationDescriptor {
+): ObservationDescriptor & { readonly eventTypes?: () => Readonly<Record<string, number>> } {
   const inspect = descriptor?.inspectPayload
+  // A driver naming a stream cap also gets the event-type tally its failure line carries (12.8).
+  const tally = descriptor?.streamCap === undefined ? undefined : createEventTally()
   let seen = false
   return {
+    ...(tally === undefined ? {} : { eventTypes: tally.counts }),
     terminalPolicy: descriptor?.terminalPolicy ?? "evidence-only",
     get contentFrames() {
-      return seen && inspect === undefined ? "skip" : "inspect"
+      return seen && inspect === undefined && tally === undefined ? "skip" : "inspect"
     },
     inspectPayload: (payload, event) => {
+      tally?.note(payload, event)
       if (!seen && isModelOutputFrame(dialect, payload, event)) {
         seen = true
         onOutput()

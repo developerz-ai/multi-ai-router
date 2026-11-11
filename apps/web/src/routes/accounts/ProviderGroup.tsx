@@ -5,7 +5,8 @@ import { Icon } from "../../components/Icon"
 import { StatusDot } from "../../components/StatusDot"
 import type { ProviderGroup as Group } from "../../lib/account-groups"
 import type { AccountView } from "../../lib/api/types"
-import { formatAbsolute, formatDuration } from "../../lib/reset-countdown"
+import { formatAbsolute } from "../../lib/format"
+import { formatDuration } from "../../lib/reset-countdown"
 import styles from "./ProviderGroup.module.scss"
 
 export interface ProviderGroupProps {

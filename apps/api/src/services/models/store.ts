@@ -6,6 +6,7 @@ import {
 } from "@multi-ai-router/core"
 import type { ModelCatalogRow } from "@multi-ai-router/db"
 import { createSnapshotRefresh } from "../snapshots/refresh"
+import { createJitteredRefreshTimer } from "../snapshots/timer"
 
 /**
  * The warm model catalog: what each Account's upstream last said it serves, held in memory and
@@ -79,24 +80,19 @@ const NONE: readonly ModelDescriptor[] = Object.freeze([])
 
 export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatalogStore {
   const now = deps.now ?? (() => new Date())
-  const jitter = deps.jitter ?? defaultJitter
   let snapshot: Snapshot = EMPTY
   let loadedAt: Date | null = null
-  let timer: ReturnType<typeof setTimeout> | null = null
   const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (rows) => {
     snapshot = index(rows)
     loadedAt = now()
   })
 
-  const schedule = (): void => {
-    timer = setTimeout(() => {
-      // Never rethrown: a periodic refresh that throws must not take the process down, and the
-      // next tick retries. The snapshot stays as it was; the failure goes to `onRefreshError`.
-      void refresh().catch((error: unknown) => deps.onRefreshError?.(error))
-      if (timer !== null) schedule()
-    }, jitter(deps.refreshIntervalMs))
-    timer.unref?.()
-  }
+  const timer = createJitteredRefreshTimer({
+    intervalMs: deps.refreshIntervalMs,
+    refresh,
+    ...(deps.onRefreshError === undefined ? {} : { onError: deps.onRefreshError }),
+    ...(deps.jitter === undefined ? {} : { jitter: deps.jitter }),
+  })
 
   return {
     describe: (accountId, upstreamModel) =>
@@ -104,13 +100,8 @@ export function createModelCatalogStore(deps: ModelCatalogStoreDeps): ModelCatal
     modelsOf: (accountId) => snapshot.get(accountId)?.list ?? NONE,
     refresh,
     refreshAfterMutation,
-    start: () => {
-      if (timer === null) schedule()
-    },
-    stop: () => {
-      if (timer !== null) clearTimeout(timer)
-      timer = null
-    },
+    start: timer.start,
+    stop: timer.stop,
     loadedAt: () => loadedAt,
   }
 }
@@ -166,12 +157,4 @@ function normalizeListingSource(value: string): ModelListingSource {
 function normalizeReasoning(value: unknown): Pick<ModelDescriptor, "reasoning"> {
   const parsed = ModelReasoning.safeParse(value)
   return parsed.success ? { reasoning: parsed.data } : {}
-}
-
-/**
- * ±20%. Replicas start together — under a fixed interval they would refresh in lockstep for the
- * life of the deployment, turning a cheap query into a synchronised burst.
- */
-function defaultJitter(intervalMs: number): number {
-  return Math.round(intervalMs * (0.8 + Math.random() * 0.4))
 }

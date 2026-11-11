@@ -20,7 +20,7 @@ import {
   CODEX_DEACTIVATED_CODES,
   CODEX_LIMIT_CODES,
   CODEX_QUOTA_CODES,
-  inspectCodexStreamFrame,
+  CODEX_RESPONSE_OBSERVATION,
 } from "./openai-oauth-stream-errors"
 
 // Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
@@ -232,11 +232,8 @@ const CODEX_MODEL_REFUSED = /model is not supported when using codex/i
 const codex = createHttpDriver({
   id: "openai-oauth",
   authKind: "oauth",
-  // In-stream Codex Responses events: `response.failed` and bare `error` events are classified
-  // here, NOT in the HTTP `rules` array. A request-shaped refusal in a 200 stream must not
-  // strike the breaker; an in-stream rate limit / deactivated code must. See
-  // `openai-oauth-stream-errors.ts` and `docs/idea/05-routing-and-failover.md`.
-  responseObservation: { terminalPolicy: "evidence-only", inspectPayload: inspectCodexStreamFrame },
+  // In-stream refusals and the backend's stream cap (`openai-oauth-stream-errors.ts`).
+  responseObservation: CODEX_RESPONSE_OBSERVATION,
   // A ChatGPT plan is the flat monthly fee itself: there is no per-token price on this surface at
   // all, so its usage prices as an attribution against the OpenAI API table, never as spend.
   billing: "subscription",
