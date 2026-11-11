@@ -36,6 +36,7 @@ export function finishFailedAttempt(
         : { unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds }),
       clientMessage: outcome.failure.message,
       failureKind: outcome.failure.kind,
+      ...(outcome.verdict === undefined ? {} : { verdict: outcome.verdict }),
     },
   )
   return foldChainFailure(held, failure === null ? null : { ...failure, winner })

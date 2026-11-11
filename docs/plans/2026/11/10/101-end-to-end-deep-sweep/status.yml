@@ -1,0 +1,68 @@
+plan: 101-end-to-end-deep-sweep
+title: End-to-end deep sweep — code, prod evidence, consumers, CI, maintenance
+status: not_started        # not_started | in_progress | blocked | complete | superseded
+created_by: sebi
+worked_by: ""
+owner: sebi
+percent: 0
+current_focus: "08-db.md first (repository methods + migration 0044 that other slices depend on), then 01 (env keys)"
+slices:
+  - file: 08-db.md
+    status: not_started    # not_started | in_progress | complete
+    percent: 0
+    findings: 12
+  - file: 01-transport-auth-config.md
+    status: not_started
+    percent: 0
+    findings: 15
+  - file: 04-providers-models.md
+    status: not_started
+    percent: 0
+    findings: 10
+  - file: 03-routing-health-accounts.md
+    status: not_started
+    percent: 0
+    findings: 12
+  - file: 02-dataplane.md
+    status: not_started
+    percent: 0
+    findings: 13
+  - file: 07-usage-cost-scheduler.md
+    status: not_started
+    percent: 0
+    findings: 13
+  - file: 06-translation.md
+    status: not_started
+    percent: 0
+    findings: 14
+  - file: 05-claude-sdk-fast.md
+    status: not_started
+    percent: 0
+    findings: 14
+  - file: 09-web.md
+    status: not_started
+    percent: 0
+    findings: 11
+  - file: 11-devex-ci-release.md
+    status: not_started
+    percent: 0
+    findings: 15
+  - file: 14-maintenance-backlog.md
+    status: not_started
+    percent: 0
+    findings: 10
+  - file: 10-production-evidence.md   # evidence only; findings routed to owner slices in overview.md
+    status: not_started
+    percent: 0
+    findings: 21
+  - file: 12-tesote-deployment.md     # evidence only; infra fixes land in tesote/infrastructure
+    status: not_started
+    percent: 0
+    findings: 19
+  - file: 13-consumers.md             # owns docs/clients.md; other fixes land in consumer repos
+    status: not_started
+    percent: 0
+    findings: 18
+evidence: []               # PRs / commits, e.g. ["#141", "abc1234"]
+notes: "197 findings: critical 0, high 30, medium 79, low 88. Owner rulings needed before 07.4, 06.4, 02.4, 03.7, 10.3 (see overview Risks). 13.7 and 11.15 corrected after live evidence showed both clusters on 2.55.0."
+last_updated: 2026-11-10

@@ -27,7 +27,10 @@ export function logAttemptFailure(
     failureKind: outcome.failure.kind,
     signal: outcome.classification?.signal,
     reason: outcome.failure.message,
-    upstreamMessage: scrubbedQuote(outcome.classification?.message, reasonMaxChars),
+    upstreamMessage: scrubbedQuote(
+      outcome.classification?.message ?? outcome.upstreamMessage,
+      reasonMaxChars,
+    ),
   })
 }
 

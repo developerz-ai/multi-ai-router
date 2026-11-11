@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/api",
-  "version": "2.54.2",
+  "version": "2.55.0",
   "private": true,
   "type": "module",
   "main": "src/main.ts",
@@ -15,7 +15,7 @@
     "@multi-ai-router/core": "workspace:*",
     "@multi-ai-router/db": "workspace:*",
     "@sentry/bun": "^11.10.0",
-    "hono": "^4.13.13",
+    "hono": "^4.13.14",
     "zod": "^4.6.7"
   },
   "devDependencies": {
