@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.58.0] — 2026-11-11
+
+### Fixed
+
+- **A wall read out of an upstream `2xx` is countable in prod.** The peek (2.49.0, streaming since 2.53.0) renders the wall at the status the client is owed, and the usage row copied that status, so a MiniMax `base_resp`, an `event: error` or a Codex `response.failed` under a `200` was stored as `http_status 429` with a NULL `error_class`. That is indistinguishable from an upstream that answered `429` itself, and it contradicts `docs/idea/08`, which defines `httpStatus` as the upstream's status, never the client's. As a result the wall-in-2xx rate (developerz.ai plan 101 slice 07, step 4) could not be measured: over 7 days to 2026-11-11, 133,381 upstream `2xx` attempts showed no wall at all. Such a row now records the upstream's `2xx` with `error_class` `success_wall`, and `router_upstream_errors_total{error_class="success_wall"}` counts them. The client-facing answer is unchanged. Regression: `apps/api/test/unit/dataplane/success-wall-record.test.ts`.
+
 ## [2.57.1] — 2026-11-11
 
 ### Fixed
@@ -2190,3 +2196,4 @@ your tooling config.
 [2.56.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.56.0
 [2.57.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.0
 [2.57.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.1
+[2.58.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.58.0
