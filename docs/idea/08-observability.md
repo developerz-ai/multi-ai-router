@@ -192,7 +192,24 @@ Three bases, and the third is a feature.
 |---|---|---|
 | `metered` | A priced model on a pay-per-token account | Real spend |
 | `notional` | A priced model on a **subscription** account. A flat fee has no per-request charge, so the figure is an attribution — "what these tokens would have cost on that vendor's API" | A separate total, **never summed with metered** |
-| `unknown` | No rate for that provider + model, or no provider at all | NULL, never zero |
+| `unknown` | No rate for that provider + model, or no provider at all, or a completion whose upstream never stated usage the router could read | NULL, never zero |
+
+**Usage nobody stated is unknown, not free.** Zero token columns mean one of two things: a measured
+zero, or no measurement at all. Only the first is a free completion. A successful completion whose
+response observation read **no usage sample** (`usage/usage-unread.ts`) keeps its token columns at
+0, because nothing was measured, but it prices as `unknown`. Its `errorClass` names why, from a
+closed set:
+
+- `usage_unreported`: the stream was readable and stated no usage. It ended without its final event,
+  or the final event carried no `usage`.
+- `usage_invalid`: a usage block arrived that the reader could not trust.
+- `usage_unobservable`: the observer lost evidence and read no sample.
+
+The outcome stays `success`, because the client was served. A warn line, `upstream usage unread`,
+records the terminal the stream reached and the upstream's event names by count (never a payload).
+That line is how the cause is read off a live row. A response that did state a sample keeps its counts
+and price unchanged. These rows used to be priced `0.000000`. Prod, 2026-11-10/11: 1,644
+ChatGPT/Codex attempts translated from `/v1/chat/completions` read as free completions.
 
 **The basis comes from the Account, not from the provider.** `accounts.billing` is either `metered`
 or `subscription` ([02-domain-model.md](02-domain-model.md#account)), because the same provider sells

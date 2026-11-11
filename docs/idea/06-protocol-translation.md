@@ -786,6 +786,9 @@ is unchanged — same bytes, same latency. A cost an upstream states itself (Ope
 **Absent, never zero.** The fields are left out when no rate is known, when the upstream stated no
 counts, or when the observation could not trust them (`usageInvalid`, `evidenceUnavailable`). A
 stated `0` claims the call was free. `count_tokens` and embeddings price nothing and state nothing.
+The `UsageRecord` follows the same rule: a completion with no readable usage sample prices as
+`unknown` and names why in `errorClass`
+([08-observability.md](08-observability.md#metered-notional-unknown)).
 
 **It adds no time to first token.** The stamp touches only the final usage frame, the one frame that
 has to wait on the usage observer (`relay-cost.ts`). Everything ahead of it in the same chunk is

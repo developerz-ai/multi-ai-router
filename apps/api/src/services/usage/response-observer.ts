@@ -14,6 +14,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
     throw new Error("response observation byte bound must be a positive integer")
   let counts = ZERO_TOKENS
   let usageInvalid = false
+  let usageStated = false
   let evidenceUnavailable = false
   let terminal: ResponseObservationFacts["terminal"] = "none"
   let failure: ResponseObservationFacts["failure"] = null
@@ -34,6 +35,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
     cached ??= Object.freeze({
       counts: Object.freeze({ ...counts }),
       usageInvalid,
+      usageStated,
       evidenceUnavailable,
       terminal,
       failure: failure === null ? null : Object.freeze({ ...failure }),
@@ -59,6 +61,8 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
       spec.onPayload?.(body, event)
       if (spec.operation !== "count-tokens") {
         const reading = readResponseUsage(spec.dialect, body, event, counts)
+        // A sample was read exactly when the reader returned a new reading rather than `counts`.
+        usageStated ||= reading.counts !== counts
         counts = reading.counts
         usageInvalid ||= reading.invalid
       }

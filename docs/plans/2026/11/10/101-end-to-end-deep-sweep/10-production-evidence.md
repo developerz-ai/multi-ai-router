@@ -49,6 +49,14 @@
 - **Test:** `bin/bench --prompt-bytes 400000` asserting passthrough p99 < 5 ms; unit on the body scanner with a 400 KB fixture.
 - **Re-run:** `select egress_mode, width_bucket(coalesce(tokens_in,0)+coalesce(cache_read_tokens,0)+coalesce(cache_write_tokens,0), array[1000,5000,20000,50000,100000,200000]) b, count(*), percentile_disc(0.5) within group (order by router_overhead_ms), percentile_disc(0.99) within group (order by router_overhead_ms) from usage_records where created_at > now() - interval '3 days' and outcome='success' group by 1,2 order by 1,2;`
 
+- **After 2.57.0** (developerz-ai, 2026-11-11 06:56–08:00Z, successes, same buckets, p50 / p99 ms):
+  - Translate: 2 / 9 · 5 / 8 · 9 / 17 · 16 / 27 · 23 / 29 · 30 / 45.
+  - Passthrough: 7 / 8 · 4 / 4 · 5 / 6 (n ≤ 7 per bucket).
+  - All paths together: translate p50 / p99 16 / 31 (pre-sweep 13 / 42); passthrough 5 / 8 (pre-sweep 5 / 17).
+  - The passthrough O(body) work is gone: what is left is the body skim. Translate is still linear.
+  - Measured `bodyFor` on a 1 MB prod-shaped transcript: decode 0.21, JSON.parse 1.47, Zod 0.83, convert 1.00, stringify 1.18, encode 0.14, about 5 ms in total. No redundant pass.
+  - The remaining cost is inherent to a stateless translator that is resent the whole transcript every turn. A per-session prefix cache needs a spec decision first and is tracked in #388.
+
 ### 10.3 medium — An upstream-supplied OpenRouter key hash is written to the log
 - **Kind:** nn-violation (NN 3) — `unverified` whether the project counts a provider key hash as credential material
 - **Where:** log line `account test failed`, field `detail` (component `test-now`); redactor in `apps/api/src/logging/redact` (owner: slice 01), probe message plumbing in slice 03.

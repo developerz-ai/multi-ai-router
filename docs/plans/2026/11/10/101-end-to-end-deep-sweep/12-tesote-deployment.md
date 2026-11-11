@@ -56,6 +56,11 @@
 - **Test:** `bin/bench` with a 300 KB transcript body (02.13).
 - **Re-run:** `select egress_mode, width_bucket(tokens_in+coalesce(cache_read_tokens,0), array[2000,10000,30000,60000,120000]) tb, count(*), percentile_disc(0.5) within group (order by router_overhead_ms), percentile_disc(0.99) within group (order by router_overhead_ms) from usage_records where created_at > now()-interval '7 days' and outcome='success' and router_overhead_ms < 1000 group by 1,2`.
 
+- **After 2.57.0** (tesote, 2026-11-11 06:56–08:00Z, successes):
+  - Translate p50 / p99 2 / 10 ms (n 255); passthrough 1 / 1 (n 1).
+  - The recovery wait is subtracted from `router_overhead_ms` (`records.ts:163`), so the 250 ms grid is gone.
+  - The rest of the translate cost is linear in transcript size (#388).
+
 ### 12.5 medium — Requests wait 2–5 s for a recovery permit and are then refused while the account is serving
 - **Kind:** bug (`unverified` mechanism)
 - **Where:** owner 03 `apps/api/src/services/dataplane/recovery-wait.ts`, `apps/api/src/services/recovery/coordinator.ts`; `apps/api/src/config/recovery.ts:41` (`RECOVERY_REQUEST_WAIT_MS` 5,000).

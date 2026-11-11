@@ -27,6 +27,11 @@ export interface ResponseObservationSpec {
 export interface ResponseObservationFacts {
   readonly counts: TokenCounts
   readonly usageInvalid: boolean
+  /**
+   * The upstream stated a usage sample the reader accepted. False means the token counts are no
+   * measurement at all, which is different from a measured zero (`usage-unread.ts`).
+   */
+  readonly usageStated: boolean
   readonly evidenceUnavailable: boolean
   readonly terminal: "none" | "completed" | "explicit_error" | "explicit_incomplete"
   readonly failure: FailureClassification | null
