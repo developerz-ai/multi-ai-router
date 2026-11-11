@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.57.1] — 2026-11-11
+
+### Fixed
+
+- **A streamed completion whose upstream stated no usage was booked as free.** On developerz-ai prod, 1,644 `openai-chat → openai-oauth` successes over three days carried zero tokens and `cost_estimate 0.000000 notional`, so cost and quota quietly under-counted. Each affected Codex session flipped from normal usage to zero and stayed there. The usage record never asked whether the response observer had read a usage sample. Only the client-facing cost line did. The observer now reports `usageStated`, and a pure `usageUnread()` (`services/usage/usage-unread.ts`) names the reason: `usage_unreported`, `usage_invalid` or `usage_unobservable`. Such a row keeps outcome `success`, because the client was served. It records `cost_estimate` NULL with `cost_basis` `unknown` and the reason in `error_class`, which is "absent, never zero", as `docs/idea/06` and `08` already specify. A warn line, `upstream usage unread`, logs the stream's terminal state and its event names by count, so the next occurrence shows what the upstream actually sent. Responses that state usage are unchanged (#389).
+
+### Notes
+
+- Sweep 101 close-out numbers are in the plan's `status.yml`. Translate-egress overhead stays linear in transcript size because every turn parses, validates, converts and serialises the whole transcript, about 5 ms per MB measured. The per-session prefix cache that would fix it needs a spec decision and is tracked in #388.
+
 ## [2.57.0] — 2026-11-11
 
 Sweep 101 wave 3 (#373): the findings 2.56.0 deferred.
@@ -2179,3 +2189,4 @@ your tooling config.
 [2.55.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.55.0
 [2.56.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.56.0
 [2.57.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.0
+[2.57.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.1
