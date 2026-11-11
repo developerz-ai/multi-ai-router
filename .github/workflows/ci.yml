@@ -236,10 +236,23 @@ jobs:
       # runner image: DejaVu is the font stack bin/ui-geometry pins text metrics
       # to, and the browser build is whatever the pinned playwright in
       # package.json resolves to — never `latest`.
+      # The runner image's apt reads /etc/apt/apt-mirrors.txt and `apt-get update`
+      # only warns when the first (Azure) mirror fails DNS, so the install then
+      # fails on a stale index. Append archive.ubuntu.com as a fallback mirror,
+      # retry, and fail the step on any index that still did not download.
+      # Playwright's `--with-deps` calls the same apt, so it inherits the mirror.
       - name: install pinned fonts and headless Chromium
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+          mirrors=/etc/apt/apt-mirrors.txt
+          if [ -f "$mirrors" ] && ! grep -q '^http://archive\.ubuntu\.com/ubuntu/' "$mirrors"; then
+            printf 'http://archive.ubuntu.com/ubuntu/\tpriority:2\n' | sudo tee -a "$mirrors" >/dev/null
+          fi
+          sudo apt-get update -o Acquire::Retries=3 2>&1 | tee /tmp/apt-update.log
+          if grep -E '^(W|E): Failed to fetch' /tmp/apt-update.log; then
+            echo "::error::apt-get update could not fetch an index from the mirrors above; refusing to install from a stale index" >&2
+            exit 1
+          fi
+          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends fonts-dejavu-core
           bunx playwright install --with-deps chromium
       - run: bin/ui-geometry
 
