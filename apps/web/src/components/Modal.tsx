@@ -26,6 +26,12 @@ export interface ModalProps {
   readonly footer?: JSX.Element
   /** Defaults to `md`. See {@link ModalSize}. */
   readonly size?: ModalSize
+  /**
+   * False while the dialog's action is in flight: Escape, the scrim and the close button do
+   * nothing, so the server's answer — a `409` naming what blocked a delete — has a dialog to land
+   * in. Defaults to true.
+   */
+  readonly dismissible?: boolean
 }
 
 /**
@@ -41,11 +47,14 @@ export function Modal(props: ModalProps) {
   const titleId = createUniqueId()
   const descriptionId = createUniqueId()
   let panel: HTMLDivElement | undefined
+  const dismiss = () => {
+    if (props.dismissible !== false) props.onClose()
+  }
 
   createFocusTrap({
     container: () => panel,
     active: () => props.open,
-    onEscape: () => props.onClose(),
+    onEscape: dismiss,
   })
   createScrollLock(() => props.open)
 
@@ -54,7 +63,7 @@ export function Modal(props: ModalProps) {
       <Portal>
         <div class={styles.layer}>
           {/* Dismiss on outside tap; keyboard users get Escape from the trap. */}
-          <div aria-hidden="true" class={styles.scrim} onClick={() => props.onClose()} />
+          <div aria-hidden="true" class={styles.scrim} onClick={dismiss} />
           <div
             aria-describedby={props.description === undefined ? undefined : descriptionId}
             aria-labelledby={titleId}
@@ -79,7 +88,8 @@ export function Modal(props: ModalProps) {
               <button
                 aria-label="Close"
                 class={styles.close}
-                onClick={() => props.onClose()}
+                disabled={props.dismissible === false}
+                onClick={dismiss}
                 type="button"
               >
                 <Icon name="close" />

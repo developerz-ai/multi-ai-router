@@ -1,4 +1,4 @@
-import { Show } from "solid-js"
+import { createMemo, Show } from "solid-js"
 import type { QuotaWindowDisplay } from "../lib/quota-windows"
 import { quotaWindowTone } from "../lib/quota-windows"
 import { formatAbsolute, type ResetQualifier } from "../lib/reset-countdown"
@@ -27,6 +27,10 @@ export interface QuotaWindowRowProps {
  */
 export function QuotaWindowRow(props: QuotaWindowRowProps) {
   const window = () => props.window
+  // The description is rebuilt on every clock tick for its countdown text, but the series is the
+  // server's own array. A memo on the reference keeps the sparkline's path from being recomputed
+  // every second for every window on the screen.
+  const series = createMemo(() => window().tokenSeries)
 
   return (
     <li class={styles.row} data-spent={window().spent ? "true" : "false"}>
@@ -51,14 +55,14 @@ export function QuotaWindowRow(props: QuotaWindowRowProps) {
         It earns its space by answering what the bar cannot: two windows both two-thirds spent
         look identical until one of them shows the whole two-thirds went in the first hour.
       */}
-      <Show when={window().tokenSeries.length > 0}>
+      <Show when={series().length > 0}>
         <span
           class={styles.trend}
           title="Tokens this router recorded across the window's span, oldest first. Same measurement as the bar — these slices are what it sums."
         >
           <Sparkline
             label={`${props.owner}, ${window().title} consumption over the window`}
-            points={[...window().tokenSeries]}
+            points={series()}
           />
         </span>
       </Show>

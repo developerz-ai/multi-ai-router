@@ -29,7 +29,7 @@ import { distinctOwners, distinctTools } from "./keys/filter-keys"
 import { KeyDangerDialogs } from "./keys/KeyDangerDialogs"
 import { KeyFormDialog } from "./keys/KeyFormDialog"
 import { KeyValueDialog } from "./keys/KeyValueDialog"
-import { type KeyFormValues, toCreateKeyInput } from "./keys/key-form-values"
+import { type KeyFormValues, toCreateKeyInput, toUpdateKeyInput } from "./keys/key-form-values"
 
 interface ShownKey {
   readonly name: string
@@ -163,9 +163,12 @@ export default function KeysRoute() {
       })
       return
     }
-    // `KeyFormValues` states every field, which is exactly what `UpdateKeyInput` wants:
-    // a `null` ceiling or expiry is a removal, not an omission.
-    update.mutate({ id: target.id, patch: values }, { onSuccess: closeForm })
+    // Every field stated — a `null` ceiling or expiry is a removal, not an omission — except
+    // an untouched expiry, which an expired key could otherwise never get past.
+    update.mutate(
+      { id: target.id, patch: toUpdateKeyInput(values, target) },
+      { onSuccess: closeForm },
+    )
   }
 
   const mintButton = () => (
@@ -204,7 +207,7 @@ export default function KeysRoute() {
                   title="No keys yet"
                 />
               }
-              when={rows.length > 0}
+              when={rows().length > 0}
             >
               <FilteredKeys
                 nowMs={now()}
@@ -227,7 +230,7 @@ export default function KeysRoute() {
                 onToolFilterChange={setToolFilter}
                 ownerFilter={ownerFilter()}
                 revealingId={reveal.isPending ? (reveal.variables ?? null) : null}
-                rows={rows}
+                rows={rows()}
                 toolFilter={toolFilter()}
                 {...usage()}
               />

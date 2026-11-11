@@ -1,18 +1,19 @@
 import { describe, expect, test } from "bun:test"
+import type { ProviderId } from "@multi-ai-router/core"
 import type { PriceRow } from "../../src/lib/api/settings"
 import { filterPriceRows, PRICE_PAGE_SIZE, visiblePriceRows } from "../../src/lib/price-filter"
 
-function row(provider: string, model: string): PriceRow {
+function row(provider: ProviderId, model: string): PriceRow {
   return {
     id: `${provider}/${model}`,
     provider,
     model,
     origin: "shipped",
     shipped: null,
-    rates: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    rates: { inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0, cacheWritePerMtok: 0 },
     longContext: null,
     updatedAt: null,
-  } as PriceRow
+  }
 }
 
 const rows = Array.from({ length: 40 }, (_, i) =>

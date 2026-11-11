@@ -1,5 +1,6 @@
 import { toApiError, UNAUTHORIZED } from "./errors"
-import { csrfToken, markSessionLost } from "./session"
+import { adoptSession, csrfToken, markSessionLost, sessionLost } from "./session"
+import type { SessionView } from "./types"
 
 // The one place in the SPA that knows about `fetch`.
 //
@@ -84,6 +85,7 @@ export interface RequestSpec {
  * throw a `SyntaxError` that says nothing about what actually happened.
  */
 export async function request<T>(spec: RequestSpec): Promise<T> {
+  if (isMutating(spec.method)) await ensureCsrfToken(spec.path)
   const response = await fetch(buildPath(spec.path, spec.query), {
     ...buildInit(spec.method, spec.body, csrfToken()),
   })
@@ -98,6 +100,33 @@ export async function request<T>(spec: RequestSpec): Promise<T> {
   }
 
   return (await readBody(response)) as T
+}
+
+/** The one mutating call that is made without a session — it is what issues one. */
+const SESSIONLESS_PATHS: ReadonlySet<string> = new Set(["/auth/login"])
+
+let pendingSession: Promise<void> | null = null
+
+/**
+ * The token arrives with `GET /auth/session`, which the shell starts on mount. An operator who
+ * presses a button before that answer lands sent the mutation with no `x-csrf-token`, and the
+ * guard refused a perfectly good session. Such a mutation waits for the same session read first —
+ * one in flight at a time. A failed read is not raised here: the mutation goes out and the
+ * server's own refusal (a `401` routes to login) is what the caller sees.
+ */
+async function ensureCsrfToken(path: string): Promise<void> {
+  if (csrfToken() !== null || sessionLost() || SESSIONLESS_PATHS.has(path)) return
+  pendingSession ??= request<SessionView>({ method: "GET", path: "/auth/session" })
+    .then(
+      (session) => {
+        if (typeof session?.csrfToken === "string") adoptSession(session)
+      },
+      () => undefined,
+    )
+    .finally(() => {
+      pendingSession = null
+    })
+  await pendingSession
 }
 
 async function readBody(response: Response): Promise<unknown> {

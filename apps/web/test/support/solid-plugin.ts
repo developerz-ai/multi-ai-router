@@ -186,7 +186,11 @@ export function compileSolidJsx(source: string, filename: string): string {
     // Babel 7 it would emit `createSignal<T>(...)`, which Bun reads as a
     // comparison rather than a call.
     plugins: ["@babel/plugin-syntax-jsx"],
-    presets: [[solidPreset, { generate: "dom", hydratable: false }], "@babel/preset-typescript"],
+    presets: [
+      // The preset ships no type of its own; Babel types a preset by its call shape.
+      [solidPreset as unknown as string, { generate: "dom", hydratable: false }],
+      "@babel/preset-typescript",
+    ],
     sourceMaps: false,
   })
   if (result?.code === null || result?.code === undefined) {

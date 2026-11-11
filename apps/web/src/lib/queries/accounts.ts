@@ -20,6 +20,7 @@ import {
 } from "../api/accounts"
 import type { AccountView } from "../api/types"
 import { LIVE_POLL_MS } from "../query"
+import { invalidateAccountReaders } from "./account-readers"
 import { queryKeys } from "./query-keys"
 
 // Server state for accounts.
@@ -55,6 +56,9 @@ export function useCreateAccount() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (input: CreateAccountInput) => createAccount(input),
+    // The variables carry the upstream credential in the clear; see `router-keys.ts` for why a
+    // mutation that holds a secret is dropped from the mutation cache once nothing observes it.
+    gcTime: 0,
     onSuccess: () => invalidateAccountReaders(client),
   }))
 }
@@ -64,6 +68,9 @@ export function useUpdateAccount() {
   return useMutation(() => ({
     mutationFn: (args: { readonly id: string; readonly patch: UpdateAccountInput }) =>
       updateAccount(args),
+    // The variables carry the upstream credential in the clear; see `router-keys.ts` for why a
+    // mutation that holds a secret is dropped from the mutation cache once nothing observes it.
+    gcTime: 0,
     onSuccess: () => invalidateAccountReaders(client),
   }))
 }
@@ -194,13 +201,3 @@ export function useLastRecheck(id: Accessor<string>) {
 }
 
 export type { AccountView }
-
-async function invalidateAccountReaders(client: ReturnType<typeof useQueryClient>): Promise<void> {
-  await Promise.all([
-    client.invalidateQueries({ queryKey: queryKeys.accounts.root() }),
-    client.invalidateQueries({ queryKey: queryKeys.pools.root() }),
-    // Every mutation routed through here is an audited action; without this the
-    // audit table only updates on a reload, which reads as a write not recorded.
-    client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
-  ])
-}

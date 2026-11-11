@@ -43,7 +43,7 @@ export function RetentionSection() {
       >
         {(view) => (
           <dl class={styles.facts}>
-            <For each={windows(view)}>
+            <For each={windows(view())}>
               {(window) => (
                 <div class={styles.fact}>
                   <dt class={styles.term}>{window.label}</dt>

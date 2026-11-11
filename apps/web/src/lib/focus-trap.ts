@@ -80,7 +80,11 @@ export function createFocusTrap(options: FocusTrapOptions): void {
     onCleanup(() => {
       document.removeEventListener("keydown", onKeyDown)
       const restore = options.restoreTo?.() ?? previous
-      restore?.focus()
+      // A confirmed delete removes the row whose button opened the dialog before the dialog
+      // closes; focusing that detached node drops focus to `<body>`. The page's main landmark
+      // is the nearest place that still exists.
+      if (restore?.isConnected === true) restore.focus()
+      else document.querySelector<HTMLElement>("main")?.focus()
     })
   })
 }

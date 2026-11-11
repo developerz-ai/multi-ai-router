@@ -10,6 +10,8 @@ export interface ErrorStateProps {
   readonly error: unknown
   readonly onRetry?: () => void
   readonly retrying?: boolean
+  /** The retry button's words. Defaults to "Try again". */
+  readonly retryLabel?: string
 }
 
 /**
@@ -28,7 +30,7 @@ export function ErrorState(props: ErrorStateProps) {
       </div>
       <Show when={props.onRetry !== undefined}>
         <Button busy={props.retrying === true} onClick={() => props.onRetry?.()} tone="neutral">
-          Try again
+          {props.retryLabel ?? "Try again"}
         </Button>
       </Show>
     </section>

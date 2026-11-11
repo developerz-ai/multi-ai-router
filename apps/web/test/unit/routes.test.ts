@@ -72,6 +72,17 @@ describe("safeNextPath", () => {
     expect(safeNextPath("javascript:alert(1)")).toBe("/")
   })
 
+  test("refuses a backslash or control-character spelling of a protocol-relative URL", () => {
+    // Browsers read `/\evil.example` as `//evil.example` and drop a tab inside a URL.
+    expect(safeNextPath("/\\evil.example")).toBe("/")
+    expect(safeNextPath("/\t/evil.example")).toBe("/")
+    expect(safeNextPath("/\n/evil.example")).toBe("/")
+  })
+
+  test("keeps the query and fragment of a console path", () => {
+    expect(safeNextPath("/usage?window=7d#feed")).toBe("/usage?window=7d#feed")
+  })
+
   test("a missing or repeated parameter falls back to the overview", () => {
     expect(safeNextPath(undefined)).toBe("/")
     expect(safeNextPath(["/keys", "/pools"])).toBe("/")

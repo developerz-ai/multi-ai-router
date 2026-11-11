@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
+import type { JSX } from "solid-js"
 import { render } from "solid-js/web"
 import type { RecheckResult, TestNowResult } from "../../src/lib/api/accounts"
 import type { AccountView, ProviderDescriptor } from "../../src/lib/api/types"
@@ -114,6 +115,7 @@ describe("AccountTestNow live region", () => {
         <QueryClientProvider client={client}>
           <AccountTestNow
             accountId="acc-1"
+            accountLabel="acc-one"
             busy={false}
             nowMs={NOW_MS}
             onTest={() => {}}
@@ -234,10 +236,12 @@ describe("AccountEditDialog numeric guard", () => {
     dialect: null,
     modelAliases: null,
     supportedModels: null,
+    windowTokenLimits: null,
     weight: 300,
     priority: 2,
     billing: "metered",
     tokenExpiresAt: null,
+    lastUsedAt: null,
     createdAt: "2026-07-24T12:00:00.000Z",
     updatedAt: "2026-07-24T12:00:00.000Z",
   }

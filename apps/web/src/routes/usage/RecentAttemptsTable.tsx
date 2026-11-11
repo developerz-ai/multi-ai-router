@@ -45,7 +45,7 @@ export interface RecentAttemptsTableProps {
 }
 
 export function RecentAttemptsTable(props: RecentAttemptsTableProps) {
-  const columns = (): readonly Column<RecentAttempt>[] => [
+  const columns: readonly Column<RecentAttempt>[] = [
     {
       id: "when",
       header: "When",
@@ -180,7 +180,7 @@ export function RecentAttemptsTable(props: RecentAttemptsTableProps) {
   return (
     <Table
       caption={`Newest first, at most ${props.limit} attempts. A row is one upstream attempt, not one client request — a failover chain of three writes three rows under one request id. No body is ever stored; a failure is recorded by error class, never by message.`}
-      columns={columns()}
+      columns={columns}
       emptyMessage="Nothing was routed in this window."
       rowId={(attempt) => attempt.id}
       rows={props.attempts}

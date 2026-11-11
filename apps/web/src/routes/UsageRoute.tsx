@@ -120,27 +120,27 @@ export default function UsageRoute() {
       >
         {(data) => (
           <>
-            <UsageCoverage summary={data} />
-            <UsageTiles data={data} />
+            <UsageCoverage summary={data()} />
+            <UsageTiles data={data()} />
 
             {/* Directly under the tiles, above the charts: the error-rate tile is the figure an
                 operator stops on, and this is the sentence that follows it. */}
             <UsageFailures
-              failures={data.failures}
-              windowLabel={usageSummaryWindowLabel(data.window)}
+              failures={data().failures}
+              windowLabel={usageSummaryWindowLabel(data().window)}
             />
 
             <section aria-label="Requests, attempts and errors over time" class={styles.chart}>
               <p class={styles.chartLabel}>
-                Requests, attempts and errors per {data.coverage.bucketWidth} {data.bucket}
-                {data.coverage.bucketWidth === 1 ? "" : "s"} ·{" "}
-                {usageSummaryWindowLabel(data.window)}
+                Requests, attempts and errors per {data().coverage.bucketWidth} {data().bucket}
+                {data().coverage.bucketWidth === 1 ? "" : "s"} ·{" "}
+                {usageSummaryWindowLabel(data().window)}
               </p>
               <UsageChart
-                bucket={data.bucket}
-                bucketWidth={data.coverage.bucketWidth}
-                incomplete={data.coverage.incomplete}
-                points={data.series}
+                bucket={data().bucket}
+                bucketWidth={data().coverage.bucketWidth}
+                incomplete={data().coverage.incomplete}
+                points={data().series}
               />
             </section>
 
@@ -163,13 +163,13 @@ export default function UsageRoute() {
             <UsageTopN
               dimension={dimension()}
               limit={TOP_N}
-              rows={breakdownFor(data, dimension())}
+              rows={breakdownFor(data(), dimension())}
             />
 
             <UsageBreakdown
-              bucket={data.bucket}
+              bucket={data().bucket}
               dimension={dimension()}
-              rows={breakdownFor(data, dimension())}
+              rows={breakdownFor(data(), dimension())}
             />
 
             <UsageQuota accounts={accounts.data ?? []} failed={accounts.isError} nowMs={now()} />

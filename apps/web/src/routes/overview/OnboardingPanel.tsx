@@ -1,4 +1,4 @@
-import { createMemo, createSignal, type JSX, Show } from "solid-js"
+import { createMemo, createSignal, Show } from "solid-js"
 import { Button } from "../../components/Button"
 import { EmptyState } from "../../components/EmptyState"
 import type { IconName } from "../../components/Icon"
@@ -21,6 +21,13 @@ import { KeyFormDialog, toCreateKeyInput } from "../keys/KeyFormDialog"
 import { KeyValueDialog } from "../keys/KeyValueDialog"
 import { PoolFormDialog } from "../pools/PoolFormDialog"
 import styles from "./OnboardingPanel.module.scss"
+import {
+  accountsDoneNote,
+  keysDoneNote,
+  type Minted,
+  OnboardingStep,
+  poolsDoneNote,
+} from "./OnboardingStep"
 
 export interface OnboardingPanelProps {
   readonly accounts: readonly AccountView[]
@@ -29,11 +36,6 @@ export interface OnboardingPanelProps {
   readonly providers: readonly ProviderDescriptor[]
   /** The operator's configured `PUBLIC_URL`, or null to fall back to this tab's own origin. */
   readonly publicUrl: string | null
-}
-
-interface Minted {
-  readonly name: string
-  readonly value: string
 }
 
 /**
@@ -254,51 +256,4 @@ export function OnboardingPanel(props: OnboardingPanelProps) {
       </Show>
     </Show>
   )
-}
-
-interface OnboardingStepProps {
-  readonly index: number
-  readonly title: string
-  readonly done: boolean
-  /** What the step reads once it is behind the operator — a count or the one thing they named. */
-  readonly doneNote: string
-  readonly action: JSX.Element
-}
-
-function OnboardingStep(props: OnboardingStepProps) {
-  return (
-    <li class={styles.step} data-done={props.done ? "true" : "false"}>
-      <span aria-hidden="true" class={styles.marker}>
-        <Show fallback={props.index} when={props.done}>
-          ✓
-        </Show>
-      </span>
-      <div class={styles.body}>
-        <p class={styles.title}>{props.title}</p>
-        <Show fallback={props.action} when={props.done}>
-          <p class={styles.note}>{props.doneNote}</p>
-        </Show>
-      </div>
-    </li>
-  )
-}
-
-function accountsDoneNote(accounts: readonly AccountView[]): string {
-  return accounts.length === 1
-    ? `"${accounts[0]?.label ?? ""}" added`
-    : `${accounts.length} accounts added`
-}
-
-function poolsDoneNote(pools: readonly PoolView[]): string {
-  return pools.length === 1 ? `"${pools[0]?.name ?? ""}" created` : `${pools.length} pools created`
-}
-
-/**
- * The mint's own response outruns the keys query it invalidates, so for the beat between the two
- * this step reads its name off the value in hand rather than briefly re-offering the mint button
- * to an operator who has already minted.
- */
-function keysDoneNote(keys: readonly ApiKeyView[], justMinted: Minted | null): string {
-  if (keys.length === 0 && justMinted !== null) return `"${justMinted.name}" minted`
-  return keys.length === 1 ? `"${keys[0]?.name ?? ""}" minted` : `${keys.length} keys minted`
 }

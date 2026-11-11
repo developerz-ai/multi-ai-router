@@ -84,4 +84,54 @@ describe("ConfirmDialog", () => {
       },
     )
   })
+
+  test("while busy it cannot be dismissed — Escape, scrim, close and Cancel all hold it open", () => {
+    // Dismissed mid-flight, the caller reset the pending mutation and the 409 sentence naming
+    // what blocked the delete arrived at a dialog that no longer existed.
+    let closes = 0
+    withMount(
+      {
+        open: true,
+        busy: true,
+        title: "Delete account",
+        subject: "prod-claude-1",
+        consequences: ["Every key scoped only to this account stops routing."],
+        confirmLabel: "Delete",
+        onConfirm: () => {},
+        onClose: () => closes++,
+      },
+      () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+        const close = document.body.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+        close?.click()
+        const cancel = [...document.body.querySelectorAll("button")].find(
+          (button) => button.textContent?.trim() === "Cancel",
+        )
+        cancel?.click()
+        expect(close?.disabled).toBe(true)
+        expect(cancel?.disabled).toBe(true)
+        expect(closes).toBe(0)
+      },
+    )
+  })
+
+  test("once settled it closes on Escape again", () => {
+    let closes = 0
+    withMount(
+      {
+        open: true,
+        busy: false,
+        title: "Delete account",
+        subject: "prod-claude-1",
+        consequences: ["Every key scoped only to this account stops routing."],
+        confirmLabel: "Delete",
+        onConfirm: () => {},
+        onClose: () => closes++,
+      },
+      () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
+        expect(closes).toBe(1)
+      },
+    )
+  })
 })

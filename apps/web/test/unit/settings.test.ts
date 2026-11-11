@@ -242,6 +242,7 @@ test("Reset removes an explicit metered Kimi override rather than submitting its
   const view: SettingsView = {
     version: "fixture",
     publicUrl: null,
+    usageReport: { discordWebhookConfigured: false, lastDeliveredAt: null },
     logLevel: "info",
     janitorIntervalMinutes: 5,
     retention: {
@@ -333,7 +334,7 @@ test("Reset removes an explicit metered Kimi override rather than submitting its
  * "all our prices are verified".
  */
 
-const coverageTable = (sources: readonly PriceTable["sources"]): PriceTable => ({
+const coverageTable = (sources: PriceTable["sources"]): PriceTable => ({
   shippedAsOf: "2026-10-01",
   sources,
   shipped: [],

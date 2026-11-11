@@ -175,7 +175,13 @@ describe("summarise", () => {
     },
     logLevel: "info",
     janitorIntervalMinutes: 5,
-    prices: { shipped: [], overrides: [shippedOverride("claude-sonnet-5", 2.5, 12)] },
+    publicUrl: null,
+    usageReport: { discordWebhookConfigured: false, lastDeliveredAt: null },
+    prices: {
+      shippedAsOf: "2026-10-01",
+      shipped: [],
+      overrides: [shippedOverride("claude-sonnet-5", 2.5, 12)],
+    },
   }
 
   test("nothing to save is stated plainly when the diff is empty", () => {

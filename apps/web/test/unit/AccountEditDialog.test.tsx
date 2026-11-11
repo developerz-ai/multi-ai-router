@@ -46,7 +46,7 @@ const HTTP_PROVIDER: ProviderDescriptor = {
 
 const SUBSCRIPTION: ProviderDescriptor = {
   ...HTTP_PROVIDER,
-  id: "anthropic-subscription",
+  id: "anthropic-oauth",
   transport: "agent-sdk",
   authKind: null,
   supportedDialects: ["anthropic"],

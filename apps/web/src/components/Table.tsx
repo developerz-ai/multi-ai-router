@@ -1,4 +1,12 @@
-import { createMemo, createUniqueId, For, type JSX, mergeProps, Show } from "solid-js"
+import {
+  type Accessor,
+  createMemo,
+  createUniqueId,
+  For,
+  type JSX,
+  mergeProps,
+  Show,
+} from "solid-js"
 import { cx } from "../lib/cx"
 import styles from "./Table.module.scss"
 
@@ -26,9 +34,12 @@ export interface TableProps<T> {
  * nothing else: no sorting, no fetching, no pagination until a second caller
  * needs them.
  *
- * `<For>` is keyed by reference, which is what a list of rows wants: a row
- * object that did not change is not re-rendered. `<Index>` would be wrong here
- * — position is not the identity of a row.
+ * Rows are keyed by `rowId`, never by object reference. A poll or a keystroke
+ * hands the table fresh row objects for the same rows (a refetch parses a new
+ * body; the price editor re-derives every row per keystroke), and a
+ * reference-keyed `<For>` would dispose and recreate each `<tr>` — losing the
+ * focused input, the half-typed value, the open confirm. `<Index>` would be
+ * wrong too: position is not the identity of a row.
  */
 export function Table<T>(props: TableProps<T>) {
   const merged = mergeProps({ emptyMessage: "Nothing here yet." }, props)
@@ -37,6 +48,9 @@ export function Table<T>(props: TableProps<T>) {
   // A landmark with no accessible name is worse than no landmark, so the role
   // and the name are produced together or not at all — one object, never two
   // independent attributes that could drift apart.
+  const ids = createMemo(() => merged.rows.map((row) => merged.rowId(row)))
+  const byId = createMemo(() => new Map(merged.rows.map((row) => [merged.rowId(row), row])))
+
   const region = createMemo(() =>
     merged.caption === undefined ? {} : ({ role: "region", "aria-labelledby": captionId } as const),
   )
@@ -78,22 +92,59 @@ export function Table<T>(props: TableProps<T>) {
               </tr>
             }
           >
-            <For each={merged.rows}>
-              {(row) => (
-                <tr class={styles.row} data-row-id={merged.rowId(row)}>
-                  <For each={merged.columns}>
-                    {(column) => (
-                      <td class={cx(styles.cell, column.numeric === true && styles.numeric)}>
-                        {column.cell(row)}
-                      </td>
-                    )}
-                  </For>
-                </tr>
-              )}
+            <For each={ids()}>
+              {(id) => {
+                const row = liveRow(latestRow(id, byId))
+                return (
+                  <tr class={styles.row} data-row-id={id}>
+                    <For each={merged.columns}>
+                      {(column) => (
+                        <td class={cx(styles.cell, column.numeric === true && styles.numeric)}>
+                          {column.cell(row)}
+                        </td>
+                      )}
+                    </For>
+                  </tr>
+                )
+              }}
             </For>
           </Show>
         </tbody>
       </table>
     </div>
   )
+}
+
+/** The current object for one row id; the last one seen while the row is being removed. */
+function latestRow<T>(id: string, byId: Accessor<ReadonlyMap<string, T>>): Accessor<T> {
+  let last: T | undefined
+  return () => {
+    const current = byId().get(id)
+    if (current !== undefined) last = current
+    if (last === undefined) throw new Error(`Table row ${id} has no data`)
+    return last
+  }
+}
+
+/**
+ * A stand-in row whose every property read goes to the row's latest object.
+ *
+ * `column.cell(row)` runs once per row, so a cell's components and inputs survive a replaced row
+ * object; the reads inside its JSX are tracked through this proxy, so the text still updates. A
+ * cell that returns a plain value re-runs because its insert reads through the proxy too.
+ */
+function liveRow<T>(current: Accessor<T>): T {
+  const target = () => current() as object
+  return new Proxy(
+    {},
+    {
+      get: (_, key) => Reflect.get(target(), key),
+      has: (_, key) => Reflect.has(target(), key),
+      ownKeys: () => Reflect.ownKeys(target()),
+      getOwnPropertyDescriptor: (_, key) => {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target(), key)
+        return descriptor === undefined ? undefined : { ...descriptor, configurable: true }
+      },
+    },
+  ) as T
 }

@@ -51,7 +51,7 @@ export function AuditLogSection() {
     })
   })
 
-  const columns = (): readonly Column<AuditEvent>[] => [
+  const columns: readonly Column<AuditEvent>[] = [
     {
       id: "when",
       header: "When",
@@ -154,19 +154,19 @@ export function AuditLogSection() {
                 description={
                   kind() === null
                     ? "Every admin-plane mutation lands here — accounts added, keys minted or viewed, pools re-policied, settings changed. Nothing has been recorded yet."
-                    : "No event of that kind is in this page. Widen the window or clear the filter."
+                    : "No event of that kind is in this page(). Widen the window or clear the filter."
                 }
                 icon="settings"
                 title={kind() === null ? "No admin activity yet" : "Nothing matches that kind"}
               />
             }
-            when={page.events.length > 0}
+            when={page().events.length > 0}
           >
             <Table
-              caption={`Newest first, at most ${page.limit} events. The log is append-only — only the janitor's retention sweep ever removes a row — and never contains credential material: a key view is recorded by id, never by value.`}
-              columns={columns()}
+              caption={`Newest first, at most ${page().limit} events. The log is append-only — only the janitor's retention sweep ever removes a row — and never contains credential material: a key view is recorded by id, never by value.`}
+              columns={columns}
               rowId={(event) => event.id}
-              rows={page.events}
+              rows={page().events}
             />
           </Show>
         )}

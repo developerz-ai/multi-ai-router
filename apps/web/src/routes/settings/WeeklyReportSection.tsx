@@ -36,9 +36,9 @@ export function WeeklyReportSection() {
             <div class={styles.fact}>
               <dt class={styles.term}>Discord webhook</dt>
               <dd class={styles.value}>
-                {view.usageReport.discordWebhookConfigured ? "Configured" : "Not configured"}
+                {view().usageReport.discordWebhookConfigured ? "Configured" : "Not configured"}
                 <span class={styles.hint}>
-                  {view.usageReport.discordWebhookConfigured
+                  {view().usageReport.discordWebhookConfigured
                     ? "Reports post to the channel after each week is generated."
                     : "Reports store as not_configured and nothing makes a network call."}
                 </span>
@@ -48,7 +48,7 @@ export function WeeklyReportSection() {
             <div class={styles.fact}>
               <dt class={styles.term}>Last delivered</dt>
               <dd class={styles.value}>
-                {formatTimestamp(view.usageReport.lastDeliveredAt)}
+                {formatTimestamp(view().usageReport.lastDeliveredAt)}
                 <span class={styles.hint}>
                   The newest stored delivery, by any path — the task or an operator's re-send.
                 </span>

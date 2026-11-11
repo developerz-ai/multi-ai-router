@@ -15,12 +15,15 @@ import styles from "./LoginRoute.module.scss"
  *
  * The two flows differ in transport but land on the same session:
  *   - SSO navigates the browser away to the IdP and comes back through the
- *     callback with a cookie already set; `?error=` carries the callback's
- *     generic failure sentence back here.
+ *     callback with a cookie already set. The callback renders its own failure
+ *     page; a `?error=` arriving here is shown as one fixed sentence, never echoed.
  *   - The password form POSTs to `/api/admin/auth/login` and adopts the
  *     returned session, then navigates on. Its failure sentence is the same
  *     generic one, rendered inline where the operator typed.
  */
+export const SIGN_IN_FAILED =
+  "Sign-in did not complete. Try again; if it keeps failing, the router's log says which check refused it."
+
 export default function LoginRoute() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
@@ -29,10 +32,12 @@ export default function LoginRoute() {
   const [password, setPassword] = createSignal("")
 
   const destination = () => safeNextPath(params.next)
+  // Never the parameter's own text: anyone can put a sentence in a link, and this page renders on
+  // the router's real origin under its name. Any value means "the last sign-in did not work".
   const callbackError = () => {
     const value = params.error
     if (typeof value !== "string" || value.length === 0) return null
-    return value
+    return SIGN_IN_FAILED
   }
 
   const startOIDC = () => {

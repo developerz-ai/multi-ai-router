@@ -40,11 +40,32 @@ export function loginPathFor(pathname: string): string {
  * slash as protocol-relative, so it is an off-origin redirect wearing a path's
  * clothes. An open redirect on a login form is how a phished operator ends up
  * authenticating somewhere else entirely.
+ *
+ * A backslash or a control character is refused outright — browsers read
+ * `/\evil.example` as `//evil.example` and strip a tab or newline from a URL — and
+ * whatever is left must still resolve to this origin.
  */
 export function safeNextPath(value: string | string[] | undefined): string {
   if (typeof value !== "string") return "/"
-  if (!value.startsWith("/") || value.startsWith("//")) return "/"
-  return value
+  if (!/^\/(?!\/)/.test(value)) return "/"
+  if (hasUnsafeCharacter(value)) return "/"
+  const base = "https://console.invalid"
+  try {
+    const resolved = new URL(value, base)
+    if (resolved.origin !== base) return "/"
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`
+  } catch {
+    return "/"
+  }
+}
+
+/** A backslash, or a C0 control / DEL — what a browser rewrites or strips inside a URL. */
+function hasUnsafeCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0)
+    if (char === "\\" || code <= 0x1f || code === 0x7f) return true
+  }
+  return false
 }
 
 /** Rendered outside the authed shell. */

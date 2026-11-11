@@ -1,5 +1,5 @@
 import type { UseQueryResult } from "@tanstack/solid-query"
-import { type JSX, Match, Switch } from "solid-js"
+import { type Accessor, type JSX, Match, Switch, untrack } from "solid-js"
 import { ErrorState } from "./ErrorState"
 import { TableSkeleton } from "./TableSkeleton"
 
@@ -9,7 +9,11 @@ export interface QueryBoundaryProps<T> {
   readonly errorTitle: string
   /** Shaped like the content it stands in for. Defaults to a table skeleton. */
   readonly loading?: JSX.Element
-  readonly children: (data: T) => JSX.Element
+  /**
+   * Called once per success, with an accessor: a refetch updates what the accessor returns, it
+   * does not call this again. Passing the value instead rebuilt the whole screen on every poll.
+   */
+  readonly children: (data: Accessor<T>) => JSX.Element
 }
 
 /**
@@ -23,6 +27,10 @@ export interface QueryBoundaryProps<T> {
  * router's own boundary, and the skeleton below would never render. `<Match>`
  * evaluates its children only when its condition holds, so the read happens
  * strictly after the resource has resolved.
+ *
+ * **The children render once, not once per refetch.** They get an accessor and run untracked, so
+ * a poll that lands new data flows into the mounted tree through fine-grained reads instead of
+ * disposing it: a collapsed group, a half-typed input and keyboard focus all survive.
  */
 export function QueryBoundary<T>(props: QueryBoundaryProps<T>) {
   return (
@@ -36,7 +44,9 @@ export function QueryBoundary<T>(props: QueryBoundaryProps<T>) {
           title={props.errorTitle}
         />
       </Match>
-      <Match when={props.query.isSuccess}>{props.children(props.query.data as T)}</Match>
+      <Match when={props.query.isSuccess}>
+        {untrack(() => props.children(() => props.query.data as T))}
+      </Match>
     </Switch>
   )
 }

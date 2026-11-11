@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { buildInit, buildPath, CSRF_HEADER, isMutating } from "../../src/lib/api/client"
+import { buildInit, buildPath, CSRF_HEADER, isMutating, request } from "../../src/lib/api/client"
+import { clearSession } from "../../src/lib/api/session"
 
 // Transport rules, asserted without a network. The load-bearing one is the CSRF
 // header: the admin guard rejects a mutation that arrives without it, so a
@@ -83,5 +84,50 @@ describe("buildInit", () => {
     const init = buildInit("POST", undefined, "t")
     expect(init.body).toBeUndefined()
     expect((init.headers as Record<string, string>)["content-type"]).toBeUndefined()
+  })
+})
+
+describe("request before the session read has landed", () => {
+  test("a mutation waits for the session's CSRF token instead of going out without one", async () => {
+    const originalFetch = globalThis.fetch
+    clearSession()
+    const sent: { method: string; path: string; csrf: string | null }[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      sent.push({ method: init?.method ?? "GET", path, csrf: headers[CSRF_HEADER] ?? null })
+      if (path.endsWith("/auth/session")) {
+        return Response.json({ username: "admin", csrfToken: "token-1" })
+      }
+      return Response.json({ ok: true })
+    }) as typeof fetch
+    try {
+      await request({ method: "POST", path: "/accounts/acc-1/recheck" })
+      expect(sent.map((call) => `${call.method} ${call.path}`)).toEqual([
+        "GET /api/admin/auth/session",
+        "POST /api/admin/accounts/acc-1/recheck",
+      ])
+      expect(sent[1]?.csrf).toBe("token-1")
+    } finally {
+      globalThis.fetch = originalFetch
+      clearSession()
+    }
+  })
+
+  test("login is the one mutation that never waits — it is what issues the session", async () => {
+    const originalFetch = globalThis.fetch
+    clearSession()
+    const paths: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      paths.push(String(input))
+      return Response.json({ username: "admin", csrfToken: "token-2" })
+    }) as typeof fetch
+    try {
+      await request({ method: "POST", path: "/auth/login", body: { password: "x" } })
+      expect(paths).toEqual(["/api/admin/auth/login"])
+    } finally {
+      globalThis.fetch = originalFetch
+      clearSession()
+    }
   })
 })

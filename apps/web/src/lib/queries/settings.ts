@@ -31,6 +31,8 @@ export function useTasks() {
     queryKey: queryKeys.tasks.list(),
     queryFn: () => fetchTasks(),
     refetchInterval: 30_000,
+    // A task row has no `id`; its name is its identity, so a poll keeps each row's object.
+    reconcile: "task",
   }))
 }
 

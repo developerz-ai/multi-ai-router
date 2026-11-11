@@ -43,7 +43,7 @@ function tokenFloor(tokens: number): string {
  * makes that consequence visible before they save.
  */
 export function PriceTable(props: PriceTableProps) {
-  const columns = (): readonly Column<PriceRow>[] => [
+  const columns: readonly Column<PriceRow>[] = [
     {
       id: "model",
       header: "Model",
@@ -106,7 +106,7 @@ export function PriceTable(props: PriceTableProps) {
   return (
     <Table
       caption="Rates in USD per million tokens. Edits are local until you save; saving replaces the whole override table with what is listed here."
-      columns={columns()}
+      columns={columns}
       emptyMessage="This image ships no prices and none are overridden."
       rowId={(row) => row.id}
       rows={props.rows}

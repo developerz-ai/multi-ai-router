@@ -38,9 +38,10 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     <Modal
       size="sm"
       description={`This affects "${props.subject}".`}
+      dismissible={props.busy !== true}
       footer={
         <>
-          <Button onClick={() => props.onClose()} tone="ghost">
+          <Button disabled={props.busy === true} onClick={() => props.onClose()} tone="ghost">
             Cancel
           </Button>
           <Button busy={props.busy === true} onClick={() => props.onConfirm()} tone="danger">

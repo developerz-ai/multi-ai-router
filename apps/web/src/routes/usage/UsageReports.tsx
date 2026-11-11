@@ -109,7 +109,7 @@ export function UsageReports() {
             columns={columns}
             emptyMessage="No weekly report has been generated yet."
             rowId={(row) => row.periodStart}
-            rows={rows}
+            rows={rows()}
           />
         )}
       </QueryBoundary>

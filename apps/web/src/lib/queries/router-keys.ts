@@ -27,6 +27,10 @@ import { queryKeys } from "./query-keys"
 // screen never stops observing on its own, so without the reset the timer would
 // never start. Neither half works alone.
 //
+// The same `gcTime: 0` is on every mutation whose *variables* hold a secret: account create and
+// update (the upstream credential), the local login (the admin password) and the connect
+// completion (the pasted authorization code).
+//
 // Keys stay retrievable through all of this — pressing reveal again is one more
 // audited call, which is exactly the intended cost.
 //
