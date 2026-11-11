@@ -62,6 +62,26 @@ export function logStreamFailure(
   })
 }
 
+/**
+ * A success whose usage was never read (`usage/usage-unread.ts`). The row says that it happened.
+ * This line says what the upstream sent instead: the terminal it reached and the event names it
+ * streamed, counted. Names and counts only, never a payload.
+ */
+export function logUsageUnread(
+  log: Logger | undefined,
+  accountId: string,
+  reason: string,
+  terminal: string,
+  eventTypes?: Readonly<Record<string, number>>,
+): void {
+  log?.warn("upstream usage unread", {
+    accountId,
+    reason,
+    terminal,
+    ...(eventTypes === undefined ? {} : { eventTypes }),
+  })
+}
+
 /** `Name(CODE): message` — what broke a stream that carried no error frame of its own. */
 function transportCause(error: Error): string {
   const code = "code" in error && typeof error.code === "string" ? `(${error.code})` : ""

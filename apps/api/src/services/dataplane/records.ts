@@ -96,6 +96,12 @@ export interface AttemptRecordInput {
    */
   readonly priced?: boolean
   /**
+   * Whether `tokens` is a measurement. Default true. `false` is a completion whose upstream never
+   * stated usage the router could read (`usage/usage-unread.ts`): the zero counts measure nothing,
+   * so the attempt prices as `unknown` rather than as a free completion.
+   */
+  readonly usageRead?: boolean
+  /**
    * How the selected account is billed, which decides whether a priced attempt is reported as
    * spend or as an attribution. Absent is `metered` — the value an attempt that never selected an
    * account would have anyway, and the one an unstated account row holds.
@@ -120,10 +126,11 @@ export interface AttemptRecordInput {
 export function attemptCost(
   input: Pick<
     AttemptRecordInput,
-    "priced" | "provider" | "upstreamModel" | "accountId" | "billing" | "prices"
+    "priced" | "usageRead" | "provider" | "upstreamModel" | "accountId" | "billing" | "prices"
   > & { readonly tokens: TokenCounts },
 ): CostEstimate {
-  if (input.priced === false || input.upstreamModel === null) return UNKNOWN_COST
+  if (input.priced === false || input.usageRead === false || input.upstreamModel === null)
+    return UNKNOWN_COST
   return estimateCost({
     provider: input.provider,
     model: input.upstreamModel,

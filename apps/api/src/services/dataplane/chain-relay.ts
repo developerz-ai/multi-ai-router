@@ -1,6 +1,6 @@
-import { createResponseObserver } from "../usage"
+import { createResponseObserver, USAGE_SUCCESS, usageUnread } from "../usage"
 import { RouterShutdownError } from "./active-requests"
-import { logStreamFailure } from "./attempt-log"
+import { logStreamFailure, logUsageUnread } from "./attempt-log"
 import { reasoningSealFor } from "./chain-body"
 import type { AttemptRelay, SuccessClock } from "./chain-relay-types"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
@@ -95,6 +95,11 @@ export function relaySuccess(
     const verdict = terminal.finish(facts)
     ctx.request?.signal.removeEventListener("abort", requestAborted)
     const counts = facts.counts
+    // A completion that never stated its usage is unknown, never free (`usage/usage-unread.ts`).
+    const unread =
+      verdict.outcome === USAGE_SUCCESS && ctx.runtime.operation === "messages"
+        ? usageUnread(facts)
+        : null
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
     try {
       const rateLimited = at.isRateLimited?.() ?? at.rateLimited ?? false
@@ -120,6 +125,7 @@ export function relaySuccess(
           ...ctx.runtime.attribution(attempt, servable),
           tokens: counts,
           priced: ctx.runtime.operation !== "count-tokens",
+          usageRead: unread === null,
           timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
           outcome: verdict.outcome,
           streamed,
@@ -128,10 +134,18 @@ export function relaySuccess(
           responseStatus:
             refusedStatus(error, streamed, servable.translation !== null && !clientStreams) ??
             response.status,
-          errorClass: verdict.errorClass,
+          errorClass: verdict.errorClass ?? unread,
         }),
       )
       // Last, so a logging fault cannot cost the breaker update or the usage row above.
+      if (unread !== null)
+        logUsageUnread(
+          ctx.log,
+          servable.account.id,
+          unread,
+          facts.terminal,
+          descriptor.eventTypes?.(),
+        )
       if (verdict.failure !== null) {
         logStreamFailure(
           ctx.log,
