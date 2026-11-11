@@ -53,10 +53,31 @@ export interface ListedModel {
   readonly reasoning?: ModelReasoning
 }
 
+/**
+ * Memoized per account snapshot and catalog-rows array. Both are replaced wholesale on refresh,
+ * never mutated (`services/catalog/store.ts`, `services/models/store.ts`), so identity is the
+ * version: a steady state answers `GET /v1/models` without rebuilding a row (sweep 101, 04.7).
+ */
+const memo = new WeakMap<
+  AccountSnapshot,
+  { readonly rows: readonly ModelDescriptor[]; readonly listed: readonly ListedModel[] }
+>()
+
 export function listableModels(
   account: AccountSnapshot,
   catalogRows: readonly ModelDescriptor[],
 ): readonly ListedModel[] {
+  const cached = memo.get(account)
+  if (cached !== undefined && cached.rows === catalogRows) return cached.listed
+  const listed = Object.freeze(buildListable(account, catalogRows))
+  memo.set(account, { rows: catalogRows, listed })
+  return listed
+}
+
+function buildListable(
+  account: AccountSnapshot,
+  catalogRows: readonly ModelDescriptor[],
+): ListedModel[] {
   const subscription = PROVIDER_REGISTRY[account.provider].transport === "agent-sdk"
   // Live rows first, so the subscription's own word on an alias wins; the shipped table then adds
   // the family aliases and canonical ids the handshake does not spell out (`opus`, `fable`,

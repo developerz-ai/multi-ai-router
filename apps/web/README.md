@@ -240,7 +240,7 @@ configuration, not reactive data.
 ## Testing
 
 ```
-bun test apps/web
+bin/test apps/web
 ```
 
 Two kinds of suite live here. The `.ts` suites are DOM-free — pure mappers and formatters, with the

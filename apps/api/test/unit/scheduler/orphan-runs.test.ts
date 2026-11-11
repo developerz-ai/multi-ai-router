@@ -99,3 +99,35 @@ test("a run row whose task name no longer exists is swept, not thrown on", async
   expect(repo.rows.find((row) => row.id === removed)?.outcome).toBe("failed")
   expect(await repo.deleteOlderThan(new Date(NOW.getTime() + 1), 10)).toBe(1)
 })
+
+test("capacity-retry ticks inside the gap reuse one maintenance pass", async () => {
+  const repo = memoryTaskRepository()
+  let listed = 0
+  const counted = {
+    ...repo,
+    listInterruptedTasks: (...args: Parameters<typeof repo.listInterruptedTasks>) => {
+      listed++
+      return repo.listInterruptedTasks(...args)
+    },
+  }
+  let at = NOW.getTime()
+  const maintenance = createInterruptedRunMaintenance({
+    repo: counted,
+    lock: alwaysFree(),
+    cutoffAgeMs: 1_000,
+    batchSize: 10,
+    minGapMs: 60_000,
+    now: () => new Date(at),
+  })
+  const signal = new AbortController().signal
+  // Concurrent callers share the in-flight pass.
+  await Promise.all([maintenance(signal), maintenance(signal)])
+  for (let i = 0; i < 10; i++) {
+    at += 1_000
+    await maintenance(signal)
+  }
+  expect(listed).toBe(1)
+  at += 60_000
+  await maintenance(signal)
+  expect(listed).toBe(2)
+})

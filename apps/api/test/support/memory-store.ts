@@ -99,6 +99,21 @@ export function createMemoryStore(): MemoryStore {
             (filter?.status === undefined || row.status === filter.status) &&
             (filter?.provider === undefined || row.provider === filter.provider),
         ),
+      listSummaries: async (filter) =>
+        accounts
+          .filter(
+            (row) =>
+              (filter?.status === undefined || row.status === filter.status) &&
+              (filter?.provider === undefined || row.provider === filter.provider),
+          )
+          .map(({ id, label, provider, status, lastUsedAt, createdAt }) => ({
+            id,
+            label,
+            provider,
+            status,
+            lastUsedAt,
+            createdAt,
+          })),
       readEligibleBackgroundAccount: async (id, expected) => {
         const row = accounts.find((candidate) => candidate.id === id)
         const state = recoveries.get(id)?.state

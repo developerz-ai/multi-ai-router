@@ -105,7 +105,8 @@ describe("a context-tagged model name", () => {
     const result = selectFor("gpt-9-unknown[1m]", [codex, zai, claude])
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.error.status).toBe(503)
+    // A client change, so a 404 — never a 503 that invites retries (plan 101, 10.21).
+    expect(result.error.status).toBe(404)
     expect(result.decision.rejected.map((entry) => entry.reason)).toEqual([
       "model-unsupported",
       "model-unsupported",

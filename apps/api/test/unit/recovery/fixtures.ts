@@ -46,6 +46,7 @@ export function fixture() {
   let acknowledgmentLost = false
   let outcomeUnavailable = false
   let catalog: () => Promise<void> = async () => {}
+  let clock = 1000
   const deps: RecoveryCoordinatorDeps = {
     config: {
       intervalMs: 1000,
@@ -59,7 +60,7 @@ export function fixture() {
       shutdownDrainMs: 20,
       quotaSpentThreshold: 1,
     },
-    now: () => new Date(1000),
+    now: () => new Date(clock),
     schedule: () => () => {},
     warn: () => {},
     accounts: { findById: async () => account },
@@ -148,5 +149,8 @@ export function fixture() {
       return held
     },
     state: () => row,
+    advance: (ms: number) => {
+      clock += ms
+    },
   }
 }

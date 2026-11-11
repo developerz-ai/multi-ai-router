@@ -5,7 +5,7 @@ import type { ClaudeCliReadiness } from "./readiness"
 /**
  * The `claude` half of `/readyz`: which rung of the resolution ladder won.
  *
- * It re-resolves on every call rather than caching a boot-time answer, and that is the useful
+ * It re-resolves after a short cache rather than keeping a boot-time answer, and that is the useful
  * behaviour: an operator who fixes a bad mount, a missing platform package, or a wrong
  * `CLAUDE_CLI_PATH` sees the endpoint agree without restarting the router. The cost is a handful of
  * `statSync` calls against paths the page cache already holds — nothing that belongs on the request
@@ -23,15 +23,29 @@ export interface ClaudeCliProbeDeps {
   readonly log: Logger
   /** Test seam. Production resolves against the real filesystem and module resolver. */
   readonly resolve?: () => CliResolution
+  /**
+   * How long one resolution answers `/readyz` before the ladder is walked again
+   * (`HEALTH_CLI_PROBE_CACHE_MS`). An unauthenticated poll must not cost a `statSync` ladder per
+   * hit; a fixed mount is still seen within this window. Default 5 s; 0 re-resolves every call.
+   */
+  readonly cacheMs?: number
+  /** Monotonic ms. Test seam; defaults to `performance.now`. */
+  readonly elapsed?: () => number
 }
 
 export function createClaudeCliProbe(deps: ClaudeCliProbeDeps): () => Promise<ClaudeCliReadiness> {
   const resolve =
     deps.resolve ?? (() => resolveClaudeCli(createCliProbe({ override: deps.override })))
+  const cacheMs = deps.cacheMs ?? 5_000
+  const elapsed = deps.elapsed ?? (() => performance.now())
   let reported: string | null = null
+  let cached: { readonly at: number; readonly resolution: CliResolution } | undefined
 
   return () => {
-    const resolution = resolve()
+    const now = elapsed()
+    if (cached === undefined || now - cached.at >= cacheMs)
+      cached = { at: now, resolution: resolve() }
+    const resolution = cached.resolution
     const current = signature(resolution)
     if (reported !== current) {
       reported = current

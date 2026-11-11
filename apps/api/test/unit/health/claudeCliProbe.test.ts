@@ -31,7 +31,7 @@ function harness(resolutions: CliResolution[]): Harness {
   let call = 0
   const resolve = (): CliResolution =>
     resolutions[Math.min(call++, resolutions.length - 1)] as CliResolution
-  return { check: createClaudeCliProbe({ override: null, log, resolve }), lines }
+  return { check: createClaudeCliProbe({ override: null, log, resolve, cacheMs: 0 }), lines }
 }
 
 function entry(line: string): Record<string, unknown> {
@@ -89,5 +89,30 @@ describe("the claude cli probe", () => {
     expect(entry(lines[0] ?? "{}").attempts).toEqual([
       { source: "path_lookup", path: "/usr/local/bin/claude", rejection: "missing" },
     ])
+  })
+})
+
+// Plan 101, 03.10: `/readyz` is unauthenticated; every poll walked the `statSync` ladder.
+describe("the claude cli probe cache", () => {
+  test("one resolution answers polls inside the window, and the ladder re-runs after it", async () => {
+    let resolutions = 0
+    let clock = 0
+    const check = createClaudeCliProbe({
+      override: null,
+      log: createLogger({ level: "error", write: () => {} }),
+      resolve: () => {
+        resolutions++
+        return RESOLVED
+      },
+      cacheMs: 1_000,
+      elapsed: () => clock,
+    })
+    await check()
+    clock = 999
+    await check()
+    expect(resolutions).toBe(1)
+    clock = 1_000
+    await check()
+    expect(resolutions).toBe(2)
   })
 })

@@ -30,16 +30,25 @@ export function createUsageHistoryMaintenance(db: Database) {
   // A committed sweep advances through the indexed event clock. Exhaustion resets this hint so
   // newly arrived older legacy rows are picked up next sweep; correctness remains receipt-based.
   let cursor: { createdAt: Date; id: string } | undefined
-  const backfill = async ({ limit }: { limit: number }) => {
+  const backfill = async ({ limit, fullScan = false }: { limit: number; fullScan?: boolean }) => {
     boundUsageBatch(limit)
     const committed = await db.transaction(async (tx) => {
       const { state, dbNow } = await lockUsageHistory(tx)
-      const after = cursor
+      // A fresh sweep starts at the banked-through watermark, not the table start: every row at or
+      // below it was proven banked, and re-proving it hourly was a full anti-join under this lock
+      // (prod: 28 % of all DB time, 0 rows found — 10.5 / 12.9). Only a lock-free pre-2.16 writer
+      // can land a row below the watermark later; `fullScan` is the rare pass that adopts those.
+      const watermark =
+        !fullScan && state.bankedThroughAt !== null && state.bankedThroughId !== null
+          ? { createdAt: state.bankedThroughAt, id: state.bankedThroughId }
+          : undefined
+      const fresh = cursor === undefined
+      const after = cursor ?? watermark
       const rows = await tx
         .select()
         .from(usageRecords)
         .where(
-          sql`not exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending') ${after === undefined ? sql`` : sql`and (${usageRecords.createdAt},${usageRecords.id}) > (${after.createdAt.toISOString()}::timestamptz,${after.id}::uuid)`}`,
+          sql`not exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending') ${after === undefined ? sql`` : sql`and ${usageRecords.createdAt} >= ${after.createdAt.toISOString()}::timestamptz and (${usageRecords.createdAt},${usageRecords.id}) > (${after.createdAt.toISOString()}::timestamptz,${after.id}::uuid)`}`,
         )
         .orderBy(asc(usageRecords.createdAt), asc(usageRecords.id))
         .limit(limit)
@@ -85,14 +94,14 @@ export function createUsageHistoryMaintenance(db: Database) {
         returning id,kind,day,source,payload_hash as "payloadHash",payload,ingested_at as "ingestedAt"`)),
             ] as unknown as ContributionRow[])
       await applyUsageContributions(tx, admitted)
-      // A sweep that began at the start of the table and ended short of its limit has just
-      // banked every unbanked row there is, inside this transaction. That is the only moment the
-      // watermark is provable (#275); a resumed sweep says nothing about rows before its cursor.
-      // A `legacy_overlap` adoption is evidence a lock-free pre-2.16 writer was active, whose rows
-      // can land below any watermark; do not certify a sweep that saw one.
+      // A sweep that began at the start of the table — or at the watermark, which already proves
+      // everything before it — and ended short of its limit has just banked every unbanked row
+      // there is, inside this transaction. That is the only moment the watermark is provable
+      // (#275); a resumed sweep says nothing about rows before its cursor. A `legacy_overlap`
+      // adoption is evidence a lock-free pre-2.16 writer was active, whose rows can land below any
+      // watermark; do not certify a sweep that saw one.
       const sawLockFreeWriter = inputs.some((input) => input.source === "legacy_overlap")
-      if (after === undefined && rows.length < limit && !sawLockFreeWriter)
-        await advanceBankedWatermark(tx)
+      if (fresh && rows.length < limit && !sawLockFreeWriter) await advanceBankedWatermark(tx)
       return { processed: rows.length, remaining: rows.length === limit, last: rows.at(-1) }
     })
     cursor =
@@ -138,7 +147,9 @@ export function createUsageHistoryMaintenance(db: Database) {
           .select({ id: table.id })
           .from(table)
           .where(sql`${table.day} < ${horizon}::date`)
-          .orderBy(table.day, table.id)
+          // `day` alone: which rows of the oldest day go first is irrelevant, and a second key
+          // would sort every expired row per batch instead of riding the day-leading index.
+          .orderBy(table.day)
           .limit(limit - deleted)
         if (ids.length)
           deleted += (
@@ -155,7 +166,7 @@ export function createUsageHistoryMaintenance(db: Database) {
         ...(await tx.execute(sql`
         delete from ${usageContributions} where (kind,id) in (
           select kind,id from ${usageContributions} where day < ${horizon}::date
-          order by day,id,kind limit ${limit - deleted}) returning id`)),
+          order by day limit ${limit - deleted}) returning id`)),
       ].length
       return deleted
     })

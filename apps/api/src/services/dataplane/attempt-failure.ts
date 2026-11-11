@@ -52,6 +52,8 @@ export function toAttemptFailure(
     retryAfterSeconds: signal?.retryAfterSeconds,
     resetSource: signal?.resetSource,
     message: classification?.signal ?? `upstream returned ${status}`,
+    // The request itself is refused wherever it goes (05.14): counted toward a request wall.
+    ...(classification?.requestAttributable === true ? { requestAttributable: true } : {}),
   }
 }
 
@@ -91,5 +93,28 @@ export function transportFailure(error: unknown): AttemptFailure {
     message: timedOut
       ? "upstream did not answer within its deadline"
       : "upstream connection failed",
+  }
+}
+
+/** A class name is a bounded label; anything else a throw carries is not. */
+const ERROR_CLASS_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/
+
+/**
+ * An attempt whose upstream was contacted, and then the router threw reading the answer — a driver
+ * hook meeting a header or body shape it did not expect. The upstream may have billed it, so it is
+ * an attempt like any other: attributed, struck on the breaker, and failed over (plan 101, 02.7).
+ */
+export function thrownAttemptFailure(error: unknown) {
+  const name = error instanceof Error ? error.name : ""
+  return {
+    kind: "failure" as const,
+    failure: {
+      kind: "server-error" as const,
+      message: "the router could not read the upstream's answer",
+    },
+    classification: null,
+    rateLimit: null,
+    upstream: null,
+    errorClass: ERROR_CLASS_NAME.test(name) ? name : "router_error",
   }
 }

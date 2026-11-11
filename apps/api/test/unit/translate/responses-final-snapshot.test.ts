@@ -147,3 +147,32 @@ test("interleaved Chat text never closes a tool before its later arguments", () 
       .join(""),
   ).toBe("between")
 })
+
+// 06.10: the second final mirror of the same value compares against the kept digest; it adds nothing.
+for (const [index, factory] of factories.entries()) {
+  test(`Responses ${index}: a repeated equal final mirror emits no text`, () => {
+    const t = factory()
+    push(t, { type: "response.output_text.delta", item_id: "a", content_index: 0, delta: "hel" })
+    const first = push(t, {
+      type: "response.output_text.done",
+      item_id: "a",
+      content_index: 0,
+      text: "hello",
+    })
+    expect(text(first)).toBe("lo")
+    const second = push(t, {
+      type: "response.output_text.done",
+      item_id: "a",
+      content_index: 0,
+      text: "hello",
+    })
+    expect(text(second)).toBe("")
+    const changed = push(t, {
+      type: "response.output_text.done",
+      item_id: "a",
+      content_index: 0,
+      text: "hellx",
+    })
+    expect(text(changed)).toBe("")
+  })
+}

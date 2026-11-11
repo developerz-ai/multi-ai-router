@@ -28,6 +28,7 @@ describe.skipIf(!url)("recovery outcome quota revision fencing", () => {
     })
 
     const [row] = await fixture.windows(account.id)
+    if (row === undefined) throw new Error("window missing")
     expect(row).toMatchObject({
       utilization: 1,
       evidenceState: "superseded_by_recovery",

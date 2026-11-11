@@ -1,4 +1,4 @@
-import type { AccountStatus, AuthKind, QuotaWindowState } from "@multi-ai-router/core"
+import type { AuthKind, QuotaWindowState } from "@multi-ai-router/core"
 import type { RateLimitSignal, RateLimitWindow } from "../../providers"
 import {
   type AttemptFailure,
@@ -16,17 +16,24 @@ import {
   type HealthAccountFacts,
   type HealthObservation,
 } from "./health-observation"
+import { configuredBreaker, type HealthStoreOptions } from "./health-options"
 import { foldRateLimit } from "./health-reading"
 import { recoverHealth } from "./health-recovery"
+import { rotateTokens, type TokenWindow } from "./health-tokens"
 
 export interface AccountHealthState {
   readonly breaker: BreakerState
   readonly inFlight: number
+  /** Output tokens over the last one to two `tokenWindowMs` windows (02.10); since boot without one. */
   readonly recentTokens: number
+  /** The two buckets `recentTokens` sums, when a window is configured. */
+  readonly tokenWindow?: TokenWindow
   readonly limiterWindows: readonly RateLimitWindow[]
   readonly quotaWindows: readonly QuotaWindowState[]
   readonly lastSignalAt: Date | null
   readonly probeHeldUntil: Date | null
+  /** Upstream models this account answered `model-unsupported` for, each until its expiry (10.16). */
+  readonly refusedModels?: ReadonlyMap<string, Date>
 }
 
 const FRESH: AccountHealthState = {
@@ -41,32 +48,7 @@ const FRESH: AccountHealthState = {
 
 export const DEFAULT_PROBE_HOLD_MS = 30_000
 
-export interface HealthStoreOptions {
-  readonly failureThreshold?: number
-  readonly baseBackoffMs?: number
-  readonly maxBackoffMs?: number
-  readonly authFailureCooldownMs?: number
-  readonly authFailureMaxCooldownMs?: number
-  readonly jitter?: () => number
-  readonly probeHoldMs?: number
-  /**
-   * How old a plan reading may be and still lend its reset to a reset-less limit refusal
-   * (`routing/plan-reset.ts`). Absent: no reading lends, the breaker's own backoff stands.
-   */
-  readonly planReadingMaxAgeMs?: number
-  readonly onQuotaWindows?: (
-    accountId: string,
-    windows: readonly QuotaWindowState[],
-    observation?: HealthObservation,
-  ) => void
-  readonly onBlocked?: (
-    accountId: string,
-    status: AccountStatus,
-    observation?: HealthObservation,
-    quotaWindows?: readonly QuotaWindowState[],
-  ) => void
-  readonly onReset?: (accountId: string) => void
-}
+export type { HealthStoreOptions } from "./health-options"
 
 export interface ProbeAdmission {
   readonly admitted: boolean
@@ -98,6 +80,8 @@ export interface HealthStore {
     now: Date,
     observation?: HealthObservation,
   ): void
+  /** Keeps `upstreamModel` off this account for `modelRefusalTtlMs` after it refused it. */
+  refuseModel(accountId: string, upstreamModel: string, now: Date): void
   admitProbe(accountId: string, now: Date): ProbeAdmission
   releaseProbe(accountId: string, token?: number): void
   probeStats(): { readonly admitted: number; readonly refused: number }
@@ -118,19 +102,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
   let probeAdmitted = 0
   let probeRefused = 0
 
-  const configured: BreakerOptions = {
-    ...(options.failureThreshold === undefined
-      ? {}
-      : { failureThreshold: options.failureThreshold }),
-    ...(options.baseBackoffMs === undefined ? {} : { baseBackoffMs: options.baseBackoffMs }),
-    ...(options.maxBackoffMs === undefined ? {} : { maxBackoffMs: options.maxBackoffMs }),
-    ...(options.authFailureCooldownMs === undefined
-      ? {}
-      : { authFailureCooldownMs: options.authFailureCooldownMs }),
-    ...(options.authFailureMaxCooldownMs === undefined
-      ? {}
-      : { authFailureMaxCooldownMs: options.authFailureMaxCooldownMs }),
-  }
+  const configured = configuredBreaker(options)
 
   const breakerOptions = (caller?: BreakerOptions): BreakerOptions => ({
     ...configured,
@@ -138,7 +110,21 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
     ...caller,
   })
 
-  const read = (accountId: string): AccountHealthState => states.get(accountId) ?? FRESH
+  const tokenWindowMs = options.tokenWindowMs
+  const elapsed = options.elapsed ?? (() => performance.now())
+  const read = (accountId: string): AccountHealthState => {
+    const state = states.get(accountId) ?? FRESH
+    if (tokenWindowMs === undefined || state.tokenWindow === undefined) return state
+    const window = rotateTokens(state.tokenWindow, elapsed(), tokenWindowMs)
+    if (window === state.tokenWindow) return state
+    const rotated = {
+      ...state,
+      tokenWindow: window,
+      recentTokens: window.previous + window.current,
+    }
+    states.set(accountId, rotated)
+    return rotated
+  }
   const write = (accountId: string, patch: Partial<AccountHealthState>): void => {
     states.set(accountId, { ...read(accountId), ...patch })
   }
@@ -164,9 +150,17 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     endAttempt(accountId, tokens = 0) {
       const current = read(accountId)
+      const inFlight = Math.max(0, current.inFlight - 1)
+      if (tokenWindowMs === undefined) {
+        write(accountId, { inFlight, recentTokens: current.recentTokens + tokens })
+        return
+      }
+      const window = current.tokenWindow ?? { start: elapsed(), previous: 0, current: 0 }
+      const tokenWindow = { ...window, current: window.current + tokens }
       write(accountId, {
-        inFlight: Math.max(0, current.inFlight - 1),
-        recentTokens: current.recentTokens + tokens,
+        inFlight,
+        tokenWindow,
+        recentTokens: tokenWindow.previous + tokenWindow.current,
       })
     },
 
@@ -224,6 +218,14 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
           observation,
         )
       }
+    },
+
+    refuseModel(accountId, upstreamModel, now) {
+      const ttlMs = options.modelRefusalTtlMs
+      if (ttlMs === undefined) return
+      const kept = [...(read(accountId).refusedModels ?? [])].filter(([, until]) => until > now)
+      kept.push([upstreamModel, new Date(now.getTime() + ttlMs)])
+      write(accountId, { refusedModels: new Map(kept) })
     },
 
     admitProbe(accountId, now) {

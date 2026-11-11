@@ -11,7 +11,11 @@ import { strikeProbeFailure } from "../../services/dataplane/probe-verdict"
 import { probeModel, type RecoveryProbeSend } from "../../services/dataplane/recovery-probe"
 import type { RoutableAccount } from "../../services/dataplane/types"
 import type { AccountSnapshot } from "../../services/routing"
-import { cooldownRecheckDue, readingReopened } from "../../services/routing/cooldown-recheck"
+import {
+  cooldownRecheckDue,
+  providerReportedSpent,
+  readingReopened,
+} from "../../services/routing/cooldown-recheck"
 import type { ScheduledTask } from "../types"
 import { createExhaustedRetest, type ExhaustedRetestPorts } from "./exhausted-retest"
 
@@ -64,6 +68,8 @@ export interface CooldownRecheckPorts {
   readonly quotaSpentThreshold: number
   /** "Re-check now" for an `exhausted` account, attributed to this task (`exhausted-retest.ts`). */
   readonly recheckExhausted: ExhaustedRetestPorts["recheck"]
+  /** The persisted re-test ladder (`createExhaustedWatchRepository`). Absent: process memory. */
+  readonly exhaustedWatches?: ExhaustedRetestPorts["store"]
 }
 
 export interface CooldownRecheckDeps extends CooldownRecheckPorts {
@@ -92,6 +98,7 @@ export function createCooldownRecheckTask(deps: CooldownRecheckDeps): ScheduledT
   const retestExhausted = createExhaustedRetest({
     recheck: deps.recheckExhausted,
     schedule: deps.exhaustedSchedule,
+    ...(deps.exhaustedWatches === undefined ? {} : { store: deps.exhaustedWatches }),
   })
 
   return {
@@ -212,8 +219,16 @@ async function byRequest(
   const fold = (signal: RateLimitSignal): void =>
     deps.health.applyRateLimit(account.id, signal, now, observation)
   if (result.ok) {
-    deps.health.recordSuccess(account.id, observation)
+    if (!spentByProvider(deps, account, now)) {
+      deps.health.recordSuccess(account.id, observation)
+      if (reading !== undefined) fold(reading)
+      return "reopened"
+    }
+    // A 2xx says the probe model answered; it does not say a provider-reported window charged to
+    // other models has refilled (10.8). The probe's own reading lands first — only it can lift it.
     if (reading !== undefined) fold(reading)
+    if (spentByProvider(deps, account, now)) return "still-cooling"
+    deps.health.recordSuccess(account.id, observation)
     return "reopened"
   }
   // The verdict first, as every other path records it; the reading lands after it.
@@ -230,4 +245,10 @@ async function byRequest(
     )
   if (reading !== undefined) fold({ ...reading, limited: false })
   return stillCooling ? "still-cooling" : "failed"
+}
+
+/** A03's pure rule over the live snapshot; an account with no snapshot has nothing spent. */
+function spentByProvider(deps: CooldownRecheckDeps, account: RoutableAccount, now: Date): boolean {
+  const live = deps.snapshot(account.id)
+  return live !== undefined && providerReportedSpent(live, now, deps.quotaSpentThreshold)
 }

@@ -65,7 +65,7 @@ export function translatedBody(
     async start(controller) {
       let raw: Uint8Array
       try {
-        raw = await readRelayBody(upstream, signal)
+        raw = await readRelayBody(upstream, signal, input.bufferedBodyMaxBytes)
       } catch (error) {
         controller.error(error)
         fail(error)
@@ -85,7 +85,15 @@ export function translatedBody(
         fail(error)
         return
       }
-      const chunk = source === UNREADABLE ? raw : translate(input, source)
+      const converted = source === UNREADABLE ? raw : translate(input, source)
+      // A response the translator could not convert faithfully (undecodable tool arguments, 06.4)
+      // fails honestly: nothing was written, so the client gets the typed error, not a body.
+      if (converted instanceof TranslationStreamError) {
+        controller.error(converted)
+        fail(converted)
+        return
+      }
+      const chunk = converted
 
       controller.enqueue(chunk)
       guard(() => observer.onWireBytes?.(chunk.length))
@@ -102,8 +110,12 @@ export function translatedBody(
   })
 }
 
-function translate(input: TranslatedRelayInput, source: unknown): Uint8Array {
+function translate(
+  input: TranslatedRelayInput,
+  source: unknown,
+): Uint8Array | TranslationStreamError {
   const translated = input.pair.response(source, input.context)
+  if (translated.translationFailure !== undefined) return translated.translationFailure
   const unrecognized = translated.unrecognizedStopReason
   if (unrecognized !== null) guard(() => input.onUnrecognizedStopReason?.(unrecognized))
   const body =

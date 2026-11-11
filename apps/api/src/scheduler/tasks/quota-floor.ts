@@ -51,7 +51,7 @@ import type { ScheduledTask } from "../types"
 export interface QuotaFloorDeps {
   readonly accounts: Pick<
     AccountRepository,
-    "list" | "listQuotaWindows" | "clearObservedQuotaWindow"
+    "listSummaries" | "listQuotaWindows" | "clearObservedQuotaWindow"
   >
   /** Read-only: the floor never marks health, it only asks how fresh the live signal is. */
   readonly health: Pick<HealthStore, "stateOf">
@@ -67,7 +67,8 @@ export function createQuotaFloorTask(deps: QuotaFloorDeps): ScheduledTask {
     intervalMs: deps.intervalMs,
 
     run: async ({ now, logger, signal }) => {
-      const accounts = await deps.accounts.list({})
+      // The ciphertext-free projection: the floor needs ids and status, never a credential.
+      const accounts = await deps.accounts.listSummaries()
       const idle = accounts.filter(
         (account) => account.status !== "exhausted" && isIdle(deps, account.id, now),
       )

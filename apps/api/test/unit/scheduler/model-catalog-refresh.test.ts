@@ -88,6 +88,7 @@ function failingTask(options: {
     },
     intervalMs: HOUR,
     batchSize: options.batchSize ?? 1,
+    startupDelayMs: 30_000,
   })
   return { task, asked }
 }
@@ -117,6 +118,7 @@ function harness(options: {
     },
     intervalMs: HOUR,
     batchSize: options.batchSize ?? 25,
+    startupDelayMs: 30_000,
   })
 
   const logs: Record<string, unknown>[] = []
@@ -141,6 +143,23 @@ describe("the hourly model-catalog sweep", () => {
 
     expect(refreshed).toEqual(["a", "b"])
     expect(result).toMatchObject({ outcome: "success", itemsProcessed: 2 })
+  })
+
+  test("a refresh that carries a note (a truncated listing) says so", async () => {
+    const { run, logs } = harness({
+      accounts: [account("a")],
+      outcome: () => ({ kind: "refreshed", models: 100, detail: "listing:truncated" }),
+    })
+
+    await run()
+
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        msg: "model catalog refreshed with a note",
+        accountId: "a",
+        detail: "listing:truncated",
+      }),
+    )
   })
 
   /**
@@ -354,6 +373,11 @@ describe("the hourly model-catalog sweep", () => {
     // A deployment configuring a one-second refresh must not wait thirty for its first run.
     expect(built({ intervalMs: 1_000 }).task.startupDelayMs).toBe(1_000)
   })
+
+  test("takes the first-tick delay from config (07.3)", () => {
+    expect(built({ intervalMs: HOUR, startupDelayMs: 5_000 }).task.startupDelayMs).toBe(5_000)
+    expect(built({ intervalMs: 2_000, startupDelayMs: 5_000 }).task.startupDelayMs).toBe(2_000)
+  })
 })
 
 describe("durable attempt stamps", () => {
@@ -426,7 +450,7 @@ describe("durable attempt stamps", () => {
   })
 })
 
-function built(options: { readonly intervalMs: number }) {
+function built(options: { readonly intervalMs: number; readonly startupDelayMs?: number }) {
   const task = createModelCatalogRefreshTask({
     accounts: { list: async () => [] },
     catalog: {
@@ -436,6 +460,7 @@ function built(options: { readonly intervalMs: number }) {
     refresh: async () => ({ kind: "skipped", reason: "test" }),
     intervalMs: options.intervalMs,
     batchSize: 1,
+    startupDelayMs: options.startupDelayMs ?? 30_000,
   })
   return { task }
 }

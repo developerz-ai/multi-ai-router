@@ -34,7 +34,7 @@ export interface KeysService {
 export interface KeysServiceDeps {
   readonly keys: Pick<
     ApiKeyRepository,
-    "list" | "findById" | "listPoolTargets" | "listAccountTargets" | "listTargetsForKeys"
+    "listSummaries" | "findById" | "listPoolTargets" | "listAccountTargets" | "listTargetsForKeys"
   >
   readonly mutations: AdminMutationRepository
   /** Runs immediately after commit, before rendering a response. */
@@ -54,15 +54,24 @@ export function createKeysService(deps: KeysServiceDeps): KeysService {
 
   return {
     list: async (query) => {
-      const rows = await deps.keys.list(query)
+      const rows = await deps.keys.listSummaries(query)
       const targets = await deps.keys.listTargetsForKeys(rows.map((row) => row.id))
+      // Grouped once: a scan of every target per key was quadratic in the keys screen (01.11).
+      const poolIds = groupBy(
+        targets.pools,
+        (t) => t.apiKeyId,
+        (t) => t.poolId,
+      )
+      const accountIds = groupBy(
+        targets.accounts,
+        (t) => t.apiKeyId,
+        (t) => t.accountId,
+      )
       return ok(
         rows.map((row) =>
           toKeyView(row, {
-            poolIds: targets.pools.flatMap((t) => (t.apiKeyId === row.id ? [t.poolId] : [])),
-            accountIds: targets.accounts.flatMap((t) =>
-              t.apiKeyId === row.id ? [t.accountId] : [],
-            ),
+            poolIds: poolIds.get(row.id) ?? [],
+            accountIds: accountIds.get(row.id) ?? [],
           }),
         ),
       )
@@ -95,4 +104,19 @@ export function createKeysService(deps: KeysServiceDeps): KeysService {
 
     ...createKeyMutations(deps),
   }
+}
+
+/** Order-preserving grouping of `rows` by `key`, keeping `value` of each. */
+function groupBy<T>(
+  rows: readonly T[],
+  key: (row: T) => string,
+  value: (row: T) => string,
+): ReadonlyMap<string, string[]> {
+  const groups = new Map<string, string[]>()
+  for (const row of rows) {
+    const group = groups.get(key(row))
+    if (group === undefined) groups.set(key(row), [value(row)])
+    else group.push(value(row))
+  }
+  return groups
 }

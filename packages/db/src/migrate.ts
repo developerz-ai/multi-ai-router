@@ -22,13 +22,36 @@ export interface MigrateOptions {
    * one step earlier, on the migration that runs before the pool exists.
    */
   readonly connectTimeoutSeconds?: number
+  /**
+   * Milliseconds one DDL statement may wait for a table lock before the migration — and the boot —
+   * fails with {@link MigrationLockTimeoutError}. A DDL queued behind a long read (a usage summary
+   * on a running replica) otherwise stalls silently, and every later query on that table queues
+   * behind the DDL. Applied only after the migration advisory lock is held, so a replica waiting
+   * its turn behind another's migration is not bounded by it. `0` waits forever.
+   */
+  readonly lockTimeoutMs?: number
+  /** Called once when another replica holds the migration lock, before this one blocks on it. */
+  readonly onLockWait?: () => void
+}
+
+export const MIGRATION_LOCK_TIMEOUT_DEFAULT_MS = 10_000
+
+/** A migration DDL could not take its table lock within `lockTimeoutMs` (SQLSTATE `55P03`). */
+export class MigrationLockTimeoutError extends Error {
+  override readonly name = "MigrationLockTimeoutError"
+  constructor(lockTimeoutMs: number, options: { cause: unknown }) {
+    super(
+      `a migration statement waited over ${lockTimeoutMs} ms for a table lock — a long-running query on a running replica holds it; the boot fails rather than queue every query on that table, and the next start retries`,
+      options,
+    )
+  }
 }
 
 /**
  * Session-scoped advisory lock so two replicas starting at once converge
  * instead of racing the same DDL. The id is arbitrary but fixed forever.
  */
-const MIGRATION_LOCK_ID = 4_071_150_071
+export const MIGRATION_LOCK_ID = 4_071_150_071
 
 export function defaultMigrationsFolder(): string {
   return fileURLToPath(new URL("../migrations", import.meta.url))
@@ -37,24 +60,50 @@ export function defaultMigrationsFolder(): string {
 /** Applies every pending migration. Idempotent: already-applied files are skipped. */
 export async function runMigrations(options: MigrateOptions): Promise<void> {
   const folder = options.migrationsFolder ?? defaultMigrationsFolder()
+  const lockTimeoutMs = options.lockTimeoutMs ?? MIGRATION_LOCK_TIMEOUT_DEFAULT_MS
   // max: 1 pins every statement below to one connection, which is what makes
-  // the session-scoped advisory lock actually cover the migration.
+  // the session-scoped advisory lock actually cover the migration. No statement timeout: an index
+  // build is legitimately long, and a cancelled one fails the boot for nothing.
   const handle = createDatabase({
     url: options.url,
     maxConnections: 1,
     connectTimeoutSeconds: options.connectTimeoutSeconds,
+    statementTimeoutMs: 0,
+    lockTimeoutMs: 0,
+    idleInTransactionTimeoutMs: 0,
   })
 
   try {
-    await handle.sql`select pg_advisory_lock(${MIGRATION_LOCK_ID})`
+    const [first] = await handle.sql<{ acquired: boolean }[]>`
+      select pg_try_advisory_lock(${MIGRATION_LOCK_ID}) as acquired`
+    if (first?.acquired !== true) {
+      const onLockWait =
+        options.onLockWait ?? (() => log("info", "waiting for another replica's migration"))
+      onLockWait()
+      await handle.sql`select pg_advisory_lock(${MIGRATION_LOCK_ID})`
+    }
     try {
-      await migrate(handle.db, { migrationsFolder: folder })
+      await handle.sql`select set_config('lock_timeout', ${String(lockTimeoutMs)}, false)`
+      await migrate(handle.db, { migrationsFolder: folder }).catch((error: unknown) => {
+        if (sqlState(error) === "55P03")
+          throw new MigrationLockTimeoutError(lockTimeoutMs, { cause: error })
+        throw error
+      })
     } finally {
       await handle.sql`select pg_advisory_unlock(${MIGRATION_LOCK_ID})`
     }
   } finally {
     await handle.close()
   }
+}
+
+/** drizzle wraps the driver error; the SQLSTATE is on it or on its cause. */
+function sqlState(error: unknown): string | undefined {
+  for (let current: unknown = error; current instanceof Error; current = current.cause) {
+    const code: unknown = Reflect.get(current, "code")
+    if (typeof code === "string") return code
+  }
+  return undefined
 }
 
 /**

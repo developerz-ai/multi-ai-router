@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.56.0] — 2026-11-11
+
+Sweep 101 (#373): 197 findings from code, both production deployments, consumers and CI. Ledger: `docs/plans/2026/11/10/101-end-to-end-deep-sweep/`.
+
+### Changed (client-visible)
+
+- **A model no account in scope serves is `404 model_not_found`**, not `503 no_healthy_account` (10.21).
+- **A request refused by two or more accounts for a request-attributable reason** (a Claude subscription's "Extra Usage" gate) ends as `400` wall `request`, never `429`; the refusal no longer cools or strikes the account (05.14).
+- **An undecodable upstream tool call is a typed `502 translation_protocol_error`** on non-streamed cross-dialect answers, never a tool call with `input: {}`; streamed answers end with the typed error event (06.4).
+- **`503 no_healthy_account` carries `Retry-After`** when every attempt failed on capacity (13.8).
+- **Key verification survives a Postgres outage**: a warm key is served from memory; a cold one gets `503 key_verification_unavailable` + `Retry-After`, never a generic `500` (01.1, 01.8, 12.3).
+- OpenAI-hosted built-in tools (`web_search`, `file_search`, `code_interpreter`, …) on `/v1/responses` translated to another dialect are dropped and reported instead of rejected (06.9).
+
+### Fixed
+
+- **Kimi's weekly-window 429 no longer parks the account `exhausted` / answers 402** (10.1); wording rules read only a cleaned prefix of the upstream message on named statuses, so echoed client text cannot mark a healthy account out of credits (04.1). 408/425 fail over as server errors, 529 as overloaded (04.8). Provider-reported resets are capped by `ROUTING_MAX_REPORTED_RESET_SECONDS` (04.2).
+- **Structured output on Claude subscriptions no longer hangs ~180 s then 400s** (10.4, regression from 2.55.0): schemas are reduced to the subset Anthropic accepts, complexity-gated, header-timed, and re-sent once on the adapted tool on a schema rejection.
+- **Silent upstream event streams are no longer cut after 60 s** with zero bytes (12.1): the idle clock now resumes at the first body byte.
+- **Shutdown withdraws readiness before closing admission** (12.2); stray promise rejections no longer kill the process (01.5).
+- **Re-check / Re-check all no longer gate accounts that are serving** (03.1); recovery waiters past their budget ride the in-flight probe (12.5); a successful re-check probe no longer reopens a seat whose provider-reported window is still spent (10.8).
+- **`count_tokens` releases its active-request lease** (02.3).
+- **Usage batches survive a database outage** (bounded by `USAGE_RETRY_BUFFER_MAX`, oldest dropped and counted) and a poison batch costs only its bad rows (07.4).
+- **The first request in a Claude token-refresh window no longer waits 20 s on its own claim** (05.1 / 10.10); a busy-session retry keeps its own claims (05.5).
+- Scheduler runs have a deadline (`SCHEDULER_TASK_MAX_RUN_MINUTES`) and a throwing tick never disarms a timer (07.5, 07.10); the exhausted re-test ladder is persisted (07.6) and a thrown re-test does not advance it (03.7).
+- Admin sessions can be revoked (`bin/admin revoke-sessions`; password/allowlist changes revoke) (01.2); OIDC callback throttled; client IP from the right of `X-Forwarded-For`.
+- `/assets/*` misses and dot-paths are `404`, not the SPA shell; expired keys can be renamed.
+- Operator console: polls reconcile rows by id instead of rebuilding the screen (09.1), error boundary + stale-chunk reload (09.2), and the carry-over fixes in slice 09.
+
+### Performance
+
+- Router overhead on prod-shaped bodies (bench, p99): 350 KB stream 20 → 2.6 ms, 1 MB passthrough 75 → 8 ms, 350 KB translate 39 → ~8–17 ms (noisy box). Body scanner, response observer (~10× cheaper), SSE parser (quadratic → linear: 4 MiB 7.4 s → 11 ms), request parse dispatches on `type` and parses once per request (02.1, 07.1, 06.1, 06.2). Recovery wait is no longer counted as overhead (12.4).
+- Fast transport reads the account credential from an in-process cache keyed on the credential file's identity instead of spawning two processes per request (05.2).
+- Hourly usage backfill starts at its banked watermark instead of a full anti-join (08.2 / 10.5 — 28 % of prod DB time); the recovery coordinator no longer polls Postgres every 250 ms (03.11 / 10.9 — 64 % of prod statements); `accounts.last_used_at` stamps are throttled and its unread index dropped (08.6).
+- Usage summary labelling O(rows × points) → linear (07.2); identical concurrent summaries coalesce (`USAGE_SUMMARY_CACHE_SECONDS`).
+
+### Database
+
+- Migration `0044`: request-id lookups use the uuid index, new `usage_records (account_id, created_at)` covering index, six unread indexes dropped, `account_exhausted_watches` table, `NOT VALID` CHECKs on closed text sets; pools set `statement_timeout` / `lock_timeout` / `idle_in_transaction_session_timeout` (`DB_*_TIMEOUT_MS`), and migrations wait on the migration lock with a bound.
+
+### Security
+
+- Claude subprocess env is an explicit allowlist (05.3); a build gate enumerates every Agent SDK `query()` site (05.9). OpenRouter key-management URLs are redacted (10.3).
+
+### CI / release
+
+- Tests, bench and tooling are type-checked (11.1). `release.yml` refuses to build unless the tag is on `main` and main's CI passed on that commit (11.2); the image carries signed build provenance; `latest` only moves to the highest stable version. New CI `image` job.
+
+### Configuration
+
+New optional env keys (defaults keep prior behaviour where one existed) are listed in `.env.example` and `docs/idea/09-deployment.md`.
+
 ## [2.55.0] — 2026-11-09
 
 ### Fixed
@@ -2100,3 +2151,4 @@ your tooling config.
 [2.54.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.54.2
 
 [2.55.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.55.0
+[2.56.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.56.0

@@ -19,9 +19,14 @@ import { compareDeclared, type Policy } from "./order"
 
 export const sticky: Policy = ({ candidates, sessionKey }) => {
   const seed = sessionSeed(sessionKey)
-  const ordered = [...candidates].sort((left, right) => {
-    const delta = scoreWithSeed(seed, right.account.id) - scoreWithSeed(seed, left.account.id)
-    return delta !== 0 ? delta : compareDeclared(left, right)
-  })
+  // Scored once each, then sorted: scoring inside the comparator hashed both sides of every
+  // comparison — O(n log n) × 4 passes instead of n (plan 101, 03.6). Same scores, same order.
+  const ordered = candidates
+    .map((candidate) => ({ candidate, score: scoreWithSeed(seed, candidate.account.id) }))
+    .sort((left, right) => {
+      const delta = right.score - left.score
+      return delta !== 0 ? delta : compareDeclared(left.candidate, right.candidate)
+    })
+    .map((entry) => entry.candidate)
   return { ordered, notes: [] }
 }

@@ -15,7 +15,12 @@ import {
 } from "../translate"
 import { upstreamCountTokensUrl, upstreamEmbeddingsUrl, upstreamUrl } from "./egress/endpoint"
 import { type EgressRejection, resolveEgress } from "./egress/mode"
-import type { RoutableAccount, RoutingCatalog, UpstreamOperation } from "./types"
+import {
+  accountLookup,
+  type RoutableAccount,
+  type RoutingCatalog,
+  type UpstreamOperation,
+} from "./types"
 
 /**
  * Turning routing's ordered candidates into attempts this build can actually dispatch.
@@ -159,7 +164,8 @@ export function planCandidates(
   ingress: Dialect,
   operation: UpstreamOperation = "messages",
 ): CandidatePlan {
-  const accounts = new Map(catalog.accounts().map((account) => [account.id, account]))
+  // The catalog's own id index: no per-request map of the whole fleet (02.8).
+  const accountOf = accountLookup(catalog)
   const servable: ServableCandidate[] = []
   let rejection: EgressRejection | null = null
   let endpointError: RouterError | null = null
@@ -172,7 +178,7 @@ export function planCandidates(
   let estimated = 0
 
   for (const candidate of candidates) {
-    const account = accounts.get(candidate.account.id)
+    const account = accountOf(candidate.account.id)
     if (account === undefined) continue
     if (counting) asked += 1
 

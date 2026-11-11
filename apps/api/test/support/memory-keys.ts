@@ -1,10 +1,6 @@
-import type {
-  ApiKeyAccountRow,
-  ApiKeyPoolRow,
-  ApiKeyRepository,
-  ApiKeyRow,
-} from "@multi-ai-router/db"
+import type { ApiKeyAccountRow, ApiKeyPoolRow, ApiKeyRow } from "@multi-ai-router/db"
 import { drop, replace } from "./memory-row-operations"
+import type { MemoryKeys } from "./memory-store-types"
 
 /**
  * The admin-plane key store of `createMemoryStore`, over arrays — the same
@@ -19,21 +15,7 @@ export function memoryKeys(
   keyPools: ApiKeyPoolRow[],
   keyAccounts: ApiKeyAccountRow[],
   epoch: Date,
-): Pick<
-  ApiKeyRepository,
-  | "create"
-  | "list"
-  | "findById"
-  | "findByName"
-  | "update"
-  | "markRevoked"
-  | "listPoolTargets"
-  | "listAccountTargets"
-  | "listTargetsForKeys"
-  | "listKeysScopedToPool"
-  | "listKeysScopedToAccount"
-  | "replaceScopeTargets"
-> {
+): MemoryKeys {
   return {
     create: async (input) => {
       const row: ApiKeyRow = {
@@ -66,6 +48,35 @@ export function memoryKeys(
           (filter?.owner === undefined || row.owner === filter.owner) &&
           (filter?.tool === undefined || row.tool === filter.tool),
       ),
+    // `value` dropped exactly as the SQL projection drops it, so a caller that starts reading the
+    // ciphertext from a summary fails here too.
+    listSummaries: async (filter) =>
+      keys
+        .filter(
+          (row) =>
+            (filter?.owner === undefined || row.owner === filter.owner) &&
+            (filter?.tool === undefined || row.tool === filter.tool),
+        )
+        .map(({ value: _ciphertext, ...summary }) => summary),
+    // The repository's usable predicate: prefix match, not revoked, unexpired at `now`.
+    findUsableWithTargetsByPrefix: async (prefix, now) =>
+      keys
+        .filter(
+          (row) =>
+            row.prefix === prefix &&
+            !row.revoked &&
+            (row.expiresAt === null || row.expiresAt.getTime() > now.getTime()),
+        )
+        .map((key) => ({
+          key,
+          poolIds: keyPools
+            .filter((row) => row.apiKeyId === key.id)
+            .sort(byPositionThenId)
+            .map((row) => row.poolId),
+          accountIds: keyAccounts
+            .filter((row) => row.apiKeyId === key.id)
+            .map((row) => row.accountId),
+        })),
     findById: async (id) => keys.find((row) => row.id === id),
     findByName: async (name) => keys.find((row) => row.name === name),
     update: async (id, patch, now) => replace(keys, id, patch, now),

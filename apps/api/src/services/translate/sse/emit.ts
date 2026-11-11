@@ -48,6 +48,8 @@ export const DONE: SseEvent = { data: "[DONE]" }
 
 export function encodeSseEvent(event: SseEvent): string {
   const name = event.event === undefined ? "" : `event: ${event.event}\n`
+  // Every translated payload is one-line JSON; only a multi-line value needs the split.
+  if (event.data.indexOf("\n") === -1) return `${name}data: ${event.data}\n\n`
   const lines = event.data.split("\n")
   let payload = ""
   for (const line of lines) payload += `data: ${line}\n`

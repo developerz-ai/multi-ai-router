@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto"
 import { AdminAuthError, describeError } from "@multi-ai-router/core"
 import type { RequiredClaim } from "../../../config/env-admin-types"
-import { type DiscoveryDocument, discoverySchema, OIDCDiscoveryError } from "./discovery"
+import { createDiscoveryService, DEFAULT_DISCOVERY_TTL_MS, OIDCDiscoveryError } from "./discovery"
 import { assertEmailVerified, OIDCIdTokenInvalidError, verifyIdToken } from "./idToken"
-import { createJWKSCache, OIDCJWKSError } from "./jwks"
+import { createJWKSCache, DEFAULT_JWKS_TTL_MS, type JWKSCache, OIDCJWKSError } from "./jwks"
 import { unmetRequiredClaim } from "./requiredClaims"
 import { createOIDCStateStore, OIDCStateMismatchError, type OIDCStateStoreDeps } from "./state"
 
@@ -91,6 +91,10 @@ export interface OIDCFlowDeps {
   readonly requestTimeoutMs?: number
   /** Clock, for tests. */
   readonly now?: () => Date
+  /** `ADMIN_OIDC_DISCOVERY_TTL_SECONDS` in milliseconds; default one day. */
+  readonly discoveryTtlMs?: number
+  /** `ADMIN_OIDC_JWKS_TTL_SECONDS` in milliseconds; default one hour. */
+  readonly jwksTtlMs?: number
 }
 
 export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
@@ -110,50 +114,28 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
   }
   const stateStore = createOIDCStateStore(deps.stateStore)
 
-  let cachedJwks: ReturnType<typeof createJWKSCache> | null = null
-  let cachedDiscovery: DiscoveryDocument | null = null
-
-  async function discover(): Promise<DiscoveryDocument> {
-    if (cachedDiscovery !== null) return cachedDiscovery
-    const res = await discoveryFetch(
-      `${config.issuerUrl.replace(/\/+$/u, "")}/.well-known/openid-configuration`,
-    )
-    if (!res.ok) {
-      throw new OIDCDiscoveryError(`discovery endpoint returned ${res.status}`, "fetch_failed")
+  const nowMs = (): number => now().getTime()
+  const discovery = createDiscoveryService(
+    config.issuerUrl,
+    { fetch: (url) => discoveryFetch(url) },
+    nowMs,
+    deps.discoveryTtlMs ?? DEFAULT_DISCOVERY_TTL_MS,
+  )
+  // One cache per `jwks_uri`: a re-discovery that names a new one starts a new cache.
+  let jwks: { readonly uri: string; readonly cache: JWKSCache } | null = null
+  function jwksFor(uri: string): JWKSCache {
+    if (jwks?.uri !== uri) {
+      jwks = {
+        uri,
+        cache: createJWKSCache(
+          uri,
+          { fetch: (url) => discoveryFetch(url) },
+          nowMs,
+          deps.jwksTtlMs ?? DEFAULT_JWKS_TTL_MS,
+        ),
+      }
     }
-    let body: unknown
-    try {
-      body = await res.json()
-    } catch {
-      throw new OIDCDiscoveryError("discovery endpoint did not return JSON", "parse_failed")
-    }
-    const parsed = discoverySchema.safeParse(body)
-    if (!parsed.success) {
-      throw new OIDCDiscoveryError(
-        "discovery document is missing required fields",
-        "validation_failed",
-      )
-    }
-    if (parsed.data.issuer.replace(/\/+$/u, "") !== config.issuerUrl.replace(/\/+$/u, "")) {
-      throw new OIDCDiscoveryError(
-        `discovery document issuer "${parsed.data.issuer}" does not match configured issuer`,
-        "validation_failed",
-      )
-    }
-    if (
-      !parsed.data.code_challenge_methods_supported?.includes("S256") &&
-      !parsed.data.code_challenge_methods_supported?.includes("s256")
-    ) {
-      throw new OIDCDiscoveryError(
-        "discovery document does not advertise PKCE S256 support",
-        "unsupported",
-      )
-    }
-    cachedDiscovery = parsed.data
-    cachedJwks = createJWKSCache(cachedDiscovery.jwks_uri, { fetch: discoveryFetch }, () =>
-      now().getTime(),
-    )
-    return cachedDiscovery
+    return jwks.cache
   }
 
   async function exchangeCode(
@@ -169,12 +151,20 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
     if (config.clientSecret !== null) params.set("client_secret", config.clientSecret)
     params.set("code_verifier", codeVerifier)
     {
-      const res = await discoveryFetch(tokenEndpoint, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: params.toString(),
-      })
+      let res: Response
+      try {
+        res = await discoveryFetch(tokenEndpoint, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: params.toString(),
+        })
+      } catch (err) {
+        // The endpoint may have moved: the next sign-in re-discovers rather than waiting out the TTL.
+        discovery.invalidate()
+        throw err
+      }
       if (!res.ok) {
+        discovery.invalidate()
         // The status only. A token-endpoint error body quotes the request back — including the
         // authorization code and, on some providers, the client secret — so it never reaches a log.
         throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
@@ -193,7 +183,7 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
 
   return {
     async start() {
-      const doc = await discover()
+      const doc = await discovery.load()
       const issued = await stateStore.issue()
       const challenge = createHash("sha256").update(issued.codeVerifier).digest("base64url")
       const url = new URL(doc.authorization_endpoint)
@@ -213,7 +203,7 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
       try {
         // Invalid callbacks must not turn a cold process into an unauthenticated IdP probe.
         const consumed = await stateStore.consume(state)
-        const doc = await discover()
+        const doc = await discovery.load()
         const tokenResponse = await exchangeCode(doc.token_endpoint, code, consumed.codeVerifier)
         const verified = await verifyIdToken(
           {
@@ -224,7 +214,7 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
             clockSkewSeconds: config.clockSkewSeconds ?? 60,
             nowSeconds: () => Math.floor(now().getTime() / 1000),
           },
-          { jwks: cachedJwks ?? createJWKSCache(doc.jwks_uri, undefined, () => now().getTime()) },
+          { jwks: jwksFor(doc.jwks_uri) },
         )
         const { email, sub } = assertEmailVerified(verified.claims)
         if (config.adminEmails !== null && !config.adminEmails.includes(email.toLowerCase())) {

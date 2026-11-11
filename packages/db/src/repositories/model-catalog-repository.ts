@@ -1,5 +1,5 @@
 import type { ModelContextSource, ModelListingSource, ModelReasoning } from "@multi-ai-router/core"
-import { asc, eq, inArray, max, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, max, notInArray, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import { type ModelCatalogRow, modelCatalog, modelCatalogAttempts } from "../schema/model-catalog"
 
@@ -96,23 +96,51 @@ export function createModelCatalogRepository(db: Database): ModelCatalogReposito
   const order = [asc(modelCatalog.accountId), asc(modelCatalog.modelId)] as const
 
   return {
+    // Upsert the listing and delete only what left it, rather than delete-all + insert: a sweep
+    // that re-lists the same models is then an in-place (HOT-eligible, no PK churn) update
+    // instead of a dead tuple and a fresh index entry per model per refresh (prod: 13k inserts
+    // and 13k deletes for 22 live rows).
     replaceForAccount: (accountId, rows, refreshedAt) =>
       db.transaction(async (tx) => {
-        await tx.delete(modelCatalog).where(eq(modelCatalog.accountId, accountId))
+        const listed = rows.map((row) => row.modelId)
+        await tx
+          .delete(modelCatalog)
+          .where(
+            listed.length === 0
+              ? eq(modelCatalog.accountId, accountId)
+              : and(
+                  eq(modelCatalog.accountId, accountId),
+                  notInArray(modelCatalog.modelId, listed),
+                ),
+          )
         if (rows.length === 0) return
-        await tx.insert(modelCatalog).values(
-          rows.map((row) => ({
-            accountId,
-            modelId: row.modelId,
-            contextTokens: row.contextTokens,
-            maxOutputTokens: row.maxOutputTokens,
-            contextSource: row.contextSource,
-            listingSource: row.listingSource,
-            resolvedModel: row.resolvedModel,
-            reasoning: row.reasoning ?? null,
-            refreshedAt,
-          })),
-        )
+        await tx
+          .insert(modelCatalog)
+          .values(
+            rows.map((row) => ({
+              accountId,
+              modelId: row.modelId,
+              contextTokens: row.contextTokens,
+              maxOutputTokens: row.maxOutputTokens,
+              contextSource: row.contextSource,
+              listingSource: row.listingSource,
+              resolvedModel: row.resolvedModel,
+              reasoning: row.reasoning ?? null,
+              refreshedAt,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: [modelCatalog.accountId, modelCatalog.modelId],
+            set: {
+              contextTokens: sql`excluded.context_tokens`,
+              maxOutputTokens: sql`excluded.max_output_tokens`,
+              contextSource: sql`excluded.context_source`,
+              listingSource: sql`excluded.listing_source`,
+              resolvedModel: sql`excluded.resolved_model`,
+              reasoning: sql`excluded.reasoning`,
+              refreshedAt: sql`excluded.refreshed_at`,
+            },
+          })
       }),
 
     list: () =>

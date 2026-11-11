@@ -65,7 +65,26 @@ export function overlayHealth(
       // reset nobody reported.
       ...(state.probeHeldUntil === null ? {} : { probeHeldUntil: state.probeHeldUntil }),
     },
+    ...(state.refusedModels === undefined ? {} : { refusedModels: state.refusedModels }),
   }
+}
+
+/**
+ * The overlay, memoized on the identity of its two inputs. Catalog rows and health states are
+ * replaced, never mutated (`health.ts` `write`), so an account nothing touched since the last
+ * request reuses its view: a steady fleet allocates nothing per request (plan 101, 02.8 / 03.3).
+ */
+const overlays = new WeakMap<
+  AccountSnapshot,
+  { readonly state: AccountHealthState; readonly view: AccountSnapshot }
+>()
+
+function overlayMemo(account: AccountSnapshot, state: AccountHealthState): AccountSnapshot {
+  const hit = overlays.get(account)
+  if (hit !== undefined && hit.state === state) return hit.view
+  const view = overlayHealth(account, state)
+  overlays.set(account, { state, view })
+  return view
 }
 
 /**
@@ -106,9 +125,7 @@ export function buildSnapshot(
   }
   const pools = catalog.pools()
   return {
-    accounts: accounts.map((account) =>
-      overlayHealth(account.snapshot, health.stateOf(account.id)),
-    ),
+    accounts: accounts.map((account) => overlayMemo(account.snapshot, health.stateOf(account.id))),
     pools:
       rotation === undefined
         ? pools

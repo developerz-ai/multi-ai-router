@@ -1,4 +1,4 @@
-import { NoHealthyAccountError } from "@multi-ai-router/core"
+import { InvalidRequestError, NoHealthyAccountError } from "@multi-ai-router/core"
 import type { AttemptFailure } from "../routing"
 import type { UsageRecord } from "../usage"
 import type { ChainFailure } from "./chain-error"
@@ -15,9 +15,18 @@ export function finishChain(
   lastFailure: AttemptFailure | null,
   failIfRefused: (held: ChainFailure | null, lastFailure: AttemptFailure | null) => void,
   selectTerminal?: (winner: UsageRecord | undefined) => void,
+  ending: {
+    /** The planner stopped because the request itself is refused wherever it goes (05.14). */
+    readonly requestWall?: boolean
+    /** Seconds until a tried account may serve again, when every failure was capacity (13.8). */
+    readonly capacityRetryAfterSeconds?: number | undefined
+  } = {},
 ): Response {
   selectTerminal?.(held?.winner)
   failIfRefused(held, lastFailure)
+  // A request wall is the request's own: never a `429` a retry would hit again.
+  if (ending.requestWall === true && lastFailure !== null)
+    throw new InvalidRequestError(lastFailure.message)
   if (held !== null) {
     if (held.kind === "router") throw held.error
     const relayed = relayUpstreamError(held.upstream, held.dialect)
@@ -38,6 +47,11 @@ export function finishChain(
         )
   }
   if (lastFailure !== null)
-    throw new NoHealthyAccountError(`every attempt failed: ${lastFailure.message}`)
+    throw new NoHealthyAccountError(
+      `every attempt failed: ${lastFailure.message}`,
+      ending.capacityRetryAfterSeconds === undefined
+        ? {}
+        : { wall: "capacity", retryAfterSeconds: ending.capacityRetryAfterSeconds },
+    )
   throw new NoHealthyAccountError("no candidate account could be attempted")
 }

@@ -11,6 +11,7 @@ import {
 import { phase, type SelectionOptions } from "../services/routing"
 import type { UsageRecorder } from "../services/usage"
 import { createMetrics, type DbPoolSample, type RouterMetrics } from "./metrics"
+import { createProcessSampler, type ProcessSampler } from "./self-metrics"
 
 /**
  * The router's metrics as the running process wires them: the registry, plus the gauges that
@@ -49,6 +50,11 @@ export interface RuntimeMetricsDeps {
    * rather than claiming a load that never happened.
    */
   readonly prices?: Pick<PriceBook, "loadedAt">
+  /** The warm routing and model catalogs, for their `*_loaded_at_seconds` gauges. */
+  readonly snapshots?: {
+    readonly routingCatalog: { loadedAt(): Date | null }
+    readonly modelCatalog: { loadedAt(): Date | null }
+  }
   /**
    * The pool wrapper's own sample (`packages/db/src/pool-metrics.ts`). Optional for the same reason
    * as `sdkConcurrency`: a build wired against a stub `Database` in a test still exports every other
@@ -56,6 +62,10 @@ export interface RuntimeMetricsDeps {
    */
   readonly dbPool?: { sample(): DbPoolSample }
   readonly logger: Logger
+  /** `METRICS_MAX_SERIES_PER_METRIC`. Defaults to the registry's own ceiling. */
+  readonly maxSeriesPerMetric?: number
+  /** Resident memory and event-loop delay, per scrape. Defaults to this process. */
+  readonly processSampler?: ProcessSampler
   readonly now?: () => Date
   /** Stamped onto `router_build_info{revision}`; `env.revision`, which defaults to `unknown`. */
   readonly revision?: string
@@ -69,13 +79,17 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
     ...(deps.metricInventory === undefined ? {} : { metricInventory: deps.metricInventory }),
     ...(deps.now === undefined ? {} : { now: deps.now }),
     ...(deps.revision === undefined ? {} : { revision: deps.revision }),
-    // A metric that hit its ceiling is under-reporting from then on, silently. It is the one
-    // thing about this layer worth a log line: the numbers on a dashboard stopped being whole.
+    ...(deps.maxSeriesPerMetric === undefined
+      ? {}
+      : { maxSeriesPerMetric: deps.maxSeriesPerMetric }),
+    // A metric that hit its ceiling under-reports from then on. The first refusal gets a log line
+    // that names it; every refusal counts on `router_metric_series_dropped_total`.
     onSeriesLimit: (metric) =>
       deps.logger.warn("metric stopped adding series", { component: "observability", metric }),
   })
 
   const at = deps.now ?? (() => new Date())
+  const processSampler = deps.processSampler ?? createProcessSampler()
 
   metrics.onCollect(() => {
     const now = at()
@@ -107,9 +121,15 @@ export function createRuntimeMetrics(deps: RuntimeMetricsDeps): RouterMetrics {
       metrics.setSdkConcurrency({ inFlight: sdk.inFlight, queued: sdk.queued })
     }
 
+    metrics.setProcess(processSampler.sample())
+
     if (deps.dbPool !== undefined) metrics.setDbPool(deps.dbPool.sample())
 
     if (deps.prices !== undefined) metrics.setPriceOverridesLoadedAt(deps.prices.loadedAt())
+    if (deps.snapshots !== undefined) {
+      metrics.setSnapshotLoadedAt("routing_catalog", deps.snapshots.routingCatalog.loadedAt())
+      metrics.setSnapshotLoadedAt("model_catalog", deps.snapshots.modelCatalog.loadedAt())
+    }
   })
 
   return metrics

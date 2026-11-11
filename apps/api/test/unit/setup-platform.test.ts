@@ -9,6 +9,8 @@ async function setupFixture(platform: string, compilerAvailable: boolean) {
     await mkdir(join(root, "bin/lib"), { recursive: true })
     await mkdir(join(root, "commands"))
     await copyFile(resolve("bin/setup"), join(root, "bin/setup"))
+    // Sourced, not executed: the real port resolution and wait loop, driven by the docker stub.
+    await copyFile(resolve("bin/lib/dev-db-env"), join(root, "bin/lib/dev-db-env"))
     const log = join(root, "calls")
     async function script(path: string, body: string) {
       await writeFile(join(root, path), `#!/bin/sh\n${body}\n`)

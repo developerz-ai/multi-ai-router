@@ -4,15 +4,20 @@
 #   bin/db psql          interactive shell
 #   bin/db migrate       apply pending migrations
 #   bin/db generate      author a migration from the current schema
+#   bin/db check         verify the migration journal is consistent (drizzle-kit check)
 #   bin/db reset         DESTROY the dev data and re-migrate from scratch
 #   bin/db url           print the DATABASE_URL these commands use
+#
+# The port is the one bin/setup was given (DEV_DB_PORT, recorded in .env).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-DEV_DB_PORT="${DEV_DB_PORT:-5433}"
+# shellcheck source=bin/lib/dev-db-env
+. bin/lib/dev-db-env
+DEV_DB_PORT="$(dev_db_port)"
 export DEV_DB_PORT
-DEV_URL="postgres://router:router@localhost:${DEV_DB_PORT}/router"
-COMPOSE="docker compose -f docker-compose.dev.yml"
+DEV_URL="$(dev_db_url "$DEV_DB_PORT")"
+COMPOSE="$DEV_DB_COMPOSE"
 
 case "${1:-}" in
   psql)
@@ -27,6 +32,10 @@ case "${1:-}" in
     # work with no database running. See packages/db/drizzle.config.ts.
     exec bun run --cwd packages/db db:generate
     ;;
+  check)
+    # Offline like `generate`: reads the migrations folder and its journal only.
+    exec bun run --cwd packages/db db:check
+    ;;
   reset)
     # Guarded because it is unrecoverable. Only ever points at the dev compose
     # volume — it cannot reach a deployed database.
@@ -35,12 +44,7 @@ case "${1:-}" in
     [ "$confirm" = "reset" ] || { echo "aborted"; exit 1; }
     $COMPOSE down -v
     $COMPOSE up -d
-    printf 'waiting for postgres'
-    for _ in $(seq 1 60); do
-      $COMPOSE exec -T postgres pg_isready -U router -d router >/dev/null 2>&1 && break
-      printf '.'; sleep 1
-    done
-    printf '\n'
+    dev_db_wait || { echo "postgres did not become ready — check: $COMPOSE logs postgres" >&2; exit 1; }
     env DATABASE_URL="$DEV_URL" bun run --cwd packages/db migrate
     echo "dev database reset."
     ;;
@@ -48,7 +52,7 @@ case "${1:-}" in
     echo "$DEV_URL"
     ;;
   *)
-    sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

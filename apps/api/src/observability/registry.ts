@@ -13,7 +13,8 @@
  *   to a metric by accident — the label discipline in docs/idea/08-observability.md is a type
  *   error here, not a review comment.
  * - **Cardinality is bounded.** A label value that turns out to be unbounded stops creating
- *   series at `maxSeriesPerMetric` and reports once, rather than growing until the process dies.
+ *   series at `maxSeriesPerMetric` and reports every refusal, rather than growing until the
+ *   process dies.
  *   Metrics are diagnostics; they may degrade, they may not take the router with them.
  *
  * Everything is synchronous and allocation-light: an observation is a map lookup and an add.
@@ -55,10 +56,15 @@ export interface Histogram<L extends LabelNames> {
 }
 
 export interface RegistryOptions {
-  /** Ceiling per metric. Not a policy knob: it bounds memory when a label value misbehaves. */
+  /** Ceiling per metric (`METRICS_MAX_SERIES_PER_METRIC`): bounds memory when a label misbehaves. */
   readonly maxSeriesPerMetric?: number
   /** Called once per metric that hits the ceiling, so the drop has a log line. */
   readonly onSeriesLimit?: (metric: string) => void
+  /**
+   * Called for every observation refused at the ceiling — what `router_metric_series_dropped_total`
+   * counts. Must not throw; it runs on whatever path made the observation.
+   */
+  readonly onSeriesDropped?: (metric: string) => void
 }
 
 export const DEFAULT_MAX_SERIES_PER_METRIC = 4_096
@@ -109,6 +115,7 @@ export function createRegistry(options: RegistryOptions = {}): Registry {
         const existing = series.get(key)
         if (existing !== undefined) return existing.state
         if (series.size >= maxSeries) {
+          options.onSeriesDropped?.(spec.name)
           if (!reported) {
             reported = true
             options.onSeriesLimit?.(spec.name)

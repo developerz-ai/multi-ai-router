@@ -53,3 +53,24 @@ export function readingReopened(
   })
   return reread && !windows.some((window) => isWindowSpent(window, now, threshold))
 }
+
+/**
+ * A current, provider-reported window is spent with its reset still ahead. A recheck answering 2xx
+ * does not reopen such an account: the probe model answered, which says nothing about a window the
+ * provider charges to other models (plan 101, 10.8 — opencode-go seats reopened 51 times in 37.5 h
+ * against a weekly window at 1.0, each reopening followed by real `429`s). Only a fresh reading
+ * that lifts the window, or its own reset, reopens it.
+ */
+export function providerReportedSpent(
+  account: AccountSnapshot,
+  now: Date,
+  threshold: number,
+): boolean {
+  return (account.quotaWindows ?? []).some(
+    (window) =>
+      window.resetSource === "provider-reported" &&
+      window.resetsAt !== undefined &&
+      window.resetsAt.getTime() > now.getTime() &&
+      isWindowSpent(window, now, threshold),
+  )
+}

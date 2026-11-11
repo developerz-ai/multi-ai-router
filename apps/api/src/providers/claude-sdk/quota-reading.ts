@@ -32,6 +32,11 @@ export interface SdkRateLimitReading {
   readonly overageStatus: string | null
   readonly overageResetsAt: Date | null
   readonly usingOverage: boolean
+  /**
+   * True when the reporter measures utilization on every response — the fast transport's unified
+   * rate-limit headers — rather than as a near-limit alarm, as the SDK's `rate_limit_event` does.
+   */
+  readonly continuous: boolean
 }
 
 const nullableString = z.string().nullish().catch(null)
@@ -58,6 +63,8 @@ const rateLimitInfoSchema = z.looseObject({
   overage_resets_at: nullableNumber,
   isUsingOverage: nullableBoolean,
   is_using_overage: nullableBoolean,
+  /** Router-internal: set by `claude-fast/quota.ts`, never by the SDK. */
+  utilizationSource: nullableString,
 })
 
 /** @returns null when the value is not a rate-limit payload at all. The caller skips it. */
@@ -74,6 +81,7 @@ export function readSdkRateLimitInfo(value: unknown, now: Date): SdkRateLimitRea
     overageStatus: nonEmpty(data.overageStatus ?? data.overage_status ?? null),
     overageResetsAt: futureEpoch(data.overageResetsAt ?? data.overage_resets_at ?? null, now),
     usingOverage: (data.isUsingOverage ?? data.is_using_overage) === true,
+    continuous: data.utilizationSource === "continuous",
   }
 }
 

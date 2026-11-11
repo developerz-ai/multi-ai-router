@@ -1,4 +1,5 @@
 import { Hono, type MiddlewareHandler } from "hono"
+import { DEFAULT_ADMIN_JSON_MAX_BYTES } from "../../config/admin-bodies"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
 import {
   type AccountsService,
@@ -83,7 +84,9 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
   routes.post("/", async (c) => {
     const body = validate(
       createAccountBody,
-      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
     )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.create(body.value), 201)
@@ -103,7 +106,9 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     if (!id.ok) return render(c, id)
     const body = validate(
       updateAccountBody,
-      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
     )
     if (!body.ok) return render(c, body)
     return render(c, await deps.service.update(id.value, body.value))
@@ -126,7 +131,9 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     if (!id.ok) return render(c, id)
     const body = validate(
       testNowBody,
-      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
     )
     if (!body.ok) return render(c, body)
     return render(c, await deps.testNow.test(id.value, body.value))
@@ -157,7 +164,9 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     if (!id.ok) return render(c, id)
     const body = validate(
       completeConnectBody,
-      await readJsonBody(c.req.raw, { maximumBytes: deps.maximumJsonBytes ?? 1048576 }),
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
     )
     if (!body.ok) return render(c, body)
     return render(c, await deps.connect.complete(id.value, body.value.pasted))

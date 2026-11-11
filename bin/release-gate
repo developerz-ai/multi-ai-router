@@ -1,0 +1,72 @@
+#!/bin/sh
+# Refuse to release a commit that main's CI has not proven.
+#
+#   bin/release-gate <sha>
+#
+# .github/workflows/release.yml runs this as its first job; nothing is built
+# until it exits 0. It proves two things about the tagged commit:
+#
+#   1. it is on main — a tag pushed on an unmerged branch commit never ran the
+#      main pipeline, and would otherwise publish X.Y.Z and :latest all the same;
+#   2. every required CI check run on that exact commit concluded `success` —
+#      waiting for runs still in flight, because a tag is routinely pushed
+#      seconds after the merge (v2.55.0's image was built while `test` was still
+#      running), and failing on any other conclusion.
+#
+# Reads GitHub through `gh` (GH_TOKEN, GITHUB_REPOSITORY from the runner). The
+# knobs are environment, not constants:
+#   RELEASE_GATE_BRANCH           branch the commit must be on       (main)
+#   RELEASE_GATE_CHECKS           space-separated required check names
+#   RELEASE_GATE_TIMEOUT_SECONDS  how long to wait for pending checks (1800)
+#   RELEASE_GATE_POLL_SECONDS     pause between polls                 (20)
+set -eu
+
+sha="${1:-}"
+if [ -z "$sha" ]; then
+  echo "usage: bin/release-gate <sha>" >&2
+  exit 64
+fi
+repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY must name owner/repo}"
+branch="${RELEASE_GATE_BRANCH:-main}"
+checks="${RELEASE_GATE_CHECKS:-lint typecheck test build ui-geometry advisory image}"
+timeout="${RELEASE_GATE_TIMEOUT_SECONDS:-1800}"
+poll="${RELEASE_GATE_POLL_SECONDS:-20}"
+
+git fetch --no-tags --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+if ! git merge-base --is-ancestor "$sha" "origin/$branch"; then
+  echo "release-gate: $sha is not on $branch — merge first, then tag the merged commit." >&2
+  exit 1
+fi
+
+deadline=$(($(date +%s) + timeout))
+while :; do
+  # `filter=latest` (the API default, stated for the reader) keeps only the
+  # newest run per check name, so a re-run that went green supersedes the red.
+  runs="$(gh api --paginate \
+    "repos/$repo/commits/$sha/check-runs?per_page=100&filter=latest" \
+    --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')"
+
+  pending=""
+  for check in $checks; do
+    line="$(printf '%s\n' "$runs" | awk -F '\t' -v name="$check" '$1 == name { print; exit }')"
+    status="$(printf '%s' "$line" | cut -f2)"
+    conclusion="$(printf '%s' "$line" | cut -f3)"
+    if [ "$status" != completed ]; then
+      pending="$pending $check"
+    elif [ "$conclusion" != success ]; then
+      echo "release-gate: check '$check' on $sha concluded '$conclusion' — fix main and cut a new patch." >&2
+      exit 1
+    fi
+  done
+
+  if [ -z "$pending" ]; then
+    echo "release-gate: $sha is on $branch and passed:" $checks
+    exit 0
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "release-gate: still waiting after ${timeout}s for:$pending — re-run this workflow once main's CI finishes." >&2
+    exit 1
+  fi
+  echo "release-gate: waiting for:$pending"
+  sleep "$poll"
+done

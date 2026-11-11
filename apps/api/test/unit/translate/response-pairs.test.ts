@@ -12,6 +12,7 @@ import { describe, expect, test } from "bun:test"
 import {
   anthropicToOpenAiChatResponse,
   openAiChatToAnthropicResponse,
+  openAiResponsesToAnthropicResponse,
 } from "../../../src/services/translate/index"
 import { anthropicUsageWire, openAiChatUsageWire } from "./fixtures"
 
@@ -214,7 +215,8 @@ describe("openai-chat -> anthropic response", () => {
     ).toEqual(["text", "tool_use"])
   })
 
-  test("undecodable arguments become an empty input object, not a thrown error", () => {
+  // 06.4: an invented `{}` is a call the client would run with arguments the model never wrote.
+  test("undecodable arguments fail the translation instead of becoming an empty input", () => {
     const out = translate({
       choices: [
         {
@@ -227,10 +229,12 @@ describe("openai-chat -> anthropic response", () => {
         },
       ],
     })
-    expect((out.body as { content: { input: unknown }[] }).content[0]?.input).toEqual({})
+    expect(out.translationFailure?.errorClass).toBe("translation_protocol_error")
+    expect(out.translationFailure?.message).toContain("tool call 0")
+    expect(out.translationFailure?.message).not.toContain("not json")
   })
 
-  test("arguments that decode to an array or a scalar also fall back to an empty object", () => {
+  test("arguments that decode to an array or a scalar fail the translation too", () => {
     for (const args of ['["a","b"]', '"just a string"', "42"]) {
       const out = translate({
         choices: [
@@ -244,8 +248,46 @@ describe("openai-chat -> anthropic response", () => {
           },
         ],
       })
+      expect(out.translationFailure?.errorClass).toBe("translation_protocol_error")
+    }
+  })
+
+  test("blank or absent arguments are a no-argument call: `{}` and no failure", () => {
+    for (const args of ["", "  ", null]) {
+      const out = translate({
+        choices: [
+          {
+            index: 0,
+            message: {
+              content: null,
+              tool_calls: [{ id: "call_1", function: { name: "f", arguments: args } }],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      })
+      expect(out.translationFailure).toBeUndefined()
       expect((out.body as { content: { input: unknown }[] }).content[0]?.input).toEqual({})
     }
+  })
+
+  test("the failure names the position of the undecodable call", () => {
+    const out = translate({
+      choices: [
+        {
+          index: 0,
+          message: {
+            content: null,
+            tool_calls: [
+              { id: "a", function: { name: "f", arguments: "{}" } },
+              { id: "b", function: { name: "rm", arguments: '{"path": "/tmp/x' } },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+    })
+    expect(out.translationFailure?.message).toContain("tool call 1")
   })
 
   test("choice-index selection: the choice naming index 0 wins regardless of array order", () => {
@@ -350,5 +392,35 @@ describe("openai-chat -> anthropic response", () => {
     const out = openAiChatToAnthropicResponse({ choices: [] })
     expect((out.body as { id: string; model: string }).id).toBe("")
     expect((out.body as { id: string; model: string }).model).toBe("")
+  })
+})
+
+describe("openai-responses -> anthropic response: undecodable arguments (06.4)", () => {
+  const translate = (args: string) =>
+    openAiResponsesToAnthropicResponse({
+      id: "resp_1",
+      model: "m",
+      status: "completed",
+      output: [{ type: "function_call", call_id: "c1", name: "rm", arguments: args }],
+    })
+
+  test("truncated JSON, an array and a scalar fail the translation", () => {
+    for (const args of ['{"path": "/tmp/x', "[1]", "7"]) {
+      expect(translate(args).translationFailure?.errorClass).toBe("translation_protocol_error")
+    }
+  })
+
+  test("a blank string is a no-argument call", () => {
+    const out = translate("")
+    expect(out.translationFailure).toBeUndefined()
+    expect((out.body as { content: { input: unknown }[] }).content[0]?.input).toEqual({})
+  })
+
+  test("decodable arguments are carried and nothing fails", () => {
+    const out = translate('{"path":"/tmp/x"}')
+    expect(out.translationFailure).toBeUndefined()
+    expect((out.body as { content: { input: unknown }[] }).content[0]?.input).toEqual({
+      path: "/tmp/x",
+    })
   })
 })

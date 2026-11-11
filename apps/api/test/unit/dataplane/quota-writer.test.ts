@@ -169,3 +169,57 @@ describe("quota window writer", () => {
     expect(accounts.upserts).toHaveLength(0)
   })
 })
+
+describe("batched persistence (02.11)", () => {
+  function batching(fail: { value: boolean }) {
+    const calls: (readonly { accountId: string }[])[] = []
+    const write = async (rows: readonly { accountId: string }[]) => {
+      calls.push(rows)
+      if (fail.value) throw new Error("connection refused")
+      return rows.length
+    }
+    return {
+      calls,
+      accounts: {
+        upsertQuotaWindow: async () => {
+          throw new Error("per-row path must not run when a batch method exists")
+        },
+        upsertQuotaWindows: write,
+        upsertObservedQuotaWindows: write,
+      },
+    }
+  }
+
+  test("one repository call per flush, whatever the number of accounts and windows", async () => {
+    const repo = batching({ value: false })
+    const writer = createQuotaWindowWriter({
+      accounts: repo.accounts,
+      logger: logger().logger,
+      flushIntervalMs: 60_000,
+    })
+    writer.record("a", [window(), window({ window: "seven_day" })])
+    writer.record("b", [window()])
+    await writer.flush()
+    expect(repo.calls).toHaveLength(1)
+    expect(repo.calls[0]).toHaveLength(3)
+    expect(writer.stats()).toMatchObject({ written: 3, pending: 0 })
+  })
+
+  test("a failed batch requeues every row for the next flush", async () => {
+    const fail = { value: true }
+    const repo = batching(fail)
+    const writer = createQuotaWindowWriter({
+      accounts: repo.accounts,
+      logger: logger().logger,
+      flushIntervalMs: 60_000,
+    })
+    writer.record("a", [window(), window({ window: "seven_day" })])
+    writer.record("b", [window()])
+    await writer.flush()
+    expect(writer.stats()).toMatchObject({ pending: 2, writeFailures: 3, written: 0 })
+    fail.value = false
+    await writer.flush()
+    expect(repo.calls.at(-1)).toHaveLength(3)
+    expect(writer.stats()).toMatchObject({ pending: 0, written: 3 })
+  })
+})

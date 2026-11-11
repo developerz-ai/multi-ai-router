@@ -64,6 +64,41 @@ describe("createDiscoveryService", () => {
     expect(calls).toBe(1)
   })
 
+  test("re-fetches once the cached document is older than the TTL", async () => {
+    let calls = 0
+    let now = 0
+    const service = createDiscoveryService(
+      ISSUER,
+      {
+        fetch: async () => {
+          calls += 1
+          return jsonResponse({ ...DOC, token_endpoint: `${ISSUER}/v${calls}/token` })
+        },
+      },
+      () => now,
+      1_000,
+    )
+
+    expect((await service.load()).token_endpoint).toBe(`${ISSUER}/v1/token`)
+    now = 999
+    await service.load()
+    expect(calls).toBe(1)
+    now = 1_000
+    expect((await service.load()).token_endpoint).toBe(`${ISSUER}/v2/token`)
+  })
+
+  test("concurrent cold loads share one fetch", async () => {
+    let calls = 0
+    const service = createDiscoveryService(ISSUER, {
+      fetch: async () => {
+        calls += 1
+        return jsonResponse(DOC)
+      },
+    })
+    await Promise.all([service.load(), service.load(), service.load()])
+    expect(calls).toBe(1)
+  })
+
   test("re-fetches after invalidate() is called", async () => {
     let calls = 0
     const service = createDiscoveryService(ISSUER, {

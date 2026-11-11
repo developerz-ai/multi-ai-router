@@ -1,5 +1,5 @@
 import type { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
-import { and, asc, eq, gt, inArray, isNull, or, type SQL } from "drizzle-orm"
+import { and, asc, eq, getTableColumns, gt, inArray, isNull, or, type SQL, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import {
   type ApiKeyAccountRow,
@@ -30,6 +30,13 @@ export interface ApiKeyRepository {
    * candidate and compares in constant time — the index narrows, it never decides.
    */
   findUsableByPrefix(prefix: string, now: Date): Promise<ApiKeyRow[]>
+  /**
+   * {@link ApiKeyRepository.findUsableByPrefix} with each candidate's scope targets folded in, as
+   * one statement: a scoped key's cache miss used to cost the prefix query plus two membership
+   * queries. Pool ids keep the scope's listed order (`position`, then id); account ids are
+   * unordered. Both arrays are empty for a key whose scope is `all`.
+   */
+  findUsableWithTargetsByPrefix(prefix: string, now: Date): Promise<ApiKeyWithTargets[]>
   findById(id: string): Promise<ApiKeyRow | undefined>
   markRevoked(id: string, now: Date): Promise<void>
   touchLastUsed(id: string, now: Date): Promise<void>
@@ -38,6 +45,12 @@ export interface ApiKeyRepository {
   create(input: CreateApiKeyInput): Promise<ApiKeyRow>
   /** Oldest first, so the admin list is stable across calls. Filters are exact matches, ANDed. */
   list(filter?: ApiKeyListFilter): Promise<ApiKeyRow[]>
+  /**
+   * {@link ApiKeyRepository.list} without `value`: every reader of the list (the admin keys
+   * table, recovery reach, usage labels) renders or filters metadata, and the ciphertext belongs
+   * to the reveal path (`findById`) alone.
+   */
+  listSummaries(filter?: ApiKeyListFilter): Promise<ApiKeyListRow[]>
   findByName(name: string): Promise<ApiKeyRow | undefined>
   /** Never touches `value` or `prefix`: editing a key does not rotate it. */
   update(id: string, patch: UpdateApiKeyInput, now: Date): Promise<ApiKeyRow | undefined>
@@ -102,9 +115,26 @@ export interface ScopeTargets {
   readonly accountIds?: readonly string[]
 }
 
+/** An `api_keys` row without the encrypted `value`. */
+export type ApiKeyListRow = Omit<ApiKeyRow, "value">
+
+export interface ApiKeyWithTargets {
+  readonly key: ApiKeyRow
+  readonly poolIds: readonly string[]
+  readonly accountIds: readonly string[]
+}
+
 export interface ScopeTargetRows {
   readonly pools: readonly ApiKeyPoolRow[]
   readonly accounts: readonly ApiKeyAccountRow[]
+}
+
+/** `undefined` (no WHERE) when the filter names nothing. Exact matches, ANDed. */
+function listFilter(filter: ApiKeyListFilter | undefined): SQL | undefined {
+  return and(
+    filter?.owner === undefined ? undefined : eq(apiKeys.owner, filter.owner),
+    filter?.tool === undefined ? undefined : eq(apiKeys.tool, filter.tool),
+  )
 }
 
 export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
@@ -115,18 +145,35 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
       .where(where)
       .orderBy(asc(apiKeyPools.position), asc(apiKeyPools.id))
 
+  const usableByPrefix = (prefix: string, now: Date) =>
+    and(
+      eq(apiKeys.prefix, prefix),
+      eq(apiKeys.revoked, false),
+      or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, now)),
+    )
+
   return {
     findUsableByPrefix: (prefix, now) =>
+      db.select().from(apiKeys).where(usableByPrefix(prefix, now)),
+
+    // `array(subquery)` rather than a join + `array_agg`: it yields `{}` for a key with no targets
+    // instead of a NULL or a duplicated key row, and each subquery rides its `(api_key_id, …)`
+    // unique index. Spelled with explicit aliases because drizzle renders columns inside a select
+    // field unqualified, which would turn the correlation into `api_key_id = id`. Cast to text so
+    // the driver hands back plain strings.
+    findUsableWithTargetsByPrefix: (prefix, now) =>
       db
-        .select()
+        .select({
+          key: apiKeys,
+          poolIds: sql<
+            string[]
+          >`array(select p.pool_id::text from api_key_pools p where p.api_key_id = api_keys.id order by p.position, p.id)`,
+          accountIds: sql<
+            string[]
+          >`array(select a.account_id::text from api_key_accounts a where a.api_key_id = api_keys.id)`,
+        })
         .from(apiKeys)
-        .where(
-          and(
-            eq(apiKeys.prefix, prefix),
-            eq(apiKeys.revoked, false),
-            or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, now)),
-          ),
-        ),
+        .where(usableByPrefix(prefix, now)),
 
     findById: async (id) => {
       const rows = await db.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1)
@@ -166,15 +213,16 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
       return row
     },
 
-    list: async (filter) => {
-      const conditions = [
-        ...(filter?.owner === undefined ? [] : [eq(apiKeys.owner, filter.owner)]),
-        ...(filter?.tool === undefined ? [] : [eq(apiKeys.tool, filter.tool)]),
-      ]
-      const query = db.select().from(apiKeys)
-      return conditions.length === 0
-        ? query.orderBy(asc(apiKeys.createdAt))
-        : query.where(and(...conditions)).orderBy(asc(apiKeys.createdAt))
+    list: (filter) =>
+      db.select().from(apiKeys).where(listFilter(filter)).orderBy(asc(apiKeys.createdAt)),
+
+    listSummaries: (filter) => {
+      const { value: _ciphertext, ...columns } = getTableColumns(apiKeys)
+      return db
+        .select(columns)
+        .from(apiKeys)
+        .where(listFilter(filter))
+        .orderBy(asc(apiKeys.createdAt))
     },
 
     findByName: async (name) => {

@@ -18,7 +18,7 @@ export async function stalledProxy(url: string, needle: string) {
     let buffer = Buffer.alloc(0)
     let startup = true
     client.on("data", (chunk) => {
-      buffer = Buffer.concat([buffer, chunk])
+      buffer = Buffer.concat([buffer, Buffer.from(chunk)])
       if (paused) return
       while (buffer.length >= (startup ? 4 : 5)) {
         const size = startup ? buffer.readInt32BE(0) : buffer.readInt32BE(1) + 1

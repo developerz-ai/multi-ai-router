@@ -69,8 +69,13 @@ export type {
   AnthropicToolUseBlock,
 } from "./shared/anthropic"
 export { DEFAULT_MAX_TOKENS } from "./shared/anthropic"
+export type { AnthropicOutputSchema } from "./shared/anthropic-output-schema"
+export {
+  anthropicOutputSchema,
+  DEFAULT_OUTPUT_SCHEMA_PATH,
+} from "./shared/anthropic-output-schema"
 export type { DropSink, TranslationDrop } from "./shared/drops"
-export { IGNORE_DROPS } from "./shared/drops"
+export { dropSignature, IGNORE_DROPS } from "./shared/drops"
 export type { UpstreamErrorDetail } from "./shared/errors"
 export { parseUpstreamError, translateUpstreamError } from "./shared/errors"
 export type {
@@ -95,18 +100,18 @@ export {
   assertNoAnthropicStructuredOutput,
   assertNoStopSequence,
   assertPlainTextFormat,
-  assertStatelessResponses,
   assertTranslatableToAnthropic,
   parseRequest,
   rejectField,
-  rejectStatefulItem,
 } from "./shared/reject"
+export { assertStatelessResponses, rejectStatefulItem } from "./shared/reject-responses"
 export type { TranslatedResponse } from "./shared/response"
 export { collectResponsesStream } from "./shared/responses-collect"
 export type { ResponsesEgressRules } from "./shared/responses-egress"
 export { applyResponsesEgressRules, DEFAULT_RESPONSES_EGRESS } from "./shared/responses-egress"
 export type { ReadResponsesBody, ReadResponsesItem } from "./shared/responses-read"
 export { readResponsesBody } from "./shared/responses-read"
+export { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "./shared/responses-tools"
 export type {
   AnthropicStopReason,
   MappedReason,
@@ -135,11 +140,9 @@ export { forcesOpenAiChatTool, toolChoiceForOpenAiChat } from "./shared/tool-cho
 export {
   argumentsFromInput,
   inputFromArguments,
-  toolChoiceFromOpenAiResponses,
   toolChoiceToAnthropic,
   toolChoiceToOpenAiChat,
   toolChoiceToOpenAiResponses,
-  toolsFromOpenAiResponses,
   toolsToAnthropic,
   toolsToOpenAiChat,
   toolsToOpenAiResponses,

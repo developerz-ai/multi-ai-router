@@ -8,7 +8,6 @@ import {
 import { sql } from "drizzle-orm"
 import {
   check,
-  index,
   integer,
   jsonb,
   pgTable,
@@ -170,11 +169,9 @@ export const accounts = pgTable(
     check("accounts_lifecycle_version_nonnegative", sql`${table.lifecycleVersion} >= 0`),
     check("accounts_health_recovery_version_nonnegative", sql`${table.healthRecoveryVersion} >= 0`),
     check("accounts_auth_recovery_version_nonnegative", sql`${table.authRecoveryVersion} >= 0`),
-    index("accounts_provider_idx").on(table.provider),
-    index("accounts_status_idx").on(table.status),
-    // The idle probe's only query orders the whole table by this. Small table, but the
-    // index keeps the sweep from degrading as accounts accumulate.
-    index("accounts_last_used_at_idx").on(table.lastUsedAt),
+    // No index on `provider`, `status` or `last_used_at` (dropped in 0044): the table holds tens
+    // of rows, nothing reads it by those columns alone, and an index on `last_used_at` made every
+    // usage flush's stamp a non-HOT update (prod: 6 HOT of 179,229).
     // Two accounts sharing a config directory is cross-contamination of two
     // subscriptions, which is exactly what per-account isolation prevents.
     uniqueIndex("accounts_config_dir_key").on(table.configDir),

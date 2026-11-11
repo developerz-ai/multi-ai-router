@@ -25,6 +25,7 @@ export {
   backoffMs,
   DEFAULT_BASE_BACKOFF_MS,
   DEFAULT_MAX_BACKOFF_MS,
+  DEFAULT_MAX_REPORTED_RESET_SECONDS,
   JITTER_FRACTION,
 } from "./backoff"
 export { carryBlockedBinding, decideBinding } from "./binding"
@@ -46,25 +47,31 @@ export {
   refusalStands,
 } from "./credential-rejection"
 export {
-  type AttemptFailure,
-  classifyStatus,
   DEFAULT_MAX_IN_PLACE_RETRIES,
   type FailoverDecision,
   type FailoverOptions,
   type FailoverProgress,
   type FailoverStopReason,
-  type FailureKind,
-  type InPlaceReason,
-  inPlaceReason,
-  isRetryable,
-  markStreamed,
   maxAttempts,
   NO_ATTEMPTS,
-  noteOverload,
   planNextAttempt,
-  RETRYABLE_FAILURE_KINDS,
-  recordAttempt,
+  REQUEST_WALL_AFTER,
 } from "./failover"
+export {
+  type InPlaceReason,
+  inPlaceReason,
+  markStreamed,
+  noteOverload,
+  noteRequestAttributable,
+  recordAttempt,
+} from "./failover-progress"
+export {
+  type AttemptFailure,
+  classifyStatus,
+  type FailureKind,
+  isRetryable,
+  RETRYABLE_FAILURE_KINDS,
+} from "./failure-kind"
 export {
   type CandidateVerdict,
   evaluateCandidate,

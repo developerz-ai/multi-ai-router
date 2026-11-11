@@ -104,8 +104,17 @@ export interface CredentialFreshness {
    * Never rejects for a credential reason — a caller that cannot be helped is let through. It
    * rejects when filesystem ownership is unavailable or `signal` aborts, carrying the signal's own
    * reason so the caller classifies the abort exactly as it classifies every other one.
+   *
+   * `held` makes the call re-entrant: a caller re-asking the window with its own earlier claim in
+   * hand (the invoker's recheck once its slot is granted) is answered with a no-op claim at once
+   * while that claim still owns the window. Without it the caller's own unreleased holder reads as
+   * a foreign ACTIVE owner, and it waits the whole cap on a refresh that only it can start.
    */
-  ensureFresh(accountId: string, signal: AbortSignal): Promise<CredentialRefreshClaim>
+  ensureFresh(
+    accountId: string,
+    signal: AbortSignal,
+    held?: CredentialRefreshClaim,
+  ): Promise<CredentialRefreshClaim>
   /**
    * Whether a `claude` subprocess spawned against `accountId` right now would refresh its access
    * token — and so must not be a turn-free one, which is ended before the rotated refresh token
@@ -175,6 +184,8 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
   // released. Usually one — a takeover records the newcomer beside the holder it displaced, so an
   // owner that was taken over from and never released stays on the record.
   const holders = new Map<string, Set<Holder>>()
+  // The holder behind each owning claim this gate handed out, so a re-ask can recognise its own.
+  const owners = new WeakMap<CredentialRefreshClaim, Holder>()
 
   const classify = async (accountId: string): Promise<Freshness> => {
     const metadata = await deps.reader.read(deps.configDirs.pathFor(accountId))
@@ -262,6 +273,7 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
     const unreleased = recorded !== undefined && [...recorded].some((entry) => !entry.released)
     const { entry, bind } = admit(accountId)
     const claim: CredentialRefreshClaim = { release: entry.release }
+    owners.set(claim, entry)
     if (deps.refreshLock === undefined) return claim
     let lease: CredentialRefreshLeaseResult
     try {
@@ -327,8 +339,12 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
       return expiresAt.getTime() - deps.now().getTime() <= deps.coldMarginMs
     },
 
-    ensureFresh: async (accountId, signal) => {
+    ensureFresh: async (accountId, signal, held) => {
       throwIfAborted(signal)
+      // Still this caller's window: its own holder is not somebody else's refresh to wait on.
+      const own = held === undefined ? undefined : owners.get(held)
+      if (own !== undefined && isActive(own) && holders.get(accountId)?.has(own) === true)
+        return NO_OP
 
       let state: Freshness
       try {

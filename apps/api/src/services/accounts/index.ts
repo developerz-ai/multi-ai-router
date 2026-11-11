@@ -54,6 +54,7 @@ export type {
   DiscoverModelsServiceDeps,
 } from "./discover-models"
 export { createDiscoverModelsService } from "./discover-models"
+export { type LiveHealthDeps, liveHealthCheck } from "./live-health"
 export type { ProviderConnectFlow, ProviderDescriptor, ProviderTransport } from "./providers"
 export { describeProvider, describeProviders } from "./providers"
 export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"

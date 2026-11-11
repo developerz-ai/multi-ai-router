@@ -58,7 +58,7 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
     const [row] = await db.select().from(usageHistoryState).where(sql`id = 'v2'`)
     await db.delete(usageHistoryState).where(sql`id = 'v2'`)
     try {
-      const totals = await fixture.history().totals(dayWindow("1984-01-01", "1984-02-01"))
+      const totals = await fixture.history().totals(dayWindow("1984-01-01", "1984-02-01"), {})
       expect(totals.unpriced).toEqual({ attempts: null, since: "infinity" })
     } finally {
       if (row) await db.insert(usageHistoryState).values(row)
@@ -67,7 +67,7 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
 
   test("a window wholly before unpriced_since reports null attempts, never 0", async () => {
     await setSince("2099-01-01")
-    const totals = await fixture.history().totals(dayWindow("1984-01-01", "1984-02-01"))
+    const totals = await fixture.history().totals(dayWindow("1984-01-01", "1984-02-01"), {})
     expect(totals.unpriced).toEqual({ attempts: null, since: "2099-01-01" })
   })
 
@@ -77,13 +77,16 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
       .usage()
       .insertBatch({ attempts: [unknown("edge-model", "1984-04-04T12:00:00Z")], terminals: [] })
     // `to` is exclusive: [04-04, 04-05) never touches since's day, so it is not measured.
-    const totals = await fixture.history().totals(dayWindow("1984-04-04", "1984-04-05"))
+    const totals = await fixture.history().totals(dayWindow("1984-04-04", "1984-04-05"), {})
     expect(totals.unpriced.attempts).toBeNull()
     // One millisecond more reaches the first measured day.
-    const reached = await fixture.history().totals({
-      from: new Date("1984-04-04T00:00:00Z"),
-      to: new Date("1984-04-05T00:00:00.001Z"),
-    })
+    const reached = await fixture.history().totals(
+      {
+        from: new Date("1984-04-04T00:00:00Z"),
+        to: new Date("1984-04-05T00:00:00.001Z"),
+      },
+      {},
+    )
     expect(reached.unpriced.attempts).toBe(0)
   })
 
@@ -220,11 +223,11 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
       terminals: [],
     })
     const window = dayWindow("1984-02-10", "1984-02-11")
-    expect((await fixture.history().totals(window)).unpriced).toEqual({
+    expect((await fixture.history().totals(window, {})).unpriced).toEqual({
       attempts: 1,
       since: "1984-02-10",
     })
-    const groups = await fixture.history().breakdown(window, "model")
+    const groups = await fixture.history().breakdown(window, "model", undefined, {})
     expect(groups.find((row) => row.id === "measured-model")?.unpriced).toEqual({
       attempts: 1,
       since: "1984-02-10",
@@ -234,10 +237,13 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
       since: "1984-02-10",
     })
     // A within-day window's days are all partial edges, so the receipts query alone serves it.
-    const receiptsOnly = await fixture.history().totals({
-      from: new Date("1984-02-10T12:00:00Z"),
-      to: new Date("1984-02-10T14:00:00Z"),
-    })
+    const receiptsOnly = await fixture.history().totals(
+      {
+        from: new Date("1984-02-10T12:00:00Z"),
+        to: new Date("1984-02-10T14:00:00Z"),
+      },
+      {},
+    )
     expect(receiptsOnly.unpriced.attempts).toBe(1)
   })
 
@@ -251,10 +257,13 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
       terminals: [],
     })
     // Both edges are partial days (no whole day inside the window), so receipts serve all of it.
-    const totals = await fixture.history().totals({
-      from: new Date("1984-06-02T12:00:00Z"),
-      to: new Date("1984-06-03T12:00:00Z"),
-    })
+    const totals = await fixture.history().totals(
+      {
+        from: new Date("1984-06-02T12:00:00Z"),
+        to: new Date("1984-06-03T12:00:00Z"),
+      },
+      {},
+    )
     expect(totals.attempts).toBe(2)
     expect(totals.unpriced.attempts).toBe(1)
   })
@@ -269,8 +278,8 @@ describe.skipIf(!historyUrl)("unpriced attempts through the rollup and reads", (
       terminals: [],
     })
     const window = dayWindow("1984-03-09", "1984-03-13")
-    expect((await fixture.history().totals(window)).unpriced.attempts).toBe(1)
-    const groups = await fixture.history().breakdown(window, "model")
+    expect((await fixture.history().totals(window, {})).unpriced.attempts).toBe(1)
+    const groups = await fixture.history().breakdown(window, "model", undefined, {})
     expect(groups.find((row) => row.id === "pre-since-model")?.unpriced.attempts).toBe(0)
     expect(groups.find((row) => row.id === "post-since-model")?.unpriced.attempts).toBe(1)
   })

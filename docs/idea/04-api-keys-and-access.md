@@ -120,11 +120,14 @@ logs in again, which is the honest outcome rather than a session silently downgr
   `SameSite=Strict` is the first line; the token is the second, because one is a browser
   behavior and the other is an application invariant.
 - **OIDC start/callback throttling** on the admin plane is keyed by client IP. `GET /oidc/start`
-  is charged before state is created, and the callback is charged before code exchange. Tunable, not
+  is charged before state is created; the callback has its own per-IP bucket, checked before the
+  one-shot state is consumed and reset (with the start bucket) by a completed sign-in. IPv6
+  addresses count per /64. Tunable, not
   constant — `ADMIN_LOGIN_MAX_ATTEMPTS`, `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES`,
   `ADMIN_LOGIN_LOCKOUT_MINUTES` ([09-deployment.md](09-deployment.md#environment-reference)).
   The key is only as good as the IP, which is why `TRUST_PROXY` defaults to off: an unvetted
-  `X-Forwarded-For` is a throttle bypass.
+  `X-Forwarded-For` is a throttle bypass. With it on, the IP is the entry `TRUST_PROXY_HOPS`
+  (default 1) from the right of `X-Forwarded-For`, never the client-chosen leftmost.
 - OIDC failures are indistinguishable to the caller. The server log carries a bounded diagnostic kind;
   no claim, token, code, or state value is returned.
 
@@ -184,11 +187,25 @@ UI shows in lists (`mar_live_8f3c…`). It is too short to be useful to an attac
 The rate-limit window is charged last, and by the dispatcher rather than the verifier: a verified
 key is **cached**, so a limiter living inside verification would only ever see the cache misses.
 
-Concurrent misses for the same key share one lookup. Pending lookups are bounded, and an admin
-invalidation fences any older result before it can enter the cache. A fenced lookup reloads up to
-three times in total. Full lookup capacity or continued invalidation returns `503`
-`key_verification_unavailable` with `Retry-After: 1`; confirmed unknown, revoked, or expired keys
-return `401`.
+A cache miss is **one** statement: the candidate rows and their scope targets come back together
+(`findUsableWithTargetsByPrefix`), so a scoped key costs no more than an unscoped one.
+
+Concurrent misses for the same key share one lookup. Pending lookups are bounded by their own
+setting (`KEY_VERIFY_MAX_PENDING`, default 32 — not the cache size), and an admin invalidation
+fences any older result before it can enter the cache. A fenced lookup reloads up to three times in
+total. Full lookup capacity or continued invalidation returns `503` `key_verification_unavailable`
+with `Retry-After: 1`; confirmed unknown, revoked, or expired keys return `401`.
+
+Refusals are remembered in a **separate** cache (`KEY_CACHE_NEGATIVE_MAX`, `KEY_CACHE_NEGATIVE_TTL_SECONDS`;
+`0` caches none): a spray of well-formed unknown keys can neither evict a verified key nor queue
+more than the pending ceiling's worth of queries on the pool the rest of the router shares.
+
+**A warm key never waits on Postgres.** Past 80 % of `KEY_CACHE_TTL_SECONDS` a hit is answered from
+memory and starts one background reload; only a key whose TTL ran out with no reload landed waits
+for the lookup. When that lookup fails on a store error (Postgres restarting), the last verified
+copy keeps being served for up to `KEY_CACHE_STALE_ON_ERROR_SECONDS` (default 900) past its TTL;
+a key with no verified copy gets `503 key_verification_unavailable` + `Retry-After`, never a `500`.
+A key the store answers as gone, or one revoked on this replica, is never served stale.
 
 Key create, edit, revoke and delete operations commit their row, scope targets and redacted audit
 record together. Name checks for API create/rename operations are serialized inside that transaction;
@@ -225,7 +242,7 @@ Every key carries a **scope** — the set of Accounts it may reach — in one of
 | Tool | slug, optional | What the key is used from (`claude-code`, `ci`). Same slug rule |
 | Purpose | free text, optional | Trimmed, at most 500 characters; blank stores as unset; must not contain U+0000 (`400`) |
 | Rate limit | requests per window | Enforced as an **exact sliding window** over accepted requests, in memory, before the request body is read — a refusal must cost less than the request it refuses. Over the ceiling → `429` `key_rate_limited` + `Retry-After`, and never `quota_exhausted`: one key spending its allowance is not the pool running out. **Per replica**, deliberately: a shared counter would put a round trip on the request path, so two replicas admit up to twice the ceiling |
-| Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one |
+| Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one. A new or **changed** expiry must lie in the future (`expiry_in_past`); an edit that resends the stored one is accepted, so an expired key can still be renamed or re-scoped |
 | Revoked | flag | one-way |
 
 All four attribution fields are nullable (a key minted before they existed is unlabelled) and `PATCH null` clears each. `GET /api/admin/keys` takes exact-match `?owner=` and `?tool=` filters, which combine; a value that is not a valid slug answers `400`, and so does any other query parameter. The convention is to name keys `<owner>/<tool>`; it is documentation, not validation, and `name` stays free text.

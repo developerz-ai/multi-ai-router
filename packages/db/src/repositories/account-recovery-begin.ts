@@ -61,6 +61,7 @@ export function createRecoveryBegin(
             lifecycleVersion: account.lifecycleVersion,
             authMaterial: account.authMaterial,
             reason: "operator-recheck",
+            settled: input.settled === true,
             ineligible:
               knownLoggedOut ||
               account.status === "disabled" ||

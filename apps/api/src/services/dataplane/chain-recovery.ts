@@ -25,6 +25,9 @@ export function recordChainFailure(
   // forced-tool `400`s over two days were each recorded a failed recovery, re-gating the account
   // ~30s and drawing a router-made `429` with an eligible account in scope, until a non-forced
   // request finally succeeded on 10-15 20:36.
+  // The account refused this model by name: keep that model off it for a while (10.16).
+  if (outcome.failure.kind === "model-unsupported")
+    ctx.runtime.health.refuseModel(servable.account.id, servable.upstreamModel, now)
   if (outcome.failure.kind === "client-error" || outcome.failure.kind === "model-unsupported") {
     recovery?.finish("succeeded")
     ctx.runtime.health.recordSuccess(servable.account.id, observation)

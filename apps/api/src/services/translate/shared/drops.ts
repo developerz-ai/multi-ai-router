@@ -30,3 +30,15 @@ export type DropSink = (drop: TranslationDrop) => void
 
 /** The sink a translator uses when its caller passed none — a unit test asserting the body alone. */
 export const IGNORE_DROPS: DropSink = () => undefined
+
+/**
+ * A stable fingerprint of one translation's drops: the same client sending the same body shape
+ * (one tool schema, every request) gets the same string. The caller keys a once-per-window report
+ * on it so a repeated drop is one log line, not one per request. Structural, like the drops.
+ */
+export function dropSignature(drops: readonly TranslationDrop[]): string {
+  return drops
+    .map((drop) => `${drop.field} ${drop.reason}`)
+    .sort()
+    .join("\n")
+}

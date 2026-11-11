@@ -4,5 +4,5 @@
     "composite": false,
     "noEmit": true
   },
-  "include": ["test/**/*.ts", "smoke/**/*.ts"]
+  "include": ["test/**/*.ts", "smoke/**/*.ts", "bench/**/*.ts", "advisory/**/*.ts"]
 }

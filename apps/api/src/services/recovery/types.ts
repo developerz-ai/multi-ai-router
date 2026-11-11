@@ -41,6 +41,13 @@ export interface RecoveryCoordinatorConfig {
   readonly cooldownMs: number
   readonly quotaSpentThreshold: number
   readonly shutdownDrainMs: number
+  /**
+   * How often the expired-permit sweep reads Postgres (`RECOVERY_EXPIRY_SWEEP_INTERVAL_MS`).
+   * Absent: a tenth of `maximumOutcomeMs`, never faster than `intervalMs`.
+   */
+  readonly expirySweepIntervalMs?: number
+  /** Ticks a queued write may fail before it is dropped (`RECOVERY_ENTRY_MAX_ATTEMPTS`). Default 5. */
+  readonly entryMaxAttempts?: number
 }
 export interface RecoveryCoordinatorDeps {
   readonly repository: RecoveryRepository

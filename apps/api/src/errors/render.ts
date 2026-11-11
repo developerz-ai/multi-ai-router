@@ -2,6 +2,7 @@ import {
   DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
   type Dialect,
   isRouterError,
+  NoHealthyAccountError,
   RetryableRouterError,
 } from "@multi-ai-router/core"
 import { redactValue } from "../logging/redact"
@@ -196,7 +197,9 @@ function renderFailure(error: unknown, dialect: Dialect | null): ErrorResponse {
       error instanceof RetryableRouterError
         ? (error.retryAfterSeconds ??
           (error.status === 429 ? DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS : null))
-        : null,
+        : error instanceof NoHealthyAccountError
+          ? (error.retryAfterSeconds ?? null)
+          : null,
   }
 }
 

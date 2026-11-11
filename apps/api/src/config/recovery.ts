@@ -17,11 +17,18 @@ export const RECOVERY_ENV_FIELDS = {
   RECOVERY_REQUEST_WAIT_MS: wholeNumber
     .refine((value) => value <= 2_147_483_647, "must fit a timer")
     .optional(),
+  // Zero is a setting: no ride on a probe already on the wire past the request wait.
+  RECOVERY_PROBE_WAIT_MS: wholeNumber
+    .refine((value) => value <= 2_147_483_647, "must fit a timer")
+    .optional(),
   // The production CLI status check allows 15s plus 1s pipe drain; reserve additional slack.
   RECOVERY_OPERATOR_CHECK_LEASE_MS: timerMs
     .refine((value) => value >= 17_000, "must be at least 17000 to cover the CLI status deadline")
     .optional(),
   ROUTING_QUOTA_STALE_AFTER_MS: timerMs.optional(),
+  // Absent: a tenth of RECOVERY_MAXIMUM_OUTCOME_MS, never faster than the coordinator interval.
+  RECOVERY_EXPIRY_SWEEP_INTERVAL_MS: timerMs.optional(),
+  RECOVERY_ENTRY_MAX_ATTEMPTS: capacity.optional(),
 }
 
 type RecoveryEnv = { readonly [K in keyof typeof RECOVERY_ENV_FIELDS]?: number }
@@ -39,8 +46,14 @@ export function readRecoveryEnv(raw: RecoveryEnv) {
       shutdownDrainMs: raw.RECOVERY_SHUTDOWN_DRAIN_MS ?? 15_000,
       retryAfterMs: raw.RECOVERY_RETRY_AFTER_MS ?? 1_000,
       requestWaitMs: raw.RECOVERY_REQUEST_WAIT_MS ?? 5_000,
+      probeWaitMs: raw.RECOVERY_PROBE_WAIT_MS ?? 30_000,
       operatorCheckLeaseMs: raw.RECOVERY_OPERATOR_CHECK_LEASE_MS ?? 30_000,
       quotaStaleAfterMs: raw.ROUTING_QUOTA_STALE_AFTER_MS ?? 600_000,
+      // Left absent so the coordinator derives it from the outcome bound it belongs to.
+      ...(raw.RECOVERY_EXPIRY_SWEEP_INTERVAL_MS === undefined
+        ? {}
+        : { expirySweepIntervalMs: raw.RECOVERY_EXPIRY_SWEEP_INTERVAL_MS }),
+      entryMaxAttempts: raw.RECOVERY_ENTRY_MAX_ATTEMPTS ?? 5,
     },
   }
 }

@@ -1,5 +1,5 @@
 import type { KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
-import type { ApiKeyRow } from "@multi-ai-router/db"
+import type { ApiKeyListRow } from "@multi-ai-router/db"
 
 /**
  * What the console renders for a router key.
@@ -56,7 +56,7 @@ export interface RevealedKey {
   readonly value: string
 }
 
-export function toKeyView(row: ApiKeyRow, targets: KeyScopeTargets): ApiKeyView {
+export function toKeyView(row: ApiKeyListRow, targets: KeyScopeTargets): ApiKeyView {
   return {
     id: row.id,
     name: row.name,
@@ -86,7 +86,7 @@ export interface KeyScopeTargets {
 }
 
 /** Half a rate limit is not one: both columns are set together or neither is. */
-function toRateLimit(row: ApiKeyRow): KeyRateLimitView | null {
+function toRateLimit(row: ApiKeyListRow): KeyRateLimitView | null {
   if (row.rateLimitRequests === null || row.rateLimitWindowSeconds === null) return null
   return { requests: row.rateLimitRequests, windowSeconds: row.rateLimitWindowSeconds }
 }

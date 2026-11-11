@@ -177,6 +177,9 @@ describe("parseEnv", () => {
       DB_POOL_CONNECT_TIMEOUT_SECONDS: "20",
       DB_POOL_MAX_LIFETIME_SECONDS: "600",
       DB_POOL_CLOSE_TIMEOUT_SECONDS: "9",
+      DB_STATEMENT_TIMEOUT_MS: "45000",
+      DB_LOCK_TIMEOUT_MS: "0",
+      DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: "90000",
       SHUTDOWN_READY_GRACE_MS: "20000",
     })
 
@@ -196,6 +199,9 @@ describe("parseEnv", () => {
       connectTimeoutSeconds: 20,
       maxLifetimeSeconds: 600,
       closeTimeoutSeconds: 9,
+      statementTimeoutMs: 45_000,
+      lockTimeoutMs: 0,
+      idleInTransactionTimeoutMs: 90_000,
     })
     expect(env.retention.sessionsHours).toBe(6)
     expect(env.retention.usageDailyDays).toBe(400)

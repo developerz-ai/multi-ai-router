@@ -97,7 +97,106 @@ describe("createDatabase", () => {
       connectTimeoutSeconds: 10,
       maxLifetimeSeconds: 1_800,
       closeTimeoutSeconds: 5,
+      statementTimeoutMs: 60_000,
+      lockTimeoutMs: 30_000,
+      idleInTransactionTimeoutMs: 60_000,
     })
+  })
+
+  describe("server-side timeouts", () => {
+    /** The SQLSTATE of a rejected statement, wherever the driver put it. */
+    const codeOf = (error: unknown): unknown =>
+      error instanceof Error ? Reflect.get(error, "code") : undefined
+
+    test.skipIf(skip)(
+      "cancels a statement past the bound and the pool serves the next",
+      async () => {
+        const handle = createDatabase({
+          url: databaseUrl ?? "",
+          maxConnections: 1,
+          statementTimeoutMs: 500,
+        })
+        try {
+          const startedAt = performance.now()
+          const failed = await handle.sql`select pg_sleep(5)`.catch((error: unknown) => error)
+          expect(codeOf(failed)).toBe("57014")
+          expect(performance.now() - startedAt).toBeLessThan(3_000)
+          // The one connection was freed, not wedged behind the cancelled statement.
+          const [row] = await handle.sql<{ one: number }[]>`select 1 as one`
+          expect(row?.one).toBe(1)
+        } finally {
+          await handle.close()
+        }
+      },
+    )
+
+    test.skipIf(skip)("terminates a transaction left idle past the bound", async () => {
+      const handle = createDatabase({
+        url: databaseUrl ?? "",
+        maxConnections: 1,
+        idleInTransactionTimeoutMs: 300,
+      })
+      try {
+        const outcome = await handle.sql
+          .begin(async (tx) => {
+            await tx`select 1`
+            // Idle inside the transaction, as a snapshot whose request was cut would be.
+            await Bun.sleep(1_000)
+            await tx`select 1`
+          })
+          .then(
+            () => "committed",
+            (error: unknown) => codeOf(error) ?? "failed",
+          )
+        expect(outcome).not.toBe("committed")
+        // The pool replaces the terminated session.
+        const [row] = await handle.sql<{ one: number }[]>`select 1 as one`
+        expect(row?.one).toBe(1)
+      } finally {
+        await handle.close()
+      }
+    })
+
+    test.skipIf(skip)("a lock wait fails at the lock bound with 55P03", async () => {
+      const holder = createDatabase({ url: databaseUrl ?? "", maxConnections: 1 })
+      const waiter = createDatabase({
+        url: databaseUrl ?? "",
+        maxConnections: 1,
+        lockTimeoutMs: 300,
+      })
+      const key = Math.floor(Math.random() * 1_000_000_000)
+      try {
+        await holder.sql`select pg_advisory_lock(${key})`
+        const failed = await waiter.sql`select pg_advisory_lock(${key})`.catch(
+          (error: unknown) => error,
+        )
+        expect(codeOf(failed)).toBe("55P03")
+      } finally {
+        await holder.sql`select pg_advisory_unlock(${key})`
+        await holder.close()
+        await waiter.close()
+      }
+    })
+  })
+
+  describe("openConnections", () => {
+    test.skipIf(skip)(
+      "counts this pool's open sessions, idle ones included, and no one else's",
+      async () => {
+        const handle = createDatabase({ url: databaseUrl ?? "", maxConnections: 3 })
+        const other = createDatabase({ url: databaseUrl ?? "", maxConnections: 2 })
+        try {
+          // Three overlapping statements open all three; afterwards they sit idle, still open.
+          await Promise.all(Array.from({ length: 3 }, () => handle.sql`select pg_sleep(0.1)`))
+          await Promise.all(Array.from({ length: 2 }, () => other.sql`select pg_sleep(0.1)`))
+          expect(await handle.openConnections()).toBe(3)
+          expect(await other.openConnections()).toBe(2)
+        } finally {
+          await handle.close()
+          await other.close()
+        }
+      },
+    )
   })
 
   describe("poolStats", () => {

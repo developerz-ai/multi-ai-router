@@ -53,6 +53,7 @@ export function createRuntimeRepositories(deps: RuntimeDeps): RuntimeRepositorie
   })
   const accounts = createAccountRepository(database, {
     recoveryCooldownMs: env.recovery.cooldownMs,
+    lastUsedMinIntervalMs: env.accountLastUsedStampIntervalSeconds * 1_000,
   })
   const keys = createApiKeyRepository(database)
   const keyTombstones = createApiKeyTombstoneRepository(database)

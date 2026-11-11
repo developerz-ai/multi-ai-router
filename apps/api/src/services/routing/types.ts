@@ -107,6 +107,19 @@ export interface AccountSnapshot {
    * on a model name. Absent: a tagged name resolves as its base name (`model.ts`).
    */
   readonly understandsContextTags?: boolean
+  /**
+   * The account is served over a transport that holds a conversation server-side (the Agent SDK),
+   * so a hop off it mid-session restarts that session elsewhere. Set by the catalog from the
+   * provider registry's transport, never by comparing provider ids here (non-negotiable 12).
+   */
+  readonly carriesSession?: boolean
+  /**
+   * Upstream model names this account refused as unknown (`model-unsupported`), each until the
+   * instant the refusal stops being trusted. Learned in memory by the health store (plan 101,
+   * 10.16: a delisted OpenRouter model kept being routed, one client-visible `404` per request).
+   * Keyed by the upstream name after alias mapping — the name the provider actually refused.
+   */
+  readonly refusedModels?: ReadonlyMap<string, Date>
   /** Client model name -> this account's upstream name. Absent means pass the name through. */
   readonly modelAliases?: Readonly<Record<string, string>>
   /** Per-window quota state. Windows reset independently; the account is blocked by any spent one. */

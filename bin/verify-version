@@ -11,11 +11,10 @@
 # version an operator sees at runtime — /healthz, router_build_info, the boot
 # log, the console footer — comes from packages/core/src/version.ts, NOT from a
 # manifest. A gate that reads package.json and stops is checking the copy, not
-# the source, and there is nothing in the release path to catch the difference:
-# release.yml builds and pushes, it never runs the test suite, so the drift test
-# that normally holds VERSION and the manifests together
-# (packages/core/test/unit/version.test.ts) does not gate a tag at all. Cut
-# v1.0.1 from a tree where only the manifests were bumped and you publish an
+# the source. release.yml's gate does require main's CI, and with it the drift
+# test that holds VERSION and the manifests together
+# (packages/core/test/unit/version.test.ts) — but no test knows the tag name.
+# Cut v1.0.1 from a tree where only the manifests were bumped and you publish an
 # image whose /healthz says 1.0.0 — passing the old check, and wrong.
 #
 # So this checks the source, checks every manifest against it, checks the OCI

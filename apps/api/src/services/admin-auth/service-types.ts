@@ -25,6 +25,14 @@ export interface AdminAuthDeps {
   readonly now?: () => number
   /** Absent means no audit rows and nothing else different. See the module comment. */
   readonly audit?: AuditRecorder
+  /**
+   * How long "is a local password set" is answered from memory (`ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`
+   * in milliseconds; default 60 000). Bounds how soon a `bin/admin` verb is seen by `/methods` and
+   * by the session check.
+   */
+  readonly localCredentialTtlMs?: number
+  /** The login throttle's full-table sweep runs at most once per this; default 1 000 ms. */
+  readonly throttleEvictionIntervalMs?: number
 }
 
 /**
@@ -53,8 +61,9 @@ export interface AdminAuthService {
   ready(): Promise<void>
   /**
    * Which sign-in methods this deployment offers. `oidc` is configuration;
-   * `local` is the presence of the hash row, read live so a `bin/admin`
-   * verb takes effect without a restart. Public — the login page asks.
+   * `local` is the presence of the hash row, cached for `localCredentialTtlMs`
+   * so a `bin/admin` verb takes effect without a restart but an unauthenticated
+   * caller cannot buy a query per hit. Public — the login page asks.
    */
   methods(): Promise<AdminAuthMethods>
   /** Mints a state and an authorize URL. The route redirects the browser. */

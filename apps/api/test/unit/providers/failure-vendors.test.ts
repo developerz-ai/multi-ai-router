@@ -124,11 +124,13 @@ describe("kimi", () => {
     expect(result?.retryable).toBe(true)
   })
 
+  // Still the auth failure the 403 default made it; the rule exists so the model name it ends in is
+  // never read by the limit or balance wording (sweep 101, 04.1).
   test("the other permission_error is still a real auth failure", () => {
     const result = kimi?.classifyFailure(response(403, { body: kimiPermissionDeniedBody }))
 
     expect(result?.kind).toBe("auth")
-    expect(result?.signal).toBe("http-status:403")
+    expect(result?.signal).toBe("kimi:model-access-denied")
   })
 
   /**

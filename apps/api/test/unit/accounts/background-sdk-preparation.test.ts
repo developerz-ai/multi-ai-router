@@ -168,7 +168,8 @@ test("provider failure after background activation records a real failed test an
   })
   expect(result.ok).toBe(true)
   if (result.ok) expect(result.value).toMatchObject({ tested: true, outcome: "failed" })
-  expect(f.service.lastCheckedAt(f.account.id)).toEqual(NOW)
+  // A background turn never spends the operator's Test now cooldown (plan 101, 03.8).
+  expect(f.service.lastCheckedAt(f.account.id)).toBeNull()
   expect(f.counts()).toMatchObject({ audits: 1, quotaWrites: 1, activations: 1, guards: 2 })
   expect(f.concurrency.inFlight).toBe(0)
 })

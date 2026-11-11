@@ -2,9 +2,8 @@ import { UpstreamAuthError } from "@multi-ai-router/core"
 import { z } from "zod"
 import type { ProviderDeviceFlow } from "../device-flow"
 import { createHttpDriver } from "../driver"
-import { messageRule, typeRule } from "../failure/classify"
 import type { OAuthTokenRequest, OAuthTokens, ProviderDriver } from "../types"
-import { OPENCODE_OVERLOADED } from "./opencode-failures"
+import { OPENCODE_SESSION_HEADER, OPENCODE_USER_AGENT, opencodeRules } from "./opencode-failures"
 import { opencodeChatModelListing } from "./opencode-models"
 
 // Provenance: OpenCode 2.2.5 MITM, 2026-11-07; upstream source fe04656465,
@@ -13,9 +12,7 @@ import { opencodeChatModelListing } from "./opencode-models"
 const CONSOLE = "https://opencode.ai/console"
 const CLIENT_ID = "opencode-cli"
 const TOKEN_URL = `${CONSOLE}/auth/device/token`
-// Honest router identity accepted by the live catalog and free-limit response on 2026-11-07.
-const USER_AGENT = "developerz.ai"
-const HEADERS = { "content-type": "application/json", "user-agent": USER_AGENT }
+const HEADERS = { "content-type": "application/json", "user-agent": OPENCODE_USER_AGENT }
 
 function post(url: string, body: unknown): OAuthTokenRequest {
   return { url, method: "POST", headers: HEADERS, body: JSON.stringify(body) }
@@ -91,7 +88,9 @@ export const opencodeDeviceFlow: ProviderDeviceFlow = {
       const retry = Number(headers?.get("retry-after"))
       return {
         kind: "retry",
-        throttled: true,
+        // Only a 429 is the issuer asking us to slow down; a 5xx is its own fault (as the OpenAI
+        // device flow reads it, `openai-oauth-device.ts`).
+        throttled: status === 429,
         retryAfterSeconds: Number.isFinite(retry) && retry > 0 ? retry : null,
       }
     }
@@ -106,16 +105,11 @@ const driver = createHttpDriver({
     {
       dialect: "openai-chat",
       baseUrl: "https://opencode.ai/inference/openai/v1",
-      sessionHeader: "x-opencode-session",
+      sessionHeader: OPENCODE_SESSION_HEADER,
       chatCeiling: "max_completion_tokens",
     },
   ],
-  rules: [
-    messageRule("overloaded", "opencode:overloaded", OPENCODE_OVERLOADED),
-    typeRule("rate-limited", "opencode:free-usage-limit", ["FreeUsageLimitError"]),
-    messageRule("credits-exhausted", "opencode:insufficient-funds", /insufficient account funds/i),
-    messageRule("model-unsupported", "opencode:model-unavailable", /model is unavailable/i),
-  ],
+  rules: opencodeRules("opencode"),
 })
 
 function deviceOnly(): never {
@@ -143,7 +137,7 @@ export const opencodeOAuthDriver: ProviderDriver = {
       throw new UpstreamAuthError(`account ${account.id}: OpenCode Console needs a workspace login`)
     const headers = driver.buildHeaders(account, credential)
     headers.set("x-opencode-org-id", credential.providerAccountId)
-    headers.set("user-agent", USER_AGENT)
+    headers.set("user-agent", OPENCODE_USER_AGENT)
     return headers
   },
 }

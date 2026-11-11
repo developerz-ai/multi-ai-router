@@ -1,13 +1,14 @@
-import { z } from "zod"
 import type {
   AnthropicTextBlock,
   AnthropicThinkingBlock,
   AnthropicToolUseBlock,
 } from "../shared/anthropic"
-import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
-import type { TranslatedResponse } from "../shared/response"
+import { readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
+import { openAiChatCompletionSchema } from "../shared/openai-chat-wire"
+import { type TranslatedResponse, undecodableToolArguments } from "../shared/response"
 import { ROUTER_THINKING_SIGNATURE } from "../shared/router-thinking"
 import { toAnthropicStopReason } from "../shared/stop-reason"
+import { upstreamToolInput } from "../shared/tools"
 import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
 
 /**
@@ -22,45 +23,12 @@ import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
  * translator (`06-protocol-translation.md#known-lossy-edges`).
  *
  * **Nothing here throws.** The upstream already answered, so a malformed field is reported as
- * absent rather than turned into a failure on a request that cannot be retried
- * (`docs/idea/06-protocol-translation.md`, "Rejected: nothing at stream time"). That is the one
- * place this module differs from `request.ts`, where the same undecodable `arguments` string is a
- * `400` naming the call: there, nothing has happened yet and refusing costs the caller nothing.
+ * absent rather than thrown (`docs/idea/06-protocol-translation.md`, "Rejected: nothing at stream
+ * time"). The one exception is a tool call whose `arguments` do not decode to an object: Anthropic's
+ * `input` has no form for it, and an invented `{}` is a call the client would run with arguments the
+ * model never wrote, so the result carries `translationFailure` and the caller answers with an
+ * error instead of the body.
  */
-
-const toolCallSchema = z.looseObject({
-  id: z.string().nullish().catch(null),
-  function: z
-    .looseObject({
-      name: z.string().nullish().catch(null),
-      arguments: z.string().nullish().catch(null),
-    })
-    .nullish()
-    .catch(null),
-})
-
-const completionSchema = z.looseObject({
-  id: z.string().nullish().catch(null),
-  model: z.string().nullish().catch(null),
-  choices: z
-    .array(
-      z.looseObject({
-        index: z.number().int().nullish().catch(null),
-        message: z
-          .looseObject({
-            content: z.string().nullish().catch(null),
-            ...openAiChatReasoningSchema,
-            tool_calls: z.array(toolCallSchema).nullish().catch(null),
-          })
-          .nullish()
-          .catch(null),
-        finish_reason: z.string().nullish().catch(null),
-      }),
-    )
-    .nullish()
-    .catch(null),
-  usage: z.unknown().optional(),
-})
 
 export interface OpenAiChatToAnthropicResponseOptions {
   /** Used when the upstream body names no id of its own. */
@@ -73,7 +41,7 @@ export function openAiChatToAnthropicResponse(
   body: unknown,
   options: OpenAiChatToAnthropicResponseOptions = {},
 ): TranslatedResponse {
-  const parsed = completionSchema.safeParse(body)
+  const parsed = openAiChatCompletionSchema.safeParse(body)
   const completion = parsed.success ? parsed.data : null
 
   // `n > 1` is refused at request time, so the one choice a translated response can carry is the
@@ -88,12 +56,15 @@ export function openAiChatToAnthropicResponse(
   const text = choice?.message?.content ?? ""
   // Anthropic rejects an empty text block, and a completion that was only a tool call said nothing.
   if (text.length > 0) content.push({ type: "text", text })
-  for (const call of choice?.message?.tool_calls ?? []) {
+  let translationFailure: TranslatedResponse["translationFailure"]
+  for (const [index, call] of (choice?.message?.tool_calls ?? []).entries()) {
+    const input = upstreamToolInput(call.function?.arguments)
+    translationFailure ??= input === null ? undecodableToolArguments(index) : undefined
     content.push({
       type: "tool_use",
       id: call.id ?? "",
       name: call.function?.name ?? "",
-      input: toolInput(call.function?.arguments),
+      input: input ?? {},
     })
   }
 
@@ -116,25 +87,6 @@ export function openAiChatToAnthropicResponse(
       usage: anthropicUsageCounts(parseOpenAiChatUsage(completion?.usage)),
     },
     unrecognizedStopReason: stop.unrecognized,
+    ...(translationFailure === undefined ? {} : { translationFailure }),
   }
-}
-
-/**
- * `arguments` (a JSON string) → `input` (an object), best effort.
- *
- * An upstream that streamed a call with undecodable arguments is broken, and there is no way to
- * say so in the shape — Anthropic's `input` has no array, scalar, or error form. An empty object
- * is the only representable answer; it is not a silent success, because the accompanying
- * `stop_reason: "tool_use"` still tells the client a call was made.
- */
-function toolInput(raw: string | null | undefined): Record<string, unknown> {
-  if (raw === null || raw === undefined || raw.trim().length === 0) return {}
-  let decoded: unknown
-  try {
-    decoded = JSON.parse(raw)
-  } catch {
-    return {}
-  }
-  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) return {}
-  return decoded as Record<string, unknown>
 }

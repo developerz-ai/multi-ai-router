@@ -468,6 +468,53 @@ describe("malformed request bodies", () => {
     expect(() => anthropicToOpenAiChatRequest(body)).toThrow(TranslationError)
   })
 
+  // 06.2: blocks dispatch on `type` first; a malformed known block still names its deepest field.
+  test("a tool_use missing its id is malformed, named at the field, not unsupported", () => {
+    const body = anthropicRequest({
+      messages: [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "x" },
+            { type: "tool_use", name: "f", input: {} },
+          ],
+        },
+      ],
+    })
+    expect(() => anthropicToOpenAiChatRequest(body)).toThrow("`messages.1.content.1.id`")
+  })
+
+  test("a malformed tool_result content block names the nested field", () => {
+    const body = anthropicRequest({
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "a", name: "f", input: {} }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "a", content: [{ type: "text" }] }],
+        },
+      ],
+    })
+    expect(() => anthropicToOpenAiChatRequest(body)).toThrow(
+      "`messages.1.content.0.content.0.text`",
+    )
+  })
+
+  test("an unknown block type is still read as unsupported, not malformed", () => {
+    const body = anthropicRequest({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "q" },
+            { type: "server_tool_use", id: "s", name: "w", input: {} },
+          ],
+        },
+      ],
+    })
+    expect(() => anthropicToOpenAiChatRequest(body)).not.toThrow()
+  })
+
   test("an empty messages array is a 400", () => {
     expect(() => anthropicToOpenAiChatRequest(anthropicRequest({ messages: [] }))).toThrow(
       TranslationError,

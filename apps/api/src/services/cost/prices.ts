@@ -1,4 +1,5 @@
 import { ownEntry, ProviderId } from "@multi-ai-router/core"
+import { providerShippedPrices } from "../../providers/registry"
 import { PRICE_SOURCES } from "./provenance"
 import type { RateLookupContext } from "./rates"
 import { type ModelRates, type ModelTable, modelLookupKeys, type ShippedRate } from "./rates"
@@ -83,15 +84,24 @@ export function lookupRates(
   model: string,
   context?: RateLookupContext,
 ): ModelRates | null {
-  if (
-    provider === "kimi" &&
-    (context?.billing !== "subscription" || (context.cacheWriteTokens ?? 0) > 0)
-  )
+  return lookupRatesByKeys(provider, modelLookupKeys(model), context)
+}
+
+/**
+ * `lookupRates` over keys the caller already normalised: the warm book tries its overrides with
+ * the same keys first, and one priced attempt should normalise its model name once.
+ */
+export function lookupRatesByKeys(
+  provider: ProviderId,
+  [name, family]: readonly [string, string],
+  context?: RateLookupContext,
+): ModelRates | null {
+  const notional = providerShippedPrices(provider) === "notional"
+  if (notional && (context?.billing !== "subscription" || (context.cacheWriteTokens ?? 0) > 0))
     return null
   const table = PRICES[provider]
   if (table === undefined) return null
-  const [name, family] = modelLookupKeys(model)
-  return ownEntry(table, name) ?? (provider === "kimi" ? null : ownEntry(table, family)) ?? null
+  return ownEntry(table, name) ?? (notional ? null : ownEntry(table, family)) ?? null
 }
 
 /**
@@ -119,7 +129,7 @@ export function listShippedRates(): readonly ShippedRate[] {
         model,
         ...standard,
         sourceId: sourceFor(provider),
-        ...(provider === "kimi" ? { notionalOnly: true } : {}),
+        ...(providerShippedPrices(provider) === "notional" ? { notionalOnly: true } : {}),
       })
       if (longContext !== undefined)
         rows.push({ provider, model, ...longContext, sourceId: sourceFor(provider) })

@@ -60,11 +60,17 @@ bin/check   # lint + typecheck + full test suite + build — the offline CI jobs
 bin/bench   # confirm the overhead budget hasn't regressed (non-blocking in CI, but check it here)
 ```
 
-`bin/check` covers the jobs CI can run offline — lint, typecheck, test, build. CI gates on two more
-that it cannot: `advisory` (the live OSV.dev dependency assessment, which needs the network) and
-`ui-geometry` (headless Chromium against the built SPA, which needs a browser). Both are hard
-gates, so a green `bin/check` is not a stand-in for them — read the `ci` workflow's required checks
-at merge time and let the gates decide.
+`bin/check` covers the jobs CI can run offline — lint, typecheck, test, build. CI runs three more
+that it cannot: `ui-geometry` (headless Chromium against the built SPA, which needs a browser),
+`image` (the release Dockerfile built for amd64 and never pushed, which needs Docker) and
+`advisory` (the live OSV.dev dependency assessment, which needs the network). A green `bin/check`
+is not a stand-in for them.
+
+Branch protection on `main` requires `lint`, `typecheck`, `test`, `build`, `ui-geometry` and
+`bench` (a report: the job is `continue-on-error`, though a red `bench` check can still hold a
+merge until it is re-run green). `advisory` is deliberately not required for
+a merge — a newly published advisory would otherwise block every unrelated PR — but it colours
+`main`, and the release gate (§5) requires it, together with `image`, on the tagged commit.
 
 Commit the version bump and changelog as their own PR, merge it to `main`
 through the normal review flow — no direct pushes to `main`, no skipped
@@ -72,7 +78,8 @@ review for a release commit.
 
 ## 4. Tag and push
 
-Once the version-bump PR is merged and `main` is green:
+Once the version-bump PR is merged. Tag the merged commit on `main` — the release gate refuses
+anything else — and you need not wait for `main`'s CI to finish: the gate waits for it.
 
 ```sh
 git checkout main
@@ -86,18 +93,37 @@ containing a hyphen (`v1.0.0-rc.1`) is treated as a pre-release: the image
 build still runs, but the `latest` tag is suppressed and the GitHub Release
 is marked pre-release.
 
+A version is published once. If `ghcr.io/…:X.Y.Z` already exists the gate fails; never delete and
+re-push a tag to "fix" a release — cut the next patch.
+
 ## 5. What `release.yml` does from here
 
 Pushing the tag triggers `.github/workflows/release.yml`, unattended:
 
-1. **build** — native per-arch image build (`linux/amd64`, `linux/arm64`),
-   each pushed to `ghcr.io` by digest.
-2. **merge** — the two digests are combined into one multi-arch manifest
-   list, tagged `X.Y.Z`, `X.Y`, and `latest` (the `latest` tag is skipped for
-   pre-releases).
-3. **github_release** — a GitHub Release is created against the tag, with
+1. **gate** — nothing is built until it passes. `bin/verify-version` (the tag
+   names the version the tree reports); `bin/release-gate` (the commit is on
+   `main`, and `lint`, `typecheck`, `test`, `build`, `ui-geometry`, `advisory`
+   and `image` all concluded `success` on that exact commit — waiting up to
+   `RELEASE_GATE_TIMEOUT_SECONDS`, 30 min, for runs still in flight, failing on
+   any other conclusion); the version is not already in the registry; and
+   whether this is the highest stable version, which decides `latest`.
+2. **build** — native per-arch image build (`linux/amd64`, `linux/arm64`),
+   each pushed to `ghcr.io` by digest. Reads the amd64 layer cache `main`'s
+   `image` job writes; it writes none (a cache saved under a tag ref is
+   invisible to every later tag).
+3. **merge** — the two digests are combined into one multi-arch manifest
+   list, tagged `X.Y.Z` and `X.Y`, plus `latest` only when this is the highest
+   stable version — a patch on an older line cut after a newer release never
+   moves `latest` backwards across a forward-only migration. The manifest list
+   then gets a Sigstore-signed build-provenance attestation bound to this
+   workflow's identity.
+4. **github_release** — a GitHub Release is created against the tag, with
    auto-generated notes from the merged PRs since the previous tag, plus the
-   `docker pull` line for the image.
+   `docker pull` line for the image; marked "Latest" by the same rule as the
+   `latest` tag.
+
+If the gate times out because `main`'s CI was slow, re-run the workflow once it
+finishes. If a check failed, fix `main` and cut the next patch.
 
 Nothing here is manual or ad hoc — if a step needs to change, it changes in
 `release.yml`, not in a one-off command run by hand.
@@ -120,6 +146,21 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
   `org.opencontainers.image.version` must be `X.Y.Z` and
   `org.opencontainers.image.revision` the tagged commit's sha — the same sha
   `router_build_info{revision}` reports from inside.
+- Confirm the provenance is signed by this repository's release workflow:
+
+  ```sh
+  gh attestation verify oci://ghcr.io/developerz-ai/multi-ai-router:X.Y.Z \
+    --repo developerz-ai/multi-ai-router
+  ```
+
+- **Roll the deployments — a release is not done until they run it.** Nothing
+  automates this. Open the image-pin PR in `developerz-ai/infrastructure`
+  (`stacks/apps/multi-ai-router/manifests/deployment.yml`, the
+  `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z` image line) and in every other
+  deployment repo that pins the router (the tesote stack's production overlay),
+  update each stack README's "deployed" version in the same PR, and link the
+  PRs from the GitHub Release. After they sync, confirm the pod reports the
+  version: `curl -s https://<router>/healthz` → `"version":"X.Y.Z"`.
 
 ## Moving the base image pin
 
@@ -194,7 +235,7 @@ An `-rc` is not re-tagged into a release — it is superseded by a clean tag:
 3. The stable tag rebuilds from source. Version and revision are artifact inputs,
    so do not expect its digest to equal the RC digest. Verify the stable image
    and deployment using the release checks above.
-4. `latest` and the GitHub Release's "Latest" flag only land on a hyphen-free
+4. `latest` and the GitHub Release's "Latest" flag only land on the highest hyphen-free
    tag. Keep superseded RC tags and GitHub pre-releases as the validation record.
 
 ## Rollback
@@ -203,8 +244,11 @@ A bad tag is not un-published — `docker pull` will always find it again — bu
 `latest` and any environment that tracks it move back:
 
 1. **Stop pointing `latest` at the bad version.** Never force-move an
-   already-pushed tag (`git tag -f`) to make `latest` point somewhere else —
-   a tag that's been pulled is immutable here, full stop. Instead, cut a new
+   already-pushed tag (`git tag -f`) to make `latest` point somewhere else.
+   The release gate refuses to publish a version that already exists in the
+   registry, so a re-pushed tag fails instead of moving `X.Y.Z` to a new
+   digest; GitHub itself does not yet stop a tag being deleted and re-pushed
+   (no tag ruleset — an owner setting). Instead, cut a new
    tag (`vX.Y.(Z+1)`) from the last-known-good commit — or from a revert
    commit if the bad change already merged further work on top — and push it
    normally. `latest` moves forward onto that tag the same way it always

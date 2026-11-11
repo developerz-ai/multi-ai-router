@@ -3,6 +3,7 @@
  * client is typed against is re-exported here — one file per domain concern.
  */
 
+export * from "./account-exhausted-watches"
 export * from "./account-operator-checks"
 export * from "./account-recoveries"
 export * from "./accounts"

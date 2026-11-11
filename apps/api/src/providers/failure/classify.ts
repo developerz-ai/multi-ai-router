@@ -86,14 +86,47 @@ interface StatusVerdict {
   readonly signal: string
 }
 
+/**
+ * The status defaults, for a body no rule recognised. `408 Request Timeout` and `425 Too Early` are
+ * the server declining to wait for, or replay, *this attempt* — transient, and nothing about the
+ * request is wrong, so another account gets its turn. `529` is Anthropic's (and its proxies') busy
+ * backend: `overloaded` whether or not the `overloaded_error` body survived a rewriting proxy, so it
+ * is retried with backoff and never held against the key.
+ */
 function verdictForStatus(status: number): StatusVerdict | null {
   if (status < 400) return null
   const signal = `http-status:${status}`
   if (status === 401 || status === 403) return { kind: "auth", signal }
   if (status === 402) return { kind: "credits-exhausted", signal }
   if (status === 429) return { kind: "rate-limited", signal }
-  if (status >= 500) return { kind: "server-error", signal }
+  if (status === 529) return { kind: "overloaded", signal }
+  if (status === 408 || status === 425 || status >= 500) return { kind: "server-error", signal }
   return { kind: "invalid-request", signal }
+}
+
+/**
+ * The longest message a wording rule reads. Every provenance sentence a rule here was written from is
+ * under 200 characters; past this is a gateway's HTML page or an echoed request, and an unbounded
+ * read hands a quadratic regex 64 KB of upstream-controlled text on the event loop. A safety bound on
+ * regex input, not a tunable: no reading changes with it.
+ */
+const WORDING_MAX_CHARS = 2048
+
+/**
+ * Spans an upstream quotes are values it is echoing — a model name, a block `type`, a field — and
+ * the client chose them. `'…'` only where the quote is not an apostrophe (`You've` stays whole).
+ */
+const QUOTED_SPANS = /"[^"]*"|`[^`]*`|“[^”]*”|‘[^’]*’|(?<!\w)'[^'\n]*'(?!\w)/g
+
+/**
+ * The text a wording rule is allowed to read: capped, and with every quoted span removed. Applied
+ * once here, before any rule runs, so no driver can forget it — a client that names its model
+ * `insufficient balance` must never read as a dead balance (docs/idea/05-routing-and-failover.md).
+ * The classification still carries the upstream's whole message; only the verdict is shielded.
+ */
+export function wordingOf(message: string | undefined): string | undefined {
+  if (message === undefined) return undefined
+  return message.slice(0, WORDING_MAX_CHARS).replace(QUOTED_SPANS, " ").trim()
 }
 
 export function classifyUpstreamFailure(
@@ -105,7 +138,8 @@ export function classifyUpstreamFailure(
   const stated = {
     reset: rateLimit?.resetsAt !== undefined || rateLimit?.retryAfterSeconds !== undefined,
   }
-  const matched = options.rules.find((rule) => rule.when(facts, response.status, stated))
+  const wording = { ...facts, message: wordingOf(facts.message) }
+  const matched = options.rules.find((rule) => rule.when(wording, response.status, stated))
   const verdict: StatusVerdict | null = matched
     ? { kind: matched.kind, signal: matched.signal }
     : verdictForStatus(response.status)
@@ -189,14 +223,31 @@ export function typeRule(
   return { kind, signal, when: (facts) => facts.type !== undefined && types.includes(facts.type) }
 }
 
+/**
+ * Where a wording rule may fire. **Required**, because upstream `4xx` messages echo client-chosen
+ * text: a rule free to read any status turned `404 "model: credit balance is too low"` into a dead
+ * balance and parked a healthy account `exhausted` (sweep 101, 04.1). A rule names the statuses its
+ * provenance sentence was observed on, and — where the vendor types its errors — the type.
+ */
+export interface MessageGuard {
+  readonly statuses: readonly number[]
+  readonly types?: readonly string[]
+}
+
 export function messageRule(
   kind: UpstreamFailureKind,
   signal: string,
   pattern: RegExp,
+  guard: MessageGuard,
 ): ClassificationRule {
   return {
     kind,
     signal,
-    when: (facts) => facts.message !== undefined && pattern.test(facts.message),
+    when: (facts, status) =>
+      guard.statuses.includes(status) &&
+      (guard.types === undefined ||
+        (facts.type !== undefined && guard.types.includes(facts.type))) &&
+      facts.message !== undefined &&
+      pattern.test(facts.message),
   }
 }

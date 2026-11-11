@@ -19,7 +19,7 @@ import type { TickResult } from "./types"
  */
 
 export interface SchedulerFromEnvDeps extends ScheduledTaskDeps {
-  readonly env: ScheduledTaskDeps["env"] & Pick<Env, "background">
+  readonly env: ScheduledTaskDeps["env"] & Pick<Env, "background" | "schedulerLimits">
   /** The runner's own run log. Widened from the registry's read-only slice, which it satisfies. */
   readonly scheduledTasks: ScheduledTaskRepository
   /**
@@ -44,12 +44,14 @@ export function schedulerFromEnv(deps: SchedulerFromEnvDeps): Scheduler {
       lock,
       cutoffAgeMs: deps.env.retention.taskRunsDays * 24 * 60 * 60 * 1000,
       batchSize: deps.env.scheduler.sweepBatchSize,
+      minGapMs: deps.env.janitorIntervalMinutes * 60_000,
       now: deps.now,
     }),
     jitterFraction: deps.env.scheduler.jitterFraction,
     shutdownDrainMs: deps.env.background.shutdownDrainMs,
     interruptedBatchSize: deps.env.scheduler.sweepBatchSize,
     capacityRetryMs: deps.env.scheduler.localCapacityRetryMs,
+    maxRunMs: deps.env.schedulerLimits.taskMaxRunMinutes * 60_000,
     logger: deps.logger,
     now: deps.now,
     onTick: deps.onTick,

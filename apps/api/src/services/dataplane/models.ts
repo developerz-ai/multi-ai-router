@@ -89,16 +89,16 @@ export function reachableModels(
     if (isStandingBlock(liveStatus.get(account.id) ?? account.snapshot.status)) continue
     for (const model of listableModels(account.snapshot, models?.modelsOf(account.id) ?? [])) {
       const current = merged.get(model.id)
-      // First known answer wins and a known one beats an unknown one, per field — the rule
-      // `/v1/catalog` folds by (`catalog-listing.ts`): two accounts of one provider agree on a
-      // model's size, and where they differ one has been swept and the other has not.
+      // Sizes fold to the smallest known, as `/v1/catalog` does (`catalog-listing.ts` `fold`): a
+      // request may land on any account serving the name, so only the minimum is safe to plan by
+      // (13.15). A known number beats an unknown one.
       const reasoning = current?.reasoning ?? model.reasoning
       merged.set(model.id, {
         ...(reasoning === undefined ? {} : { reasoning }),
         owner: current?.owner ?? account.driver.provider,
         resolvedModel: mergeResolution(current?.resolvedModel ?? null, model.resolvedModel),
-        contextTokens: current?.contextTokens ?? model.contextTokens,
-        maxOutputTokens: current?.maxOutputTokens ?? model.maxOutputTokens,
+        contextTokens: smallest(current?.contextTokens, model.contextTokens),
+        maxOutputTokens: smallest(current?.maxOutputTokens, model.maxOutputTokens),
       })
     }
   }
@@ -162,4 +162,11 @@ export function reachableModel(
     contextTokens: listed?.contextTokens ?? described?.contextTokens ?? null,
     maxOutputTokens: listed?.maxOutputTokens ?? described?.maxOutputTokens ?? null,
   }
+}
+
+/** The smaller of two sizes, where an unknown (`null`) never wins over a known one. */
+function smallest(current: number | null | undefined, next: number | null): number | null {
+  if (current === undefined || current === null) return next
+  if (next === null) return current
+  return Math.min(current, next)
 }

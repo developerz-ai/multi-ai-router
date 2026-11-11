@@ -46,7 +46,14 @@ const AUTH_CODES = ["1000", "1001", "1002", "1003", "1004"]
  */
 const WINDOW_CODES = ["1310"]
 
-const INSUFFICIENT_BALANCE = /insufficient balance|balance is insufficient|account balance/i
+/**
+ * The wording backstop for a balance code z.ai did not send. The codes above are the verdict; this
+ * reads only the statuses a drained balance arrives on — never a `404`, where an upstream echoes the
+ * model name — and never a bare "account balance", which also merely *describes* one ("check your
+ * account balance"). Quoted echoes are stripped before any rule runs (sweep 101, 04.1).
+ */
+const INSUFFICIENT_BALANCE = /insufficient balance|balance is insufficient/i
+const BALANCE_STATUSES = [400, 402, 429]
 
 /**
  * z.ai reports a plan window's reset **only in the error message**, never in a header — the 429
@@ -130,11 +137,16 @@ export const zaiDriver: ProviderDriver = {
     parseRateLimit: parseZaiRateLimit,
     rules: [
       codeRule("credits-exhausted", "zai:balance-code", BALANCE_CODES),
-      messageRule("credits-exhausted", "zai:insufficient-balance", INSUFFICIENT_BALANCE),
+      messageRule("credits-exhausted", "zai:insufficient-balance", INSUFFICIENT_BALANCE, {
+        statuses: BALANCE_STATUSES,
+      }),
       codeRule("rate-limited", "zai:throttle-code", THROTTLE_CODES),
       codeRule("rate-limited", "zai:window-exhausted", WINDOW_CODES),
       codeRule("auth", "zai:auth-code", AUTH_CODES),
     ],
   }),
   quotaRead: zaiQuotaRead,
+  // The idle keepalive/probe's one minimal turn: the cheapest current model this provider serves.
+  // Provenance: carried from `scheduler/tasks/idle-account-probe.ts` IDLE_PROBE_MODELS (sweep 101).
+  idleProbeModel: "glm-4.6",
 }

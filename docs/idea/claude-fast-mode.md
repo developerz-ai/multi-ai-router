@@ -12,14 +12,29 @@ refresh and background credential keepalive. Fast inference reads the selected a
 `.credentials.json` and `.claude.json` under its metadata ownership fence, never HOME or another
 account directory. Credentials are read after concurrency admission so a queued request cannot reuse a stale
 pre-queue snapshot. The access token is used only for the fixed Anthropic HTTPS endpoint.
+
+The fenced read spawns the `config-owner` guardian plus `/bin/cat` (measured 2.9 ms p50 / 13.6 ms
+max), so it is not paid per request (`claude-fast/credential-cache.ts`). A warm request does one
+`stat` of `.credentials.json` and reuses the last fenced read while the file's `(ino, size,
+mtimeNs)` is unchanged. A rewrite (the SDK fallback's refresh, a re-login), a different config
+directory, an expiry inside the CLI's refresh lead, a `401`/`403` answer, or a revoked Account
+(`AccountCliOwnership.isRevoked`) forces the fenced read again; a revoked Account is refused before
+any read. The token stays in process memory and is never logged.
 Client authentication headers are discarded; redirects are refused and provider error prose
 is replaced with safe router-authored messages.
 
 Missing identity, missing credentials, expiry within the CLI's five-minute refresh lead,
 unresolved model aliases, or an unknown native wire version cause SDK fallback **before** HTTP
 inference starts. SDK fallback answers that request; the following warm request can be direct.
-There is no SDK retry after direct inference begins. Normal router failover remains responsible
-for upstream failures and never retries after response bytes reach the client.
+A request-preparation failure (an uncalibrated profile, a missing checksum) is the same
+pre-inference `profile` fallback, logged once with its error class. There is no SDK retry after
+direct inference begins. A transport failure (DNS, TLS, reset) throws `FastTransportError`: the
+client sees the router's sentence, the warn line carries only the error name or errno code, and
+normal router failover handles it. Failover never retries after response bytes reach the client.
+
+Every fallback calls `onFallback(reason, accountId)` (for the `claude_fast_fallback_total{reason}`
+counter) and warns **once per Account and reason**. An Account whose `.claude.json` lacks its
+identity, or whose alias never resolves, falls back on every request, and debug logs alone hid it.
 
 The calibrated profile is CLI `2.1.319`, SDK `0.3.319`, Bun `1.4.4`. A custom CLI override,
 a different Bun version or SDK manifest, or a binary SHA-256 differing from the captured Linux x64
@@ -133,6 +148,28 @@ client's fields):
   schema under properties, items, combinators, `$defs`/`definitions` and `additionalProperties`).
   It is merged into any existing `output_config`, and sent with `tools: []` and no `tool_choice`.
   The answer is ordinary text, which the openai-chat renderer returns as `message.content`.
+- The schema is first reduced to the subset Anthropic's native structured output compiles
+  (`translate/shared/anthropic-output-schema.ts`, the subset Anthropic's own SDKs send). Unsupported
+  keywords (numeric and string-length bounds, `maxItems`, `minItems` above 1, `uniqueItems`,
+  `pattern`, tuple, conditional and dependent keywords, unsupported `format`s) are removed and
+  restated in the node's `description`, so the model still reads the bound. `oneOf` travels as
+  `anyOf`. Each restated constraint is reported as a translation drop. The client validates against
+  its own full schema. A schema too deep or too large to reduce stays on the adapted tool.
+- Native is an optimisation, never a requirement, so `native-schema.ts` then checks the **reduced**
+  schema and errs towards the tool. The schema rides the tool when an object node is left open,
+  when a `$ref` is recursive, remote or dangling, or when it exceeds the complexity budget:
+  Anthropic's published 24 optional and 16 union-typed properties, plus a 200-node ceiling of our
+  own. Prod 2026-11-09…10 (101 finding 10.4): 13 × `400 … 'maxItems' is not supported` in 0.2 s
+  (now reduced and served natively), and 46 × `Schema is too complex.` plus 2 × `Grammar
+  compilation timed out`, each after a ~180 s compile that held the client.
+- A native request waits at most `CLAUDE_FAST_NATIVE_SCHEMA_TIMEOUT_SECONDS` (default 20 s) for
+  response headers, since Anthropic compiles the schema before it answers. On that timeout, or on a
+  `400` naming the schema (`Schema is too complex`, `Grammar compilation …`,
+  `output_config.format…`), the request is re-sent **once** on the adapted tool, carrying the
+  client's original schema. It is the same
+  Account and slot, and no byte has reached the client yet. One `UsageRecord`, one warn line
+  (`header-timeout` or `schema-rejected`). The schema's hash is remembered in process (bounded,
+  oldest out), so a repeat goes straight to the tool. Any other `400` is relayed as before.
 - Any other structured-output schema stays the adapted forced tool from the first bullet. That
   includes `json_object`, whose schema is a bare `{type:"object"}`. Anthropic refuses such a
   schema natively: a local 2.55.0 router against a real subscription (claude-opus-5-5, 2026-11-09)

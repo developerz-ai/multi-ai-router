@@ -309,6 +309,13 @@
       "when": 1794057396593,
       "tag": "0043_fantastic_norrin_radd",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794371075598,
+      "tag": "0044_index_hygiene",
+      "breakpoints": true
     }
   ]
 }

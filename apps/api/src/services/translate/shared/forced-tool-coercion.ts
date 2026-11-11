@@ -1,5 +1,6 @@
 import { encodeSseEvent } from "../sse/emit"
 import { createSseParser, type SseFrame } from "../sse/parse"
+import { isRecord } from "./is-record"
 
 /**
  * A forced tool the vendor answered in text: the answer, put where the request said it would be.
@@ -25,14 +26,14 @@ export type NewToolUseId = () => string
 
 /** The tool a request forces, or `null` when it forces none or leaves the choice ambiguous. */
 export function forcedToolFromRequest(body: unknown): string | null {
-  if (!isObject(body)) return null
+  if (!isRecord(body)) return null
   const choice = body.tool_choice
-  if (!isObject(choice)) return null
+  if (!isRecord(choice)) return null
   if (choice.type === "tool") return typeof choice.name === "string" ? choice.name : null
   if (choice.type !== "any") return null
   const tools = body.tools
   if (!Array.isArray(tools) || tools.length !== 1) return null
-  const name = isObject(tools[0]) ? tools[0].name : undefined
+  const name = isRecord(tools[0]) ? tools[0].name : undefined
   return typeof name === "string" && name.length > 0 ? name : null
 }
 
@@ -46,7 +47,7 @@ export function jsonObjectFromText(text: string): Record<string, unknown> | null
   if (!candidate.startsWith("{")) return null
   try {
     const parsed: unknown = JSON.parse(candidate)
-    return isObject(parsed) ? parsed : null
+    return isRecord(parsed) ? parsed : null
   } catch {
     return null
   }
@@ -60,11 +61,11 @@ export function coerceMessage(
   tool: string,
   newId: NewToolUseId,
 ): Record<string, unknown> | null {
-  if (!isObject(message) || !Array.isArray(message.content)) return null
+  if (!isRecord(message) || !Array.isArray(message.content)) return null
   if (message.stop_reason === "max_tokens") return null
   let text = ""
   for (const block of message.content) {
-    if (!isObject(block)) return null
+    if (!isRecord(block)) return null
     if (block.type === "tool_use") return null
     if (block.type === "text" && typeof block.text === "string") text += block.text
   }
@@ -108,15 +109,15 @@ export function coerceStream(
     else if (type === "message_stop") stopped = true
     else if (type === "content_block_start") {
       const block = payload.content_block
-      if (isObject(block) && block.type === "tool_use") return null
-    } else if (type === "content_block_delta" && isObject(payload.delta)) {
+      if (isRecord(block) && block.type === "tool_use") return null
+    } else if (type === "content_block_delta" && isRecord(payload.delta)) {
       if (payload.delta.type === "text_delta" && typeof payload.delta.text === "string") {
         text += payload.delta.text
       }
     }
   }
   if (start === null || delta === null || !stopped) return null
-  const inner = isObject(delta.delta) ? delta.delta : {}
+  const inner = isRecord(delta.delta) ? delta.delta : {}
   if (inner.stop_reason === "max_tokens") return null
   const input = jsonObjectFromText(text)
   if (input === null) return null
@@ -150,12 +151,8 @@ function withoutType(payload: Record<string, unknown>): Record<string, unknown> 
 function parse(data: string): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(data)
-    return isObject(value) ? value : null
+    return isRecord(value) ? value : null
   } catch {
     return null
   }
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

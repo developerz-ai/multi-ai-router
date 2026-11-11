@@ -24,7 +24,11 @@ afterEach(() => {
 })
 
 function serve(responses: Parameters<typeof harness>[0]["responses"]): string {
-  const { app } = harness({ responses, serverIdleTimeoutSeconds: IDLE_SECONDS })
+  return serveWithUsage(responses).base
+}
+
+function serveWithUsage(responses: Parameters<typeof harness>[0]["responses"]) {
+  const { app, usage } = harness({ responses, serverIdleTimeoutSeconds: IDLE_SECONDS })
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -32,7 +36,7 @@ function serve(responses: Parameters<typeof harness>[0]["responses"]): string {
     fetch: app.fetch,
   })
   servers.push(server)
-  return `http://127.0.0.1:${server.port}`
+  return { base: `http://127.0.0.1:${server.port}`, usage }
 }
 
 const ANSWER = { id: "msg_1", type: "message", content: [{ type: "text", text: "late" }] }
@@ -148,6 +152,48 @@ describe("the server's idle clock still governs everything else", () => {
       )
       expect(outcome).toBe("closed")
       expect(Date.now() - started).toBeLessThan(HOLD_MS * 2)
+    },
+    TEST_TIMEOUT_MS,
+  )
+})
+
+// 12.1 (prod 2026-11, zai passthrough, 512 in 14 d): an event stream's clock was restored the
+// moment its headers were returned, but Bun writes no status line before the first body byte, so an
+// upstream that thought longer than the listener's idle timeout was cut with *nothing* written —
+// Envoy logged `502 UPE`, the router `client_cancelled` with no tokens.
+describe("an event stream stays off the idle clock until its first byte", () => {
+  test(
+    "an upstream silent past the idle timeout before its first event still reaches the client",
+    async () => {
+      const events = [
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-opus-5","usage":{"input_tokens":3,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"late"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ].join("")
+      let sent = false
+      const { base, usage } = serveWithUsage([
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              async pull(controller) {
+                if (sent) return controller.close()
+                await Bun.sleep(HOLD_MS)
+                controller.enqueue(new TextEncoder().encode(events))
+                sent = true
+              },
+            }),
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          ),
+      ])
+      const body = JSON.stringify({ ...JSON.parse(MESSAGE), stream: true })
+      const response = await fetch(`${base}/v1/messages`, post(body, bearer()))
+      expect(response.status).toBe(200)
+      expect(await response.text()).toContain("message_stop")
+      await Bun.sleep(50)
+      expect(usage.rows.map((row) => row.outcome)).toEqual(["success"])
     },
     TEST_TIMEOUT_MS,
   )

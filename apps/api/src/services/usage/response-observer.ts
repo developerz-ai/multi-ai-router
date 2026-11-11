@@ -1,3 +1,4 @@
+import { responseFrameSkip } from "./response-frame-skip"
 import { createResponseFraming } from "./response-framing"
 import type {
   ResponseObservationFacts,
@@ -20,8 +21,17 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
   /** The first driver-supplied classification, kept separately so `relay-terminal` can read its signal. */
   let provider: ResponseObservationFacts["provider"] = null
   let finished = false
-  const snapshot = (): ResponseObservationFacts =>
-    Object.freeze({
+  // The relay reads facts after every chunk; they change only when a frame lands, so the frozen
+  // copy is rebuilt only then.
+  let cached: ResponseObservationFacts | null = null
+  let revision = 0
+  /** Every state change goes through here: the snapshot is rebuilt and the revision moves. */
+  const changed = (): void => {
+    cached = null
+    revision += 1
+  }
+  const snapshot = (): ResponseObservationFacts => {
+    cached ??= Object.freeze({
       counts: Object.freeze({ ...counts }),
       usageInvalid,
       evidenceUnavailable,
@@ -30,16 +40,23 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
       incompleteReason,
       provider: provider === null ? null : Object.freeze({ ...provider }),
     })
+    return cached
+  }
   const framing = createResponseFraming({
     contentType: spec.contentType,
     maximumBytes: spec.maximumObservationBytes,
+    skip: responseFrameSkip(spec),
     unavailable: () => {
+      changed()
       evidenceUnavailable = true
     },
     done: () => {
+      changed()
       if (spec.dialect === "openai-chat" && terminal === "none") terminal = "completed"
     },
     payload(body, event) {
+      changed()
+      spec.onPayload?.(body, event)
       if (spec.operation !== "count-tokens") {
         const reading = readResponseUsage(spec.dialect, body, event, counts)
         counts = reading.counts
@@ -81,8 +98,18 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
       if (!finished) framing.observe(chunk)
     },
     snapshot,
+    get terminal() {
+      return terminal
+    },
+    get failure() {
+      return failure
+    },
+    get revision() {
+      return revision
+    },
     finish() {
       if (!finished) {
+        changed()
         framing.finish()
         finished = true
         const sse = spec.contentType?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"

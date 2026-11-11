@@ -40,6 +40,8 @@ export interface UsageRecorderFromEnvDeps {
   readonly env: {
     readonly logReasonMaxChars: number
     readonly background?: { readonly shutdownDrainMs: number }
+    /** `USAGE_RETRY_BUFFER_MAX`: records a transient outage may hold for retry. */
+    readonly usageRetryBufferMax?: number
     readonly dataPlane: Pick<
       Env["dataPlane"],
       "usageQueueMax" | "usageBatchSize" | "usageFlushIntervalMs" | "usageLogReportIntervalMs"
@@ -114,10 +116,19 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
     })
   })
   const reportDiscard = throttle<WriteFailure>((batches, latest) => {
+    // Message kept verbatim from before bisecting existed: operators' log queries match on it.
     log.error("usage batch write failed twice — records lost, traffic unaffected", {
       batches,
       records: latest.size,
       reason: latest.reason,
+    })
+  })
+  const retryBufferMax = deps.env.usageRetryBufferMax
+  const reportOverflow = throttle<number>((overflows, records) => {
+    log.error("usage retry buffer full during a database outage — oldest records dropped", {
+      overflows,
+      records,
+      retryBufferMax,
     })
   })
 
@@ -148,12 +159,15 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
           reportStampFailure({ reason: reasonOf(error), size: used.length })
         }
       },
+      isTransient: isTransientDatabaseError,
     },
     {
       maxQueued: usageQueueMax,
       batchSize: usageBatchSize,
       flushIntervalMs: usageFlushIntervalMs,
       shutdownDrainMs: deps.env.background?.shutdownDrainMs ?? 15_000,
+      ...(retryBufferMax === undefined ? {} : { retryBufferMax }),
+      onRetryOverflow: (records) => reportOverflow(records),
       onShed: () => reportShed(undefined),
       onWriteError: ({ error, batch, terminals, discarded }) => {
         const failure = { reason: reasonOf(error), size: batch.length + terminals.length }
@@ -167,6 +181,43 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
       ...(deps.onRecord === undefined ? {} : { onRecord: deps.onRecord }),
     },
   )
+}
+
+/**
+ * SQLSTATE classes that say the database, not the batch, is the problem: connection exceptions
+ * (`08`), operator intervention such as a shutdown or failover (`57P`), insufficient resources
+ * (`53`), and the two concurrency aborts a retry resolves (`40001`, `40P01`).
+ */
+const TRANSIENT_SQLSTATE = /^(08|57P|53)|^40001$|^40P01$/
+/** postgres.js / Node connection-level codes, and the DNS failure a restarting pod produced. */
+const TRANSIENT_CODES = new Set([
+  "CONNECTION_CLOSED",
+  "CONNECTION_ENDED",
+  "CONNECTION_DESTROYED",
+  "CONNECT_TIMEOUT",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+])
+
+/**
+ * Walks the cause chain (an ORM wraps the driver error one `cause` down) for a code that marks the
+ * refusal as the database being unavailable. Anything unrecognised is treated as possibly permanent.
+ */
+export function isTransientDatabaseError(error: unknown): boolean {
+  let current: unknown = error
+  for (let depth = 0; depth < 8 && typeof current === "object" && current !== null; depth += 1) {
+    const code = (current as { code?: unknown }).code
+    if (typeof code === "string" && (TRANSIENT_CODES.has(code) || TRANSIENT_SQLSTATE.test(code)))
+      return true
+    const errno = (current as { errno?: unknown }).errno
+    if (typeof errno === "string" && TRANSIENT_CODES.has(errno)) return true
+    current = (current as { cause?: unknown }).cause
+  }
+  return false
 }
 
 interface WriteFailure {

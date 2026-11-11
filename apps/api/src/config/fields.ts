@@ -187,6 +187,24 @@ export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
   ["ACCOUNT_RECHECK_COOLDOWN_SECONDS", "no cooldown between manual Re-check now probes"],
   ["ACCOUNT_TEST_NOW_COOLDOWN_SECONDS", "no cooldown between manual Test now presses"],
   ["KEY_CACHE_NEGATIVE_TTL_SECONDS", "do not cache a failed key lookup at all"],
+  [
+    "KEY_CACHE_STALE_ON_ERROR_SECONDS",
+    "never serve an expired key on a store failure — the request gets 503 + Retry-After instead",
+  ],
+  ["DB_STATEMENT_TIMEOUT_MS", "let a statement run for as long as it takes (Postgres' own off)"],
+  [
+    "ACCOUNT_LAST_USED_STAMP_INTERVAL_SECONDS",
+    "stamp an account's last-used time on every request that reaches it",
+  ],
+  ["DB_LOCK_TIMEOUT_MS", "wait for a lock for as long as it takes (Postgres' own off)"],
+  [
+    "DB_IDLE_IN_TRANSACTION_TIMEOUT_MS",
+    "never end a session left idle inside a transaction (Postgres' own off)",
+  ],
+  [
+    "MODEL_CATALOG_REFRESH_STARTUP_DELAY_SECONDS",
+    "list every account's models at boot instead of after a delay",
+  ],
   ["SESSION_CACHE_NEGATIVE_TTL_SECONDS", "do not cache an absent session binding at all"],
   ["SCHEDULER_JITTER_FRACTION", "run every task exactly on its interval, unspread"],
   [
@@ -199,6 +217,12 @@ export const ZERO_IS_LEGAL: ReadonlyMap<string, string> = new Map([
   ],
   ["CLAUDE_SDK_USAGE_GAUGE_MIN_INTERVAL_SECONDS", "ask the usage gauge on every subscription turn"],
   ["USAGE_REPORT_HOUR_UTC", "generate the weekly report at midnight UTC on its weekday"],
+  ["HEALTH_CLI_PROBE_CACHE_MS", "resolve the claude binary on every /readyz poll"],
+  ["USAGE_SUMMARY_CACHE_SECONDS", "read every usage summary from Postgres, uncached"],
+  [
+    "RECOVERY_PROBE_WAIT_MS",
+    "never ride a recovery probe already on the wire — the request wait alone decides",
+  ],
   [
     "RECOVERY_REQUEST_WAIT_MS",
     "never hold a request for a recovery permit — the router's own recovery hold answers 429 at once",

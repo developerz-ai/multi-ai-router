@@ -74,7 +74,16 @@ function fakeRepo(
     windows,
     upserts,
     deps: {
-      list: async () => accounts,
+      // Summaries only — the floor must work with rows that carry no credential fields (07.11).
+      listSummaries: async () =>
+        accounts.map(({ id, label, provider, status, lastUsedAt, createdAt }) => ({
+          id,
+          label,
+          provider,
+          status,
+          lastUsedAt,
+          createdAt,
+        })),
       listQuotaWindows: async (ids) => windows.filter((w) => ids.includes(w.accountId)),
       clearObservedQuotaWindow: async ({ accountId, window: kind, expected, now }) => {
         const existing = windows.find((w) => w.accountId === accountId && w.window === kind)

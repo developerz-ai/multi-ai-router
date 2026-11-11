@@ -7,12 +7,7 @@ import type {
 } from "./anthropic"
 import { type DropSink, IGNORE_DROPS } from "./drops"
 import type { OpenAiChatTool, OpenAiChatToolChoice } from "./openai-chat"
-import type {
-  OpenAiResponsesTool,
-  OpenAiResponsesToolChoice,
-  ParsedOpenAiResponsesTool,
-  ParsedOpenAiResponsesToolChoice,
-} from "./openai-responses"
+import type { OpenAiResponsesTool, OpenAiResponsesToolChoice } from "./openai-responses"
 import { rejectField } from "./reject"
 
 /**
@@ -23,8 +18,9 @@ import { rejectField } from "./reject"
  * `{type:"function", name, parameters}` — so almost all of the work here is the one shape
  * difference that is *not* cosmetic: Anthropic's `tool_use.input` is a **JSON object** and OpenAI's
  * `tool_calls[].function.arguments` is a **JSON string**. Every crossing parses or serializes, and
- * a string that does not decode to an object is a `400`, never an empty call handed to a model
- * that will act on it (docs/idea/06-protocol-translation.md#tool-and-function-calling).
+ * a string that does not decode to an object is a `400` on a request, and a translation failure on
+ * an upstream answer — never an empty call handed to a client or model that will act on it
+ * (docs/idea/06-protocol-translation.md#tool-and-function-calling).
  *
  * **openai-responses converts through the openai-chat shape**, in both directions and by design: the
  * two differ only by one level of nesting, and giving Responses its own path to Anthropic would be a
@@ -47,6 +43,7 @@ interface ChatToolLike {
         readonly name: string
         readonly description?: string | undefined
         readonly parameters?: Record<string, unknown> | undefined
+        readonly strict?: boolean | null | undefined
       }
     | undefined
 }
@@ -69,7 +66,7 @@ function emptyObjectSchema(): Record<string, unknown> {
   return { type: "object", properties: {} }
 }
 
-function assertObjectSchema(schema: Record<string, unknown>, field: string): void {
+export function assertObjectSchema(schema: Record<string, unknown>, field: string): void {
   const type = schema.type
   if (type !== undefined && type !== "object") {
     rejectField(field, 'must be a JSON Schema of `type: "object"`')
@@ -166,38 +163,6 @@ export function toolChoiceToAnthropic(choice: ChatToolChoiceLike): AnthropicTool
 }
 
 /**
- * A flat Responses tool → the nested openai-chat shape every other conversion here reads.
- *
- * A built-in (`web_search_preview`, `file_search`, `code_interpreter`, …) is a capability of
- * OpenAI's own inference rather than a function the client can execute, so nothing on the other side
- * of any seam runs it — the same call `toolsToOpenAiChat` makes about an Anthropic server tool.
- *
- * @throws TranslationError (400) naming the tool that has no counterpart.
- */
-export function toolsFromOpenAiResponses(
-  tools: readonly ParsedOpenAiResponsesTool[],
-): OpenAiChatTool[] {
-  return tools.map((tool, index) => {
-    const at = `tools[${index}]`
-    const type = tool.type ?? "function"
-    const name = tool.name
-    if (type !== "function" || name === undefined || name.length === 0) {
-      rejectField(
-        at,
-        `declares tool type \`${type}\`, a built-in served inside openai-responses, which has no counterpart on another dialect`,
-      )
-    }
-
-    const parameters = tool.parameters
-    if (parameters !== undefined) assertObjectSchema(parameters, `${at}.parameters`)
-    return {
-      type: "function",
-      function: { name, description: tool.description, parameters: parameters ?? {} },
-    }
-  })
-}
-
-/**
  * The nested openai-chat shape → a flat Responses tool.
  *
  * @throws TranslationError (400) naming a tool that declares no `function` at all — an openai-chat
@@ -221,22 +186,9 @@ export function toolsToOpenAiResponses(tools: readonly ChatToolLike[]): OpenAiRe
       name: fn.name,
       description: fn.description,
       parameters: parameters === undefined ? emptyObjectSchema() : parameters,
+      ...(typeof fn.strict === "boolean" ? { strict: fn.strict } : {}),
     }
   })
-}
-
-export function toolChoiceFromOpenAiResponses(
-  choice: ParsedOpenAiResponsesToolChoice,
-): OpenAiChatToolChoice {
-  if (typeof choice === "string") return choice
-  const name = choice.name
-  if (choice.type !== "function" || name === undefined) {
-    rejectField(
-      "tool_choice.type",
-      `\`${choice.type}\` names a built-in served inside openai-responses, which has no counterpart on another dialect`,
-    )
-  }
-  return { type: "function", function: { name } }
 }
 
 export function toolChoiceToOpenAiResponses(choice: ChatToolChoiceLike): OpenAiResponsesToolChoice {
@@ -272,4 +224,23 @@ export function inputFromArguments(
   const parsed = jsonObject.safeParse(decoded)
   if (!parsed.success) rejectField(field, NOT_AN_OBJECT)
   return parsed.data
+}
+
+/**
+ * An upstream answer's `arguments` → `input`, or null when they do not decode to an object.
+ *
+ * The response-side twin of {@link inputFromArguments}: the upstream already answered, so there is
+ * no `400` to give; the caller fails the translation instead (`undecodableToolArguments`). Absent
+ * or blank is a no-argument call, `{}`, exactly as on the request side.
+ */
+export function upstreamToolInput(raw: string | null | undefined): Record<string, unknown> | null {
+  if (raw === null || raw === undefined || raw.trim().length === 0) return {}
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const parsed = jsonObject.safeParse(decoded)
+  return parsed.success && !Array.isArray(decoded) ? parsed.data : null
 }

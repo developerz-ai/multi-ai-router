@@ -2,12 +2,14 @@ import { type ParsedAnthropicMessage, UNSUPPORTED_BLOCK } from "./anthropic"
 import { dropBlock } from "./anthropic-blocks"
 import { BLOCK_JOIN } from "./anthropic-turns"
 import type { DropSink } from "./drops"
+import { isRecord } from "./is-record"
 
 /**
  * Anthropic's `system` as a **mid-conversation role**: per-turn instructions, and — beta —
- * `tool_addition` / `tool_removal` blocks. Both OpenAI dialects state the same thing as a
- * `developer` turn, so each translator emits one in the same position; only the *top-level*
- * `system` field becomes the system prompt / `instructions`.
+ * `tool_addition` / `tool_removal` blocks. Each OpenAI translator emits one turn in the same
+ * position — `developer` on openai-responses, `system` on openai-chat, whose compatible vendors
+ * refuse a mid-list `developer` — and only the *top-level* `system` field becomes the system prompt
+ * / `instructions`.
  *
  * The Agent-SDK path reads the same role (`providers/claude-sdk/request.ts`) and renders tool
  * changes with the same words, so one body says the same thing to the model whichever account
@@ -19,16 +21,20 @@ import type { DropSink } from "./drops"
  */
 
 /**
- * A `system` turn with `clear_at: "next_user_message"` that a later user turn has followed. The API
- * keeps it in the array but no longer shows it to the model, so the translators skip it.
+ * Which `system` turns are cleared: `clear_at: "next_user_message"` with a later user turn. The API
+ * keeps such a turn in the array but no longer shows it to the model, so the translators skip it.
+ * The last user turn is found once, so a transcript with many system turns stays linear.
  */
-export function isClearedSystemTurn(
+export function clearedSystemTurns(
   messages: readonly ParsedAnthropicMessage[],
-  index: number,
-): boolean {
-  const message = messages[index]
-  if (message?.role !== "system" || message.clear_at !== "next_user_message") return false
-  return messages.slice(index + 1).some((later) => later.role === "user")
+): (index: number) => boolean {
+  const lastUser = messages.findLastIndex((message) => message.role === "user")
+  return (index) => {
+    const message = messages[index]
+    return (
+      message?.role === "system" && message.clear_at === "next_user_message" && index < lastUser
+    )
+  }
 }
 
 /** The turn's text; empty when nothing in it renders. */
@@ -70,8 +76,4 @@ function toolName(tool: unknown): string {
     return tool.definition.name
   }
   return typeof tool.server_name === "string" ? `set from ${tool.server_name}` : "(unnamed)"
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

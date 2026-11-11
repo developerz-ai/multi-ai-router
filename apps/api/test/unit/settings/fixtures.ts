@@ -112,10 +112,27 @@ export type TaskRuns = Partial<Record<ScheduledTaskName, readonly ScheduledTaskR
 export function memoryTasks(runs: TaskRuns = {}) {
   const newest = (rows: readonly ScheduledTaskRunRow[]): ScheduledTaskRunRow | undefined =>
     [...rows].sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())[0]
+  let calls = 0
   return {
-    lastRun: async (task: ScheduledTaskName) => newest(runs[task] ?? []),
-    lastSuccess: async (task: ScheduledTaskName) =>
-      newest((runs[task] ?? []).filter((row) => row.outcome === "success")),
+    /** Repository calls the tasks screen made — one, whatever the number of tasks (01.11). */
+    get calls() {
+      return calls
+    },
+    latestPerTask: async () => {
+      calls++
+      const lastRun = new Map<ScheduledTaskName, ScheduledTaskRunRow>()
+      const lastSuccess = new Map<ScheduledTaskName, ScheduledTaskRunRow>()
+      for (const [task, rows] of Object.entries(runs) as [
+        ScheduledTaskName,
+        ScheduledTaskRunRow[],
+      ][]) {
+        const run = newest(rows)
+        if (run !== undefined) lastRun.set(task, run)
+        const success = newest(rows.filter((row) => row.outcome === "success"))
+        if (success !== undefined) lastSuccess.set(task, success)
+      }
+      return { lastRun, lastSuccess }
+    },
   }
 }
 
@@ -159,9 +176,13 @@ export function event(options: {
 export function memoryAuditLog(rows: readonly AuditEventRow[]) {
   const newestFirst = [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
   return {
-    list: async (limit: number) => newestFirst.slice(0, limit),
-    listForSubject: async (subjectId: string, limit: number) =>
-      newestFirst.filter((row) => row.subjectId === subjectId).slice(0, limit),
+    // `kind` filters before `limit`, as the repository's SQL predicate does (01.10).
+    list: async (limit: number, kind?: string) =>
+      newestFirst.filter((row) => kind === undefined || row.kind === kind).slice(0, limit),
+    listForSubject: async (subjectId: string, limit: number, kind?: string) =>
+      newestFirst
+        .filter((row) => row.subjectId === subjectId && (kind === undefined || row.kind === kind))
+        .slice(0, limit),
   }
 }
 
@@ -203,15 +224,17 @@ export interface Harness {
   readonly service: SettingsService
   readonly prices: MemoryPrices
   readonly audit: ReturnType<typeof recordingAudit>
+  readonly tasks: ReturnType<typeof memoryTasks>
 }
 
 export function harness(options: HarnessOptions = {}): Harness {
   const prices = memoryPrices(options.prices)
   const audit = recordingAudit(options.onAudit)
+  const tasks = memoryTasks(options.runs)
   const service = createSettingsService({
     prices,
     priceAccounts: options.priceAccounts,
-    scheduledTasks: memoryTasks(options.runs),
+    scheduledTasks: tasks,
     auditEvents: memoryAuditLog(options.auditLog ?? []),
     audit,
     usageReports: { lastDeliveredAt: async () => options.lastDeliveredAt ?? null },
@@ -229,7 +252,7 @@ export function harness(options: HarnessOptions = {}): Harness {
     now: () => options.now ?? NOW,
     ...(options.onPricesChanged === undefined ? {} : { onPricesChanged: options.onPricesChanged }),
   })
-  return { service, prices, audit }
+  return { service, prices, audit, tasks }
 }
 
 /** Flushes the microtask queue far enough that a promise blocked on nothing would have settled. */

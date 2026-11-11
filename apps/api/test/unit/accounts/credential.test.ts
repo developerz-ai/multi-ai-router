@@ -80,7 +80,7 @@ function serviceOf(views: readonly AccountView[]): AccountsService {
     create: unreachable,
     update: unreachable,
     disable: unreachable,
-    remove: unreachable,
+    remove: async (id) => ok({ id, deleted: true as const, cleanup: "removed" as const }),
   }
 }
 
@@ -518,4 +518,15 @@ describe("login lifetime on an account read", () => {
     }).service.get(SUB_ID)
     expect(result.ok && result.value.credential?.renewsAtSource).toBe("estimated")
   })
+})
+
+// Plan 101, 03.9: a deleted account's cached metadata outlived it.
+test("a committed delete drops the account's cached metadata", async () => {
+  const h = harness([view()], () => LIVE)
+  await h.service.get(view().id)
+  await h.service.get(view().id)
+  expect(h.reads).toHaveLength(1)
+  await h.service.remove(view().id)
+  await h.service.get(view().id)
+  expect(h.reads).toHaveLength(2)
 })

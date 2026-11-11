@@ -45,6 +45,13 @@ export interface RecoveryRepository {
     accountId: string
     generationCandidate: string
     cooldownMs: number
+    /**
+     * Publish the new generation already closed (`cancelled`, no admission probe), as
+     * `publishAccountRecovery` does after a login. For a re-check of an account nothing holds out
+     * of rotation: a `pending` generation would gate every request but one behind the probe
+     * permit. The caller decides liveness; the cooldown and the version bumps still apply.
+     */
+    settled?: boolean
     negativeAuthObservation?: {
       lifecycleVersion: number
       authMaterial: string | null

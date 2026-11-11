@@ -76,6 +76,11 @@ export function evaluateCandidate(
   // permanent fact; it invalidates the binding and names a client change.
   const resolution = resolveModel(account, model)
   if (!resolution.supported) return drop({ reason: "model-unsupported" })
+  // The provider itself said it does not serve this name; trust that over the declared list
+  // until the learned refusal lapses.
+  const refusedUntil = account.refusedModels?.get(resolution.upstreamModel)
+  if (refusedUntil !== undefined && refusedUntil.getTime() > now.getTime())
+    return drop({ reason: "model-unsupported" })
 
   const threshold = options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD
   const spent = findSpentWindow(account, now, threshold)

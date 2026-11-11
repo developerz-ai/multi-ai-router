@@ -24,8 +24,12 @@ export interface RequestProgress {
   readonly startedAt: Date
   readonly requestStarted: number
   bodyReadMs: number
+  /** Time asleep waiting out the router's own recovery hold (`recovery-wait.ts`). */
+  recoveryWaitMs: number
   bodyReadWaitingSince?: number | undefined
   model: string | null
+  /** Whether the model resolved against the routing catalog, once selection has run. */
+  modelKnown?: boolean
   /** Names of the pools selection drew from, once it has run. */
   pools?: readonly string[]
 }
@@ -44,6 +48,7 @@ export function sampleOf(
     outcome,
     durationMs: Math.max(0, clock.elapsed() - progress.requestStarted),
     streamed: isStreamed,
+    ...(progress.modelKnown === undefined ? {} : { modelKnown: progress.modelKnown }),
   }
 }
 

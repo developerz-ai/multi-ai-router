@@ -46,9 +46,11 @@ export interface ScheduledTask {
   /** Nominal gap between runs. Config, never a constant (non-negotiable 11). Jittered by the runner. */
   readonly intervalMs: number
   /**
-   * How long after `start()` the **first** tick runs. Absent means one full jittered interval,
-   * which is the right default for every task that deletes or rolls up: nothing is waiting on it,
-   * and sweeping at boot is work a restart loop would repeat.
+   * How long after `start()` the **first** tick runs when the task has no persisted run. Absent
+   * means one full jittered interval, which is the right default for every task that deletes or
+   * rolls up: nothing is waiting on it, and sweeping at boot is work a restart loop would repeat.
+   * A task with a persisted last run resumes from it instead — the remainder of its interval, or,
+   * when already overdue, a random point inside the jitter band (`runner.ts` `scheduleFirst`).
    *
    * A task states this only when its output is something a reader can *see missing*. The model
    * catalog is the case: it populates a public listing, so an hour of `data: []` after a fresh

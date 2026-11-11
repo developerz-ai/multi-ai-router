@@ -206,7 +206,8 @@ describe("routing", () => {
     expect(upstream.calls[0]?.headers.get("authorization")).toBe("Bearer sk-embed")
   })
 
-  test("no in-scope account declaring the embedding model is a 503 naming the accounts", async () => {
+  // A 404 client change, not a 503 that invites retries (plan 101, 10.21).
+  test("no in-scope account declaring the embedding model is a 404 naming the accounts", async () => {
     const { app, upstream } = harness({
       accounts: [
         account("chat-only", {
@@ -222,7 +223,7 @@ describe("routing", () => {
     const res = await app.request("/v1/embeddings", post(EMBED, bearer()))
     const body = (await res.json()) as { error: { message: string } }
 
-    expect(res.status).toBe(503)
+    expect(res.status).toBe(404)
     expect(body.error.message).toContain("chat-only")
     expect(upstream.calls).toHaveLength(0)
   })

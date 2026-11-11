@@ -2,9 +2,9 @@
  * `/.well-known/openid-configuration` — the document the IdP publishes so verification
  * never needs a hardcoded endpoint per provider.
  *
- * The cache is in-memory and process-local: a reload picks up the new keys lazily on
- * the first verify after the cache is invalidated, and one replica's stale doc is
- * a stale doc for one request — no coordination needed.
+ * The cache is in-memory and process-local and lives `ttlMs` (`ADMIN_OIDC_DISCOVERY_TTL_SECONDS`):
+ * an IdP that moves an endpoint is picked up within the TTL, or at once after the caller
+ * `invalidate()`s on a failed token exchange — never only by a restart.
  *
  * Errors here are reason-coded: a fetch that fails and a parse that fails are
  * different problems and the rest of the stack should be able to tell them apart
@@ -43,8 +43,14 @@ export class OIDCDiscoveryError extends Error {
   }
 }
 
+/** `ADMIN_OIDC_DISCOVERY_TTL_SECONDS`' default, in milliseconds. */
+export const DEFAULT_DISCOVERY_TTL_MS = 86_400_000
+
 export interface DiscoveryService {
-  /** Force-fetches on miss, returns cached on hit. Throws {@link OIDCDiscoveryError} on failure. */
+  /**
+   * Fetches on a miss or once the cached doc is `ttlMs` old, else returns it. Concurrent misses
+   * share one fetch. Throws {@link OIDCDiscoveryError} on failure.
+   */
   load(): Promise<DiscoveryDocument>
   /** Drops the cached doc. The next `load()` will fetch again. */
   invalidate(): void
@@ -86,6 +92,7 @@ export function createDiscoveryService(
   issuerUrl: string,
   fetcher: typeof fetch | DiscoveryFetch = defaultDiscoveryFetch(),
   clock: () => number = () => Date.now(),
+  ttlMs: number = DEFAULT_DISCOVERY_TTL_MS,
 ): DiscoveryService {
   const fetcherNorm = asFetch(fetcher)
   /** Normalize: drop any trailing slash. The spec is permissive; we are not. */
@@ -93,50 +100,57 @@ export function createDiscoveryService(
   const url = `${issuer}/.well-known/openid-configuration`
 
   let cached: { doc: DiscoveryDocument; fetchedAtMs: number } | null = null
+  let pending: Promise<DiscoveryDocument> | null = null
+
+  async function fetchDocument(): Promise<DiscoveryDocument> {
+    const res = await fetcherNorm.fetch(url)
+    if (!res.ok) {
+      throw new OIDCDiscoveryError(
+        `discovery endpoint returned ${res.status} for ${url}`,
+        "fetch_failed",
+      )
+    }
+    let body: unknown
+    try {
+      body = await res.json()
+    } catch {
+      throw new OIDCDiscoveryError("discovery endpoint did not return JSON", "parse_failed")
+    }
+    const parsed = discoverySchema.safeParse(body)
+    if (!parsed.success) {
+      throw new OIDCDiscoveryError(
+        "discovery document is missing required fields",
+        "validation_failed",
+      )
+    }
+    // Verify the issuer is exactly the one we asked for. RFC 8414 says it must match.
+    if (parsed.data.issuer.replace(/\/+$/u, "") !== issuer) {
+      throw new OIDCDiscoveryError(
+        `discovery document issuer "${parsed.data.issuer}" does not match configured issuer`,
+        "validation_failed",
+      )
+    }
+    // PKCE is mandatory for the public client we run.
+    if (
+      !parsed.data.code_challenge_methods_supported?.includes("S256") &&
+      !parsed.data.code_challenge_methods_supported?.includes("s256")
+    ) {
+      throw new OIDCDiscoveryError(
+        "discovery document does not advertise PKCE S256 support",
+        "unsupported",
+      )
+    }
+    cached = { doc: parsed.data, fetchedAtMs: clock() }
+    return parsed.data
+  }
 
   return {
     async load(): Promise<DiscoveryDocument> {
-      if (cached !== null) return cached.doc
-
-      const res = await fetcherNorm.fetch(url)
-      if (!res.ok) {
-        throw new OIDCDiscoveryError(
-          `discovery endpoint returned ${res.status} for ${url}`,
-          "fetch_failed",
-        )
-      }
-      let body: unknown
-      try {
-        body = await res.json()
-      } catch {
-        throw new OIDCDiscoveryError("discovery endpoint did not return JSON", "parse_failed")
-      }
-      const parsed = discoverySchema.safeParse(body)
-      if (!parsed.success) {
-        throw new OIDCDiscoveryError(
-          "discovery document is missing required fields",
-          "validation_failed",
-        )
-      }
-      // Verify the issuer is exactly the one we asked for. RFC 8414 says it must match.
-      if (parsed.data.issuer.replace(/\/+$/u, "") !== issuer) {
-        throw new OIDCDiscoveryError(
-          `discovery document issuer "${parsed.data.issuer}" does not match configured issuer`,
-          "validation_failed",
-        )
-      }
-      // PKCE is mandatory for the public client we run.
-      if (
-        !parsed.data.code_challenge_methods_supported?.includes("S256") &&
-        !parsed.data.code_challenge_methods_supported?.includes("s256")
-      ) {
-        throw new OIDCDiscoveryError(
-          "discovery document does not advertise PKCE S256 support",
-          "unsupported",
-        )
-      }
-      cached = { doc: parsed.data, fetchedAtMs: clock() }
-      return parsed.data
+      if (cached !== null && clock() - cached.fetchedAtMs < ttlMs) return cached.doc
+      pending ??= fetchDocument().finally(() => {
+        pending = null
+      })
+      return pending
     },
     invalidate(): void {
       cached = null

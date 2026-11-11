@@ -61,7 +61,7 @@ export type SdkModelListUnavailable =
 
 export interface SdkModelListInput {
   readonly accountId: string
-  /** The isolated `CLAUDE_CONFIG_DIR`. Also the subprocess's working directory. */
+  /** The isolated `CLAUDE_CONFIG_DIR`. Never the working directory: that is the neutral workspace. */
   readonly configDir: string
   /** Bounds the whole thing — the wait for a slot, the spawn, and the handshake. Config, never a constant. */
   readonly timeoutMs: number

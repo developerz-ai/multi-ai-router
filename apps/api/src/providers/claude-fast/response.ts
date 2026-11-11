@@ -120,7 +120,20 @@ export async function sanitizeFastError(
   maxBytes: number,
   secrets: readonly string[] = [],
 ): Promise<Response> {
-  const text = sanitizeErrorBody(await readErrorBody(response, maxBytes), secrets)
+  return fastErrorResponse(response, await readFastErrorText(response, maxBytes, secrets))
+}
+
+/** The upstream's error prose, bounded and with the Account's token and credential shapes redacted. */
+export async function readFastErrorText(
+  response: Response,
+  maxBytes: number,
+  secrets: readonly string[] = [],
+): Promise<string> {
+  return sanitizeErrorBody(await readErrorBody(response, maxBytes), secrets)
+}
+
+/** The client-safe Response for an already-read, already-redacted upstream error. */
+export function fastErrorResponse(response: Response, text: string): Response {
   const failure = classifySdkFailure({ message: text, apiErrorStatus: response.status })
   const status =
     failure.classification.kind === "unknown" ? response.status : failure.classification.status
@@ -128,6 +141,18 @@ export async function sanitizeFastError(
   FAST_FAILURES.set(safe, failure)
   return safe
 }
+
+/**
+ * Anthropic refusing the native `output_config.format` schema itself rather than the request: the
+ * prod sentences of 101 finding 10.4 — `Schema is too complex.`, `Grammar compilation timed out`,
+ * and `output_config.format.schema: … is not supported`. Only these send the invoker back to the
+ * adapted structured-output tool; any other `400` is the request's own and is relayed.
+ */
+export function isNativeSchemaRejection(status: number, text: string): boolean {
+  return status === 400 && NATIVE_SCHEMA_REJECTION.test(text)
+}
+const NATIVE_SCHEMA_REJECTION =
+  /schema is too complex|grammar compilation|output_config\.format(?:\.schema)?\b/i
 
 /**
  * Keyed weakly by the sanitized Response the invoker returned, so nothing outlives the attempt that

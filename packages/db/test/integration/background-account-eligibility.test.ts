@@ -105,7 +105,7 @@ describe.skipIf(!url)("durable background account eligibility", () => {
           now: new Date(),
         })
       if (mutation === "path")
-        await repo.update(original.id, { configDir: `/scratch/${original.id}` })
+        await repo.update(original.id, { configDir: `/scratch/${original.id}` }, new Date())
       if (mutation === "delete") await repo.delete(original.id)
       expect(await repo.readEligibleBackgroundAccount(original.id, original)).toBeUndefined()
     }

@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { type ConnectService, OAUTH_CALLBACK_PATH } from "../../services/accounts"
 import type { AppEnv } from "../../types"
+import { callbackPage } from "./auth-callback-page"
 
 /**
  * The OAuth redirect capture: where a provider sends the operator's browser back with a `code`.
@@ -19,6 +20,7 @@ import type { AppEnv } from "../../types"
  * The one route in this directory that answers HTML: a human lands here, having been bounced out
  * of a provider's consent screen, and the console is not necessarily where they came from. The
  * page is self-contained — no asset, no script, no token, and no interpolation that is not escaped.
+ * One message quotes an Account label, which is operator input; `callbackPage` escapes it.
  */
 
 export interface OAuthCallbackRoutesDeps {
@@ -36,42 +38,9 @@ export function oauthCallbackRoutes(deps: OAuthCallbackRoutesDeps): Hono<AppEnv>
     })
 
     if (!result.ok)
-      return c.html(page("Not connected", result.failure.message), result.failure.status)
-    return c.html(page("Connected", "This account is authorized. You can close this tab."))
+      return c.html(callbackPage("Not connected", result.failure.message), result.failure.status)
+    return c.html(callbackPage("Connected", "This account is authorized. You can close this tab."))
   })
 
   return routes
-}
-
-function page(title: string, detail: string): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(title)}</title>
-<style>
-:root { color-scheme: dark light }
-body { font: 16px/1.6 system-ui, sans-serif; margin: 0; display: grid; place-items: center; min-height: 100vh }
-main { max-width: 34rem; padding: 2rem }
-h1 { font-size: 1.25rem; margin: 0 0 .5rem }
-p { margin: 0; opacity: .75 }
-</style>
-</head>
-<body><main><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p></main></body>
-</html>
-`
-}
-
-/**
- * Every message rendered here is router-authored, but one of them quotes an Account label, which
- * is operator input. Escaping is what makes that inert rather than a judgement call per message.
- */
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;")
 }

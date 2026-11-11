@@ -1,7 +1,7 @@
 import type { OpenAiChatToolCall } from "../shared/openai-chat"
 import type { TranslatedResponse } from "../shared/response"
 import { readResponsesBody } from "../shared/responses-read"
-import { fromResponsesCompletion } from "../shared/stop-reason"
+import { chatFinishFromResponses } from "../shared/stop-reason"
 import { responsesUsageToOpenAiChat } from "../shared/usage"
 
 /**
@@ -70,7 +70,7 @@ export function openAiResponsesToOpenAiChatResponse(
     })
   }
 
-  const stop = fromResponsesCompletion(read.status, read.incompleteReason, toolCalls.length > 0)
+  const stop = chatFinishFromResponses(read.status, read.incompleteReason, toolCalls.length > 0)
 
   return {
     body: {

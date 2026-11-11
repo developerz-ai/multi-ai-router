@@ -1,4 +1,59 @@
+import { z } from "zod"
 import type { AnthropicUsage } from "./usage"
+
+/**
+ * The Anthropic stream event schemas both `anthropic → OpenAI` stream translators read. Loose and
+ * forgiving by construction (`nullish().catch(null)`), so a field read for one pair never changes
+ * what the other accepts; one copy, so a fix to the reading lands in both pairs.
+ */
+export const messageStartSchema = z.looseObject({
+  message: z
+    .looseObject({
+      id: z.string().nullish().catch(null),
+      model: z.string().nullish().catch(null),
+      usage: z.unknown().optional(),
+    })
+    .nullish(),
+})
+
+export const blockStartSchema = z.looseObject({
+  index: z.number().int().nonnegative(),
+  content_block: z.looseObject({
+    type: z.string(),
+    text: z.string().nullish().catch(null),
+    id: z.string().nullish().catch(null),
+    name: z.string().nullish().catch(null),
+    input: z.unknown().optional(),
+  }),
+})
+
+export const blockDeltaSchema = z.looseObject({
+  index: z.number().int().nonnegative(),
+  delta: z.looseObject({
+    type: z.string(),
+    text: z.string().nullish().catch(null),
+    thinking: z.string().nullish().catch(null),
+    partial_json: z.string().nullish().catch(null),
+  }),
+})
+
+export const messageDeltaSchema = z.looseObject({
+  delta: z.looseObject({ stop_reason: z.string().nullish().catch(null) }).nullish(),
+  usage: z.unknown().optional(),
+})
+
+/**
+ * The arguments a `tool_use` block that streams no `input_json_delta` closes with.
+ *
+ * Anthropic itself always starts a call with `input: {}` and streams the arguments as deltas, so
+ * `"{}"` is right for it. A compatible upstream may instead state the whole call on
+ * `content_block_start`; replacing that with `"{}"` hands the client a call with no arguments. So
+ * a non-empty object stated on the start is the call's arguments.
+ */
+export function startedArguments(input: unknown): string {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return "{}"
+  return Object.keys(input).length === 0 ? "{}" : JSON.stringify(input)
+}
 
 export function eventType(name: string | null, payload: unknown): string | null {
   if (typeof payload === "object" && payload !== null && "type" in payload) {

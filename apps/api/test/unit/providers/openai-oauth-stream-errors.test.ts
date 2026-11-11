@@ -72,7 +72,7 @@ describe("inspectCodexStreamFrame", () => {
       retryable: true,
       signal: "codex:stream-error:rate_limit_exceeded",
       rateLimit: null,
-      message: undefined,
+      message: "response.failed carried no message (code=rate_limit_exceeded)",
     })
   })
 
@@ -84,7 +84,7 @@ describe("inspectCodexStreamFrame", () => {
       retryable: true,
       signal: "codex:stream-error:usage_limit_reached",
       rateLimit: null,
-      message: undefined,
+      message: "error carried no message (code=usage_limit_reached)",
     })
   })
 
@@ -99,7 +99,7 @@ describe("inspectCodexStreamFrame", () => {
       retryable: true,
       signal: "codex:stream-error:account_deactivated",
       rateLimit: null,
-      message: undefined,
+      message: "response.failed carried no message (code=account_deactivated)",
     })
   })
 
@@ -241,7 +241,22 @@ describe("inspectCodexStreamFrame", () => {
       retryable: true,
       signal: "codex:stream-error:other",
       rateLimit: null,
+      message: "error carried no message",
     })
+  })
+
+  // Sweep 101, 10.17: 41 of 45 Codex stream failures logged `upstreamMessage=null`.
+  test("a frame with no words still names its frame, code and status for the operator's line", () => {
+    const verdict = inspectCodexStreamFrame(
+      {
+        type: "response.failed",
+        response: { status: "failed", error: { code: "server_is_busy" } },
+      },
+      "response.failed",
+    )
+    expect(verdict?.message).toBe(
+      "response.failed carried no message (code=server_is_busy, status=failed)",
+    )
   })
 
   test("the frame type is `payload.type ?? event`, as the protocol reader reads it", () => {

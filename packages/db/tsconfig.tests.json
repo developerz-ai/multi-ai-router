@@ -1,0 +1,11 @@
+{
+  // Type-checks what the composite build leaves out: `bun test` strips types and
+  // checks nothing, so without this project a stale call site in a test passes
+  // at runtime with the missing argument `undefined`. Run by `bun run typecheck`.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true
+  },
+  "include": ["test/**/*.ts", "drizzle.config.ts"]
+}

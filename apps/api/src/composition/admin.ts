@@ -1,38 +1,14 @@
 import {
-  type AccountRepository,
-  type AdminCredentialRepository,
-  type ApiKeyRepository,
-  type ApiKeyTombstoneRepository,
-  type AuditRepository,
-  type CredentialRefreshLock,
   createAdminMutationRepository,
   createUsageHistoryRepository,
   createUsageReadRepository,
   createUsageRecentRepository,
   createUsageReportRepository,
-  type Database,
-  type OauthStateRepository,
-  type PoolRepository,
-  type PriceOverrideRepository,
-  type RecoveryRepository,
-  type ScheduledTaskRepository,
 } from "@multi-ai-router/db"
-import type { Env } from "../config/env"
-import type { Logger } from "../logging/logger"
-import {
-  type CredentialFreshness,
-  createCredentialMetadataReader,
-  createSdkTestProbe,
-  type SdkConcurrency,
-  type SdkQuotaStore,
-  type SdkUsageGauge,
-} from "../providers"
-import type { AccountCliOwnership } from "../providers/claude-sdk/account-ownership"
-import type { AccountConfigDirs } from "../providers/claude-sdk/config-dir"
-import type { OwnerLaunchConfig } from "../providers/claude-sdk/owner-launch"
+import { usageSnapshotStatementTimeoutMs } from "../config/usage-snapshot"
+import { createCredentialMetadataReader, createSdkTestProbe } from "../providers"
 import { scheduledTaskIntervals } from "../scheduler"
 import {
-  type CredentialRefresher,
   claudeCliFromEnv,
   connectFromEnv,
   createAccountsService,
@@ -40,34 +16,25 @@ import {
   createDiscoverModelsService,
   createRecheckService,
   createTestNowService,
+  liveHealthCheck,
   refreshErrorLogger,
   refresherFromEnv,
   withAvailability,
   withCredentialMetadata,
 } from "../services/accounts"
-import type { createBackgroundStartGuard } from "../services/accounts/background-admission"
 import { createLastLoginLookup } from "../services/accounts/last-login"
 import { loginLifetimePolicy } from "../services/accounts/login-lifetime"
-import { type CoherenceHooks, createAuditRecorder, keyMutationCommitted } from "../services/admin"
-import {
-  adminAuthConfigFromEnv,
-  createAdminAuthService,
-  createLocalAdminCredentials,
-  type SessionStore,
-} from "../services/admin-auth"
-import { createOIDCFlow } from "../services/admin-auth/oidc/flow"
-import type { RoutingCatalogStore } from "../services/catalog"
-import type { PriceBook } from "../services/cost"
-import type { CredentialCipher } from "../services/crypto/cipher"
-import type { HealthStore } from "../services/dataplane"
+import { createAuditRecorder, keyMutationCommitted } from "../services/admin"
 import { createKeysService } from "../services/keys"
-import type { RefreshSubscriptionModels } from "../services/models"
 import { createPoolsService } from "../services/pools"
 import { createSettingsService } from "../services/settings"
 import { accountProviders, catalogLabels, createUsageService } from "../services/usage-read"
-import type { AdminServices } from "../types"
+import { createAdminAuth } from "./admin-auth"
+import type { AdminPlane, AdminPlaneDeps } from "./admin-types"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
 import { createUsageReportDelivery, createUsageReports } from "./usage-reports"
+
+export type { AdminPlane, AdminPlaneDeps } from "./admin-types"
 
 /**
  * The admin plane's assembly, split from the composition root because it changes for a different
@@ -84,90 +51,6 @@ import { createUsageReportDelivery, createUsageReports } from "./usage-reports"
  *    account's breaker marks and the settings service refreshes the price book. Neither can touch a
  *    request in flight.
  */
-
-export interface AdminPlaneDeps {
-  readonly ownership: { manager: AccountCliOwnership; config: OwnerLaunchConfig }
-  readonly backgroundStartGuard: (
-    expected: Parameters<typeof createBackgroundStartGuard>[1],
-    signal?: AbortSignal,
-  ) => () => Promise<void>
-  readonly accountDeletionCommitted: (id: string) => Promise<void>
-  readonly recovery: {
-    repository: RecoveryRepository
-    coordinator: { demand(accountId: string): void }
-  }
-  readonly env: Env
-  readonly logger: Logger
-  readonly now: () => Date
-  /** Read-only repositories the usage screen builds its own reader from. */
-  readonly database: Database
-  readonly accounts: AccountRepository
-  readonly refreshLock: Pick<CredentialRefreshLock, "tryRun">
-  readonly keys: ApiKeyRepository
-  readonly keyTombstones: Pick<ApiKeyTombstoneRepository, "listAll">
-  readonly pools: PoolRepository
-  readonly auditEvents: AuditRepository
-  readonly oauthStates: OauthStateRepository
-  /** The one-row local admin credential; the auth service reads it live per login. */
-  readonly adminCredentials: AdminCredentialRepository
-  readonly scheduledTasks: ScheduledTaskRepository
-  readonly priceOverrides: PriceOverrideRepository
-  readonly cipher: CredentialCipher
-  readonly catalog: RoutingCatalogStore
-  readonly health: HealthStore
-  /** Refreshed after a price edit, so the console is read-after-write consistent on cost. */
-  readonly prices: PriceBook
-  /**
-   * The replica's `claude` subprocess ceiling, as the composition root built it. Passed in rather
-   * than created here because "Test now" spawns the same process the dispatch path does, and one
-   * memory budget takes one gate — see `providers/claude-sdk/test-probe.ts`.
-   */
-  readonly sdkConcurrency: SdkConcurrency
-  /**
-   * The refresh-window gate (`providers/claude-sdk/credential-freshness.ts`), from the same root and
-   * for the same reason as the ceiling above: an operator's "Test now" is a subprocess against the
-   * Account's config dir, and one landing mid-refresh is exactly how a credential gets spent twice.
-   */
-  readonly credentialFreshness: CredentialFreshness
-  /**
-   * The dispatch path's own Claude quota store, so a "Test now" turn's `rate_limit_event` readings
-   * land where routing and the console already read them. Passed in for the same reason the gate
-   * above is: a second store would be a second, disagreeing answer to "how much of this
-   * subscription is left".
-   */
-  readonly sdkQuota: Pick<SdkQuotaStore, "ingest">
-  /**
-   * One isolated `CLAUDE_CONFIG_DIR` per subscription account, as the composition root built it.
-   * Passed in for the same reason the gate above is: the scheduler's reaper sweeps the very volume
-   * this plane provisions on, and two instances could be rooted at two different places.
-   */
-  readonly configDirs: AccountConfigDirs
-  readonly coherence: CoherenceHooks
-  /**
-   * Built in the composition root rather than defaulted here because the scheduler's admin-session
-   * purge task (`scheduler/tasks/admin-session-purge.ts`) sweeps this very instance — two instances
-   * would mean the task cleans a map nothing ever populates.
-   */
-  readonly sessionStore: SessionStore
-  /**
-   * One Account's model-catalog refresh, for the connect flow to call the moment a Claude login
-   * completes (`services/models/refresher.ts`). The same refresh the hourly sweep runs, plus an
-   * immediate warm of the store — so a subscription lists its models before the next tick rather
-   * than answering `data: []` for up to an hour.
-   */
-  readonly refreshSubscriptionModels: RefreshSubscriptionModels
-  /** The dispatch path's usage gauge, so a "Test now" turn also reads the plan's percentages. */
-  readonly usageGauge?: SdkUsageGauge
-}
-
-export interface AdminPlane {
-  readonly services: AdminServices
-  /**
-   * Exposed for boot and shutdown ordering. It is built here because the connect flow hands it
-   * every freshly written credential, and it must be armed before the listener opens.
-   */
-  readonly refresher: CredentialRefresher
-}
 
 export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   const { env, logger, now, accounts, keys, keyTombstones, cipher, catalog, health, configDirs } =
@@ -234,6 +117,10 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     operatorCheckLeaseMs: env.recovery.operatorCheckLeaseMs,
     recovery: deps.recovery.repository,
     onRecoveryRequested: (accountId) => deps.recovery.coordinator.demand(accountId),
+    // A re-check of an account the router already sees as healthy settles at once instead of
+    // issuing a recovery permit that holds live traffic behind it (03.1).
+    isLiveHealthy: liveHealthCheck({ catalog, health, now }),
+    recheckAllConcurrency: env.accountRecheckAllConcurrency,
     // `retryParked` answers `not-refreshable` for a Claude subscription: its token is the SDK's.
     onParkedRecheck: (accountId) => {
       refresher
@@ -325,6 +212,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     cipher,
     audit,
     timeoutMs: env.failover.upstreamTimeoutMs,
+    maxResponseBytes: env.modelListingMaxBytes,
     log: logger,
     reasonMaxChars: env.logReasonMaxChars,
   })
@@ -332,54 +220,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   return {
     refresher,
     services: {
-      auth: createAdminAuthService({
-        env,
-        store: deps.sessionStore,
-        // The env layer speaks minutes and hours; the service speaks seconds.
-        // `adminAuthConfigFromEnv` is the single conversion, so the two never drift.
-        config: adminAuthConfigFromEnv({
-          adminSessionIdleMinutes: env.adminAuth.sessionIdleMinutes,
-          adminSessionAbsoluteHours: env.adminAuth.sessionAbsoluteHours,
-          adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
-          adminLoginMaxConcurrent: env.adminAuth.loginMaxConcurrent,
-          adminLoginMaxTrackedIps: env.adminAuth.loginMaxTrackedIps,
-          adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
-          adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
-          adminSessionTouchIntervalSeconds: env.adminAuth.sessionTouchIntervalSeconds,
-        }),
-        // No OIDC variables means no OIDC door: the login page learns what is
-        // offered from `methods()`, and the start/callback routes answer 404.
-        oidc:
-          env.adminOidc === null
-            ? null
-            : createOIDCFlow({
-                requestTimeoutMs: env.adminOidc.requestTimeoutMs,
-                config: {
-                  issuerUrl: env.adminOidc.issuerUrl,
-                  clientId: env.adminOidc.clientId,
-                  clientSecret: env.adminOidc.clientSecret,
-                  redirectUri: env.adminOidc.redirectUri,
-                  adminEmails: env.adminOidc.adminEmails,
-                  requiredClaims: env.adminOidc.requiredClaims,
-                  adminSubject: env.adminOidc.adminSubject,
-                  scopes: env.adminOidc.scopes,
-                  clockSkewSeconds: env.adminOidc.clockSkewSeconds,
-                },
-                stateStore: {
-                  // The OAuth state repository is reused — see `packages/db` for the
-                  // shared schema. The cipher is the same one every other admin
-                  // secret rides on.
-                  states: deps.oauthStates,
-                  cipher: deps.cipher,
-                  stateMinutes: env.retention.oauthStateMinutes,
-                  now,
-                },
-              }),
-        // Always built: whether the door is open is the *row*, read live per
-        // login, so `bin/admin set-password` takes effect without a restart.
-        local: createLocalAdminCredentials({ repository: deps.adminCredentials }),
-        audit,
-      }),
+      auth: createAdminAuth(deps, audit),
       // Two decorators in the order they must run: `withCatalogRefresh` makes a write land on the
       // request path, `withAvailability` answers a read with what the router currently observes
       // rather than with the row the operator last wrote.
@@ -400,7 +241,9 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         onCommitted: (id, kind) => keyMutationCommitted(deps.coherence, id, kind),
       }),
       usage: createUsageService({
-        history: createUsageHistoryRepository(deps.database),
+        history: createUsageHistoryRepository(deps.database, {
+          snapshotStatementTimeoutMs: usageSnapshotStatementTimeoutMs(env),
+        }),
         recent: createUsageRecentRepository(deps.database),
         labels: catalogLabels({ keys, tombstones: keyTombstones, catalog }),
         providers: accountProviders(catalog),

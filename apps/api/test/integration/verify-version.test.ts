@@ -7,10 +7,10 @@ import { VERSION } from "@multi-ai-router/core"
 /**
  * Proves `bin/verify-version` is a gate and not a formality.
  *
- * It is the only thing standing between a tag push and a published image, because
- * `release.yml` builds and pushes — it never runs the test suite. The drift test that normally
- * holds `VERSION` and the manifests together (`packages/core/test/unit/version.test.ts`) therefore
- * does not gate a tag at all: cut `v1.0.1` from a tree where only the manifests moved and you
+ * It is the only thing that compares the tag *name* to the tree. `release.yml`'s gate requires
+ * main's CI — including the drift test that holds `VERSION` and the manifests together
+ * (`packages/core/test/unit/version.test.ts`) — but no test can know which tag will be pushed:
+ * cut `v1.0.1` from a tree where only the manifests moved and you
  * publish an image whose `/healthz`, `router_build_info`, boot log and console footer all say
  * `1.0.0`. The check this replaced compared the tag to the root `package.json` and would have
  * waved that through, which is the case asserted below by name.

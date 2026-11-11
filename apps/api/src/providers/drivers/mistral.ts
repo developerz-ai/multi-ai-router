@@ -51,7 +51,9 @@ export const mistralDriver = createHttpDriver({
   readFacts: readFlatErrorFacts,
   rules: [
     typeRule("rate-limited", "mistral:rate_limit_error", RATE_LIMIT_TYPES),
-    messageRule("rate-limited", "mistral:service-tier-capacity", TIER_CAPACITY),
+    messageRule("rate-limited", "mistral:service-tier-capacity", TIER_CAPACITY, {
+      statuses: [429],
+    }),
     typeRule("auth", "mistral:authentication_error", AUTH_TYPES),
     typeRule("server-error", "mistral:server_error", SERVER_TYPES),
     // Mistral documents no `402` and no status for the spend-suspended account its billing pages

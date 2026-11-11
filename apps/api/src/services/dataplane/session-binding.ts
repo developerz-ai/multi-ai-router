@@ -4,7 +4,7 @@ import type { Env } from "../../config/env"
 import type { Logger } from "../../logging/logger"
 import { createSessionStore, PROVIDER_REGISTRY, type SessionStore } from "../../providers"
 import type { SessionCarrier } from "../../providers/claude-sdk/session-carry"
-import type { SessionBinding } from "../routing"
+import type { KeyScopeSnapshot, SessionBinding } from "../routing"
 import type { RoutingCatalog } from "./types"
 
 /**
@@ -18,13 +18,18 @@ import type { RoutingCatalog } from "./types"
  * The gate is what keeps it that cheap for everyone else. Only the Agent-SDK path ever writes a
  * binding — an HTTP session's placement is recomputed by rendezvous hashing every request and
  * hopping costs a cold prompt cache, nothing more — so a router with no subscription Account has
- * nothing to look up and does not look. A router that gains one starts binding on its next
- * request, because the catalog is read per call rather than captured at construction.
+ * nothing to look up and does not look — nor does a key whose scope reaches no subscription, even
+ * beside one elsewhere in the catalog (plan 101, 02.8). A router that gains one starts binding on
+ * its next request, because the catalog is read per call rather than captured at construction.
  */
 
 export interface SessionBindings {
   /** The binding to hand selection, or undefined when this session has none. */
-  read(apiKeyId: string, sessionKey: string): Promise<SessionBinding | undefined>
+  read(
+    apiKeyId: string,
+    sessionKey: string,
+    scope?: KeyScopeSnapshot,
+  ): Promise<SessionBinding | undefined>
 }
 
 const NONE: SessionBindings = {
@@ -37,10 +42,11 @@ export function sessionBindings(
   timing?: { readonly elapsed: () => number; readonly onWait: (milliseconds: number) => void },
 ): SessionBindings {
   if (store === undefined) return NONE
+  const reach = subscriptionReach(catalog)
 
   return {
-    async read(apiKeyId, sessionKey) {
-      if (!servesSubscriptions(catalog)) return undefined
+    async read(apiKeyId, sessionKey, scope = { kind: "all" }) {
+      if (!reach(scope)) return undefined
       const started = timing?.elapsed()
       try {
         return await store.binding(apiKeyId, sessionKey)
@@ -51,10 +57,37 @@ export function sessionBindings(
   }
 }
 
-function servesSubscriptions(catalog: RoutingCatalog): boolean {
-  return catalog
-    .accounts()
-    .some((account) => PROVIDER_REGISTRY[account.driver.provider].transport === "agent-sdk")
+/**
+ * Whether a key scope can reach any subscription account. The id and pool sets are rebuilt only
+ * when the catalog installs new arrays, not per request.
+ */
+function subscriptionReach(catalog: RoutingCatalog): (scope: KeyScopeSnapshot) => boolean {
+  let seen: { accounts: unknown; pools: unknown } | undefined
+  let ids = new Set<string>()
+  let poolIds = new Set<string>()
+  const refresh = () => {
+    const accounts = catalog.accounts()
+    const pools = catalog.pools()
+    if (seen?.accounts === accounts && seen.pools === pools) return
+    seen = { accounts, pools }
+    ids = new Set(
+      accounts
+        .filter((account) => PROVIDER_REGISTRY[account.driver.provider].transport === "agent-sdk")
+        .map((account) => account.id),
+    )
+    poolIds = new Set(
+      pools
+        .filter((pool) => pool.members.some((member) => ids.has(member.accountId)))
+        .map((pool) => pool.id),
+    )
+  }
+  return (scope) => {
+    refresh()
+    if (ids.size === 0) return false
+    if (scope.kind === "all") return true
+    if (scope.kind === "accounts") return scope.accountIds.some((id) => ids.has(id))
+    return scope.poolIds.some((id) => poolIds.has(id))
+  }
 }
 
 export interface SessionStoreEnvDeps {

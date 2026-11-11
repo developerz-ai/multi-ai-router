@@ -209,10 +209,18 @@ describe("anthropic ingress against a Codex account", () => {
       responses: [truncated, truncated],
     })
     const res = await app.request("/v1/messages", post(JSON.stringify(ANTHROPIC), bearer()))
-    await expect(res.text()).rejects.toBeDefined()
+    // Read whole before converting, so the status is held: a typed 502, not a cut 200 (06.4).
+    expect(res.status).toBe(502)
+    expect(await res.json()).toMatchObject({
+      type: "error",
+      error: { router: { retryable: false, signal: "translation_protocol_error" } },
+    })
     await settle()
     expect(upstream.calls).toHaveLength(1)
-    expect(usage.rows[0]).toMatchObject({ errorClass: "translation_protocol_error" })
+    expect(usage.rows[0]).toMatchObject({
+      errorClass: "translation_protocol_error",
+      responseStatus: 502,
+    })
   })
 })
 

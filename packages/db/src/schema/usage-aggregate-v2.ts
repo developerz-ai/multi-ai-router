@@ -1,4 +1,15 @@
-import { bigint, date, numeric, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
+import {
+  bigint,
+  check,
+  date,
+  numeric,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from "drizzle-orm/pg-core"
 
 /** Both tables carry event-time days; terminal requests are never counted per attempt group. */
 function grain() {
@@ -34,12 +45,14 @@ export const usageAttemptDailyV2 = pgTable(
     unpricedAttempts: bigint("unpriced_attempts", { mode: "number" }),
   },
   (table) => [
+    check("usage_attempt_daily_v2_basis_known", sql`${table.basis} in ('live', 'legacy')`),
     unique("usage_attempt_daily_v2_grain")
       .on(table.day, table.apiKeyId, table.accountId, table.poolId, table.model, table.basis)
       .nullsNotDistinct(),
   ],
 )
 export const usageRequestDailyV2 = pgTable("usage_request_daily_v2", grain(), (table) => [
+  check("usage_request_daily_v2_basis_known", sql`${table.basis} in ('live', 'legacy')`),
   unique("usage_request_daily_v2_grain")
     .on(table.day, table.apiKeyId, table.accountId, table.poolId, table.model, table.basis)
     .nullsNotDistinct(),

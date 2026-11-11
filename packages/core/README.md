@@ -115,7 +115,7 @@ const maybe = RoutingPolicy.safeParse(body.policy) // when you want to answer 40
 
 ## Testing
 
-`bun test packages/core` — pure, no mocks, no I/O. Covers every error's code/status/name and the
+`bin/test packages/core` — pure, no mocks, no I/O. Covers every error's code/status/name and the
 uniqueness of that mapping, `QuotaExhaustedError` vs `CreditsExhaustedError` distinctness,
 `isRouterError` against look-alikes, key shape/entropy/uniqueness and prefix round-trip, and each
 enum accepting exactly its members while rejecting near-miss spellings.
@@ -128,7 +128,7 @@ enum accepting exactly its members while rejecting near-miss spellings.
 | **429 and 402 are never collapsed** | `QuotaExhaustedError` (clock-recoverable) and `CreditsExhaustedError` (human-recoverable) stay separate classes with separate statuses. A product rule from `02-domain-model.md`, not an implementation detail — merging them makes the router retry a dead account on a timer |
 | Adding an error class is three edits | The class, its code in `ROUTER_ERROR_CODES`, and a row in the `cases` table in `test/unit/errors.test.ts`. The table test fails until the code is claimed exactly once |
 | Schema and type share a name | `export const AccountStatus` + `export type AccountStatus`. Derive with `z.infer`; never hand-write a parallel interface |
-| `test/` is outside `tsconfig.json` | `rootDir` is `src`, so `tsc --build` does not type-check the tests. `bun test` is what exercises them |
+| `test/` is outside `tsconfig.json` | `rootDir` is `src`, so `tsconfig.tests.json` type-checks the tests through `bun run typecheck`; `bin/test` runs them |
 
 ## See also
 

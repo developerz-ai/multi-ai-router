@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { readdirSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import type { AccountRow, ModelCatalogEntry } from "@multi-ai-router/db"
+import { httpDriver } from "../../../src/providers"
 import { isRefreshable, refreshAccountCatalog } from "../../../src/services/models"
 import { accountRow as durableAccountRow } from "../../support/account-row"
 
@@ -211,14 +214,28 @@ describe("refreshing one account's catalog", () => {
     expect(writes).toEqual([])
   })
 
-  test("the aggregator is skipped by name, and says which rule fired", async () => {
+  test("a provider whose driver declares a manual listing is skipped, and says which rule fired", async () => {
     const { deps, calls } = harness({ data: [] })
 
+    expect(httpDriver("openrouter")?.catalogSweep).toBe("manual")
     expect(await refreshAccountCatalog(deps, accountRow({ provider: "openrouter" }), NOW)).toEqual({
       kind: "skipped",
-      reason: "openrouter:aggregator",
+      reason: "http:manual-listing",
     })
     expect(calls()).toBe(0)
+  })
+
+  // Non-negotiable 12: the sweep's eligibility is the driver's word, never a provider id here.
+  test("no provider id is named anywhere in services/models", () => {
+    const dir = join(import.meta.dir, "../../../src/services/models")
+    const sources = readdirSync(dir, { recursive: true })
+      .map(String)
+      .filter((name) => name.endsWith(".ts") && !name.startsWith("windows"))
+    expect(sources.length).toBeGreaterThan(0)
+    for (const name of sources) {
+      const source = readFileSync(join(dir, name), "utf8")
+      expect({ name, hit: /["']openrouter["']/.test(source) }).toEqual({ name, hit: false })
+    }
   })
 
   test("the operator's own off switch outranks every other reason", async () => {

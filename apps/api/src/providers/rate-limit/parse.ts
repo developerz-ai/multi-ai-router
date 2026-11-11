@@ -18,8 +18,11 @@ import {
  * | OpenAI | `x-ratelimit-{limit,remaining,reset}[-<limiter>]` | duration (`6m0s`), or epoch millis on OpenRouter's unsuffixed header |
  *
  * The parser never invents a reset. `resetSource` is `provider-reported` when the upstream said
- * something and `unknown` when it did not; `estimated` belongs to the circuit breaker, which owns
- * the backoff policy (docs/idea/05-routing-and-failover.md).
+ * something and `unknown` when it did not. The one `estimated` it emits is a reset the upstream did
+ * state but in a unit we inferred (epoch seconds on a duration header, `duration.ts`); every other
+ * estimate belongs to the circuit breaker, which owns the backoff policy, and to a driver rule's
+ * re-test cadence (`withEstimatedReset`). How long a stated reset may be at most is the breaker's
+ * `ROUTING_MAX_REPORTED_RESET_SECONDS`, applied once downstream (docs/idea/05-routing-and-failover.md).
  */
 
 const ANTHROPIC_HEADER = /^anthropic-ratelimit-(.+)-(limit|remaining|reset)$/
@@ -134,21 +137,32 @@ interface RetryAfter {
   at?: Date
 }
 
+/**
+ * RFC 9110's `delay-seconds` is digits; a fraction is tolerated because `retry-after-ms` and some
+ * gateways send one. Never `Number()` on the raw value: it reads `0x10` as 16 s and `1e9` as 31
+ * years, and a bogus header would then park the account on our misreading.
+ */
+const DELAY_SECONDS = /^\d+(?:\.\d+)?$/
+
+function positiveDelay(value: string): number | undefined {
+  if (!DELAY_SECONDS.test(value)) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 /** `retry-after` is seconds or an HTTP-date; `retry-after-ms` is what OpenAI sometimes sends. */
 function parseRetryAfter(headers: Headers): RetryAfter {
-  const millis = headers.get("retry-after-ms")
-  if (millis !== null) {
-    const parsed = Number(millis.trim())
-    if (millis.trim() !== "" && Number.isFinite(parsed) && parsed > 0)
-      return { seconds: parsed / 1000 }
+  const millis = positiveDelay(headers.get("retry-after-ms")?.trim() ?? "")
+  if (millis !== undefined) return { seconds: millis / 1000 }
+
+  const value = headers.get("retry-after")?.trim() ?? ""
+  if (value === "") return {}
+  if (DELAY_SECONDS.test(value)) {
+    const seconds = positiveDelay(value)
+    return seconds === undefined ? {} : { seconds }
   }
-
-  const value = headers.get("retry-after")
-  if (value === null || value.trim() === "") return {}
-
-  const seconds = Number(value.trim())
-  if (Number.isFinite(seconds)) return seconds > 0 ? { seconds } : {}
-
+  // An HTTP-date carries letters and a comma; a bare signed or hex number is neither form.
+  if (!/[a-z]/i.test(value)) return {}
   const at = parseInstant(value)
   return at ? { at } : {}
 }

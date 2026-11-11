@@ -1,4 +1,8 @@
 import { Hono } from "hono"
+import {
+  DEFAULT_ADMIN_JSON_MAX_BYTES,
+  DEFAULT_ADMIN_LOGIN_JSON_MAX_BYTES,
+} from "./config/admin-bodies"
 import type { Logger } from "./logging/logger"
 import { adminAuth } from "./middleware/adminAuth"
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler"
@@ -20,7 +24,7 @@ import {
 } from "./routes/admin/settings"
 import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "./routes/admin/usage"
 import { healthRoutes } from "./routes/health"
-import { type MetricsRouteDeps, metricsRoutes } from "./routes/metrics"
+import { METRICS_PATH, type MetricsRouteDeps, metricsRoutes } from "./routes/metrics"
 import { spaRoutes } from "./routes/spa"
 import { DATA_PLANE_BASE_PATH, type DataPlaneRoutesDeps, dataPlaneRoutes } from "./routes/v1"
 import type {
@@ -68,6 +72,8 @@ export interface AppDeps {
     readonly maximumLoginJsonBytes: number
   }
   readonly trustProxy?: boolean
+  /** `Env.trustProxyHops`: which `X-Forwarded-For` entry, from the right, is the client. */
+  readonly trustProxyHops?: number
   /**
    * `Env.adminAuth.sessionCookieInsecure`. Off by default, and the default is the hardened one:
    * the escape hatch drops `Secure`/`__Host-` so a plain-HTTP LAN install can log in at all —
@@ -95,6 +101,7 @@ interface AdminMountOptions {
     readonly maximumLoginJsonBytes: number
   }
   readonly trustProxy: boolean
+  readonly trustProxyHops: number
   readonly sessionCookieInsecure: boolean
   readonly apiToken: string | null
 }
@@ -120,7 +127,11 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
 
   // Order matters: the id exists before anything logs, and the logger before anything throws.
   app.use("*", requestId())
-  app.use("*", requestLogger(deps.logger, { quietPaths: deps.logQuietPaths ?? [] }))
+  // A successful scrape is the noisiest line a router writes and says nothing (10.15).
+  app.use(
+    "*",
+    requestLogger(deps.logger, { quietPaths: [...(deps.logQuietPaths ?? []), METRICS_PATH] }),
+  )
 
   app.onError(errorHandler(deps.logger))
   app.notFound(notFoundHandler())
@@ -135,10 +146,11 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   if (deps.admin !== undefined) {
     mountAdmin(app, deps.admin, {
       adminBodies: deps.adminBodies ?? {
-        maximumJsonBytes: 1024 * 1024,
-        maximumLoginJsonBytes: 8 * 1024,
+        maximumJsonBytes: DEFAULT_ADMIN_JSON_MAX_BYTES,
+        maximumLoginJsonBytes: DEFAULT_ADMIN_LOGIN_JSON_MAX_BYTES,
       },
       trustProxy: deps.trustProxy ?? false,
+      trustProxyHops: deps.trustProxyHops ?? 1,
       sessionCookieInsecure: deps.sessionCookieInsecure ?? false,
       apiToken: deps.adminApiToken ?? null,
     })
@@ -169,7 +181,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
  * wrote it in.
  */
 function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMountOptions): void {
-  const { trustProxy, sessionCookieInsecure, apiToken, adminBodies } = options
+  const { trustProxy, trustProxyHops, sessionCookieInsecure, apiToken, adminBodies } = options
   const guard = adminAuth(admin.auth, sessionCookieInsecure, apiToken)
 
   app.route(
@@ -177,6 +189,7 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMount
     adminAuthRoutes({
       service: admin.auth,
       trustProxy,
+      trustProxyHops,
       sessionCookieInsecure,
       apiToken,
       maximumJsonBytes: adminBodies.maximumLoginJsonBytes,

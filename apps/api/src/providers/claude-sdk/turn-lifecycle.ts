@@ -75,6 +75,43 @@ export interface TurnObserver {
   onSettled(): void
   /** Runs exactly once, after the subprocess is finished with. Must not throw. */
   onEnd(): void
+  /**
+   * Runs, before `onEnd`, when closing the SDK iterator did not settle inside the teardown bound —
+   * the place to kill the subprocess outright. Must not throw.
+   */
+  onTeardownTimeout?(): void
+}
+
+/**
+ * How long closing the SDK iterator may take before the turn's slot and claims are handed back
+ * anyway (101 finding 05.8). `onEnd` used to wait on `inner.return()` with no bound, so a CLI that
+ * ignored stdin EOF — a hung MCP teardown, a stuck write — kept the Account's permit for the
+ * process lifetime, and four such turns wedged the Account. Injected from config
+ * (`CLAUDE_SDK_TEARDOWN_TIMEOUT_MS`); this is the default when none is wired.
+ */
+export const DEFAULT_TEARDOWN_TIMEOUT_MS = 30_000
+
+/**
+ * Whether `pending` settled (either way) within `ms`. Never rejects; the timer never holds the
+ * process open.
+ */
+export async function settlesWithin(pending: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms)
+    timer.unref?.()
+  })
+  try {
+    return await Promise.race([
+      pending.then(
+        () => true,
+        () => true,
+      ),
+      expired,
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** The SDK messages that mean the turn has started answering. */
@@ -91,15 +128,17 @@ function isResult(message: unknown): boolean {
 export function observeTurn(
   source: AsyncIterable<unknown>,
   observer: TurnObserver,
+  teardownMs: number = DEFAULT_TEARDOWN_TIMEOUT_MS,
 ): AsyncIterable<unknown> {
   return {
-    [Symbol.asyncIterator]: () => iterate(source, observer),
+    [Symbol.asyncIterator]: () => iterate(source, observer, teardownMs),
   }
 }
 
 async function* iterate(
   source: AsyncIterable<unknown>,
   observer: TurnObserver,
+  teardownMs: number,
 ): AsyncGenerator<unknown> {
   const inner = source[Symbol.asyncIterator]()
   let inFlight: Promise<void> = Promise.resolve()
@@ -112,12 +151,28 @@ async function* iterate(
       // A gauge's failure is its own; the turn's end is not conditional on it.
     }
     observer.onSettled()
+    // A source that refuses to close, or never answers, is not this module's failure — but it must
+    // not keep the slot: past the bound the subprocess is killed and the turn ends regardless. The
+    // close is awaited directly, so a source that does close adds no turn to the ordinary path.
+    let ended = false
+    const end = (): void => {
+      if (ended) return
+      ended = true
+      clearTimeout(bound)
+      observer.onEnd()
+    }
+    const bound = setTimeout(() => {
+      if (ended) return
+      observer.onTeardownTimeout?.()
+      end()
+    }, teardownMs)
+    bound.unref?.()
     try {
       await inner.return?.()
     } catch {
       // A source that refuses to close is not this module's failure.
     }
-    observer.onEnd()
+    end()
   }
 
   try {

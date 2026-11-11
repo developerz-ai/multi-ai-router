@@ -1,4 +1,5 @@
 import type { DropSink } from "./drops"
+import { isRecord } from "./is-record"
 import { rejectField } from "./reject"
 
 /**
@@ -63,10 +64,6 @@ const SUBSCHEMA_KEYWORDS: ReadonlyMap<string, readonly Shape[]> = new Map([
 
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-}
-
 /** An own-property copy that keeps every key, `__proto__` included (CreateDataProperty, not [[Set]]). */
 function copyOf(record: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(record))
@@ -82,7 +79,7 @@ function defineOn(record: Record<string, unknown>, key: string, value: unknown):
 }
 
 /** A path segment for a map entry. `patternProperties` keys are client regexes: index only. */
-function mapSegment(keyword: string, key: string, index: number): string {
+export function schemaPathSegment(keyword: string, key: string, index: number): string {
   if (keyword === "patternProperties") return `${keyword}[${index}]`
   return IDENTIFIER.test(key) ? `${keyword}.${key}` : `${keyword}[${JSON.stringify(key)}]`
 }
@@ -104,13 +101,13 @@ function walkKeyword(
 ): unknown {
   const shapes = SUBSCHEMA_KEYWORDS.get(keyword)
   if (shapes === undefined) return value
-  if (shapes.includes("single") && isPlainObject(value)) {
+  if (shapes.includes("single") && isRecord(value)) {
     return walk(value, `${path}.${keyword}`, depth + 1, ctx)
   }
   if (shapes.includes("array") && Array.isArray(value)) {
     let changed: unknown[] | undefined
     for (const [index, sub] of value.entries()) {
-      if (!isPlainObject(sub)) continue
+      if (!isRecord(sub)) continue
       const walked = walk(sub, `${path}.${keyword}[${index}]`, depth + 1, ctx)
       if (walked === sub) continue
       changed ??= value.slice()
@@ -118,11 +115,11 @@ function walkKeyword(
     }
     return changed ?? value
   }
-  if (shapes.includes("map") && isPlainObject(value)) {
+  if (shapes.includes("map") && isRecord(value)) {
     let changed: Record<string, unknown> | undefined
     for (const [index, [key, sub]] of Object.entries(value).entries()) {
-      if (!isPlainObject(sub)) continue
-      const walked = walk(sub, `${path}.${mapSegment(keyword, key, index)}`, depth + 1, ctx)
+      if (!isRecord(sub)) continue
+      const walked = walk(sub, `${path}.${schemaPathSegment(keyword, key, index)}`, depth + 1, ctx)
       if (walked === sub) continue
       changed ??= copyOf(value)
       defineOn(changed, key, walked)
@@ -182,7 +179,7 @@ export function stripLookaroundPatternsFromTools(
   let nextTools: unknown[] | undefined
   const budget = { nodes: 0 }
   for (const [index, tool] of tools.entries()) {
-    if (!isPlainObject(tool) || !isPlainObject(tool.parameters)) continue
+    if (!isRecord(tool) || !isRecord(tool.parameters)) continue
     const name = typeof tool.name === "string" ? tool.name : `tools[${index}]`
     const reason = `the target account's Responses surface cannot compile regex lookarounds in tool schemas (tool \`${name}\`)`
     const parameters = tool.parameters

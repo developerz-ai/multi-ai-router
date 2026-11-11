@@ -111,4 +111,44 @@ describe.skipIf(!url)("operator recovery intent and database cooldown", () => {
     await fixture.db().delete(accountTable).where(eq(accountTable.id, account.id))
     expect(await repo.readOperatorCooldown(account.id)).toBeUndefined()
   })
+  test("a settled re-check publishes a closed generation instead of a probe", async () => {
+    const account = await fixture.seed()
+    const result = await fixture.repositories().recovery.beginOperatorRecovery({
+      accountId: account.id,
+      generationCandidate: crypto.randomUUID(),
+      cooldownMs: 60000,
+      settled: true,
+    })
+    // Still a real re-check: versions advance and the cooldown holds, but nothing is gated.
+    expect(result).toMatchObject({
+      rechecked: true,
+      clearedStatus: null,
+      account: { status: "active", lifecycleVersion: 1, healthRecoveryVersion: 1 },
+      recovery: { state: "cancelled", reason: "operator-recheck", permitId: null },
+    })
+    expect(result?.recovery.outcomeAt).not.toBeNull()
+    expect(result?.recovery.nextAllowedAt.getTime()).toBeGreaterThan(Date.now())
+  })
+  test("a settled finalize through the operator claim is closed as well", async () => {
+    const account = await fixture.seed()
+    const { recovery } = fixture.repositories()
+    const claimToken = crypto.randomUUID()
+    const reserved = await recovery.reserveOperatorCheck({
+      accountId: account.id,
+      claimToken,
+      leaseMs: 60000,
+    })
+    expect(reserved?.kind).toBe("acquired")
+    const finalized = await recovery.finalizeOperatorCheck({
+      accountId: account.id,
+      generationCandidate: crypto.randomUUID(),
+      cooldownMs: 60000,
+      claimToken,
+      settled: true,
+    })
+    expect(finalized).toMatchObject({
+      kind: "committed",
+      result: { recovery: { state: "cancelled" } },
+    })
+  })
 })

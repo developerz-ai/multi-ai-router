@@ -58,6 +58,22 @@ because its effect is an absence; it is an isolation guarantee and must not be d
 Same class as stripping inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`
 from the subprocess environment, which also prevents it from looping back through our own router.
 
+The subprocess environment is an **explicit allowlist** (`providers/claude-sdk/env.ts`
+`ALLOWED_ENV_NAMES` / `ALLOWED_ENV_PREFIXES`): path and identity (`PATH`, `HOME`, `USER`,
+`LOGNAME`, `SHELL`), locale and time zone (`LANG`, `LANGUAGE`, `LC_*`, `TZ`), `TERM`, temp
+directories, the CA bundle (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`) and the proxy
+settings the CLI needs to reach Anthropic. Everything else is dropped by default. It used to be a
+strip list, and it passed `USAGE_REPORT_DISCORD_WEBHOOK_URL` plus any operator-level secret it did
+not name (`PGPASSWORD`, `GITHUB_TOKEN`, `NODE_OPTIONS`; 101 finding 05.3). The `ANTHROPIC_*` prefix
+and the named router secrets are still stripped on top, so the two mechanisms fail independently.
+A test asserts that no variable the router's own env schema reads reaches the child. The proxy
+variables are the one deliberate pass-through of operator configuration, and a proxy URL with
+userinfo carries that credential to the child. Each `query()` call site is enumerated by a second
+gate (`test/integration/claude-sdk-query-sites.test.ts`): every value import from the Agent SDK is
+named by file, every `query()` importer builds its options from `isolatedOptions` /
+`createQueryLaunch`, and no source passes `bypassPermissions`, `allowDangerouslySkipPermissions` or
+a non-empty `settingSources`.
+
 Every SDK query also sets `verbatimPrompts: true`: client messages stay literal, without CLI
 slash-command dispatch or `@path` host-file expansion. On the shipped CLI this also skips turn-start
 attachments such as MCP resource mentions, nested `CLAUDE.md` files, and skill listings. This option
@@ -142,7 +158,7 @@ field; the implementation is the compact string above and it is what the code do
 | Concern | Rule |
 |---|---|
 | Front door | HTTPS terminated by a reverse proxy in front. The container speaks plain HTTP on its own port and is not meant to be published directly |
-| `TRUST_PROXY` | When set, `X-Forwarded-For` / `X-Forwarded-Proto` are honored for client IP (rate limiting, throttling, audit) and scheme. Off by default — an untrusted forwarded header is a rate-limit bypass |
+| `TRUST_PROXY` | When set, `X-Forwarded-For` / `X-Forwarded-Proto` are honored for client IP (rate limiting, throttling, audit) and scheme. Off by default — an untrusted forwarded header is a rate-limit bypass. The client IP is the entry `TRUST_PROXY_HOPS` (default 1) from the **right** of `X-Forwarded-For` — the one our own proxies appended — never the leftmost, which an appending proxy leaves client-chosen; a header with fewer entries falls back to the socket peer (`services/admin-auth/clientIp.ts`) |
 | Cookies | `httpOnly` + `SameSite=Strict` always; `Secure` + `__Host-` by default, dropped together only under `SESSION_COOKIE_INSECURE` for a plain-HTTP LAN install (warned at boot — see [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie)). No cookie on data-plane routes |
 | Upstream | TLS to the pinned base URLs in [03-providers.md](03-providers.md). No plaintext upstream, no proxy-through of client-supplied upstream URLs |
 
@@ -203,7 +219,7 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 | CSRF | A token is required on every mutating admin request. `SameSite=Strict` is the belt; the token is the braces |
 | Throttling | Local-password attempts are throttled per client IP on the login-throttle seam and lock after `ADMIN_LOGIN_MAX_ATTEMPTS`. Every rejection — wrong password, unconfigured door, locked address — returns one sentence, byte-identical to the OIDC callback's, so a prober cannot tell them apart |
 | MFA | For OIDC, enrollment and MFA policy belong to the IdP. The local password has no second factor — which is exactly why it is loopback-only by default |
-| Console assets | The built SPA is served from `WEB_ROOT` at the root, mounted **last** and never for a path under `/api`, `/v1`, `/healthz`, `/readyz` or `/metrics`. The history-API fallback reads one fixed filename, so the request path never reaches it. A path that escapes the root, or that the filesystem cannot name at all (a NUL byte, past `PATH_MAX`), gets the shell — never a file outside the root, and never a `500` an unauthenticated caller can mint on demand |
+| Console assets | The built SPA is served from `WEB_ROOT` at the root, mounted **last** and never for a path under `/api`, `/v1`, `/healthz`, `/readyz` or `/metrics`. The history-API fallback reads one fixed filename, so the request path never reaches it. A path that escapes the root, or that the filesystem cannot name at all (a NUL byte, past `PATH_MAX`), gets the shell or a `404` — never a file outside the root, and never a `500` an unauthenticated caller can mint on demand. A path with a dot-segment (`/.git/config`, `/.env`) and a missing `/assets/*` file are `404`s, not the shell: a `200` told every scanner the file existed, and a stale tab importing a vanished bundle needs a `404` to know to reload |
 
 ### Admin OIDC
 
@@ -237,7 +253,7 @@ key into the admin plane. Conversely, an admin session is not accepted on `/v1/*
 |---|---|
 | Default-on | The redactor runs on every log record, not at call sites. Forgetting to redact is not a possible mistake |
 | Catches by field name | `Authorization` / `Proxy-Authorization` / `Cookie` / `Set-Cookie` / `x-api-key` / `x-goog-api-key` / `x-goog-user-project`, anything containing `password`, `secret`, `token`, `credential`, `verifier`, OAuth `code`, `state`, `code_verifier` |
-| Catches by value shape | `mar_live_…`, `sk-…`, `Bearer …`, any JWT (`eyJ….….…` — a ChatGPT/Codex access token is one), URL userinfo (`postgres://user:pass@host`; a password holding an unencoded `/` too, up to 256 characters and holding none of `:` `?` `#` `&` `=` `"` except base64 `=` padding before the `@`), a credential in a query string (a parameter name ending in `key` / `token` / `secret` / `password` — `api_key`, `access_token` — or `passwd` / `pwd` / `code` / `code_verifier` / `state`; a whole OAuth callback URL logged as one value), `AIza…`, `gh[pousr]_…` / `github_pat_…`, `xai-…`, `gsk_…` |
+| Catches by value shape | `mar_live_…`, `sk-…`, `Bearer …`, any JWT (`eyJ….….…` — a ChatGPT/Codex access token is one), URL userinfo (`postgres://user:pass@host`; a password holding an unencoded `/` too, up to 256 characters and holding none of `:` `?` `#` `&` `=` `"` except base64 `=` padding before the `@`), a credential in a query string (a parameter name ending in `key` / `token` / `secret` / `password` — `api_key`, `access_token` — or `passwd` / `pwd` / `code` / `code_verifier` / `state`; a whole OAuth callback URL logged as one value), `AIza…`, `gh[pousr]_…` / `github_pat_…`, `xai-…`, `gsk_…`, and a provider key-management URL's key hash (`…/keys/<32+ hex>` → `…/keys/[REDACTED]`; OpenRouter's key-limit refusal quotes `https://openrouter.ai/workspaces/<ws>/keys/<64 hex>`). The hash identifies the credential, so it is credential material under non-negotiable 3; the provider and workspace path stay |
 | Query before userinfo | Both redactors first scrub ambiguous `scheme://X:Y?…@…` text, keeping only the scheme. `Y` may be numeric: `postgres://user:1234?key=1@host` and `postgres://user:pw?TAIL@host` both become `postgres://[REDACTED]`. This also sacrifices host:port diagnostics for an @-bearing query with no intervening path, since it cannot be distinguished safely from userinfo. The scrub stops at a nested `scheme://`: a tail that is a URL of its own (`postgres://u:p?x=@postgres://v:a"…"@db`) is handed to the query and userinfo rules, so its own credential is scrubbed and only its host survives — swallowing it whole took the `://` with it and left the nested password in the clear, where the previous release had removed it. Otherwise the query rule runs before userinfo and consumes credential values whole, including their @ tails; neither later userinfo rule crosses `?`. No-port inputs `postgres://db?password=Ab:cd@ef` and `postgres://db?password=x@y` keep their endpoint and no secret tail. A DSN without a query keeps its host |
 | Keeps the diagnostic | A connection string keeps its host and a URL keeps its path — only the credential inside is replaced. Everything else is replaced whole. One price: a URL with a port and an `@` later in its path (`https://host:8080/a@b`, `https://registry.npmjs.org:443/@scope/pkg`) loses its host and port, because a password may hold an unencoded `/`. The boot-path scrubber (`scrubCredentials` in `packages/core`) pays one more: it now redacts query parameter names it ignored before, so a `?job_key=build-42` on a migration line is logged as `?job_key=[REDACTED]` — over-redaction, and the house's accepted trade. Both redactors take the same parameter names, so what one scrubs the other cannot expose |
 | Tested unit | Pure function, its own test file, with one assertion per secret shape and a nested case three levels deep. A new provider credential shape means a new fixture. `apps/api/test/unit/redact-differential.test.ts` freezes the pre-fix pattern sets of both redactors and compares old against new over a seeded corpus, so a rule change that quietly drops coverage fails the build |
@@ -355,9 +371,9 @@ Two rules keep the block honest:
 | **Database + `ENCRYPTION_KEY`** | Total compromise: every upstream credential and every router key. Rotate upstream credentials, re-auth every OAuth account, mint new keys, and rotate `ENCRYPTION_KEY` |
 | The `CLAUDE_CONFIG_DIR` volume | Every Claude subscription it holds, immediately and without `ENCRYPTION_KEY` — the credentials are live in the SDK's own format. Recovery is re-running the SDK login for each affected Account, which invalidates the old directory |
 | A compromised IdP admin or the configured OIDC principal | Full control of the admin plane: keys can be read and minted, accounts read (but not their credentials — no endpoint returns them). Revoke the IdP session/credential and rotate the OIDC client secret if the client was affected |
-| The local admin password | The same full control of the admin plane as a compromised OIDC principal. Rotate with `bin/admin set-password` (or close the door with `bin/admin delete-password`) and invalidate existing sessions by restarting |
+| The local admin password | The same full control of the admin plane as a compromised OIDC principal. Rotate with `bin/admin set-password` (or close the door with `bin/admin delete-password`); both delete every password-login session in the same run. A restart does **not** end sessions — they are Postgres rows. Running replicas drop a deleted session within `ADMIN_SESSION_REVALIDATE_SECONDS` |
 | Logs | Metadata only: request ids, model names, token counts, account labels. No prompts, no credentials |
-| An admin session cookie | Admin-plane access until the session expires or is invalidated |
+| An admin session cookie | Admin-plane access until the session expires or is invalidated: logout, `bin/admin revoke-sessions [--user <email>]`, a password change for `local-admin`, or removing the email from `ADMIN_OIDC_ADMIN_EMAIL` (re-checked on every request) |
 
 ## Hardening checklist
 

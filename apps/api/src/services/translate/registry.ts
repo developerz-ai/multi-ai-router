@@ -1,28 +1,31 @@
-import type { Dialect, OpenAiChatCeiling } from "@multi-ai-router/core"
-import { anthropicToOpenAiChatRequest } from "./anthropic-to-openai-chat/request"
+import type { Dialect } from "@multi-ai-router/core"
+import { anthropicToOpenAiChatRequestFromParsed } from "./anthropic-to-openai-chat/request"
 import { anthropicToOpenAiChatResponse } from "./anthropic-to-openai-chat/response"
 import { anthropicToOpenAiChatStream } from "./anthropic-to-openai-chat/stream"
-import { anthropicToOpenAiResponsesRequest } from "./anthropic-to-openai-responses/request"
+import { anthropicToOpenAiResponsesRequestFromParsed } from "./anthropic-to-openai-responses/request"
 import { anthropicToOpenAiResponsesResponse } from "./anthropic-to-openai-responses/response"
 import { anthropicToOpenAiResponsesStream } from "./anthropic-to-openai-responses/stream"
-import { openAiChatToAnthropicRequest } from "./openai-chat-to-anthropic/request"
+import { openAiChatToAnthropicRequestFromParsed } from "./openai-chat-to-anthropic/request"
 import { openAiChatToAnthropicResponse } from "./openai-chat-to-anthropic/response"
 import { openAiChatToAnthropicStream } from "./openai-chat-to-anthropic/stream"
-import { openAiChatToOpenAiResponsesRequest } from "./openai-chat-to-openai-responses/request"
+import { openAiChatToOpenAiResponsesRequestFromParsed } from "./openai-chat-to-openai-responses/request"
 import { openAiChatToOpenAiResponsesResponse } from "./openai-chat-to-openai-responses/response"
 import { openAiChatToOpenAiResponsesStream } from "./openai-chat-to-openai-responses/stream"
-import { openAiResponsesToAnthropicRequest } from "./openai-responses-to-anthropic/request"
+import { openAiResponsesToAnthropicRequestFromParsed } from "./openai-responses-to-anthropic/request"
 import { openAiResponsesToAnthropicResponse } from "./openai-responses-to-anthropic/response"
 import { openAiResponsesToAnthropicStream } from "./openai-responses-to-anthropic/stream"
-import { openAiResponsesToOpenAiChatRequest } from "./openai-responses-to-openai-chat/request"
+import { openAiResponsesToOpenAiChatRequestFromParsed } from "./openai-responses-to-openai-chat/request"
 import { openAiResponsesToOpenAiChatResponse } from "./openai-responses-to-openai-chat/response"
 import { openAiResponsesToOpenAiChatStream } from "./openai-responses-to-openai-chat/stream"
-import type { DropSink } from "./shared/drops"
-import type { TranslatedResponse } from "./shared/response"
+import { ingressRequest, parseIngressRequest } from "./parse-ingress"
 import { translatedResponseError } from "./shared/response-error"
-import { applyResponsesEgressRules, type ResponsesEgressRules } from "./shared/responses-egress"
-import type { ThinkingDefaultMatcher } from "./shared/thinking-default"
-import type { StreamTranslator } from "./sse/emit"
+import { applyResponsesEgressRules } from "./shared/responses-egress"
+import type { TranslationContext, TranslationPair } from "./translation-pair"
+
+/** A pair as written below; `request` (parse, then convert) is derived for every pair at once. */
+type PairDefinition = Omit<TranslationPair, "request" | "requestFromParsed"> & {
+  readonly requestFromParsed: NonNullable<TranslationPair["requestFromParsed"]>
+}
 
 /**
  * Which conversion serves an (ingress dialect, egress dialect) pair — the lookup the egress decision
@@ -43,97 +46,21 @@ import type { StreamTranslator } from "./sse/emit"
  * with no schema knowledge at all, and giving it a translator here would invite someone to use it.
  */
 
-export interface TranslationContext {
-  /**
-   * Unix **seconds**, stamped on every emitted openai-chat object.
-   *
-   * Supplied by the caller because a translator holds no clock: the same recorded input must
-   * produce the same output in a test as it does on the wire.
-   */
-  readonly created: number
-  readonly includeUsage?: boolean | undefined
-  /** Exactly what the client asked for. Used until the upstream names a model of its own. */
-  readonly model: string
-  /**
-   * The id used only when the upstream never names one — the request's correlation id, prefixed
-   * per dialect. Deterministic and never random, for the same reason `created` is injected.
-   */
-  readonly fallbackId: string
-  /**
-   * Anthropic requires `max_tokens` and openai-chat's is optional, so a ceiling has to come from
-   * somewhere when a client omits it. The operator's configured value; see `request.ts`.
-   */
-  readonly defaultMaxTokens?: number | undefined
-  readonly maximumPendingBytes?: number | undefined
-  /**
-   * Which spelling of the openai-chat output ceiling the **selected Account** accepts.
-   *
-   * The one member of this context that varies per *candidate* rather than per request, because it
-   * is a fact about the upstream rather than about what the client sent: two openai-chat accounts in
-   * one pool can want different names, so a failover between them re-converts (`translate-body.ts`).
-   * Absent means the default — see `OpenAiChatCeiling`.
-   */
-  readonly chatCeiling?: OpenAiChatCeiling | undefined
-  /**
-   * What the **selected Account's** Responses surface demands of a body written for it — per
-   * candidate for the same reason as `chatCeiling`. Absent means an ordinary Responses upstream.
-   */
-  readonly responsesEgress?: ResponsesEgressRules | undefined
-  /**
-   * Matches an upstream (post-alias) model id against the operator's think-by-default set
-   * (`OPENAI_CHAT_THINKING_DEFAULT_MODELS`). A matched model that is forced to call a tool on
-   * openai-chat egress gets `enable_thinking: false` emitted beside the force
-   * (`shared/thinking-default.ts`), applied where the per-attempt model is reapplied
-   * (`dataplane/translate-body.ts`). Absent, or matching nothing, means the dial is never emitted.
-   * Request-level config, so unlike `chatCeiling` it does not vary per candidate.
-   */
-  readonly thinkingDefaultModels?: ThinkingDefaultMatcher | undefined
-  /**
-   * Where a request translator reports a field it dropped by name (`shared/drops.ts`). Injected like
-   * the clock: the translator stays pure and never logs, and the caller — which holds the request
-   * id — writes the line. Absent, drops are silent.
-   */
-  readonly onDrop?: DropSink | undefined
-  /**
-   * Whether the **selected Account's** surface reads `cache_control` beyond its dialect's base
-   * (`ProviderSurface.cacheControl`) — per candidate like `chatCeiling`. Absent means it does not.
-   */
-  readonly cacheControl?: boolean | undefined
-  /** The **selected Account's** seal, per candidate like `chatCeiling` (`sealed-reasoning.ts`). */
-  readonly reasoningSeal?: import("../crypto/reasoning-seal").ReasoningSeal | undefined
-}
-
-export interface TranslationPair {
-  /** The dialect the client speaks — the ingress surface it called. */
-  readonly ingress: Dialect
-  /** The dialect the selected Account speaks natively. */
-  readonly egress: Dialect
-  /**
-   * Client body → upstream body.
-   *
-   * @throws TranslationError (400) naming the field with no representation in `egress`. Thrown
-   * before any upstream call, which is the whole point of doing it here.
-   */
-  readonly request: (body: unknown, context: TranslationContext) => unknown
-  /** Upstream body → client body, for a response that did not stream. Never throws. */
-  readonly response: (body: unknown, context: TranslationContext) => TranslatedResponse
-  /** Upstream SSE → client SSE, one event in and zero or more out. Never throws. */
-  readonly stream: (context: TranslationContext) => StreamTranslator
-}
+export type { TranslationContext, TranslationPair } from "./translation-pair"
 
 /** Each dialect's ids have a shape — `msg_…`, `chatcmpl-…`, `resp_…`; a fallback looks like one. */
 const ANTHROPIC_ID_PREFIX = "msg_"
 const OPENAI_CHAT_ID_PREFIX = "chatcmpl-"
 const OPENAI_RESPONSES_ID_PREFIX = "resp_"
 
-const ANTHROPIC_TO_OPENAI_CHAT: TranslationPair = {
+const ANTHROPIC_TO_OPENAI_CHAT: PairDefinition = {
   ingress: "anthropic",
   egress: "openai-chat",
   // No `defaultMaxTokens` in this direction: Anthropic requires `max_tokens` on the way in, so a
   // request that reached here already carries the ceiling the client chose. Which of openai-chat's
   // two names it is emitted under is the target account's answer.
-  request: (body, context) =>
-    anthropicToOpenAiChatRequest(body, {
+  requestFromParsed: (parsed, context) =>
+    anthropicToOpenAiChatRequestFromParsed(ingressRequest(parsed, "anthropic"), {
       ceiling: context.chatCeiling,
       onDrop: context.onDrop,
       cacheControl: context.cacheControl,
@@ -151,11 +78,11 @@ const ANTHROPIC_TO_OPENAI_CHAT: TranslationPair = {
     }),
 }
 
-const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
+const OPENAI_CHAT_TO_ANTHROPIC: PairDefinition = {
   ingress: "openai-chat",
   egress: "anthropic",
-  request: (body, context) =>
-    openAiChatToAnthropicRequest(body, {
+  requestFromParsed: (parsed, context) =>
+    openAiChatToAnthropicRequestFromParsed(ingressRequest(parsed, "openai-chat"), {
       defaultMaxTokens: context.defaultMaxTokens,
       onDrop: context.onDrop,
       automaticCache: context.cacheControl,
@@ -178,13 +105,13 @@ const OPENAI_CHAT_TO_ANTHROPIC: TranslationPair = {
 /** Anthropic requires `max_tokens`, so every body this pair writes carries `max_output_tokens`. */
 const ANTHROPIC_CEILING: ReadonlySet<string> = new Set(["max_output_tokens"])
 
-const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
+const ANTHROPIC_TO_OPENAI_RESPONSES: PairDefinition = {
   ingress: "anthropic",
   egress: "openai-responses",
   // No `defaultMaxTokens` in this direction either: an anthropic request carries its own ceiling.
-  request: (body, context) =>
+  requestFromParsed: (parsed, context) =>
     applyResponsesEgressRules(
-      anthropicToOpenAiResponsesRequest(body, context),
+      anthropicToOpenAiResponsesRequestFromParsed(ingressRequest(parsed, "anthropic"), context),
       context.responsesEgress,
       context.onDrop,
       ANTHROPIC_CEILING,
@@ -204,11 +131,11 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: TranslationPair = {
     }),
 }
 
-const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
+const OPENAI_RESPONSES_TO_ANTHROPIC: PairDefinition = {
   ingress: "openai-responses",
   egress: "anthropic",
-  request: (body, context) =>
-    openAiResponsesToAnthropicRequest(body, {
+  requestFromParsed: (parsed, context) =>
+    openAiResponsesToAnthropicRequestFromParsed(ingressRequest(parsed, "openai-responses"), {
       defaultMaxTokens: context.defaultMaxTokens,
       onDrop: context.onDrop,
       automaticCache: context.cacheControl,
@@ -228,12 +155,12 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: TranslationPair = {
     }),
 }
 
-const OPENAI_CHAT_TO_OPENAI_RESPONSES: TranslationPair = {
+const OPENAI_CHAT_TO_OPENAI_RESPONSES: PairDefinition = {
   ingress: "openai-chat",
   egress: "openai-responses",
-  request: (body, context) =>
+  requestFromParsed: (parsed, context) =>
     applyResponsesEgressRules(
-      openAiChatToOpenAiResponsesRequest(body),
+      openAiChatToOpenAiResponsesRequestFromParsed(ingressRequest(parsed, "openai-chat")),
       context.responsesEgress,
       context.onDrop,
     ),
@@ -254,11 +181,11 @@ const OPENAI_CHAT_TO_OPENAI_RESPONSES: TranslationPair = {
 }
 
 /** The documented **downgrade**: the richer dialect expressed in the poorer one. */
-const OPENAI_RESPONSES_TO_OPENAI_CHAT: TranslationPair = {
+const OPENAI_RESPONSES_TO_OPENAI_CHAT: PairDefinition = {
   ingress: "openai-responses",
   egress: "openai-chat",
-  request: (body, context) =>
-    openAiResponsesToOpenAiChatRequest(body, {
+  requestFromParsed: (parsed, context) =>
+    openAiResponsesToOpenAiChatRequestFromParsed(ingressRequest(parsed, "openai-responses"), {
       ceiling: context.chatCeiling,
       onDrop: context.onDrop,
     }),
@@ -294,6 +221,8 @@ const PAIRS: ReadonlyMap<string, TranslationPair> = new Map(
     key(pair.ingress, pair.egress),
     {
       ...pair,
+      request: (body: unknown, context: TranslationContext) =>
+        pair.requestFromParsed(parseIngressRequest(pair.ingress, body), context),
       response: (body: unknown, context: TranslationContext) =>
         translatedResponseError(body, pair.ingress, pair.egress) ?? pair.response(body, context),
     },

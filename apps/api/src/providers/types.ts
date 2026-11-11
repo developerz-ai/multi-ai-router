@@ -4,21 +4,36 @@ import type {
   Dialect,
   OpenAiChatCeiling,
   ProviderId,
-  QuotaWindowState,
-  ResetSource,
-  UtilizationSource,
 } from "@multi-ai-router/core"
 import type { ModelAliasMap } from "@multi-ai-router/db"
 import type { ModelFamily } from "../services/routing/model-family"
 import type { ResponsesEgressRules } from "../services/translate/shared/responses-egress"
-import type { ProviderDeviceFlow } from "./device-flow"
+import type {
+  FailureClassification,
+  RateLimitSignal,
+  ResponseObservationDescriptor,
+} from "./failure-types"
 import type { ProviderModelListing } from "./model-listing"
+import type { ProviderOAuthFlow } from "./oauth-types"
 import type { ProviderQuotaRead } from "./quota-read"
+
+export type {
+  FailureClassification,
+  RateLimitSignal,
+  RateLimitWindow,
+  ResponseObservationDescriptor,
+  UpstreamErrorFacts,
+  UpstreamFailureKind,
+} from "./failure-types"
+export { UPSTREAM_FAILURE_KINDS } from "./failure-types"
+export type { OAuthTokenRequest, OAuthTokens, ProviderOAuthFlow } from "./oauth-types"
 
 /**
  * The provider driver contract: one interface, many implementations. Adding a provider is one
- * file under `drivers/` plus one line in `registry.ts` — nothing else in the system changes
- * (docs/idea/03-providers.md, "Adding a provider").
+ * file under `drivers/`, its id in the `ProviderId` union (`packages/core`), and one line in
+ * `registry.ts` (docs/idea/03-providers.md, "Adding a provider"). A fact about a provider that some
+ * service needs — a catalog sweep it must not get, a probe model, how its shipped prices read — is a
+ * member here, never a provider-id comparison in that service (non-negotiable 12).
  *
  * Every member here is **pure**: no clock, no store, no logger, no network. A driver decides how
  * a request is addressed and authenticated and what an upstream response *means*; what to do
@@ -73,187 +88,6 @@ export interface UpstreamResponse {
   readonly body?: unknown
 }
 
-/**
- * One limiter's reading. `limiter` is the provider's own name for the window (`requests`,
- * `tokens`, `input-tokens`, …) rather than an enum, because the set differs per provider and
- * inventing a mapping would lose information the operator needs.
- */
-export interface RateLimitWindow {
-  readonly limiter: string
-  readonly limit?: number
-  readonly remaining?: number
-  /** Fraction of the window consumed, 0..1. Absent when the provider reported no headroom. */
-  readonly utilization?: number
-  readonly utilizationSource: UtilizationSource
-  readonly resetsAt?: Date
-  readonly resetAfterSeconds?: number
-  readonly resetSource: ResetSource
-}
-
-/**
- * Normalized rate-limit / quota reading. Drivers never estimate: `resetSource` is
- * `provider-reported` when the upstream said something and `unknown` when it did not. Turning
- * "unknown" into a backoff guess is the circuit breaker's decision, not a driver's.
- */
-export interface RateLimitSignal {
-  /** The upstream says this credential is limited *now*. */
-  readonly limited: boolean
-  readonly retryAfterSeconds?: number
-  readonly resetsAt?: Date
-  readonly resetSource: ResetSource
-  readonly windows: readonly RateLimitWindow[]
-  /**
-   * The same reading in the router's own window vocabulary, for the providers that speak it.
-   *
-   * This is the **only** channel by which an Account's `quotaWindows` are ever written: the health
-   * store folds it in exactly as it folds in `windows`, and everything downstream — the filter's
-   * `quota-window-spent`, `quota-aware`'s ranking, the console's per-window countdowns — reads what
-   * lands there and nothing else.
-   *
-   * Absent on every HTTP reply **except** Codex's: `openai-oauth-quota.ts` parses the
-   * `x-codex-primary-*` / `-secondary-*` headers it already returns on every reply and maps them
-   * onto `five_hour` and `seven_day` (an unmatched minute count travels in {@link windows}).
-   * Each named window it builds is `advisory: true`, so it never blocks routing — see the field
-   * doc on `QuotaWindowState.advisory` and `services/routing/quota.ts`. Absent differs from
-   * empty: absent says "nothing to report about named windows" and leaves what is already known
-   * standing, where `[]` would claim this account has none.
-   */
-  readonly quotaWindows?: readonly QuotaWindowState[]
-}
-
-/**
- * The outcomes an upstream failure can have. `rate-limited` and `credits-exhausted` are separate
- * for the same reason `QuotaExhaustedError` and `CreditsExhaustedError` are: a clock fixes the
- * first, only a human fixes the second.
- *
- * The last three exist only on the Agent-SDK transport, and they are named rather than folded into
- * `server-error` because each one has a *different recovery* — replay this account, wait then fork,
- * or give up on the subprocess (docs/idea/11-anthropic-agent-sdk.md §9). A single `server-error`
- * would make all three retry the same wrong way.
- */
-export const UPSTREAM_FAILURE_KINDS = [
-  "rate-limited",
-  "credits-exhausted",
-  "auth",
-  "invalid-request",
-  /**
-   * This account's upstream does not serve the model asked for. Not `invalid-request`: the request
-   * may be perfectly good at the next account, which serves a different vendor's names. Retryable,
-   * and never held against the account's health — it answered, about a name it was never meant for.
-   */
-  "model-unsupported",
-  "server-error",
-  /**
-   * The provider's shared backend is busy — OpenCode Go's `[overloaded] the server is overloaded`
-   * (sent as a `429`), Anthropic's `overloaded_error`, Kimi's `engine_overloaded_error`. About the
-   * provider, not this credential: retried with backoff, never a breaker strike, a cooldown or a
-   * recovery permit, and never answered as `quota_exhausted` (`docs/idea/05-routing-and-failover.md`).
-   */
-  "overloaded",
-  /** The SDK no longer holds the session we resumed. Evict the binding, replay once in place. */
-  "stale-session",
-  /** The SDK session is still running as a background agent. Bounded waits, then fork it. */
-  "busy-session",
-  /** The `claude` subprocess died. Reported honestly, never re-read as an auth failure. */
-  "subprocess-crash",
-  "unknown",
-] as const
-
-export type UpstreamFailureKind = (typeof UPSTREAM_FAILURE_KINDS)[number]
-
-/** The provider-independent facts read out of a provider-shaped error body. */
-export interface UpstreamErrorFacts {
-  readonly type?: string
-  readonly code?: string
-  readonly message?: string
-}
-
-export interface FailureClassification {
-  readonly kind: UpstreamFailureKind
-  readonly status: number
-  /**
-   * Whether the router may try the **next candidate account**. Never the same account, and never
-   * once bytes have reached the client (docs/idea/05-routing-and-failover.md).
-   */
-  readonly retryable: boolean
-  /**
-   * Which signal decided this — `http-status:429`, `openai:insufficient_quota`,
-   * `minimax:base_resp-1008`. Recorded so a misclassification is debuggable rather than a mystery.
-   */
-  readonly signal: string
-  /** The upstream's own message, when it gave one. Never rendered into a client-facing error. */
-  readonly message?: string
-  readonly rateLimit: RateLimitSignal | null
-}
-
-/** A ready-to-send token-endpoint call. The caller owns the fetch; the driver owns the shape. */
-export interface OAuthTokenRequest {
-  readonly url: string
-  readonly method: "POST"
-  readonly headers: Readonly<Record<string, string>>
-  readonly body: string
-}
-
-/**
- * What a token endpoint said, provider-independently. A `null` field means the issuer said
- * nothing about it — refresh-token rotation and expiry reporting both vary by provider — and what
- * that means is the caller's call: a refresh keeps what the Account holds, a fresh authorization
- * replaces it.
- */
-export interface OAuthTokens {
-  readonly providerAccountId?: string
-  readonly accessToken: string
-  readonly refreshToken: string | null
-  readonly expiresInSeconds: number | null
-}
-
-/**
- * The authorization-code + PKCE flow a provider's subscription is connected with, as pure
- * builders. A driver that advertises this is connectable through
- * `services/accounts/connect/oauth.ts`, and that service names no provider — which is what keeps
- * adding an OAuth provider to one file under `drivers/` (CLAUDE.md non-negotiable 12).
- *
- * Shapes only, exactly like the rest of this interface: the fetch, the one-shot `state`, the TTL,
- * and the refresh timers live in `services/accounts/`.
- */
-export interface ProviderOAuthFlow {
-  /**
-   * The redirect the provider's own first-party client registers. Used when the operator has no
-   * reachable `PUBLIC_URL`: the browser lands on a dead loopback page whose address bar still
-   * carries `code` and `state`, and the operator pastes that back.
-   */
-  readonly loopbackRedirectUri: string
-  authorizeUrl(input: {
-    readonly redirectUri: string
-    readonly state: string
-    readonly codeChallenge: string
-  }): URL
-  codeExchange(input: {
-    readonly code: string
-    readonly redirectUri: string
-    readonly codeVerifier: string
-  }): OAuthTokenRequest
-  refresh(input: { readonly refreshToken: string }): OAuthTokenRequest
-  readonly device?: ProviderDeviceFlow
-  /** Zod at the boundary: a reshaped payload yields `null`, never a half-populated token set. */
-  readTokens(
-    body: unknown,
-    context?: {
-      readonly previousProviderAccountId?: string
-      readonly previousAccessToken?: string
-    },
-  ): OAuthTokens | null
-}
-
-/** Parsed bounded successful-body evidence; no I/O, raw body logging, or response replacement. */
-export interface ResponseObservationDescriptor {
-  readonly terminalPolicy: "evidence-only" | "require-completion"
-  readonly inspectPayload?: (
-    payload: unknown,
-    event: string | undefined,
-  ) => FailureClassification | null
-}
-
 export interface ProviderDriver {
   readonly responseObservation?: ResponseObservationDescriptor
   readonly id: ProviderId
@@ -287,6 +121,25 @@ export interface ProviderDriver {
    * Absent: routing strips the tag and sends the base name (`services/routing/context-tag.ts`).
    */
   readonly understandsContextTags?: boolean
+  /**
+   * `manual`: the hourly catalog sweep never lists this provider; only the operator's discover
+   * button does (`services/models/refresh.ts`). For an aggregator whose listing is someone else's
+   * catalog. Absent: swept like any HTTP account.
+   */
+  readonly catalogSweep?: "manual"
+  /**
+   * The model the idle-account keepalive/probe spends its one minimal turn on
+   * (`scheduler/tasks/idle-account-probe.ts`). Absent: this provider is never probed idle.
+   */
+  readonly idleProbeModel?: string
+  /**
+   * How the shipped price table for this provider reads (`services/cost/prices.ts`). Absent: list
+   * prices, family fallback allowed. `notional`: the rows are a list-price *attribution* for a
+   * flat-fee plan, not a meter — priced only for a `subscription`-billed account and never for a
+   * cache write (the plan publishes no write rate), exact model name only (no family fallback), and
+   * listed to the console as `notionalOnly`.
+   */
+  readonly shippedPrices?: "notional"
 
   /** Account override wins over the pinned default. Throws when neither exists. */
   resolveBaseUrl(account: DriverAccount): URL

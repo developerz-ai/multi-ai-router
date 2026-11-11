@@ -8,8 +8,11 @@ import type { ApiKeyRepository, ApiKeyRow } from "@multi-ai-router/db"
 import { timingSafeEqualStrings } from "../../admin-auth"
 import type { CredentialCipher } from "../../crypto/cipher"
 import type { KeyScopeSnapshot } from "../../routing"
-import { createTtlCache, type TtlCache } from "./cache"
-import type { KeyScopeLoader } from "./scope"
+import { createTtlCache } from "./cache"
+import type { RouterKeyCacheOptions } from "./cache-options"
+import type { KeyCandidateLoader, KeyScopeLoader } from "./scope"
+
+export type { RouterKeyCacheOptions } from "./cache-options"
 
 /**
  * Router key verification.
@@ -25,9 +28,16 @@ import type { KeyScopeLoader } from "./scope"
  * never decides.
  *
  * **Verified keys are cached in memory.** The performance budget forbids a database round trip per
- * request, so a hit costs a digest and a map lookup and a miss costs one indexed query. Failures
- * are cached too, on a shorter TTL, so a client looping on a bad key cannot turn itself into a
- * query generator.
+ * request, so a hit costs a digest and a map lookup and a miss costs one indexed query (prefix
+ * row and scope targets together, `repositoryCandidateLoader`). Failures are cached too, on a
+ * shorter TTL and in a cache of their own: a spray of unknown keys can neither evict a verified key
+ * nor queue more than `maxPendingLoads` lookups on the pool the rest of the router shares.
+ *
+ * **A warm key never waits on the database.** Past `refreshAheadFraction` of its TTL a hit is
+ * answered from memory and one background reload starts; only a key whose TTL ran out with no
+ * reload landed waits. If that reload fails on a store error (Postgres restarting), the last
+ * verified copy is served for up to `staleOnErrorMs` past its TTL; with nothing to serve the
+ * request gets a typed `503` + `Retry-After`, never a generic `500` (prod 2026-10-31: 52 of them).
  *
  * Revocation is immediate for new requests, which a TTL alone cannot deliver — the admin plane
  * calls {@link RouterKeyVerifier.invalidate} when it revokes or edits a key. In-flight requests
@@ -46,10 +56,21 @@ export interface VerifiedKey {
   readonly expiresAt: Date | null
 }
 
-export interface RouterKeyVerifierDeps {
-  readonly repository: Pick<ApiKeyRepository, "findUsableByPrefix">
+/**
+ * Where candidate rows come from: one combined statement (`loadCandidates`, production), or the
+ * prefix query plus a scope loader for the matched row.
+ */
+export type RouterKeyVerifierDeps = RouterKeyVerifierBase &
+  (
+    | { readonly loadCandidates: KeyCandidateLoader }
+    | {
+        readonly repository: Pick<ApiKeyRepository, "findUsableByPrefix">
+        readonly loadScope: KeyScopeLoader
+      }
+  )
+
+interface RouterKeyVerifierBase {
   readonly cipher: Pick<CredentialCipher, "decrypt">
-  readonly loadScope: KeyScopeLoader
   readonly now?: () => Date
   readonly cache?: RouterKeyCacheOptions
   /**
@@ -59,13 +80,6 @@ export interface RouterKeyVerifierDeps {
   readonly onVerified?: (key: VerifiedKey) => void
 }
 
-export interface RouterKeyCacheOptions {
-  readonly maxEntries?: number
-  readonly ttlMs?: number
-  /** How long an unknown key stays refused from memory. Short: a key may be minted at any time. */
-  readonly negativeTtlMs?: number
-}
-
 export const DEFAULT_KEY_CACHE_MAX_ENTRIES = 4_096
 export const DEFAULT_KEY_CACHE_TTL_MS = 60_000
 export const DEFAULT_KEY_CACHE_NEGATIVE_TTL_MS = 5_000
@@ -73,7 +87,8 @@ export const DEFAULT_KEY_CACHE_NEGATIVE_TTL_MS = 5_000
 export interface RouterKeyVerifier {
   /**
    * @throws KeyRevokedError when the key is unknown, revoked, expired, or malformed.
-   * @throws KeyVerificationUnavailableError on bounded-load saturation or repeated invalidation.
+   * @throws KeyVerificationUnavailableError on bounded-load saturation, repeated invalidation, or a
+   *   store failure with no verified copy to serve.
    */
   verify(presented: string): Promise<VerifiedKey>
   /** Drops every cached entry for one key. Called by the admin plane on revoke or edit. */
@@ -83,39 +98,65 @@ export interface RouterKeyVerifier {
 
 const UNKNOWN_KEY = "The presented router API key is unknown, revoked, or expired"
 const VERIFICATION_BUSY = "Router API key verification is temporarily unavailable; retry shortly"
-const MAX_LOAD_ATTEMPTS = 3
 
-type CacheEntry = { readonly ok: true; readonly key: VerifiedKey } | { readonly ok: false }
+interface Verified {
+  readonly key: VerifiedKey
+  readonly loadedAtMs: number
+}
 
 export function createRouterKeyVerifier(deps: RouterKeyVerifierDeps): RouterKeyVerifier {
   const now = deps.now ?? (() => new Date())
-  const ttlMs = deps.cache?.ttlMs ?? DEFAULT_KEY_CACHE_TTL_MS
-  const negativeTtlMs = deps.cache?.negativeTtlMs ?? DEFAULT_KEY_CACHE_NEGATIVE_TTL_MS
-  const cache: TtlCache<CacheEntry> = createTtlCache({
-    maxEntries: deps.cache?.maxEntries ?? DEFAULT_KEY_CACHE_MAX_ENTRIES,
-    ttlMs,
-    now: () => now().getTime(),
+  const nowMs = () => now().getTime()
+  const options = deps.cache ?? {}
+  const ttlMs = options.ttlMs ?? DEFAULT_KEY_CACHE_TTL_MS
+  const negativeTtlMs = options.negativeTtlMs ?? DEFAULT_KEY_CACHE_NEGATIVE_TTL_MS
+  const staleOnErrorMs = options.staleOnErrorMs ?? 0
+  const refreshAheadMs = ttlMs * (options.refreshAheadFraction ?? 0.8)
+  const maxPending = options.maxPendingLoads ?? 32
+  const maxLoadAttempts = options.maxLoadAttempts ?? 3
+  const retryAfterSeconds = options.unavailableRetryAfterSeconds ?? 1
+  const maxEntries = options.maxEntries ?? DEFAULT_KEY_CACHE_MAX_ENTRIES
+  // Kept until the stale-on-error window closes; freshness is judged from `loadedAtMs`.
+  const verified = createTtlCache<Verified>({
+    maxEntries,
+    ttlMs: ttlMs + staleOnErrorMs,
+    now: nowMs,
+  })
+  const refused = createTtlCache<true>({
+    maxEntries: options.negativeMaxEntries ?? 1_024,
+    ttlMs: negativeTtlMs,
+    now: nowMs,
   })
   // keyId -> the digests caching it, so a revocation can find them without scanning.
   const byKeyId = new Map<string, Set<string>>()
   const inFlight = new Map<string, Promise<VerifiedKey>>()
-  const maxPending = deps.cache?.maxEntries ?? DEFAULT_KEY_CACHE_MAX_ENTRIES
   let generation = 0
 
-  const remember = (digest: string, entry: CacheEntry): void => {
-    if (byKeyId.size >= maxPending) {
+  const busy = (cause?: unknown) =>
+    new KeyVerificationUnavailableError(VERIFICATION_BUSY, {
+      retryAfterSeconds,
+      ...(cause === undefined ? {} : { cause }),
+    })
+
+  const remember = (digest: string, key: VerifiedKey): void => {
+    if (byKeyId.size >= maxEntries) {
       for (const [id, digests] of byKeyId) {
         for (const cachedDigest of digests) {
-          if (cache.get(cachedDigest) === undefined) digests.delete(cachedDigest)
+          if (verified.get(cachedDigest) === undefined) digests.delete(cachedDigest)
         }
         if (digests.size === 0) byKeyId.delete(id)
       }
     }
-    cache.set(digest, entry, entry.ok ? ttlMs : negativeTtlMs)
-    if (!entry.ok) return
-    const digests = byKeyId.get(entry.key.id) ?? new Set<string>()
+    verified.set(digest, { key, loadedAtMs: nowMs() })
+    const digests = byKeyId.get(key.id) ?? new Set<string>()
     digests.add(digest)
-    byKeyId.set(entry.key.id, digests)
+    byKeyId.set(key.id, digests)
+  }
+
+  const forget = (digest: string): void => {
+    verified.delete(digest)
+    // Zero means "do not cache a miss at all" — not "cache it already expired", which still evicts.
+    if (negativeTtlMs > 0) refused.set(digest, true)
   }
 
   const match = (rows: readonly ApiKeyRow[], presented: string): ApiKeyRow | null => {
@@ -133,6 +174,69 @@ export function createRouterKeyVerifier(deps: RouterKeyVerifierDeps): RouterKeyV
     return null
   }
 
+  const lookup = async (
+    prefix: string,
+    presented: string,
+  ): Promise<{ row: ApiKeyRow; scope: KeyScopeSnapshot } | null> => {
+    if ("loadCandidates" in deps) {
+      const candidates = await deps.loadCandidates(prefix, now())
+      const row = match(
+        candidates.map((candidate) => candidate.row),
+        presented,
+      )
+      const found = candidates.find((candidate) => candidate.row === row)
+      return found === undefined ? null : found
+    }
+    // The query excludes revoked and expired rows; a miss and a mismatching prefix are
+    // deliberately indistinguishable to the caller.
+    const row = match(await deps.repository.findUsableByPrefix(prefix, now()), presented)
+    return row === null ? null : { row, scope: await deps.loadScope(row) }
+  }
+
+  const load = async (digest: string, prefix: string, presented: string) => {
+    // An unrelated key edit also advances the fence. Reload within this same coalesced slot
+    // instead of calling a valid credential revoked, but bound work under continuous edits.
+    for (let attempt = 0; attempt < maxLoadAttempts; attempt++) {
+      const startedGeneration = generation
+      const found = await lookup(prefix, presented)
+      if (startedGeneration !== generation) continue
+      if (found === null) {
+        forget(digest)
+        throw new KeyRevokedError(UNKNOWN_KEY)
+      }
+      const { row, scope } = found
+      const key: VerifiedKey = {
+        id: row.id,
+        name: row.name,
+        prefix: row.prefix,
+        scope,
+        rateLimitRequests: row.rateLimitRequests,
+        rateLimitWindowSeconds: row.rateLimitWindowSeconds,
+        expiresAt: row.expiresAt,
+      }
+      if (isExpired(key, now())) {
+        verified.delete(digest)
+        throw new KeyRevokedError(UNKNOWN_KEY)
+      }
+      remember(digest, key)
+      deps.onVerified?.(key)
+      return key
+    }
+    throw busy()
+  }
+
+  /** One coalesced load per digest; `null` when the pending ceiling refuses a new one. */
+  const startLoad = (digest: string, prefix: string, presented: string) => {
+    const pending = inFlight.get(digest)
+    if (pending !== undefined) return pending
+    if (inFlight.size >= maxPending) return null
+    const loading = load(digest, prefix, presented).finally(() => {
+      if (inFlight.get(digest) === loading) inFlight.delete(digest)
+    })
+    inFlight.set(digest, loading)
+    return loading
+  }
+
   return {
     async verify(presented) {
       // A malformed value never reaches the database as a query parameter.
@@ -140,72 +244,53 @@ export function createRouterKeyVerifier(deps: RouterKeyVerifierDeps): RouterKeyV
       if (prefix === null) throw new KeyRevokedError(UNKNOWN_KEY)
 
       const digest = createHash("sha256").update(presented, "utf8").digest("base64url")
-      const cached = cache.get(digest)
-      if (cached !== undefined) {
-        if (!cached.ok) throw new KeyRevokedError(UNKNOWN_KEY)
-        if (isExpired(cached.key, now())) {
-          cache.delete(digest)
-          throw new KeyRevokedError(UNKNOWN_KEY)
-        }
+      if (refused.get(digest) !== undefined) throw new KeyRevokedError(UNKNOWN_KEY)
+
+      const cached = verified.get(digest)
+      if (cached !== undefined && isExpired(cached.key, now())) {
+        verified.delete(digest)
+        throw new KeyRevokedError(UNKNOWN_KEY)
+      }
+      const ageMs = cached === undefined ? Number.POSITIVE_INFINITY : nowMs() - cached.loadedAtMs
+      if (cached !== undefined && ageMs < ttlMs) {
+        // Refresh ahead: the request is answered now; the reload's outcome lands in the cache.
+        if (ageMs >= refreshAheadMs) startLoad(digest, prefix, presented)?.catch(() => undefined)
         return cached.key
       }
 
-      const pending = inFlight.get(digest)
-      if (pending !== undefined) return pending
-      if (inFlight.size >= maxPending) {
-        throw new KeyVerificationUnavailableError(VERIFICATION_BUSY, { retryAfterSeconds: 1 })
+      const loading = startLoad(digest, prefix, presented)
+      if (loading === null) {
+        if (cached !== undefined) return cached.key
+        throw busy()
       }
-      const load = async (): Promise<VerifiedKey> => {
-        // An unrelated key edit also advances the fence. Reload within this same coalesced slot
-        // instead of calling a valid credential revoked, but bound work under continuous edits.
-        for (let attempt = 0; attempt < MAX_LOAD_ATTEMPTS; attempt++) {
-          const startedGeneration = generation
-          // The query excludes revoked and expired rows; a miss and a mismatching prefix are
-          // deliberately indistinguishable to the caller.
-          const rows = await deps.repository.findUsableByPrefix(prefix, now())
-          if (startedGeneration !== generation) continue
-          const row = match(rows, presented)
-          if (row === null) {
-            remember(digest, { ok: false })
-            throw new KeyRevokedError(UNKNOWN_KEY)
-          }
-
-          const key: VerifiedKey = {
-            id: row.id,
-            name: row.name,
-            prefix: row.prefix,
-            scope: await deps.loadScope(row),
-            rateLimitRequests: row.rateLimitRequests,
-            rateLimitWindowSeconds: row.rateLimitWindowSeconds,
-            expiresAt: row.expiresAt,
-          }
-          if (startedGeneration !== generation) continue
-          if (isExpired(key, now())) throw new KeyRevokedError(UNKNOWN_KEY)
-          remember(digest, { ok: true, key })
-          deps.onVerified?.(key)
-          return key
-        }
-        throw new KeyVerificationUnavailableError(VERIFICATION_BUSY, { retryAfterSeconds: 1 })
+      try {
+        return await loading
+      } catch (error) {
+        if (!isStoreFailure(error)) throw error
+        // Bounded by the cache itself: the entry is gone `staleOnErrorMs` past its TTL.
+        if (cached !== undefined && verified.get(digest) === cached) return cached.key
+        throw busy(error)
       }
-      const loading = load().finally(() => {
-        if (inFlight.get(digest) === loading) inFlight.delete(digest)
-      })
-      inFlight.set(digest, loading)
-      return loading
     },
 
     invalidate(keyId) {
       generation += 1
-      for (const digest of byKeyId.get(keyId) ?? []) cache.delete(digest)
+      for (const digest of byKeyId.get(keyId) ?? []) verified.delete(digest)
       byKeyId.delete(keyId)
     },
 
     invalidateAll() {
       generation += 1
-      cache.clear()
+      verified.clear()
+      refused.clear()
       byKeyId.clear()
     },
   }
+}
+
+/** A failure that says nothing about the key: the store could not answer. */
+function isStoreFailure(error: unknown): boolean {
+  return !(error instanceof KeyRevokedError || error instanceof KeyVerificationUnavailableError)
 }
 
 /** A key past its expiry is refused exactly like a revoked one. */

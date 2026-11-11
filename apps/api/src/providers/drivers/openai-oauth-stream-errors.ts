@@ -148,7 +148,11 @@ export function inspectCodexStreamFrame(
         ? undefined
         : listed
   const kind = code === undefined ? "server-error" : (KIND_BY_CODE.get(code) ?? "server-error")
-  const message = text(root.message) ?? text(nested?.message) ?? text(root.error)
+  const message =
+    text(root.message) ??
+    text(nested?.message) ??
+    text(root.error) ??
+    describeSilent(type, root, nested)
   return {
     kind,
     status: 200,
@@ -157,4 +161,24 @@ export function inspectCodexStreamFrame(
     rateLimit: null,
     ...(message === undefined ? {} : { message }),
   }
+}
+
+/**
+ * A frame that ends the stream with no words of its own still says *which* frame and code it was.
+ * Without this the operator's line read `upstreamMessage=null` for 41 of 45 Codex stream failures
+ * (prod 2026-11-03..10, sweep 101, 10.17) and none could be diagnosed. Built from the frame type and
+ * the upstream's code/status fields only — closed vocabulary, never a body.
+ */
+function describeSilent(
+  type: string,
+  root: Record<string, unknown>,
+  nested: Record<string, unknown> | undefined,
+): string {
+  const code = text(root.code) ?? text(nested?.code) ?? text(nested?.type)
+  const status = text(record(root.response)?.status)
+  const parts = [
+    code === undefined ? undefined : `code=${code}`,
+    status === undefined ? undefined : `status=${status}`,
+  ].filter((part) => part !== undefined)
+  return `${type} carried no message${parts.length === 0 ? "" : ` (${parts.join(", ")})`}`
 }

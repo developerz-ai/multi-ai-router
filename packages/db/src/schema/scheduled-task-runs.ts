@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm"
 import { index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
 import { scheduledTask, scheduledTaskOutcome } from "./enums"
 
@@ -37,6 +38,13 @@ export const scheduledTaskRuns = pgTable(
     // index above cannot serve: it is ordered by task before age, so a global "oldest N" is a
     // sort of the whole table.
     index("scheduled_task_runs_started_at_idx").on(table.startedAt),
+    // "Is a run of this task still open?" — asked before every tick of every task. Riding
+    // `(task, started_at)` filtered every past run of the task on the heap to find none (prod:
+    // ~6,700 index tuples per call, 0 rows). Partial on the open rows, which are almost never
+    // more than one.
+    index("scheduled_task_runs_open_idx")
+      .on(table.task, table.startedAt)
+      .where(sql`${table.finishedAt} is null`),
   ],
 )
 

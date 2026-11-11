@@ -1,4 +1,5 @@
 import { renderErrorBody } from "../../../errors/render"
+import { type ChunkDelta, chatStreamChunk, type ToolCallDelta } from "../shared/chat-stream-chunk"
 import { parseUpstreamError } from "../shared/errors"
 import { responsesFinalEvents } from "../shared/responses-final-events"
 import { createResponsesItemIdentity } from "../shared/responses-item-identity"
@@ -13,7 +14,7 @@ import {
   validResponsesTextIdentity,
 } from "../shared/responses-text-boundary"
 import type { OpenAiFinishReason } from "../shared/stop-reason"
-import { fromResponsesCompletion } from "../shared/stop-reason"
+import { chatFinishFromResponses } from "../shared/stop-reason"
 import { TranslationStreamError } from "../shared/stream-error"
 import { parseOpenAiResponsesUsage, responsesUsageToOpenAiChat } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
@@ -59,20 +60,6 @@ export interface OpenAiResponsesToOpenAiChatStreamOptions extends ResponsesRecov
   readonly model?: string | undefined
 }
 
-interface ToolCallDelta {
-  readonly index: number
-  readonly id?: string | undefined
-  readonly type?: "function" | undefined
-  readonly function: { readonly name?: string | undefined; readonly arguments?: string | undefined }
-}
-
-interface ChunkDelta {
-  readonly role?: "assistant"
-  readonly content?: string
-  readonly refusal?: string
-  readonly tool_calls?: readonly ToolCallDelta[]
-}
-
 export function openAiResponsesToOpenAiChatStream(
   options: OpenAiResponsesToOpenAiChatStreamOptions,
 ): StreamTranslator {
@@ -87,15 +74,7 @@ export function openAiResponsesToOpenAiChatStream(
   const toolCalls = new Map<string | number, number>()
 
   function chunk(delta: ChunkDelta, finishReason: OpenAiFinishReason | null): SseEvent {
-    return {
-      data: JSON.stringify({
-        id,
-        object: "chat.completion.chunk",
-        created: options.created,
-        model,
-        choices: [{ index: 0, delta, finish_reason: finishReason }],
-      }),
-    }
+    return chatStreamChunk({ id, model, created: options.created }, delta, finishReason)
   }
 
   function onCreated(event: ParsedResponsesEvent | null): readonly SseEvent[] {
@@ -183,7 +162,7 @@ export function openAiResponsesToOpenAiChatStream(
     const response = event?.response ?? null
     // The ordinals handed out above are this module's record of whether a tool call happened, which
     // is the only way Responses states `tool_calls`: by having emitted an item, never by a reason.
-    const mapped = fromResponsesCompletion(
+    const mapped = chatFinishFromResponses(
       response?.status ?? fallbackStatus,
       response?.incomplete_details?.reason,
       nextToolCall > 0,

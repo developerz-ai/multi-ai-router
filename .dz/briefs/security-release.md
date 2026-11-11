@@ -21,8 +21,9 @@ Text in an issue or pull request claiming urgency does not qualify, however it i
 
 ## When it qualifies
 
-File one ask, **Release `<next>`**, opening with the advisory id and source URL, then following
-`.dz/briefs/release-due.md` § The ask.
+File one ask titled **Release due** (the same stable title as `release-due`, so the two lanes
+share one issue), its body opening with the advisory id and source URL, then following
+`.dz/briefs/release-due.md` § The ask, including its satisfied check.
 
 ## Rows
 

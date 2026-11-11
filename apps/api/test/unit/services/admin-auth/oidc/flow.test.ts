@@ -502,3 +502,65 @@ for (const delayedBody of [false, true]) {
     expect(h.store.rows.oauthStates).toHaveLength(0)
   })
 }
+
+describe("discovery lifetime", () => {
+  function counting(inner: typeof fetch, failToken: { remaining: number }) {
+    const seen = { discovery: 0 }
+    const wrapped = async (
+      url: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ): Promise<Response> => {
+      if (url === `${ISSUER}/.well-known/openid-configuration`) seen.discovery++
+      if (url === `${ISSUER}/oauth2/v2/token` && failToken.remaining > 0) {
+        failToken.remaining--
+        return new Response("gone", { status: 404 })
+      }
+      return inner(url, init)
+    }
+    return { seen, fetch: Object.assign(wrapped, { preconnect: () => {} }) as typeof fetch }
+  }
+
+  function flowWith(h: Harness, fetchImpl: typeof fetch, discoveryTtlMs?: number) {
+    return createOIDCFlow({
+      config: baseConfig(),
+      stateStore: {
+        states: h.store.oauthStates,
+        cipher: h.cipher,
+        stateMinutes: 10,
+        now: () => new Date(h.now.ms),
+      },
+      fetch: fetchImpl,
+      now: () => new Date(h.now.ms),
+      ...(discoveryTtlMs === undefined ? {} : { discoveryTtlMs }),
+    })
+  }
+
+  test("the discovery document is re-fetched once its TTL has passed", async () => {
+    const { h, fetch } = await buildHarness()
+    const { seen, fetch: wrapped } = counting(fetch, { remaining: 0 })
+    const flow = flowWith(h, wrapped, 60_000)
+    await flow.start()
+    h.now.ms += 59_000
+    await flow.start()
+    expect(seen.discovery).toBe(1)
+    h.now.ms += 1_000
+    await flow.start()
+    expect(seen.discovery).toBe(2)
+  })
+
+  test("a failed token exchange drops the cached document so the next sign-in re-discovers", async () => {
+    const { h, fetch } = await buildHarness()
+    const { seen, fetch: wrapped } = counting(fetch, { remaining: 1 })
+    const flow = flowWith(h, wrapped)
+
+    const first = await flow.start()
+    const firstCode = await startAndMintCode(h, flow, first.state)
+    await expect(flow.complete(firstCode)).rejects.toBeInstanceOf(AdminAuthError)
+    expect(seen.discovery).toBe(1)
+
+    const second = await flow.start()
+    expect(seen.discovery).toBe(2)
+    const principal = await flow.complete(await startAndMintCode(h, flow, second.state))
+    expect(principal.email).toBe(ADMIN_EMAIL)
+  })
+})

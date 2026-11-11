@@ -1,4 +1,5 @@
 import { createCatalogSnapshotRepository } from "@multi-ai-router/db"
+import { captureException } from "../observability"
 import { createSdkQuotaStore } from "../providers"
 import { IDLE_PROBE_MODELS } from "../scheduler/tasks/idle-account-probe"
 import { createRoutingCatalog, loadCatalog } from "../services/catalog"
@@ -63,6 +64,12 @@ export function createWarmState(
     authFailureCooldownMs: env.failover.authFailureCooldownMs,
     authFailureMaxCooldownMs: env.failover.authFailureMaxCooldownMs,
     probeHoldMs: env.failover.halfOpenHoldMs,
+    // `least-used` ranks recent output tokens, not lifetime totals (02.10).
+    tokenWindowMs: env.routingLimits.leastUsedTokenWindowSeconds * 1_000,
+    // A provider reset past this is bounded, on a failure and on a limiter reading alike (04.2).
+    maxReportedResetSeconds: env.routingLimits.maxReportedResetSeconds,
+    // A `model-unsupported` answer keeps that model off the account this long (10.16).
+    modelRefusalTtlMs: env.routingLimits.modelRefusalTtlSeconds * 1_000,
     // Two read intervals: one missed `plan_quota_read` tick is tolerated, a dead endpoint is not.
     planReadingMaxAgeMs: 2 * env.scheduler.planQuotaReadIntervalMinutes * 60_000,
     // Both transports fold a reading in here and nowhere else, which is what makes one hook enough
@@ -85,6 +92,15 @@ export function createWarmState(
       statusWriter.forget(accountId)
     },
   })
+  // A failed periodic refresh keeps serving the last snapshot; it must say so (04.5).
+  const refreshFailed = (store: string) => (error: unknown) => {
+    logger.warn("warm snapshot refresh failed — serving the last one", {
+      component: "warm-state",
+      store,
+      error,
+    })
+    captureException(error, { tags: { errorClass: "warm_refresh_failure", store } })
+  }
   let catalogAccountIds = new Set<string>()
   let recoveryComponents: ReturnType<typeof createRecoveryComponents> | undefined
   const catalogSnapshots = createCatalogSnapshotRepository(database)
@@ -101,6 +117,7 @@ export function createWarmState(
       for (const account of loaded) health.reconcile(account.id, accountHealthFacts(account))
     },
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
+    onRefreshError: refreshFailed("routing-catalog"),
     now,
   })
   recoveryComponents = createRecoveryComponents({
@@ -122,6 +139,7 @@ export function createWarmState(
   const prices = createPriceBook({
     load: () => priceOverrides.list(),
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
+    onRefreshError: refreshFailed("price-book"),
     now,
   })
   // What the hourly sweep discovered, held warm so `GET /v1/catalog` renders without a query per
@@ -131,6 +149,7 @@ export function createWarmState(
   const modelCatalogStore = createModelCatalogStore({
     load: () => modelCatalog.list(),
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
+    onRefreshError: refreshFailed("model-catalog"),
     now,
   })
 

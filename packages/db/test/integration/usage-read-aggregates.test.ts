@@ -153,7 +153,7 @@ beforeAll(async () => {
 
 describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   test("totals: nine measures over the window, requests distinct from attempts", async () => {
-    const totals = await usage.totals(WINDOW)
+    const totals = await usage.totals(WINDOW, {})
 
     expect(totals).toMatchObject({
       requests: 3,
@@ -170,24 +170,24 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   test("totals: a token sum past 2^31 is answered, not raised as integer out of range", async () => {
-    const totals = await usage.totals(BIG_WINDOW)
+    const totals = await usage.totals(BIG_WINDOW, {})
 
     expect(totals.cacheReadTokens).toBe(2 * HALF_OVERFLOW)
     expect(totals.attempts).toBe(2)
     expect(totals.requests).toBe(2)
 
     // The same aggregates behind every grouped reader: none may keep an `int` cast of its own.
-    const byAccount = await usage.breakdown(BIG_WINDOW, "accountId")
+    const byAccount = await usage.breakdown(BIG_WINDOW, "accountId", undefined, undefined, {})
     expect(byAccount.map((row) => row.cacheReadTokens).sort()).toEqual([
       HALF_OVERFLOW,
       HALF_OVERFLOW,
     ])
-    const outcomes = await usage.outcomes(BIG_WINDOW)
+    const outcomes = await usage.outcomes(BIG_WINDOW, {})
     expect(outcomes).toEqual([{ outcome: "success", attempts: 2 }])
   })
 
   test("totals: an empty window answers zeros, not an absent row", async () => {
-    const totals = await usage.totals(EMPTY_WINDOW)
+    const totals = await usage.totals(EMPTY_WINDOW, {})
 
     expect(totals.requests).toBe(0)
     expect(totals.attempts).toBe(0)
@@ -195,7 +195,7 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   test("breakdown: grouped by account, biggest first, per-group percentiles", async () => {
-    const rows = await usage.breakdown(WINDOW, "accountId")
+    const rows = await usage.breakdown(WINDOW, "accountId", undefined, undefined, {})
 
     expect(rows.map((row) => row.id)).toEqual([accountA, accountB])
     expect(rows[0]).toMatchObject({
@@ -211,7 +211,7 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   test("series: hour buckets in order, ISO strings formatted in Postgres", async () => {
-    const points = await usage.series(WINDOW, "hour")
+    const points = await usage.series(WINDOW, "hour", {})
 
     expect(points).toEqual([
       { at: `${DAY}T10:00:00.000Z`, requests: 2, attempts: 2, errors: 1 },
@@ -221,13 +221,13 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   test("series: the day bucket collapses the same rows to one point", async () => {
-    const points = await usage.series(WINDOW, "day")
+    const points = await usage.series(WINDOW, "day", {})
 
     expect(points).toEqual([{ at: `${DAY}T00:00:00.000Z`, requests: 3, attempts: 4, errors: 1 }])
   })
 
   test("seriesByDimension: one query, one point per (group, bucket)", async () => {
-    const points = await usage.seriesByDimension(WINDOW, "hour", "accountId")
+    const points = await usage.seriesByDimension(WINDOW, "hour", "accountId", {})
 
     // Unordered by contract — sort before comparing.
     const sorted = [...points].sort((a, b) =>
@@ -243,7 +243,7 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   test("latency: global percentiles, TTFB excluding the attempt that relayed no byte", async () => {
-    const latency = await usage.latency(WINDOW)
+    const latency = await usage.latency(WINDOW, {})
 
     expect(latency).toEqual({
       p50Ms: 200,
@@ -255,7 +255,7 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   test("latency: an empty window is nulls, never zeros", async () => {
-    expect(await usage.latency(EMPTY_WINDOW)).toEqual({
+    expect(await usage.latency(EMPTY_WINDOW, {})).toEqual({
       p50Ms: null,
       p95Ms: null,
       routerOverheadP95Ms: null,
@@ -264,7 +264,7 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   test("outcomes: one row per outcome that occurred", async () => {
-    const rows = await usage.outcomes(WINDOW)
+    const rows = await usage.outcomes(WINDOW, {})
 
     const byOutcome = new Map(rows.map((row) => [row.outcome, row.attempts]))
     expect(byOutcome.get("success")).toBe(3)

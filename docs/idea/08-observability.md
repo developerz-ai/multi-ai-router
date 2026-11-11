@@ -70,19 +70,33 @@ make room would charge every request during an outage for the whole ceiling — 
 another name. No prompt content, no completion content, and no credential material is ever stored on
 a record.
 
-**A refused batch gets one more try, and both fates are exported.** Postgres is unavailable for a
-second — a failover, a restart, a saturated connection pool — far more often than it is unavailable
-at all, so a rejected batch is held and retried on the next flush rather than deleted on the spot.
-It is held *beside* the queue, not pushed back into it: overflow sheds the oldest, and the batch
-waiting for its retry is precisely the oldest. One retry is the whole ladder — a batch the writer
-can never accept (a row it rejects, a statement past the bind ceiling) would otherwise come back
-forever and starve every record behind it — after which it is discarded. Both steps land on
-`router_usage_write_failures_total`, under `disposition="retried"` and `disposition="discarded"`,
-because "the database blinked" and "rows no longer exist" are different incidents and alert
-differently. The retry is logged at `warn` and the discard at `error`, throttled. The pass stops at
-the first refusal rather than burning the rest of the queue against the same database, and a retried
-batch is **not** re-counted into the attempt series: a blip must not show up on a dashboard as
-upstream calls the router never made.
+**A refused batch is kept while the database is down, and every fate is exported.** The writer
+classifies each refusal (`services/usage/fromEnv.ts` `isTransientDatabaseError`, walking the cause
+chain): a connection code (`ECONNREFUSED`, `ENOTFOUND`, `CONNECTION_CLOSED`, …) or SQLSTATE class
+`08`, `57P`, `53`, `40001`, `40P01` says the *database* is unavailable — a restart, a failover, a
+saturated pool. Through 2.55.0 a batch got one retry and was then discarded, so a Postgres restart
+that outlasted two flushes deleted records while the queue sat nearly empty (prod, 2026-10-31:
+3 × "usage batch write failed twice — records lost"). Now:
+
+- **Transient.** The batch is retried on every flush with no attempt cap, and each refused flush
+  also moves one batch from the live queue into a retry buffer held *beside* the queue, oldest
+  first. An outage therefore holds up to `USAGE_QUEUE_MAX + USAGE_RETRY_BUFFER_MAX` records. At the
+  buffer's ceiling the **oldest** held records are dropped, counted under
+  `disposition="discarded"`, and logged at `error` ("usage retry buffer full during a database
+  outage — oldest records dropped"), throttled.
+- **Not transient, or unclassified** — a row the writer rejects (`UsageIdentityConflict`,
+  `UsageHistoryExpired`), a statement past the bind ceiling. One retry on the next flush (it may
+  still have been a blip), then the batch is bisected down to single rows and only the rows that
+  still fail are discarded, so one poison row costs one record rather than its batch. A bisect that
+  meets a transient refusal puts what it has not settled back in the buffer.
+
+Each refused write lands on `router_usage_write_failures_total` under `disposition="retried"`, and
+each record lost under `disposition="discarded"`, because "the database blinked" and "rows no longer
+exist" are different incidents and alert differently. A refusal is logged at `warn` and a loss at
+`error`, throttled. The pass stops at the first refusal rather than burning the rest of the queue
+against the same database, and a retried record is **not** re-counted into the attempt series: it is
+observed once, when it leaves the queue, so a blip never shows up on a dashboard as upstream calls
+the router never made.
 
 **Shutdown loss is counted too.** `stop()` drains what it can — including one fresh pass for
 records that arrived after an in-flight flush's final drain, the coalescing race — and whatever a
@@ -103,6 +117,18 @@ request fact; it never invents an upstream account or a token charge.
 A response the router writes (translated, or folded from a forced stream) also states the estimate as
 `usage.cost`, `cost_source` and `cost_basis`; a byte relay cannot, so it states none. See
 [06-protocol-translation.md](06-protocol-translation.md).
+
+What the three fields mean to a client that books them (wire shape:
+[06](06-protocol-translation.md#per-call-cost-on-the-wire); one pricing path with the `UsageRecord`):
+
+| Field | Meaning |
+|---|---|
+| `usage.cost` | Dollars this router's price book assigns the attempt that served the answer: the shipped table under the operator's overrides, priced on the upstream model. When the basis is `unknown` all three fields are **absent** (`dataplane/relay-cost.ts`) — never `0` for "nobody knows" |
+| `cost_source` | Always `estimated`: computed from token counts and the price book, never an upstream's invoice line |
+| `cost_basis` | `metered` — a pay-per-token account; the figure estimates real spend at the book's rate. `notional` — a **subscription** account; the figure is an *attribution* at the vendor's API list price, **not spend**: the subscription's flat fee is the spend. A consumer billing its own customers must not book a `notional` figure as a measured upstream charge |
+
+Which provider served the answer is `x-router-provider`, not the presence of a cost: a client that
+infers "the router priced it, so a metered upstream served it" misreads every `notional` answer.
 
 The rules below are the contract. The **numbers** live in the code, not in this document: a
 document that restates a price is wrong the day the vendor moves it, and a wrong price in a spec
@@ -154,7 +180,7 @@ own override is the way to price them.
 
 | Provider | Why no shipped rate |
 |---|---|
-| `openrouter` | The price is whichever upstream it routed to, decided per request. One table would price every route as one |
+| `openrouter` | The price is whichever upstream it routed to, decided per request. One table would price every route as one. The lookup already runs on the upstream model after the alias map, so a vendor-prefixed name (`openai/gpt-6-luna`) is not borrowed from another provider's table either: that would book OpenRouter's fee-bearing price as the vendor's list price. Until the router reads the cost OpenRouter itself reports, an override per routed model is the way to price it |
 | `ollama` | The operator's own hardware. There is no per-token price to state, and `0` would claim electricity is free rather than that nobody billed for tokens |
 | `openai-compatible` / `anthropic-compatible` | The operator's own contract with whatever sits behind the base URL they supplied. Only they know the rate — which is what overrides are for |
 
@@ -313,9 +339,13 @@ same bucket expression, so their group keys match. Owner and tool attribution fo
 
 ### Summary read budget (#250)
 
-`GET /api/admin/usage` sets no per-request statement timeout; the bound that applies is the
-server-wide `SERVER_IDLE_TIMEOUT_SECONDS` (default 60). The summary is expected to complete well
-inside it, and `bin/bench-usage` is the tripwire that proves it still does.
+`SERVER_IDLE_TIMEOUT_SECONDS` (default 60) closes the client socket but cancels nothing in
+Postgres. What bounds the database side is the pool's `statement_timeout` (`DB_STATEMENT_TIMEOUT_MS`,
+60 s by default, every statement on every pooled session) and `idle_in_transaction_session_timeout`
+(`DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`, 60 s), plus an optional narrower per-statement bound set
+`local` to the summary's snapshot transaction (`snapshotStatementTimeoutMs` on
+`createUsageHistoryRepository`). The summary is expected to complete well inside them, and
+`bin/bench-usage` is the tripwire that proves it still does.
 
 **Measured.** At the #250 fixture scale — a 30-day window over two v2 daily rollup tables of
 ~180k rows each plus receipts (~400k windowed facts) and ~200k raw records — the pre-fix summary
@@ -340,6 +370,14 @@ unnested label relation and re-ran the bucket CASE per row before aggregating, a
   the label join, so the join and the bucket CASE run at grouped cardinality (~775 rows) instead
   of per fact row (~400k), and those reads no longer spill. Sums of sums are exact
   (`sum(bigint)` is numeric), so the wire rows are unchanged.
+
+**Coalescing (plan 101, 07.7 / 10.11).** Identical summaries — the same window query and filter —
+share one read: a second caller while the first is in flight awaits the same promise, so two
+operators or one double refresh issue one set of statements on one snapshot connection, not two
+(`services/usage-read/summary-cache.ts`). A settled answer can additionally be reused for
+`summaryCacheMs` (the env reader's `usageRead` block; 0 = coalesce in-flight only); a failed read
+is never kept. Labelling the breakdowns groups each dimension's series points once, so 100 rows x
+400 buckets label in ~2.5 ms per dimension rather than ~96 ms on the loop that relays streams.
 
 The per-read scan count is unchanged: every breakdown and series still reads the windowed facts
 once (~62k shared buffers, 14 facts scans per summary at fixture scale), and the key series'
@@ -706,6 +744,15 @@ summary over a long window on a large install (prod: ~334k `usage_records`, ~360
   event-time filter discards the rows. The bound drops no row: every admitted receipt's event-time
   already lies in `[from, to)`, so its `day` already lies in the range.
 
+*The floored backfill* (plan 101, 08.2 / 10.5 / 12.9). A fresh `backfill` sweep starts at W, not
+at the table's first row: `(created_at, id) > W and created_at >= W.at`, so the `created_at` index
+bounds the anti-join to the rows written since the last certifying sweep. Before this, every hourly
+`usage_rollup` re-proved the whole banked prefix under the history lock — in prod 28 % of all DB
+time, mean 3.1 s, max 8.6 s, 0 rows ever found, with usage flushes queued behind the lock. A floored
+sweep that ends short of its limit and adopts no `legacy_overlap` still advances W (by induction:
+everything at or below the old W was already proven). The rare `fullScan: true` pass starts at the
+first row and is the only one that adopts an out-of-contract row below W.
+
 *The banked-through watermark* (#275). The per-window `pending` anti-join in `coverage(window)` is
 cheap for a named window but, for `lifetime`, used to visit every retained row, because its
 predicate references `usage_contributions` and cannot stop early. `usage_history_state` now carries
@@ -743,10 +790,10 @@ Why it is output-safe, and not a heuristic:
   sweep's select and its advance. For a window that reaches back past the raw-retention horizon on
   an install older than `RETENTION_USAGE_DAYS` (lifetime included), nothing reliably flags an
   out-of-contract unbanked row at or below W, from any out-of-contract writer (hand SQL, a restore,
-  or a 2.15.x replica during a rolling upgrade), until a cursorless sweep adopts it. That is
-  normally the next rollup run; it can take up to roughly two intervals plus jitter (per replica)
-  when a previous sweep aborted and left a resume cursor, because a resumed sweep only scans rows
-  after its cursor. Once adopted, `legacy` flags it (restored pre-2.16 rows, `ingested_at` NULL,
+  or a 2.15.x replica during a rolling upgrade), until a **full** sweep (`backfill({ fullScan:
+  true })`) adopts it. The hourly sweep is floored at W (below), so it never sees such a row; the
+  full pass runs on its own long cadence (`USAGE_BACKFILL_FULL_SCAN_HOURS`, 24 h by default, owned
+  by the rollup task) or after the remedy below clears W. Once adopted, `legacy` flags it (restored pre-2.16 rows, `ingested_at` NULL,
   adopt as `legacy_unbanked` or `legacy_baseline`, not `legacy_overlap`). A window wholly inside
   raw retention still sets `incomplete` via the admin summary's raw-vs-history count (`retainedAttempts > totals.attempts`, summary.ts:58-59).
   Remedy: set both columns NULL (`update usage_history_state set banked_through_at = null,
@@ -836,12 +883,16 @@ immediately if it is healthy.
 | `GET /readyz` | none | Readiness: **database reachable, and no shutdown started**. Two dimensions are reported without gating the answer: the account pool (`ok` / `none` / `blocked`) and the `claude` CLI (the resolution rung that won, or `missing`) | `200` `ready`; `503` `not_ready` with a short reason when the database is unreachable; `503` `shutting_down` while draining |
 | `GET /metrics` | `METRICS_TOKEN` when set, none when not | Prometheus text exposition | `200`, `401` when the token is set and not presented |
 | `GET /v1/usage/quota` | router key or admin session | Per-Account, per-window utilization, `resetsAt`, `resetSource`, `status`, `lastCheckedAt` — the same shape the UI renders, so an operator can alert on it externally | `200` |
-| `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
+| `POST /api/admin/accounts/:id/recheck` | admin session | Manual re-check. `POST /api/admin/accounts/recheck` re-checks every account (bounded concurrency, one catalog reload). A live-healthy account gets a settled generation, never a probe permit. For Claude subscriptions it also carries the credential probe, reported as `auth` | `200` always — a cooldown refusal is `rechecked: false`, not `429` |
 | `GET /api/admin/usage` | admin session | Totals, series and breakdowns per key / account / pool / model over a window, plus the [failure split](#the-failure-split) behind the error rate. Narrowed by the six repeated-param [filters](#filters) (`owner`, `tool`, `model`, `keyId`, `poolId`, `accountId`) | `200`; `400` on a malformed window, a non-uuid id, an empty or NUL-bearing value, more than 500 values, or any unknown query key |
 | `GET /api/admin/usage/recent` | admin session | The [live request feed](#the-live-request-feed): individual attempts, newest first. `limit` (1..200), `failed` or `outcome` (never both), `requestId` (matches either id) | `200`, `400` on a limit out of range or both filters at once |
 | `GET /api/admin/usage/reports`, `GET /api/admin/usage/reports/:periodStart`, `POST /api/admin/usage/reports/preview`, `POST /api/admin/usage/reports/:periodStart/deliver` | admin session (`POST` needs CSRF) | The stored [weekly usage reports](#weekly-usage-report): the list, one week by its Monday, a preview of the last complete week that stores nothing, and the Discord re-send | `200`, `400` (malformed or non-Monday `:periodStart`), `404` (no report stored for that week); the re-send answers `200` with `deliveryStatus` even when delivery itself failed |
 
-`/healthz` never touches the database.
+`/healthz` never touches the database. `/readyz`'s database check is one `select 1` bounded by
+`HEALTH_DB_PROBE_TIMEOUT_MS` (default 2000); on the deadline the query is **cancelled**, not left
+queued on the pool requests share, and concurrent polls share one in-flight check. The `claude` CLI
+rung is re-resolved at most once per `HEALTH_CLI_PROBE_CACHE_MS` (default 5000), so an
+unauthenticated poll does not walk the `statSync` ladder per hit (plan 101, 03.10).
 
 **`/readyz` turns before the listener does.** On `SIGTERM` the shutdown latches first and the
 endpoint answers `503 shutting_down` — with `checks: null`, because nothing was probed and a stale
@@ -864,8 +915,8 @@ one the loaded bundle was cut from.
 against that same `VERSION` constant and against every workspace manifest, and
 [`release.yml`](../../.github/workflows/release.yml) runs it before it builds a single layer. It
 reads the constant rather than the root `package.json` deliberately: the manifest is a copy, the
-constant is what the five surfaces above report, and the release workflow never runs the test suite
-— so the drift test that normally holds the two together does not gate a tag. Run it by hand before
+constant is what the five surfaces above report, and while the release gate requires main's CI —
+the drift test that holds the two together included — no test knows the tag name. Run it by hand before
 cutting one ([RELEASING.md](../RELEASING.md)). The same script also reads `CHANGELOG.md`: a section
 since 2.25.0, the start of the fully-linked era, whose footer link is missing or duplicated fails
 the gate, as do footer links out of ascending order — ascending by full semver precedence, so an
@@ -927,7 +978,8 @@ identity beyond its label.
 | Name | Type | Labels | Meaning |
 |---|---|---|---|
 | `router_build_info` | gauge | `version`, `revision` | Always `1`; the labels are the payload. First in the exposition. Join on it — `router_build_info * on() group_left(version) …` — to annotate a graph with the build that produced it, instead of putting a `version` label on every other series and multiplying their cardinality to say the same thing once. `revision` is the commit sha the image was built from, because a version is not an identity: a rebuilt `latest`, an rc cut twice and a locally built image all report the same one. `unknown` when nothing stamped the build (`ROUTER_REVISION`) — never a fabricated sha |
-| `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests |
+| `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests. `model` is the requested name when it resolved against the routing catalog, `other` when it did not |
+| `router_pool_serving_members` | gauge | `pool_id` | Members of each pool whose account is currently `active` on this replica, health overlaid, computed at scrape time from the warm snapshot. Every pool, no inventory needed. **Alert at `0`**: the pool has no member left to serve, so every request to it fails over or is refused (13.14). Pair with the absent-success alert below |
 | `router_request_duration_seconds` | histogram | `ingress_dialect`, `model`, `streamed` | End-to-end client request latency, upstream time included |
 | **`router_overhead_seconds`** | histogram | `ingress_dialect`, `path` (`passthrough`\|`translate`\|`agent_sdk`) | **Time spent in the router, excluding upstream.** First-class: shown on the dashboard next to upstream latency, because "the router is slow" and "the provider is slow" are different problems. A regression here is a bug, not a tuning opportunity ([06-protocol-translation.md](06-protocol-translation.md)) |
 | `router_upstream_duration_seconds` | histogram | `provider`, `account_id`, `streamed` | Upstream time alone. Together with the above, the two halves always add up |
@@ -948,17 +1000,30 @@ identity beyond its label.
 | `router_usage_queue_depth` | gauge | — | Pending `UsageRecord`s awaiting batch write, the batch held for its retry included. Rising depth means reporting lag, not request lag |
 | `router_usage_admission_seconds` | histogram | — | Background usage admission transaction duration, including database pool and history-lock wait. Observed on successful and failed attempts; excludes the subsequent account last-used stamp |
 | `router_usage_records_dropped_total` | counter | — | Records shed on queue overflow. Non-zero means the reporting path is behind; traffic is unaffected. A **different** failure from the one below, with a different fix: a bigger queue, versus a database that is up |
-| `router_usage_write_failures_total` | counter | `disposition` (`retried`\|`discarded`) | Records in a batch the database refused. `retried` went back for one more try on the next flush — reporting is late, nothing is lost. `discarded` was refused twice and is **gone**. **Never summed**: a deployment where the first is occasionally noisy and the second is flat zero is working exactly as designed, and an alert on the sum pages for every blip. Alert on `discarded` |
+| `router_usage_write_failures_total` | counter | `disposition` (`retried`\|`discarded`) | Usage records the database refused. `retried` counts each refused write — the records are kept and retried through the outage (bounded by `USAGE_RETRY_BUFFER_MAX`), reporting is late, nothing is lost. `discarded` counts records **gone**: a row bisected out as unwritable, or the oldest dropped when the retry buffer overflowed. **Never summed**: an alert on the sum pages for every blip. Alert on `discarded` |
 | `router_sdk_subprocesses` | gauge | — | `claude` subprocesses running on this replica right now. Against `CLAUDE_SDK_MAX_CONCURRENCY` this is **memory in use**, not throughput — every one of them is a ~245 MB native binary ([09-deployment.md](09-deployment.md#sizing)). Per replica, like the gate itself. Counts the console's "Test now" probe too: it spawns the same process and takes the same slot |
 | `router_sdk_subprocess_queue_depth` | gauge | — | Subscription requests **waiting** for a subprocess slot. Zero at any occupancy is a ceiling that fits; sustained depth is the signal to raise `CLAUDE_SDK_MAX_CONCURRENCY` (if RAM allows) or add a replica. Read it with the gauge above: full-and-empty is saturated-but-sufficient, full-and-queuing is not |
+| `router_metric_series_dropped_total` | counter | `metric` | Observations refused because `metric` was at `METRICS_MAX_SERIES_PER_METRIC`. Any increase means that metric under-reports from then on; alert on `> 0` |
+| `claude_fast_fallback_total` | counter | `reason` | Claude subscription requests fast mode handed to the Agent SDK (`credential`, `model`, `profile`, …). A steady count for one reason means an account never takes the fast path; the invoker also warns once per account and reason |
+| `routing_catalog_loaded_at_seconds` | gauge | — | Unix time the warm routing catalog last loaded. A failed periodic refresh keeps the last snapshot and logs `warm snapshot refresh failed`; alert when this falls more than a few `CATALOG_REFRESH_SECONDS` behind |
+| `model_catalog_loaded_at_seconds` | gauge | — | The same for the warm model catalog |
+| `process_resident_memory_bytes` | gauge | — | Resident set size of the router process, per scrape. A leak shows here per replica instead of only through cAdvisor |
+| `router_event_loop_delay_seconds` | gauge | `quantile` (`0.5`\|`0.99`\|`1`) | Event-loop lateness **since the previous scrape** (`perf_hooks.monitorEventLoopDelay`, 20 ms resolution; `1` is the maximum). Absent for an interval with no reading rather than repeating a stale one. A blocked loop delays every request on the replica |
 | `router_db_pool_connections` | gauge | `state` (`in_use`\|`idle`\|`waiting`) | Postgres connections against the fixed pool ceiling (`DB_POOL_MAX`, one pool for the admin plane, the scheduler's sweeps, and the off-path writers at once). **Approximated**, not read from the driver: postgres.js exposes no reserved/idle/waiting counts, so this counts concurrently in-flight statements instead (`packages/db/src/pool-metrics.ts`) — below the ceiling that is exactly the connections doing work, at or beyond it the excess is the driver's own internal queue admitting them one at a time. Sustained `waiting` is the signal to raise `DB_POOL_MAX` or find the query holding a connection too long |
 | `router_task_*` | — | `task` | Background task health — see [Scheduled task visibility](#scheduled-task-visibility) |
+
+**Absent-success alert.** `router_requests_total` already carries `outcome`, so no extra counter is needed. To page when a deployment that normally serves stops serving, use
+`sum(increase(router_requests_total{outcome="success"}[15m])) == 0 and sum(increase(router_requests_total[15m])) > 0`
+(requests arriving, none succeeding). For each pool, the same expression on `router_pool_model_requests_total{result=~"success.*"}` covers the configured pool/model pairs.
 
 Label discipline: no unbounded label values. `key_id` and `account_id` are bounded by the
 deployment's own inventory; `session_id`, `request_id`, and user-supplied strings are **never**
 metric labels — they live on the `UsageRecord` and in logs. `model` is the one label a client can
-influence, so it is truncated and every metric stops adding series at a per-metric ceiling rather
-than growing without bound; hitting the ceiling logs a `warn` naming the metric.
+influence: on the request series it is the requested name only when the routing catalog resolved
+it, else `other`, so a typo loop or a hostile key cannot mint series; it is also truncated to 64
+characters. As a backstop every metric stops adding series at `METRICS_MAX_SERIES_PER_METRIC`
+(default 4096) rather than growing without bound. The first refusal logs a `warn` naming the
+metric; every refusal counts on `router_metric_series_dropped_total{metric}`.
 
 ### Where the numbers come from
 
@@ -982,7 +1047,12 @@ it moved nowhere. Requests that failed outright are counted by `router_requests_
 
 ### What "excluding upstream" excludes
 
-`router_overhead_seconds` is `totalMs - upstreamMs` for the request so far, and on a streamed reply
+`router_overhead_seconds` is `totalMs - upstreamMs - bodyReadMs - recoveryWaitMs` for the request so
+far. `recoveryWaitMs` is the time a request slept waiting out the router's own recovery hold
+(`RECOVERY_REQUEST_WAIT_MS`, `RECOVERY_PROBE_WAIT_MS`): a deliberate wait, not router work, which
+otherwise put prod's passthrough p99 on the waiter's 250 ms grid (plan 101, 12.4). It has no
+series of its own yet; the `waiting for a recovery permit` / `riding a recovery probe in flight`
+log lines count it. On a streamed reply
 **the drain counts as upstream time**. Relaying is waiting, not working: the router is a pipe from
 the first byte to the last, and charging a two-minute completion's stream to the router would put
 generation time in the one series that exists to keep generation time out. What is left is the work
@@ -1018,6 +1088,13 @@ measurements, so `bin/bench` reports them as two tables:
 
 Both non-SDK egress paths are covered, streamed and not. The Agent-SDK path is excluded: it spawns a
 subprocess per request and is the budget's labeled exception.
+
+The default 1 KB `"x"` prompt is the routing scanner's one fast path, so on its own it proves
+nothing about a real request (the 10-02 bench read 5.0 ms where prod read 38–82 ms at the same
+size). The scenario list therefore also drives prod-shaped bodies built by `bench/transcript.ts` —
+a cached system prompt, tool schemas, and a transcript of `tool_use` edits answered by
+`tool_result` source text — at 350 KB (non-streamed, and streamed over 200 chunks), 1 MB, and
+translated at 350 KB, plus a ~62 KB non-streamed answer just under the 64 KiB success peek.
 
 A measurement is only worth reading if it was taken on the runtime this code ships on, so the
 `bin/bench` wrapper checks the pinned runtime before the benchmark runs: it calls the repository's own
@@ -1129,7 +1206,7 @@ Every candidate the request chain drops without an upstream attempt logs one `in
 |---|---|
 | `error` | A request the router could not serve; a failed OAuth refresh; a decrypt failure; a scheduled task that threw |
 | `warn` | A failover, a circuit breaker opening, an account entering `needs_reauth` or `exhausted`, a rejected translation, a translation that dropped fields, a shed usage record |
-| `info` | One line per completed client request (a successful request to a `LOG_QUIET_PATHS` probe path drops to `debug`; a failing one does not); one per scheduled task run; startup and config summary |
+| `info` | Exactly one transport line per client request: `request completed`, or `request failed` at the error handler's level for a request it rendered — never both. A successful request to a `LOG_QUIET_PATHS` path (the Prometheus scrape included) drops to `debug`; a failing one does not. A streamed response's line carries `streamed: true` and `timeToHeadersMs` instead of `durationMs` — the body is still flowing when the line is written; its whole lifetime is on the `UsageRecord`. One line per scheduled task run; startup and config summary |
 | `debug` | Selection decisions, candidate sets, translation event counts |
 | `trace` | **DEFERRED** |
 
@@ -1138,7 +1215,7 @@ of production told an operator nothing:
 
 | Line | Carries |
 |---|---|
-| `request failed` (`transport`) | `errorClass`, `errorCode`, `status`, and **`error`**: the thrown `RouterError`'s whole `cause` chain, innermost first, scrubbed and bounded by the logger's `Error` rendering. Every `RouterError` message is router-authored and is already the client-facing body, so the line learns nothing the caller was not told — it just becomes findable. A `translation_failed` line names the field that was refused. The line also carries what the request said about its body, by allowlist — `content-type`, `content-encoding`, `content-length`, `user-agent`, beside the session and client headers every completed line has — so an empty body, a compressed one, and the wrong content type are told apart without a packet capture. Values are bounded to 200 characters; no credential-bearing header is on the list. |
+| `request failed` (`transport`) | The request's one transport line when it failed — the completion line's `method`, `path`, `status` and timing, plus `errorClass`, `errorCode`, and **`error`**: the thrown `RouterError`'s whole `cause` chain, innermost first, scrubbed and bounded by the logger's `Error` rendering. Every `RouterError` message is router-authored and is already the client-facing body, so the line learns nothing the caller was not told — it just becomes findable. A `translation_failed` line names the field that was refused. The line also carries what the request said about its body, by allowlist — `content-type`, `content-encoding`, `content-length`, `user-agent`, beside the session and client headers every completed line has — so an empty body, a compressed one, and the wrong content type are told apart without a packet capture. Values are bounded to 200 characters; no credential-bearing header is on the list. |
 | `upstream attempt failed` (`transport`) | `accountId`, `attempt`, `status`, `failureKind`, plus **`signal`** (which classifier rule decided — `http-status:429`, `claude-sdk:unclassified`), **`reason`** (the router-authored sentence), and **`upstreamMessage`** (the provider's or the SDK's own words, scrubbed first and then bounded to `LOG_REASON_MAX_CHARS`, as on `upstream stream failure`: the Agent-SDK path hands this line an unredacted message, and a credential cut before scrubbing could leave a fragment. Up to 64 KiB the whole message is scrubbed; past it, the scan ends at the last whitespace before 64 KiB, so no credential's secret part straddles the cut (a message with no whitespace in its first 64 KiB logs only `…`). A cut never splits `[REDACTED]`, and the quote fits the bound after the logger's own pass). |
 | `upstream stream failure` (`relay`) | `accountId`, `errorClass` (the attempt's closed `errorClass`: a driver hook's signal such as `codex:stream-error:invalid_prompt` or `minimax:base_resp-1008`, else `upstream_protocol_error`, `upstream_incomplete`, `upstream_error` or `upstream_timeout`), and `upstreamMessage` (the driver hook's reading of the upstream's words, redacted by `logging/redact.ts` and then cut to `LOG_REASON_MAX_CHARS`; absent when no hook read one, e.g. a mid-stream transport failure). One line per failed relay, written after the breaker update and the usage row. The verdict is the first one the relay captured, so a Codex refusal followed by a client cancel logs the refusal, not `client_cancelled`. |
 | `translation dropped fields` (`translate`) | `ingress`, `egress`, `dropped` (the full count), and `fields` — up to twenty `<path> <reason>` entries, structural only (field paths, tool names, block types, media types; never a value from the body). One line per conversion, not per field. Rationale: [06 § Known lossy edges](06-protocol-translation.md#known-lossy-edges). |
@@ -1147,8 +1224,9 @@ of production told an operator nothing:
 upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`,
 `x-api-key`, and `x-goog-api-key` headers. The redactor also catches a credential that arrives under
 an honest-looking field name — JWTs, `postgres://user:pass@host` connection strings, a key in a
-query string, `Bearer` and `Basic` header values, and the vendor key shapes (`sk-`, `AIza`, `ghp_`,
-`xai-`, `gsk_`). Redaction is default-on and is a tested unit — see
+query string, `Bearer` and `Basic` header values, the vendor key shapes (`sk-`, `AIza`, `ghp_`,
+`xai-`, `gsk_`), and a provider key-management URL's key hash (`…/keys/<32+ hex>`, OpenRouter's
+key-limit refusal quotes one; the hash names the credential, so it is credential material). Redaction is default-on and is a tested unit — see
 [07-security.md](07-security.md).
 
 **A query-string credential is redacted whole, `@`-tail included.** Both redactors first
@@ -1173,6 +1251,10 @@ Credential parameter names end in `key` / `token` / `secret` / `password` (`api_
 
 Four properties of the redactor are load-bearing enough to state:
 
+- **A child logger's bound fields are scrubbed once, when it is made.** Redaction is per top-level
+  field, so the line is identical to scrubbing the merge on every write. Field-name verdicts and
+  short values found clean are remembered (bounded), so the repeated `method`/`path`/header values
+  of a transport line cost a lookup, not eighteen regex scans.
 - **The whole line is covered, `msg` included.** Every call site passes a constant message today;
   the scrub is there so the day one interpolates an upstream's reply, the guarantee above still
   holds.
@@ -1431,6 +1513,20 @@ Responses input includes cache, which is subtracted once. Invalid or out-of-doma
 poison persistence. The observation ceiling bounds retained protocol state, not relayed bytes:
 chunks remain immediately available, and oversized observation becomes unavailable without an
 invented provider fault or missing-terminal claim. Count-tokens remains an unpriced measurement.
+
+**Observation cost.** The observer runs synchronously on the event loop that relays every other
+request, so its cost is bounded per byte, not per frame. Line breaks are found with a native
+`indexOf`; a partial line is held as chunk slices and decoded once when it completes; a JSON body
+is held as chunk copies up to the ceiling and parsed once at end of body; an over-ceiling frame's
+salvage scan skips the inside of strings it does not capture. Frames that cannot move a fact are
+not parsed: Anthropic `content_block_*` and `ping` events by name, Responses `response.*.delta`
+events by name, and any SSE object frame whose text holds none of the member names the usage and
+terminal reads look at (`"usage"`, `"error"`, plus `"message_stop"` / `"response"` / `"status"`
+by dialect). A driver's `inspectPayload` hook, or an `onPayload` tap, sees every parsed frame, so
+skipping applies only when there is none or its descriptor declares `contentFrames: "skip"`.
+Measured on the reference host (`apps/api/src/services/usage/response-framing.ts`, 2026-11-10):
+Anthropic SSE 3.5 ns/byte with content frames skipped and 10 ns/byte with every frame parsed
+(was 110–120); a non-stream JSON body 0.002–0.05 ms per 16 KB chunk at any size (was 0.6–1.4 ms).
 
 The first observed terminal cause controls accounting. Explicit HTTP-200 protocol failure remains
 a failure after a later caller abort; caller cancellation first is client_error with

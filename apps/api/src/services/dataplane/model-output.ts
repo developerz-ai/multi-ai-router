@@ -1,5 +1,6 @@
 import type { Dialect } from "@multi-ai-router/core"
 import type { ResponseObservationDescriptor } from "../../providers/types"
+import type { ObservationDescriptor } from "../usage/response-observer-types"
 import { responseObject } from "../usage/response-usage"
 
 const CHAT_DELTA_TEXT = ["content", "reasoning_content", "reasoning", "refusal"] as const
@@ -37,17 +38,28 @@ export function isModelOutputFrame(
  * Wraps a driver's observation descriptor so the observer's existing frame parse also reports model
  * output — no second pass over the stream. Absent a driver descriptor, `evidence-only` is the same
  * policy the observer applies to none.
+ *
+ * Content frames are parsed only until the first one proves model output, and only when no driver
+ * hook reads frames itself: after that, a delta can change neither verdict, and parsing every one
+ * cost ~10 ns per relayed byte (plan 101, 02.2). Usage and terminal frames are always read.
  */
 export function observingModelOutput(
   dialect: Dialect,
   descriptor: ResponseObservationDescriptor | undefined,
   onOutput: () => void,
-): ResponseObservationDescriptor {
+): ObservationDescriptor {
   const inspect = descriptor?.inspectPayload
+  let seen = false
   return {
     terminalPolicy: descriptor?.terminalPolicy ?? "evidence-only",
+    get contentFrames() {
+      return seen && inspect === undefined ? "skip" : "inspect"
+    },
     inspectPayload: (payload, event) => {
-      if (isModelOutputFrame(dialect, payload, event)) onOutput()
+      if (!seen && isModelOutputFrame(dialect, payload, event)) {
+        seen = true
+        onOutput()
+      }
       return inspect === undefined ? null : inspect(payload, event)
     },
   }

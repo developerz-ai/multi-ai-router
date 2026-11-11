@@ -1,9 +1,9 @@
 import { decodeString } from "./decode"
-import { createOpaqueArrayRun } from "./opaque-array-run"
 import { createOpeningCapture } from "./opening"
-import { createPrimitive, finishValue } from "./primitive"
+import { createPrimitive, endsPrimitive, finishValue, isWhitespace } from "./primitive"
 import { validateScannerOptions } from "./scanner-options"
 import type { Frame, ScannerOptions, ScanResult } from "./scanner-types"
+import { createSkim } from "./skim"
 import { createStringValidation } from "./string-validation"
 import { canCloseFrame, consumeSeparator, createFrame } from "./structural"
 
@@ -35,7 +35,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
   const strings = createStringValidation(),
     literal = createPrimitive()
   const opening = createOpeningCapture(limit),
-    opaqueRun = createOpaqueArrayRun(strings)
+    skim = createSkim({ strings, literal, maximumJsonDepth })
   let inputString = false
   const top = () => stack[stack.length - 1]
   function valueDone() {
@@ -92,6 +92,16 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
       if (stack.length >= maximumJsonDepth) {
         depthExceeded = true
         invalid = true
+        return
+      }
+      // Nothing below here is read: no routing field, no opening byte. Validate it cheaply.
+      if (
+        stack.length >= 1 &&
+        opening.bytes === null &&
+        !conversation &&
+        !(p?.conversation && !opening.done)
+      ) {
+        skim.begin(byte, stack.length)
         return
       }
       stack.push(createFrame(byte, !!conversation, !!conversation && p?.key === "input"))
@@ -166,6 +176,16 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
   return {
     push(chunk: Uint8Array) {
       for (let i = 0; i < chunk.length; i++, offset++) {
+        if (skim.active) {
+          const end = skim.scan(chunk, i)
+          offset += end - i
+          i = end
+          if (skim.invalid) invalid = true
+          if (skim.depthExceeded) depthExceeded = true
+          if (skim.active) break
+          valueDone()
+          if (i === chunk.length) break
+        }
         if (
           inString &&
           (!capture || overlong) &&
@@ -199,43 +219,18 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
           continue
         }
         if (primitive) {
-          if (
-            byte !== 44 &&
-            byte !== 93 &&
-            byte !== 125 &&
-            byte !== 32 &&
-            byte !== 10 &&
-            byte !== 13 &&
-            byte !== 9
-          ) {
+          if (!endsPrimitive(byte)) {
             literal.byte(byte)
             continue
           }
           finishPrimitive()
         }
-        if (byte === 32 || byte === 10 || byte === 13 || byte === 9 || rejectedRoot) continue
+        if (isWhitespace(byte) || rejectedRoot) continue
         if (rootFinished) {
           invalid = true
           continue
         }
         const p = top()
-        if (
-          byte === 34 &&
-          p?.kind === "array" &&
-          !p.conversation &&
-          opening.bytes === null &&
-          (p.state === "first" || p.state === "value")
-        ) {
-          const after = opaqueRun.scan(chunk, i)
-          offset += after - i - 1
-          i = after - 1
-          inString = opaqueRun.open
-          capture = false
-          keyString = false
-          overlong = false
-          if (!inString) valueDone()
-          continue
-        }
         if (byte === 125 || byte === 93) {
           if (!canCloseFrame(p, byte)) {
             invalid = true
@@ -262,12 +257,13 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
           strings.reset()
           keyString = true
           stringStart = offset + 1
-          stringBytes = []
           overlong = false
           capture =
             stack.length === 1 ||
             (opening.bytes !== null &&
               (stack.length === opening.depth || opening.readsKeysAt(stack.length)))
+          // Only a captured key is decoded; every other key would allocate for nothing.
+          if (capture) stringBytes = []
           continue
         }
         beginValue(byte)
@@ -279,8 +275,8 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
     finish() {
       finalized = true
       if (primitive) finishPrimitive()
-      if (!rootFinished || stack.length || inString || strings.pending || strings.invalid)
-        invalid = true
+      const open = stack.length > 0 || inString || skim.active || strings.pending
+      if (!rootFinished || open || strings.invalid) invalid = true
       return this.result()
     },
     result(): ScanResult {

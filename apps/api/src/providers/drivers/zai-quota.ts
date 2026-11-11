@@ -46,6 +46,8 @@ const Limit = z.looseObject({
   nextResetTime: z.number().optional().catch(undefined),
 })
 
+const TokenType = z.looseObject({ type: z.literal(TOKENS_LIMIT) })
+
 const QuotaLimit = z.object({
   success: z.literal(true),
   data: z.looseObject({ limits: z.array(z.unknown()) }),
@@ -55,6 +57,14 @@ export const zaiQuotaRead: ProviderQuotaRead = {
   url: (account) => ((account.baseUrl ?? null) === null ? new URL(QUOTA_URL) : null),
   // Unobserved: what a key with no Coding Plan answers here.
   noPlanStatuses: new Set(),
+  // A well-formed answer with no token window at all — `limits: []`, or only the MCP `TIME_LIMIT` —
+  // is a key without a Coding Plan: nothing to read, not a shape this cannot read.
+  noPlan: (body) => {
+    const parsed = QuotaLimit.safeParse(body)
+    return (
+      parsed.success && !parsed.data.data.limits.some((raw) => TokenType.safeParse(raw).success)
+    )
+  },
   read: (body, at) => {
     const parsed = QuotaLimit.safeParse(body)
     if (!parsed.success) return null

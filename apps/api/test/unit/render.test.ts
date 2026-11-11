@@ -78,6 +78,28 @@ describe("toErrorResponse", () => {
     expect(response.retryAfterSeconds).toBe(42)
   })
 
+  // 13.8: a router-made 503 gave clients no number, so each invented its own retry ladder — and
+  // retried operator-only walls too. Only the clock-recoverable wall carries one.
+  test("no_healthy_account carries Retry-After on a capacity wall, never on human or scope", () => {
+    const capacity = toErrorResponse(
+      new NoHealthyAccountError("every attempt failed", { retryAfterSeconds: 7 }),
+      null,
+    )
+    expect(capacity.status).toBe(503)
+    expect(capacity.retryAfterSeconds).toBe(7)
+
+    for (const wall of ["human", "scope"] as const) {
+      const refused = toErrorResponse(
+        new NoHealthyAccountError("operator only", { wall, retryAfterSeconds: 7 }),
+        null,
+      )
+      expect({ wall, retryAfter: refused.retryAfterSeconds }).toEqual({ wall, retryAfter: null })
+    }
+    expect(
+      toErrorResponse(new NoHealthyAccountError("no number"), null).retryAfterSeconds,
+    ).toBeNull()
+  })
+
   test("key verification pressure renders a retryable service error in both dialects", () => {
     const error = new KeyVerificationUnavailableError("retry shortly", { retryAfterSeconds: 1 })
     for (const dialect of ["anthropic", "openai-chat"] as const) {

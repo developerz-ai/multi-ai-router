@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test"
 import { Hono } from "hono"
 import { createLogger } from "../../../src/logging/logger"
-import { requestLogger } from "../../../src/middleware/logger"
+import { deferFailureLine, requestLogger } from "../../../src/middleware/logger"
 import type { AppEnv } from "../../../src/types"
 
 async function completed(headers: Record<string, string>) {
@@ -150,5 +150,73 @@ describe("quiet paths", () => {
     await hono.request("/healthz")
 
     expect(lines).toHaveLength(0)
+  })
+})
+
+describe("one transport line per request", () => {
+  function harness() {
+    const lines: Record<string, unknown>[] = []
+    const log = createLogger({
+      level: "debug",
+      write: (line) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+    })
+    const hono = new Hono<AppEnv>()
+    hono.use("*", requestLogger(log))
+    hono.post("/v1/messages", () => {
+      throw new Error("refused")
+    })
+    hono.get("/v1/stream", (c) =>
+      c.body("data: {}\n\n", 200, { "content-type": "text/event-stream" }),
+    )
+    // The shape `errorHandler` takes: hand the failure to the completion line, else log it here.
+    hono.onError((err, c) => {
+      const fields = { errorClass: err.name, errorCode: "translation_failed" }
+      if (!deferFailureLine(c.req.raw, { level: "warn", fields }))
+        log.warn("request failed", fields)
+      return c.json({ error: err.message }, 400)
+    })
+    return { hono, lines }
+  }
+
+  test("a rejected request writes exactly one line, carrying the failure and the timing", async () => {
+    const { hono, lines } = harness()
+
+    await hono.request("/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-session-id": "ses_abc" },
+    })
+
+    // Production fingerprint: every rejection logged `request failed` and `request completed`.
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({
+      level: "warn",
+      msg: "request failed",
+      component: "transport",
+      method: "POST",
+      path: "/v1/messages",
+      status: 400,
+      errorClass: "Error",
+      errorCode: "translation_failed",
+      "content-type": "application/json",
+      "x-session-id": "ses_abc",
+    })
+    expect(typeof lines[0]?.durationMs).toBe("number")
+  })
+
+  test("a failure no request logger is tracking is not swallowed", () => {
+    expect(
+      deferFailureLine(new Request("http://router/v1/messages"), { level: "warn", fields: {} }),
+    ).toBe(false)
+  })
+
+  test("a streamed response names its timing as time-to-headers, not as the request's duration", async () => {
+    const { hono, lines } = harness()
+
+    await hono.request("/v1/stream")
+
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ msg: "request completed", streamed: true })
+    expect(typeof lines[0]?.timeToHeadersMs).toBe("number")
+    expect(lines[0]).not.toHaveProperty("durationMs")
   })
 })

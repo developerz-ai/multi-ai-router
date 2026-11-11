@@ -6,17 +6,18 @@ export interface ShutdownPhase {
 /** Run bounded phase APIs serially; a rejected phase never prevents the next cleanup. */
 export async function runShutdownPhases(
   phases: readonly ShutdownPhase[],
-  reportFailure: (phase: string) => void,
+  reportFailure: (phase: string, error: unknown) => void,
 ): Promise<boolean> {
   let succeeded = true
   for (const phase of phases) {
     try {
       await phase.run()
-    } catch {
+    } catch (error) {
       succeeded = false
-      // No exception details: they may contain upstream URLs, tokens or database credentials.
+      // The reason goes to the reporter, which logs through the redacting logger: a phase name
+      // alone left a failed deploy with nothing to act on.
       try {
-        reportFailure(phase.name)
+        reportFailure(phase.name, error)
       } catch {
         /* logging cannot abandon cleanup */
       }

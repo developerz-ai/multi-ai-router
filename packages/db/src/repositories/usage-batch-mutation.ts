@@ -58,7 +58,12 @@ export function createUsageBatchMutation(db: Database) {
         for (const batch of chunks(ids))
           existing.push(
             ...(await tx
-              .select()
+              // Only what the duplicate check reads: never the `payload` jsonb of a redelivery.
+              .select({
+                id: usageContributions.id,
+                source: usageContributions.source,
+                payloadHash: usageContributions.payloadHash,
+              })
               .from(usageContributions)
               .where(
                 and(eq(usageContributions.kind, kind), inArray(usageContributions.id, batch)),

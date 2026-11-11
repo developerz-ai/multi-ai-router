@@ -76,6 +76,9 @@ export const SDK_QUOTA_FAILURE_RULES: readonly SdkRule[] = [
     signal: "claude-sdk:extra-usage-gated",
     status: 429,
     clientMessage: EXTRA_USAGE_GATED,
+    // The request's harness fingerprint provokes it on every account alike (`scrub.ts`): fail
+    // over, but the account is not out of capacity, so routing must not cool it (101 finding 05.14).
+    requestAttributable: true,
     match: any(
       phrase("third-party apps now draw from your extra usage"),
       all("extra usage", "claude.ai/settings/usage"),

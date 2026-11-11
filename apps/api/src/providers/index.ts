@@ -250,7 +250,14 @@ export type { ListedModel, ProviderModelListing } from "./model-listing"
 export type { ProviderQuotaRead } from "./quota-read"
 export { parseRateLimitHeaders } from "./rate-limit/parse"
 export type { ProviderSupport } from "./registry"
-export { HTTP_DRIVERS, httpDriver, PROVIDER_REGISTRY } from "./registry"
+export {
+  HTTP_DRIVERS,
+  httpDriver,
+  PROVIDER_REGISTRY,
+  providerCatalogSweep,
+  providerIdleProbeModel,
+  providerShippedPrices,
+} from "./registry"
 export type {
   DriverAccount,
   FailureClassification,

@@ -154,6 +154,7 @@ export function classifySdkFailure(error: unknown): SdkFailure {
       // overwrite a provider-reported window with a guess.
       rateLimit: null,
       ...(text.message === "" ? {} : { message: text.message }),
+      ...(rule.requestAttributable ? { requestAttributable: true } : {}),
     },
     clientMessage: rule.clientMessage,
     text,

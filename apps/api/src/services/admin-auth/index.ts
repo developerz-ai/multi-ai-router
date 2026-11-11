@@ -12,6 +12,7 @@ export {
   isAdminApiTokenConfigured,
 } from "./apiToken"
 export { ADMIN_AUTH_DOC, adminAuthBootProblem, isLoopbackUrl } from "./boot"
+export { clientIp, UNKNOWN_CLIENT_IP } from "./clientIp"
 export {
   type AdminAuthConfig,
   type AdminAuthEnvConfig,

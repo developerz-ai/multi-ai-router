@@ -40,9 +40,26 @@ const measureSums = (names: readonly string[]) =>
 // What a series point carries; the breakdown fold carries all of `historyMeasures` instead.
 const seriesMeasures = ["requests", "attempts", "errors", "tokens_in", "tokens_out"]
 
+export interface UsageHistoryRepositoryOptions {
+  /**
+   * `statement_timeout` for each statement inside {@link UsageHistoryRepository.withSnapshot}, set
+   * `local` to that transaction. Set it below the HTTP idle bound so a summary whose client is gone
+   * cannot keep a snapshot and a connection past it; absent, the pool's own bound applies.
+   */
+  readonly snapshotStatementTimeoutMs?: number
+}
+
 export function createUsageHistoryRepository(
   db: Database,
-  inSnapshot = false,
+  options: UsageHistoryRepositoryOptions = {},
+): UsageHistoryRepository {
+  return historyRepository(db, options, false)
+}
+
+function historyRepository(
+  db: Database,
+  options: UsageHistoryRepositoryOptions,
+  inSnapshot: boolean,
 ): UsageHistoryRepository {
   const read = async <T>(query: ReturnType<typeof sql>) =>
     [...(await db.execute(query))] as unknown as T[]
@@ -227,11 +244,16 @@ export function createUsageHistoryRepository(
       inSnapshot
         ? callback(repo, createUsageReadRepository(db))
         : db.transaction(
-            (tx) =>
-              callback(
-                createUsageHistoryRepository(tx as unknown as Database, true),
+            async (tx) => {
+              if (options.snapshotStatementTimeoutMs !== undefined)
+                await tx.execute(
+                  sql`select set_config('statement_timeout', ${String(options.snapshotStatementTimeoutMs)}, true)`,
+                )
+              return callback(
+                historyRepository(tx as unknown as Database, options, true),
                 createUsageReadRepository(tx as unknown as Database),
-              ),
+              )
+            },
             { isolationLevel: "repeatable read", accessMode: "read only" },
           ),
     ...createUsageHistoryMaintenance(db),

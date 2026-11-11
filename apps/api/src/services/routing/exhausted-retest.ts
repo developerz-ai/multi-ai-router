@@ -8,13 +8,17 @@
  * re-checked. So an `exhausted` account is re-tested through the operator's own "Re-check now",
  * first after `firstMs` and then on a clock that doubles per re-test up to `maxMs`. A balance that
  * is truly drained costs one failed probe per `maxMs`; a misread one is back within `firstMs`.
+ * Only a re-test that ran is counted: one refused at the door or thrown before any probe left
+ * leaves the watch as it was, so the next tick tries again instead of waiting a doubled interval
+ * (plan 101, 03.7). This module only computes the next watch; the scheduler task commits it after
+ * the re-test answers, and keeps the prior one otherwise.
  *
- * Per replica, in memory: a restart starts the clock again at `firstMs`, which errs toward looking
- * sooner, and each replica may re-test once per wait. The recheck service's durable cooldown
- * (`ACCOUNT_RECHECK_COOLDOWN_SECONDS`, 60 s by default) only stops two re-tests landing in the same
- * window; it does not merge the replicas' clocks. The task notices an account on its first tick
- * after it went `exhausted`, so the first re-test lands between `firstMs` and `firstMs` plus one
- * task interval later — 1 to 2 h at the defaults.
+ * Persisted (`account_exhausted_watches`, through the scheduler task's injected store), so a
+ * restart resumes the ladder instead of starting again at `firstMs`. The recheck service's durable
+ * cooldown (`ACCOUNT_RECHECK_COOLDOWN_SECONDS`, 60 s by default) stops two re-tests landing in the
+ * same window. The task notices an account on its first tick after it went `exhausted`, so the
+ * first re-test lands between `firstMs` and `firstMs` plus one task interval later — 1 to 2 h at
+ * the defaults.
  */
 
 export interface ExhaustedRetestSchedule {

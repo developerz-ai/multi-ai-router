@@ -75,3 +75,37 @@ export function repositoryScopeLoader(source: KeyTargetSource): KeyScopeLoader {
  */
 export const unscopedLoader: KeyScopeLoader = (row) =>
   Promise.resolve(keyScopeSnapshot(row.scope, NO_TARGETS))
+
+/** One row the prefix index returned, with its scope already resolved. */
+export interface KeyCandidate {
+  readonly row: ApiKeyRow
+  readonly scope: KeyScopeSnapshot
+}
+
+/** Every usable row sharing a display prefix, each with its scope. Runs on a cache miss only. */
+export type KeyCandidateLoader = (prefix: string, now: Date) => Promise<readonly KeyCandidate[]>
+
+/**
+ * The production loader: one statement returns the candidate rows *and* their scope targets, so a
+ * scoped key's miss is one indexed query instead of three (`findUsableWithTargetsByPrefix`).
+ */
+export function repositoryCandidateLoader(source: {
+  findUsableWithTargetsByPrefix(
+    prefix: string,
+    now: Date,
+  ): Promise<
+    readonly {
+      readonly key: ApiKeyRow
+      readonly poolIds: readonly string[]
+      readonly accountIds: readonly string[]
+    }[]
+  >
+}): KeyCandidateLoader {
+  return async (prefix, now) =>
+    (await source.findUsableWithTargetsByPrefix(prefix, now)).map(
+      ({ key, poolIds, accountIds }) => ({
+        row: key,
+        scope: keyScopeSnapshot(key.scope, { poolIds, accountIds }),
+      }),
+    )
+}

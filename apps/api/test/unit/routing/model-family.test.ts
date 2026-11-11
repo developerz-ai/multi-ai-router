@@ -285,7 +285,8 @@ describe("nothing in scope serves the model", () => {
     const result = selectFor("glm-5.3", [...claude, codex])
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.error.status).toBe(503)
+    // A client change, so a 404 (plan 101, 10.21).
+    expect(result.error.status).toBe(404)
     expect(result.error.message).toBe(
       'no account serves model "glm-5.3" — a client change (3 accounts in scope: claude-1, claude-2, codex)',
     )
@@ -342,7 +343,7 @@ describe("a session bound to an account that cannot serve the model", () => {
     const result = selectFor("k3", [settling, cooling])
     expect(result.ok).toBe(false)
     if (result.ok) return
-    expect(result.error.status).toBe(503)
+    expect(result.error.status).toBe(404)
     expect(result.decision.rejected.map((entry) => entry.reason)).toEqual([
       "model-unsupported",
       "model-unsupported",

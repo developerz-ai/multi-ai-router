@@ -1,6 +1,7 @@
-import { z } from "zod"
-import { openAiChatReasoningSchema, readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
+import { readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
 import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
+import { openAiChatChunkSchema } from "../shared/openai-chat-wire"
+import { carriesOpenAiChatError } from "../shared/response-error"
 import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { readOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
@@ -46,41 +47,6 @@ export interface OpenAiChatToOpenAiResponsesStreamOptions extends ResponsesRecov
 
 const DONE_SENTINEL = "[DONE]"
 
-const toolCallSchema = z.looseObject({
-  index: z.number().int().nonnegative().nullish().catch(null),
-  id: z.string().nullish().catch(null),
-  function: z
-    .looseObject({
-      name: z.string().nullish().catch(null),
-      arguments: z.string().nullish().catch(null),
-    })
-    .nullish()
-    .catch(null),
-})
-
-const chunkSchema = z.looseObject({
-  id: z.string().nullish().catch(null),
-  model: z.string().nullish().catch(null),
-  choices: z
-    .array(
-      z.looseObject({
-        index: z.number().int().nullish().catch(null),
-        delta: z
-          .looseObject({
-            content: z.string().nullish().catch(null),
-            ...openAiChatReasoningSchema,
-            tool_calls: z.array(toolCallSchema).nullish().catch(null),
-          })
-          .nullish()
-          .catch(null),
-        finish_reason: z.string().nullish().catch(null),
-      }),
-    )
-    .nullish()
-    .catch(null),
-  usage: z.unknown().optional(),
-})
-
 export function openAiChatToOpenAiResponsesStream(
   options: OpenAiChatToOpenAiResponsesStreamOptions,
 ): StreamTranslator {
@@ -111,12 +77,12 @@ export function openAiChatToOpenAiResponsesStream(
 
       const payload = frameJson(frame)
       if (payload === null || typeof payload !== "object") return NO_EVENTS
-      if ("error" in payload) {
+      if (carriesOpenAiChatError(payload as Record<string, unknown>)) {
         emitter.fail(out, payload)
         return out
       }
 
-      const parsed = chunkSchema.safeParse(payload)
+      const parsed = openAiChatChunkSchema.safeParse(payload)
       if (!parsed.success) return NO_EVENTS
       emitter.identify(parsed.data.id, parsed.data.model)
       usage = parseOpenAiChatUsage(parsed.data.usage) ?? usage

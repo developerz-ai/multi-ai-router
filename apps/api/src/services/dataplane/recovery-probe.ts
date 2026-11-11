@@ -1,6 +1,6 @@
 import type { Logger } from "../../logging/logger"
 import type { RateLimitSignal, UpstreamFailureKind } from "../../providers"
-import { type AccountSnapshot, type Candidate, resolveModel } from "../routing"
+import type { Candidate } from "../routing"
 import { recoveryAwaitsProbe } from "../routing/recovery-filter"
 import { failoverKind } from "./attempt"
 import type { HealthStore } from "./health"
@@ -8,6 +8,10 @@ import { accountHealthFacts, type HealthObservation } from "./health-observation
 import { strikeProbeFailure } from "./probe-verdict"
 import type { RecoveryAccess, RecoveryAttempt } from "./recovery-access"
 import type { RecoveryCapability } from "./recovery-capability"
+import { type ProbeModel, probeModel } from "./recovery-probe-model"
+
+export { type ProbeModel, probeModel }
+
 import type { Reach } from "./recovery-reach"
 import type { RoutableAccount } from "./types"
 
@@ -81,7 +85,9 @@ export function createRecoveryProbe(deps: RecoveryProbeDeps) {
   const offered = new Map<string, string>()
   const timers = new Map<string, () => void>()
   const unprobeable = new Map<string, number>()
+  // An operator-disabled account is never probed: the switch is the operator's (10.7).
   const probeable = (account: RoutableAccount) =>
+    account.snapshot.status !== "disabled" &&
     unprobeable.get(account.id) !== account.lifecycleVersion
 
   const run = async (capability: RecoveryCapability, sender: RecoveryProbeSend) => {
@@ -279,26 +285,4 @@ function settle(
     observation,
   )
   return "settled"
-}
-
-export interface ProbeModel {
-  readonly model: string
-  readonly source: "declared" | "provider-default"
-}
-
-/**
- * The first model the account itself declares (the operator's order), and the provider's default
- * only when it declares none: a shipped default goes stale when a vendor retires a model (prod
- * 2026-11-05: `MiniMax-M2`), while the declared list is what this account routes today.
- */
-export function probeModel(
-  account: AccountSnapshot,
-  models: Readonly<Record<string, string>>,
-): ProbeModel | undefined {
-  const declared = account.supportedModels?.find((model) => resolveModel(account, model).supported)
-  if (declared !== undefined) return { model: declared, source: "declared" }
-  const fallback = models[account.provider]
-  if (fallback !== undefined && resolveModel(account, fallback).supported)
-    return { model: fallback, source: "provider-default" }
-  return undefined
 }

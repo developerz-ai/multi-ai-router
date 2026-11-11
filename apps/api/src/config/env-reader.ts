@@ -5,6 +5,7 @@ import { CLI_REFRESH_LEAD_MS } from "../providers/claude-sdk/credential-freshnes
 import { readAdminBodiesEnv } from "./admin-bodies"
 import { readBackgroundEnv } from "./background"
 import { readClaudeLoginEnv } from "./claude-login"
+import { readClaudeSdkPacingEnv } from "./claude-sdk-pacing"
 import { readCliOwnershipEnv } from "./cli-ownership"
 import {
   DEFAULT_LOG_QUIET_PATHS,
@@ -17,6 +18,8 @@ import type { Env } from "./env-types"
 import { readMetricInventoryEnv } from "./metric-inventory"
 import { readRecoveryEnv } from "./recovery"
 import { readRelayLifetimesEnv } from "./relay-lifetimes"
+import { readRoutingEnv } from "./routing-env"
+import { readRuntimeLimitsEnv } from "./runtime-limits"
 import { readUpstreamStreamEnv } from "./upstream-stream"
 import { readUsageReadEnv } from "./usage-read"
 import { readUsageReportEnv } from "./usage-report"
@@ -97,6 +100,11 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
   const usageReport = readUsageReportEnv(raw, ctx)
   if (usageReport === undefined) return z.NEVER
 
+  const serverIdleTimeoutSeconds =
+    raw.SERVER_IDLE_TIMEOUT_SECONDS ?? DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS
+  const pacing = readClaudeSdkPacingEnv({ ...raw, serverIdleTimeoutSeconds }, ctx)
+  if (pacing === undefined) return z.NEVER
+
   return {
     ...claudeLogin,
     usageReport: usageReport.usageReport,
@@ -108,9 +116,10 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     ...readUpstreamStreamEnv(raw, ctx),
     ...readMetricInventoryEnv(raw),
     ...readCliOwnershipEnv(raw),
+    ...pacing,
+    ...readRuntimeLimitsEnv(raw),
     port: raw.PORT ?? 8080,
-    serverIdleTimeoutSeconds:
-      raw.SERVER_IDLE_TIMEOUT_SECONDS ?? DEFAULT_SERVER_IDLE_TIMEOUT_SECONDS,
+    serverIdleTimeoutSeconds,
     // Fifteen seconds lets ordinary responses finish while leaving room for producer drains,
     // auxiliary pool closure and writer flushes within Compose's 60s grace. The image-pins
     // regression checks the complete shutdown budget, not just the HTTP drain.
@@ -129,6 +138,10 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
         raw.DB_POOL_MAX_LIFETIME_SECONDS ?? DATABASE_POOL_DEFAULTS.maxLifetimeSeconds,
       closeTimeoutSeconds:
         raw.DB_POOL_CLOSE_TIMEOUT_SECONDS ?? DATABASE_POOL_DEFAULTS.closeTimeoutSeconds,
+      statementTimeoutMs: raw.DB_STATEMENT_TIMEOUT_MS ?? DATABASE_POOL_DEFAULTS.statementTimeoutMs,
+      lockTimeoutMs: raw.DB_LOCK_TIMEOUT_MS ?? DATABASE_POOL_DEFAULTS.lockTimeoutMs,
+      idleInTransactionTimeoutMs:
+        raw.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS ?? DATABASE_POOL_DEFAULTS.idleInTransactionTimeoutMs,
     },
     adminOidc,
     encryptionKey: raw.ENCRYPTION_KEY,
@@ -266,45 +279,6 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       sessionCookieInsecure: raw.SESSION_COOKIE_INSECURE ?? false,
       localLoginAllowPublic: raw.ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC ?? false,
     },
-    // Defaults mirror the layer constants they override, so an unset variable
-    // and a variable set to the default behave identically.
-    dataPlane: {
-      catalogRefreshSeconds: raw.CATALOG_REFRESH_SECONDS ?? 30,
-      keyCacheMax: raw.KEY_CACHE_MAX ?? 4_096,
-      keyCacheTtlSeconds: raw.KEY_CACHE_TTL_SECONDS ?? 60,
-      keyCacheNegativeTtlSeconds: raw.KEY_CACHE_NEGATIVE_TTL_SECONDS ?? 5,
-      sessionCacheMax: raw.SESSION_CACHE_MAX ?? 4_096,
-      sessionCacheTtlSeconds: raw.SESSION_CACHE_TTL_SECONDS ?? 300,
-      sessionCacheNegativeTtlSeconds: raw.SESSION_CACHE_NEGATIVE_TTL_SECONDS ?? 30,
-      usageQueueMax: raw.USAGE_QUEUE_MAX ?? 10_000,
-      usageBatchSize: raw.USAGE_BATCH_SIZE ?? 200,
-      usageFlushIntervalMs: raw.USAGE_FLUSH_INTERVAL_MS ?? 1_000,
-      usageLogReportIntervalMs: raw.USAGE_LOG_REPORT_INTERVAL_MS ?? 60_000,
-      quotaWriteIntervalMs: raw.QUOTA_WRITE_INTERVAL_MS ?? 5_000,
-      accountStatusWriteIntervalMs: raw.ACCOUNT_STATUS_WRITE_INTERVAL_MS ?? 1_000,
-      maxRequestBodyBytes: raw.MAX_REQUEST_BODY_BYTES ?? 32 * 1024 * 1024,
-      maximumJsonDepth: raw.MAX_REQUEST_JSON_DEPTH ?? 256,
-    },
-    failover: {
-      maxAttempts: raw.ROUTING_MAX_ATTEMPTS,
-      overloadRetries: raw.ROUTING_OVERLOAD_RETRIES ?? 2,
-      overloadRetryBaseMs: raw.ROUTING_OVERLOAD_RETRY_BASE_MS ?? 1_000,
-      failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
-      baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
-      maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,
-      authFailureCooldownMs: raw.ROUTING_AUTH_FAILURE_COOLDOWN_MS ?? 900_000,
-      authFailureMaxCooldownMs: raw.ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS ?? 14_400_000,
-      halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
-      unknownResetRetryAfterSeconds: raw.ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS ?? 30,
-      upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
-      upstreamErrorMaxBytes: raw.UPSTREAM_ERROR_MAX_BYTES ?? 65_536,
-      responseObservationMaxBytes: raw.UPSTREAM_RESPONSE_OBSERVATION_MAX_BYTES ?? 65_536,
-      boundAccountCoolingDown: raw.ROUTING_BOUND_ACCOUNT_COOLING_DOWN ?? "fail",
-    },
-    translation: {
-      defaultMaxTokens: raw.TRANSLATE_DEFAULT_MAX_TOKENS ?? 4_096,
-      maximumPendingBytes: raw.MAX_TRANSLATION_PENDING_BYTES ?? 1_048_576,
-      thinkingDefaultModels: raw.OPENAI_CHAT_THINKING_DEFAULT_MODELS ?? [],
-    },
+    ...readRoutingEnv(raw),
   }
 }

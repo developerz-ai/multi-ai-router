@@ -99,6 +99,8 @@ export interface PassthroughInput {
    * way: there is nothing to require a call from.
    */
   readonly toolChoice?: ParsedAnthropicToolChoice | null
+  /** The held deny's ceiling (`CLAUDE_SDK_DENY_HOLD_SECONDS`); `early-stop.ts` defaults it. */
+  readonly holdTimeoutSeconds?: number
 }
 
 /**
@@ -153,6 +155,9 @@ export function createPassthrough(input: PassthroughInput): Passthrough | null {
   const earlyStop = createEarlyStop({
     rewriter: createToolRewriter(schemas),
     ...(input.abort === undefined ? {} : { abort: input.abort }),
+    ...(input.holdTimeoutSeconds === undefined
+      ? {}
+      : { holdTimeoutSeconds: input.holdTimeoutSeconds }),
   })
 
   return {

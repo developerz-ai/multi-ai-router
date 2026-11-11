@@ -11,10 +11,16 @@ test("usage presentation bounds have explicit defaults and honor both supported 
     maxChartPoints: 400,
     breakdownMaxRows: 100,
     exportMaxRows: 50_000,
+    summaryCacheMs: 10_000,
   })
   expect(
     parseEnv({ ...base, USAGE_CHART_MAX_POINTS: "2", USAGE_BREAKDOWN_MAX_ROWS: "1" }).usageRead,
-  ).toEqual({ maxChartPoints: 2, breakdownMaxRows: 1, exportMaxRows: 50_000 })
+  ).toEqual({
+    maxChartPoints: 2,
+    breakdownMaxRows: 1,
+    exportMaxRows: 50_000,
+    summaryCacheMs: 10_000,
+  })
   expect(
     parseEnv({
       ...base,
@@ -22,8 +28,15 @@ test("usage presentation bounds have explicit defaults and honor both supported 
       USAGE_BREAKDOWN_MAX_ROWS: "1000",
       USAGE_EXPORT_MAX_ROWS: "100000",
     }).usageRead,
-  ).toEqual({ maxChartPoints: 2000, breakdownMaxRows: 1000, exportMaxRows: 100_000 })
+  ).toEqual({
+    maxChartPoints: 2000,
+    breakdownMaxRows: 1000,
+    exportMaxRows: 100_000,
+    summaryCacheMs: 10_000,
+  })
   expect(parseEnv({ ...base, USAGE_EXPORT_MAX_ROWS: "1" }).usageRead.exportMaxRows).toBe(1)
+  // Zero is a setting: no summary cache.
+  expect(parseEnv({ ...base, USAGE_SUMMARY_CACHE_SECONDS: "0" }).usageRead.summaryCacheMs).toBe(0)
 })
 
 test("out-of-domain usage limits fail boot rather than silently truncating", () => {

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import type { SQL } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { PgDialect } from "drizzle-orm/pg-core"
+import { drizzle } from "drizzle-orm/postgres-js"
 import { createUsageHistoryRepository } from "../../src/repositories/usage-history-repository"
+import * as schema from "../../src/schema/index"
 import { usageHistoryState } from "../../src/schema/usage-history-state"
 import { usageRecords } from "../../src/schema/usage-records"
 import { historyAttempt, historyUrl, usageHistoryFixture } from "./usage-history-fixture"
@@ -235,7 +238,7 @@ describe.skipIf(!historyUrl)("banked-through watermark (#275)", () => {
     const recording = new Proxy(real, {
       get(target, prop, receiver) {
         if (prop !== "execute") return Reflect.get(target, prop, receiver)
-        return (query: Parameters<typeof real.execute>[0]) => {
+        return (query: SQL) => {
           captured.push(new PgDialect().sqlToQuery(query))
           return real.execute(query)
         }
@@ -276,5 +279,87 @@ describe.skipIf(!historyUrl)("banked-through watermark (#275)", () => {
     })
     // Floor in place: only the row(s) at W are read. Without it the scan walks all 300.
     expect(scanned).toBeLessThan(10)
+  })
+
+  test("a floored sweep starts at W: a raw row below it waits for the full pass", async () => {
+    await reset()
+    await admit("1984-01-05T12:00:00Z", LOW)
+    await sweep()
+    const stray = crypto.randomUUID()
+    await rawInsert("1984-01-03T00:00:00Z", stray) // below W, no contribution
+    // The hourly sweep no longer re-proves the banked prefix, so it cannot see the stray row…
+    expect(await sweep()).toEqual({ processed: 0, remaining: false })
+    // …the rare full pass does, and adopts it.
+    expect(await fixture.history().backfill({ limit: 1000, fullScan: true })).toEqual({
+      processed: 1,
+      remaining: false,
+    })
+    expect(await sweep()).toEqual({ processed: 0, remaining: false })
+  })
+
+  test("a floored sweep still adopts rows after W and certifies the table", async () => {
+    await reset()
+    await admit("1984-01-05T12:00:00Z", LOW)
+    await sweep()
+    const before = await state()
+    const late = crypto.randomUUID()
+    // Above W, ingested by the lock-free path's shape but with no ingested_at: legacy_unbanked.
+    await fixture
+      .db()
+      .insert(usageRecords)
+      .values(historyAttempt({ createdAt: at("1984-01-06T00:00:00Z"), id: late, ingestedAt: null }))
+    expect(await sweep()).toMatchObject({ processed: 1, remaining: false })
+    expect((await state())?.bankedThroughId).toBe(late)
+    expect((await state())?.bankedThroughAt?.getTime()).toBeGreaterThan(
+      before?.bankedThroughAt?.getTime() ?? Number.POSITIVE_INFINITY,
+    )
+  })
+
+  test("the floored sweep reads no usage_records row before W (the perf property)", async () => {
+    await reset()
+    await fixture.usage().insertBatch({
+      attempts: Array.from({ length: 300 }, (_, i) =>
+        historyAttempt({ createdAt: new Date(Date.UTC(1984, 0, 2, 0, i)) }),
+      ),
+      terminals: [],
+    })
+    await sweep()
+    expect((await state())?.bankedThroughAt).not.toBeNull()
+    // Capture the statement the sweep really issues, through drizzle's logger.
+    const captured: { sql: string; params: unknown[] }[] = []
+    const logged = drizzle(fixture.get().sql, {
+      schema,
+      logger: { logQuery: (query, params) => captured.push({ sql: query, params }) },
+    })
+    await createUsageHistoryRepository(logged).backfill({ limit: 1000 })
+    const scan = captured.find((q) => q.sql.includes("not exists (select 1 from"))
+    expect(scan).toBeDefined()
+    const read = await fixture.get().sql.begin(async (tx) => {
+      await tx.unsafe("set local enable_seqscan = off")
+      const plan = await tx.unsafe(
+        `explain (analyze, format json) ${scan?.sql}`,
+        (scan?.params ?? []) as never[],
+      )
+      const nodes: Record<string, unknown>[] = []
+      const walk = (node: Record<string, unknown>) => {
+        nodes.push(node)
+        for (const child of (node.Plans as Record<string, unknown>[] | undefined) ?? []) walk(child)
+      }
+      walk(
+        (plan[0]?.["QUERY PLAN"] as { Plan: Record<string, unknown> }[] | undefined)?.[0]?.Plan ??
+          {},
+      )
+      return nodes
+        .filter((n) => n["Relation Name"] === "usage_records")
+        .reduce(
+          (sum, n) =>
+            sum +
+            (Number(n["Actual Rows"] ?? 0) + Number(n["Rows Removed by Filter"] ?? 0)) *
+              Number(n["Actual Loops"] ?? 1),
+          0,
+        )
+    })
+    // Only the row at W. Unfloored, the anti-join walks all 300.
+    expect(read).toBeLessThan(10)
   })
 })

@@ -307,3 +307,28 @@ describe("a recovery gate never hides a provider-reported clock", () => {
     expect(result.eligible.map((candidate) => candidate.recoveryPermit)).toEqual([true])
   })
 })
+
+// Plan 101, 10.16: a model the provider refused as unknown is learned, so the next request does
+// not spend an upstream round trip on the same `404`.
+describe("a model the account refused", () => {
+  const refused = (until: Date) =>
+    account("router", { refusedModels: new Map([["inception/mercury-2", until]]) })
+
+  test("is dropped as model-unsupported while the refusal stands", () => {
+    const result = run([refused(at(60_000))], "inception/mercury-2")
+    expect(result.eligible).toEqual([])
+    expect(result.rejected.map((entry) => entry.reason)).toEqual(["model-unsupported"])
+  })
+
+  test("serves again once it lapses, and never affects another model", () => {
+    const lapsed = run([refused(at(-1))], "inception/mercury-2")
+    expect(lapsed.eligible).toHaveLength(1)
+    const other = run([refused(at(60_000))], "other/model")
+    expect(other.eligible).toHaveLength(1)
+  })
+
+  test("a prototype key is just a name", () => {
+    const result = run([refused(at(60_000))], "constructor")
+    expect(result.eligible).toHaveLength(1)
+  })
+})

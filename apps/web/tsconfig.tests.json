@@ -1,0 +1,19 @@
+{
+  // Type-checks the component tests and their support code, which the SPA
+  // project (src only) leaves out and `bun test` never checks. Tests run under
+  // Bun with a happy-dom window, so they need both Bun's types and the DOM lib.
+  // Run by `bun run typecheck`.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["bun", "vite/client"],
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js"
+  },
+  // ui-geometry-*.test.ts belong to the gate's own project
+  // (ui-geometry/tsconfig.json), which already checks them.
+  "include": ["test/**/*.ts", "test/**/*.tsx", "vite.config.ts"],
+  "exclude": ["test/unit/ui-geometry-*.test.ts"]
+}

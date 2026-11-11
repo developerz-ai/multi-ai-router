@@ -111,4 +111,28 @@ describe.skipIf(!runnable)("markUsed against a live database", () => {
     // And nothing was stamped: exactly the year of silent NULLs the fix ended.
     expect((await repository.findById(row.id))?.lastUsedAt).toBeNull()
   })
+
+  test("a stamp inside the interval writes nothing; one past it advances", async () => {
+    const row = await seed()
+    const spaced = createAccountRepository(db, { lastUsedMinIntervalMs: 60_000 })
+    const versionOf = async () => {
+      const [found] = await db
+        .select({ at: accounts.lastUsedAt, version: sql<string>`xmin::text` })
+        .from(accounts)
+        .where(eq(accounts.id, row.id))
+      return found
+    }
+    await spaced.markUsed([row.id], EARLY)
+    const first = await versionOf()
+    expect(first?.at).toEqual(EARLY)
+
+    // 30 s later: inside the interval — no new row version, the stamp stands.
+    await spaced.markUsed([row.id], new Date(EARLY.getTime() + 30_000))
+    expect(await versionOf()).toEqual(first)
+
+    // 61 s later: past it — the stamp advances.
+    const later = new Date(EARLY.getTime() + 61_000)
+    await spaced.markUsed([row.id], later)
+    expect((await versionOf())?.at).toEqual(later)
+  })
 })

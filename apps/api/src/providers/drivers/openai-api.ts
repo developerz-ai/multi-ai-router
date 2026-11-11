@@ -1,5 +1,6 @@
 import { createHttpDriver } from "../driver"
 import { codeRule, typeRule } from "../failure/classify"
+import type { ProviderDriver } from "../types"
 
 /**
  * `openai-api` — a standard platform key. Two surfaces share one base URL: Chat Completions is
@@ -48,7 +49,7 @@ const CHAT_CEILING = "max_completion_tokens" as const
  */
 const BODY_CACHE_KEY = true
 
-export const openAiApiDriver = createHttpDriver({
+const driver = createHttpDriver({
   id: "openai-api",
   surfaces: [
     {
@@ -66,3 +67,10 @@ export const openAiApiDriver = createHttpDriver({
     codeRule("auth", "openai:invalid_api_key", ["invalid_api_key", "invalid_organization"]),
   ],
 })
+
+export const openAiApiDriver: ProviderDriver = {
+  ...driver,
+  // The idle keepalive/probe's one minimal turn: the cheapest current model this provider serves.
+  // Provenance: carried from `scheduler/tasks/idle-account-probe.ts` IDLE_PROBE_MODELS (sweep 101).
+  idleProbeModel: "gpt-5",
+}

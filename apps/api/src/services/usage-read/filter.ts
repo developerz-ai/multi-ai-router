@@ -67,13 +67,17 @@ export function resolveUsageFilter(
   keys: ReadonlyMap<string, KeyLabel>,
 ): UsageFilter {
   let apiKeyIds: string[] | undefined
+  // Sets, not `includes`: the label map is every key ever minted, intersected per filter.
   const narrow = (ids: string[]) => {
-    apiKeyIds = apiKeyIds === undefined ? ids : apiKeyIds.filter((id) => ids.includes(id))
+    const allowed = new Set(ids)
+    apiKeyIds = apiKeyIds === undefined ? ids : apiKeyIds.filter((id) => allowed.has(id))
   }
-  const byLabel = (field: "owner" | "tool", wanted: readonly string[]) =>
-    [...keys]
-      .filter(([, key]) => key[field] !== null && wanted.includes(key[field]))
+  const byLabel = (field: "owner" | "tool", wanted: readonly string[]) => {
+    const names = new Set(wanted)
+    return [...keys]
+      .filter(([, key]) => key[field] !== null && names.has(key[field]))
       .map(([id]) => id)
+  }
   if (query.owner !== undefined) narrow(byLabel("owner", query.owner))
   if (query.tool !== undefined) narrow(byLabel("tool", query.tool))
   if (query.keyId !== undefined) narrow([...new Set(query.keyId)])

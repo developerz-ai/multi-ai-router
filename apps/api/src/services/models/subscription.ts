@@ -49,16 +49,26 @@ export function shippedSubscriptionCatalog(): readonly ModelCatalogEntry[] {
  * The same fallback as {@link shippedSubscriptionCatalog}, in the shape the warm store serves — for
  * a subscription the sweep has not reached yet. A freshly connected account must not list nothing
  * for up to an hour when this image already knows what a subscription serves.
+ *
+ * Built once and frozen: it is a constant of the image, and `GET /v1/models` reads it for every
+ * in-scope subscription on every listing.
  */
+let shippedModels: readonly ModelDescriptor[] | null = null
+
 export function shippedSubscriptionModels(): readonly ModelDescriptor[] {
-  return shippedSubscriptionCatalog().map((entry) => ({
-    id: entry.modelId,
-    contextTokens: entry.contextTokens,
-    maxOutputTokens: entry.maxOutputTokens,
-    contextSource: entry.contextSource,
-    listingSource: entry.listingSource,
-    resolvedModel: entry.resolvedModel,
-  }))
+  shippedModels ??= Object.freeze(
+    shippedSubscriptionCatalog().map((entry) =>
+      Object.freeze({
+        id: entry.modelId,
+        contextTokens: entry.contextTokens,
+        maxOutputTokens: entry.maxOutputTokens,
+        contextSource: entry.contextSource,
+        listingSource: entry.listingSource,
+        resolvedModel: entry.resolvedModel,
+      }),
+    ),
+  )
+  return shippedModels
 }
 
 function row(

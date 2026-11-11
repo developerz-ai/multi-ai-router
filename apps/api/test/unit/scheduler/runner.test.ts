@@ -402,6 +402,42 @@ describe("the first tick after a restart", () => {
     expect(calls).toBe(1)
   })
 
+  test("spreads an overdue task over the jitter band instead of firing in the same millisecond", async () => {
+    const repo = memoryTaskRepository()
+    repo.rows.push({
+      id: crypto.randomUUID(),
+      task: "janitor_sweep",
+      startedAt: new Date(Date.now() - 10_000),
+      finishedAt: new Date(Date.now() - 9_000),
+      outcome: "success",
+      itemsProcessed: 0,
+      error: null,
+    })
+    let calls = 0
+    const scheduler = createScheduler({
+      tasks: [
+        task({
+          name: "janitor_sweep",
+          intervalMs: 5_000,
+          run: async () => {
+            calls += 1
+            return { outcome: "success", itemsProcessed: 0 }
+          },
+        }),
+      ],
+      repo,
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0.5,
+      // Upper end of the band: ~2.5 s, well past the observation window.
+      random: () => 0.99,
+    })
+    scheduler.start()
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    await scheduler.stop()
+    expect(calls).toBe(0)
+  })
+
   test("still waits out the remainder when the last run was recent", async () => {
     const repo = memoryTaskRepository()
     repo.rows.push({
@@ -440,5 +476,129 @@ describe("the first tick after a restart", () => {
 
     // A restart loop must not turn into a sweep loop.
     expect(calls).toBe(0)
+  })
+})
+
+/** 07.5: one hung run must not hold the replica's only lock session forever. */
+describe("run deadline", () => {
+  test("a run that never settles is recorded failed at its deadline and the lock is released", async () => {
+    const repo = memoryTaskRepository()
+    let held = 0
+    const lock = alwaysFree()
+    const counting: typeof lock = async (key, work, signal) => {
+      held += 1
+      try {
+        return await lock(key, work, signal)
+      } finally {
+        held -= 1
+      }
+    }
+    let aborted = false
+    const scheduler = createScheduler({
+      tasks: [
+        task({
+          name: "janitor_sweep",
+          run: ({ signal }) =>
+            new Promise(() => {
+              signal.addEventListener("abort", () => {
+                aborted = true
+              })
+            }),
+        }),
+        task({
+          name: "oauth_state_purge",
+          run: async () => ({ outcome: "success", itemsProcessed: 0 }),
+        }),
+      ],
+      repo,
+      logger: silentLogger(),
+      lock: counting,
+      jitterFraction: 0,
+      maxRunMs: 20,
+    })
+
+    const result = await scheduler.runNow("janitor_sweep")
+    expect(result.status).toBe("failed")
+    expect(result.error).toBe("run exceeded 20 ms")
+    expect(aborted).toBe(true)
+    expect(held).toBe(0)
+    expect(repo.rows.find((row) => row.task === "janitor_sweep")?.outcome).toBe("failed")
+
+    expect((await scheduler.runNow("oauth_state_purge")).status).toBe("success")
+    // The next tick of the hung task is a fresh run, not the stuck in-flight one.
+    expect((await scheduler.runNow("janitor_sweep")).status).toBe("failed")
+    expect(repo.rows.filter((row) => row.task === "janitor_sweep")).toHaveLength(2)
+  })
+
+  test("a run inside its deadline is untouched", async () => {
+    const scheduler = createScheduler({
+      tasks: [task({ run: async () => ({ outcome: "success", itemsProcessed: 3 }) })],
+      repo: memoryTaskRepository(),
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+      maxRunMs: 1_000,
+    })
+    expect(await scheduler.runNow("janitor_sweep")).toMatchObject({
+      status: "success",
+      itemsProcessed: 3,
+    })
+  })
+})
+
+/** 07.10: the observer's "must not throw" contract is defended, not assumed. */
+describe("a throwing onTick", () => {
+  test("does not disarm the task's timer", async () => {
+    let calls = 0
+    let resolveSecond: () => void = () => undefined
+    const second = new Promise<void>((resolve) => {
+      resolveSecond = resolve
+    })
+    const scheduler = createScheduler({
+      tasks: [
+        {
+          name: "janitor_sweep",
+          intervalMs: 15,
+          run: async () => {
+            calls += 1
+            if (calls === 2) resolveSecond()
+            return { outcome: "success", itemsProcessed: 0 }
+          },
+        },
+      ],
+      repo: memoryTaskRepository(),
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+      onTick: () => {
+        throw new Error("metrics label exploded")
+      },
+    })
+    scheduler.start()
+    try {
+      await Promise.race([
+        second,
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("second tick never fired")), 2_000)
+        }),
+      ])
+    } finally {
+      await scheduler.stop()
+    }
+    expect(calls).toBeGreaterThanOrEqual(2)
+  })
+
+  test("runNow still resolves with the tick result", async () => {
+    const scheduler = createScheduler({
+      tasks: [task({ run: async () => ({ outcome: "success", itemsProcessed: 0 }) })],
+      repo: memoryTaskRepository(),
+      logger: silentLogger(),
+      lock: alwaysFree(),
+      jitterFraction: 0,
+      onTick: () => {
+        throw new Error("boom")
+      },
+    })
+    expect((await scheduler.runNow("janitor_sweep")).status).toBe("success")
   })
 })

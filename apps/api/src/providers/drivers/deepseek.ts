@@ -30,12 +30,18 @@ const BASE_URL = "https://api.deepseek.com"
  * balance", cleared only by topping up. The wire body repeats the phrase verbatim in
  * `error.message`. Blast radius: the status alone already lands on `credits-exhausted`, so this rule
  * is for the relayed case — a gateway that forwards the body under a status of its own — and for
- * recording a signal an operator can read back instead of a bare `http-status:402`.
+ * recording a signal an operator can read back instead of a bare `http-status:402`. On the `402`
+ * and on a relayed `400` only, and anchored at the start: a `400` that echoes a model name must not
+ * read as a dead balance (sweep 101, 04.1).
  */
-const INSUFFICIENT_BALANCE = /insufficient balance/i
+const INSUFFICIENT_BALANCE = /^insufficient balance/i
 
 export const deepSeekDriver = createHttpDriver({
   id: "deepseek",
   surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL }],
-  rules: [messageRule("credits-exhausted", "deepseek:insufficient-balance", INSUFFICIENT_BALANCE)],
+  rules: [
+    messageRule("credits-exhausted", "deepseek:insufficient-balance", INSUFFICIENT_BALANCE, {
+      statuses: [402, 400],
+    }),
+  ],
 })

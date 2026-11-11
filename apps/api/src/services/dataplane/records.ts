@@ -36,6 +36,11 @@ export interface AttemptTiming {
   /** Awaited upload time; separate from parsing and other router work. */
   readonly bodyReadMs?: number
   /**
+   * Time asleep waiting out the router's own recovery hold. A deliberate wait, not router work:
+   * counted as overhead it put prod's passthrough p99 on the waiter's 250 ms grid (plan 101, 12.4).
+   */
+  readonly recoveryWaitMs?: number
+  /**
    * Time spent **waiting on upstreams** for the whole request so far, this attempt included. On a
    * streamed success that is the drain too: relaying is waiting, not working, and excluding it
    * would put the entire generation into `routerOverheadMs`.
@@ -156,7 +161,12 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(
       0,
-      Math.round(input.timing.totalMs - input.timing.upstreamMs - (input.timing.bodyReadMs ?? 0)),
+      Math.round(
+        input.timing.totalMs -
+          input.timing.upstreamMs -
+          (input.timing.bodyReadMs ?? 0) -
+          (input.timing.recoveryWaitMs ?? 0),
+      ),
     ),
     outcome: input.outcome,
     streamed: input.streamed,

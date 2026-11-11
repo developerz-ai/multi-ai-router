@@ -2,12 +2,8 @@ import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { UpstreamAdmissionRefused } from "../upstream-admission"
 import { createCliProbe } from "./cli-probe"
-import type { SdkConcurrency, SdkSlot } from "./concurrency"
-import {
-  ALWAYS_FRESH,
-  type CredentialFreshness,
-  type CredentialRefreshClaim,
-} from "./credential-freshness"
+import type { SdkConcurrency } from "./concurrency"
+import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { classifySdkFailure } from "./errors"
 import { FORCED_TOOL_UNMET } from "./failure-rules-request"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
@@ -19,6 +15,7 @@ import { renderSdkResponse, type StreamPacing, type Ticker } from "./render"
 import { readSdkRequest } from "./request"
 import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
 import { createPassthrough, type Passthrough } from "./tools"
+import { admitTurn, type TurnAdmission } from "./turn-admission"
 import { holdPrompt, observeTurn } from "./turn-lifecycle"
 import { createSessionReport, createStderrTail, withStderr } from "./turn-support"
 import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
@@ -30,15 +27,11 @@ import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
  * Every piece it uses was built and tested on its own; this is the file that puts them in order,
  * and the order is the design:
  *
- * 1. **Read the body once** (`request.ts`) — prompt, tools, system prompt, and response shape all
- *    come out of one parse, because this path is the labeled exception to "never parse a passthrough
- *    body" and the exception is only affordable once.
+ * 1. **Read the body** (`request.ts`) — prompt, tools, system prompt, and response shape from one
+ *    parse here (with a session store wired, `sdk-attempt.ts` also reads the conversation once).
  * 2. **Resolve the binary** (`resolve-cli.ts`) before anything is spawned, so a deployment with no
  *    usable `claude` fails as a router misconfiguration rather than as a mysterious subprocess death.
- * 3. **Take a slot** (`concurrency.ts`) — per-Account first, global second, both freshness claims
- *    taken around it: before the queue and again on grant, so a caller that crossed the expiry
- *    boundary while queued re-enters the window instead of spawning an uncoordinated refresher.
- *    A caller aborted while queued throws the signal's own reason, so a deadline stays a deadline.
+ * 3. **Admit the turn** (`turn-admission.ts`) — refresh-window claim, slot, re-entrant recheck.
  * 4. **Register the client's tools** (`tools/`) — only if it sent any, and registering widens
  *    nothing: `allowlist.ts` still decides what may execute, which is nothing (§7).
  * 5. **Launch** (`options.ts`) — isolation flags, the abort bridge, and the lineage plan verbatim.
@@ -47,15 +40,11 @@ import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
  *    the plan's usage percentages, off the response path; `turn-lifecycle.ts` keeps the subprocess
  *    alive for exactly that long after `result`.
  *
- * Three lifetimes are managed here and nowhere else, because this is the only module that holds all
- * three at once:
+ * Three lifetimes are managed here and nowhere else:
  *
- * - **The slot** is held from the instant it is granted until the subprocess is finished with —
- *   normally, by failure, or by a client that went away — never released early by a throw between
- *   acquire and launch, and never when `query()` returns, which is immediately and long before the
- *   answer. Everything after the acquire runs under a handler that hands the permits back on
- *   failure, because a leaked permit is invisible until the fourth one wedges the account for good
- *   (`concurrency.ts`: "every holder releases").
+ * - **The admission** (slot + claims) is held until the subprocess is finished with — never released
+ *   early by a throw between acquire and launch, nor when `query()` returns. Every failure hands it
+ *   back, because a leaked permit is invisible until the fourth one wedges the account.
  * - **The abort bridge** is detached at the same moment, or a finished query keeps a listener on a
  *   signal that outlives it (§9).
  * - **The session report** is fired once, at the end, with whatever the SDK named. Before the end
@@ -66,10 +55,8 @@ import type { SdkUsageGauge, SdkUsageGaugeSource } from "./usage-gauge"
  * fate of two turns of one conversation dispatched concurrently, and routine under
  * `CLAUDE_CODE_SESSION_KIND: "bg"` (`env.ts`). That refusal is thrown before the subprocess streams
  * anything, and the renderer only ever throws before a byte is on the wire — so one in-place retry
- * with `forkSession: true` (same account, same slot, full history inherited) is legal under "never
- * retry after bytes are on the wire", and strictly better than failing over to a cold account and a
- * full transcript replay. Once, and only for a `resume` plan: a `fork` already forks, `fresh` can
- * never be busy, and a fork that comes back busy too is a real failure the chain should see.
+ * with `forkSession: true` (same account, full history inherited) is legal under "never retry after
+ * bytes are on the wire". Once, and only for a `resume` plan; a fork that comes back busy is real.
  *
  * `query` and the CLI resolution are injected for the same reason `fetch` is injected on the HTTP
  * path: **no test may spawn a real `claude` CLI** (CLAUDE.md testing rules), and a transport that
@@ -91,37 +78,32 @@ export type SdkQueryFn = (params: {
 export interface SdkInvokerDeps {
   /** Bounds `claude` subprocesses, globally and per Account. Shared across every request. */
   readonly concurrency: SdkConcurrency
-  /**
-   * Lets one subprocess cross this Account's token-refresh moment alone (`credential-freshness.ts`).
-   * Taken **before** the slot, the one order every spawn site uses, and re-asked once the slot is
-   * granted; both claims are released wherever the slot is handed back. Optional so a deployment
-   * that wires none behaves exactly as it did before the gate existed.
-   */
+  /** One subprocess across the token-refresh moment (`turn-admission.ts`). Absent: never waits. */
   readonly freshness?: CredentialFreshness
   /** `CLAUDE_CLI_PATH`, validated at the env boundary. Null leaves the resolution ladder to decide. */
   readonly cliPathOverride?: string | null
   /** Injected in tests. Defaults to the real ladder over this host's filesystem. */
   readonly resolveCli?: () => CliResolution
-  /** Injected in tests. Defaults to the Agent SDK's own `query()`. */
   readonly ownerLaunch?: OwnerLaunchFactory
+  /** Injected in tests. Defaults to the Agent SDK's own `query()`. */
   readonly runQuery?: SdkQueryFn
-  /** Idle guard and keep-alive cadence. Defaults to the renderer's own (90 s / 15 s). */
-  readonly pacing?: StreamPacing
-  readonly ticker?: Ticker
   /**
-   * The per-turn plan-usage reading. Absent means no gauge is asked and the turn ends exactly as it
-   * always did — a deployment that wires none simply keeps showing alarms instead of percentages.
+   * Idle guard and keep-alive cadence (`CLAUDE_SDK_STREAM_IDLE_SECONDS`,
+   * `CLAUDE_SDK_STREAM_HEARTBEAT_SECONDS`). Defaults to the renderer's own (90 s / 15 s).
    */
+  readonly pacing?: StreamPacing
+  /** Bound on closing a turn's SDK iterator (`CLAUDE_SDK_TEARDOWN_TIMEOUT_MS`, `turn-lifecycle.ts`). */
+  readonly teardownMs?: number
+  /** The held deny's ceiling (`CLAUDE_SDK_DENY_HOLD_SECONDS`). Defaults to `early-stop.ts`'s 60 s. */
+  readonly denyHoldMs?: number
+  readonly ticker?: Ticker
+  /** The per-turn plan-usage reading. Absent: no gauge is asked; the console shows alarms only. */
   readonly usageGauge?: SdkUsageGauge
   /** A `thinking` / `effort` value dropped rather than refused (`reasoning.ts`). Debug-logged. */
   readonly onIgnoredOption?: (detail: IgnoredOption) => void
 }
 
-/**
- * A router with no usable `claude` binary is misconfigured, not out of capacity. It classifies as
- * `unknown` — a `502` and a failover to the next Account, which is the honest answer: this Account
- * could not be served and another transport in the same Pool may still serve the request.
- */
+/** Misconfigured, not out of capacity: `unknown`, a `502` and a failover to the next Account. */
 const NO_CLI =
   "no usable claude binary is installed on this router, so a Claude subscription account cannot be dispatched to — see /readyz for which resolution rung failed"
 
@@ -150,37 +132,17 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     const cli = usableCli()
     const prompt = buildSdkPrompt({ messages: request.messages, plan: invocation.session })
 
-    // Held before the subprocess exists and released with the slot. Aborting while queued throws
-    // the signal's own reason, which `runSdkAttempt` reads as the deadline it was. `let`, because
-    // a busy-session retry ends the first attempt's slot and takes its own. Freshness before the
-    // slot: waiting on another's refresh while holding a slot wastes it.
-    let claim = await freshness.ensureFresh(invocation.accountId, invocation.signal)
-    let slot: SdkSlot
-    try {
-      slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
-    } catch (error) {
-      claim.release()
-      throw error
-    }
-    // Asked again with the slot in hand: the queue wait is unbounded, and a token that was warm at
-    // admission can cross the CLI's refresh lead while queued — the window must re-admit this
-    // caller rather than wave through an uncoordinated refresher (`idle-query.ts` asks the same
-    // way). Both claims are idempotent, so releasing beside the slot's own hand-back is safe.
-    let rechecked: CredentialRefreshClaim
-    try {
-      rechecked = await freshness.ensureFresh(invocation.accountId, invocation.signal)
-    } catch (error) {
-      slot.release()
-      claim.release()
-      throw error
-    }
-    const releaseClaims = (): void => {
-      rechecked.release()
-      claim.release()
-    }
+    // Aborting while queued throws the signal's own reason: a deadline stays a deadline.
+    const admit = () =>
+      admitTurn(
+        { freshness, concurrency: deps.concurrency },
+        invocation.accountId,
+        invocation.signal,
+      )
+    const first = await admit()
 
     /** One `query()` turn. Releases nothing on failure — the caller below owns the slot's end. */
-    const attempt = async (busySessionFork: boolean, ownSlot: SdkSlot): Promise<Response> => {
+    const attempt = async (busySessionFork: boolean, own: TurnAdmission): Promise<Response> => {
       const stderr = createStderrTail()
       // The passthrough's early stop kills the subprocess the launch owns: tied once both exist.
       let launch: QueryLaunch | null = null
@@ -188,6 +150,10 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         tools: request.tools,
         toolChoice: request.toolChoice,
         abort: () => launch?.abort(),
+        // The SDK's hook timeout is in whole seconds; rounding up never expires a hold early.
+        ...(deps.denyHoldMs === undefined
+          ? {}
+          : { holdTimeoutSeconds: Math.ceil(deps.denyHoldMs / 1_000) }),
       })
 
       launch = createQueryLaunch({
@@ -217,18 +183,22 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         })
         // The gauge is asked of the query object itself — the SDK doing the request, inside this
         // Account's own config directory, with a credential this router never sees.
-        const turn = observeTurn(messages, {
-          onFirstContent: () =>
-            deps.usageGauge?.observe(invocation.accountId, messages, gaugeObservation) ??
-            Promise.resolve(),
-          onAnswerEnd: report.fire,
-          onSettled: held.release,
-          onEnd: () => {
-            started.detach()
-            ownSlot.release()
-            releaseClaims()
+        const turn = observeTurn(
+          messages,
+          {
+            onFirstContent: () =>
+              deps.usageGauge?.observe(invocation.accountId, messages, gaugeObservation) ??
+              Promise.resolve(),
+            onAnswerEnd: report.fire,
+            onSettled: held.release,
+            onEnd: () => {
+              started.detach()
+              own.release()
+            },
+            onTeardownTimeout: () => started.abort(new Error("claude subprocess did not close")),
           },
-        })
+          deps.teardownMs,
+        )
         const filtered = passthrough === null ? turn : passthrough.filter(turn)
 
         const response = await renderSdkResponse({
@@ -298,46 +268,28 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       }
     }
 
-    // From here every exit hands the permits back: the stream's own end via `done`, and every
-    // failure — including one thrown before the launch existed — via the handlers below. The
-    // releases are once-guarded per slot (`concurrency.ts`), so the overlap with `done` is safe.
+    // From here every exit hands the permits back: the stream's own end via `onEnd`, and every
+    // failure — including one thrown before the launch existed — via the handlers below. Each
+    // admission's release is its own and idempotent, so the overlap with `onEnd` is safe.
     try {
-      return await attempt(false, slot)
+      return await attempt(false, first)
     } catch (error) {
+      first.release()
       if (
         invocation.beforeUpstreamStart?.singleStart !== true &&
         invocation.session.kind === "resume" &&
         classifySdkFailure(error).classification.kind === "busy-session"
       ) {
-        // The first attempt's stream is over, so its slot is already handed back (or is, here).
         // The retry takes its own claims and slot, queueing honestly behind whatever arrived in
-        // between; each acquire failure releases what that step already took.
-        slot.release()
-        releaseClaims()
-        claim = await freshness.ensureFresh(invocation.accountId, invocation.signal)
+        // between; the first attempt's late epilogue can only release the first admission.
+        const retry = await admit()
         try {
-          slot = await deps.concurrency.acquire(invocation.accountId, invocation.signal)
-        } catch (queued) {
-          claim.release()
-          throw queued
-        }
-        try {
-          rechecked = await freshness.ensureFresh(invocation.accountId, invocation.signal)
-        } catch (queued) {
-          slot.release()
-          claim.release()
-          throw queued
-        }
-        try {
-          return await attempt(true, slot)
+          return await attempt(true, retry)
         } catch (retried) {
-          slot.release()
-          releaseClaims()
+          retry.release()
           throw retried
         }
       }
-      slot.release()
-      releaseClaims()
       throw error
     }
   }

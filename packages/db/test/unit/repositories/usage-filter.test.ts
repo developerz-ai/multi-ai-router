@@ -83,14 +83,12 @@ async function rawProbeCast(dimension: UsageDimension): Promise<"text" | "uuid">
     then: (onFulfilled: (rows: unknown[]) => unknown) => Promise.resolve(onFulfilled([])),
   } as unknown as Chain
   const db = { select: () => builder } as unknown as Database
-  await createUsageReadRepository(db).breakdown(
-    window,
-    dimension,
-    IDS[dimension],
-    100,
-    {},
-    attribution,
-  )
+  const repo = createUsageReadRepository(db)
+  // Production calls the attributed overload only for owner/tool; a column dimension never
+  // carries an attribution.
+  if (dimension === "owner" || dimension === "tool")
+    await repo.breakdown(window, dimension, IDS[dimension], 100, {}, attribution)
+  else await repo.breakdown(window, dimension, IDS[dimension], 100, {})
   expect(captured).toBeDefined()
   return probeCast(dialect.sqlToQuery(captured as SQL).sql)
 }
@@ -104,15 +102,10 @@ async function historyProbeCast(dimension: UsageDimension): Promise<"text" | "uu
       return []
     },
   } as unknown as Database
-  await createUsageHistoryRepository(db).seriesByDimension(
-    window,
-    "day",
-    dimension,
-    1,
-    IDS[dimension],
-    {},
-    attribution,
-  )
+  const history = createUsageHistoryRepository(db)
+  if (dimension === "owner" || dimension === "tool")
+    await history.seriesByDimension(window, "day", dimension, 1, IDS[dimension], {}, attribution)
+  else await history.seriesByDimension(window, "day", dimension, 1, IDS[dimension], {})
   const first = queries[0]
   expect(first).toBeDefined()
   return probeCast(dialect.sqlToQuery(first as SQL).sql)

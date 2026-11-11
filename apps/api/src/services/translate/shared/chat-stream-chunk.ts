@@ -10,6 +10,8 @@ export interface ToolCallDelta {
 export interface ChunkDelta {
   readonly role?: "assistant"
   readonly content?: string
+  /** Where OpenAI itself streams a refusal, apart from the content a structured caller parses. */
+  readonly refusal?: string
   readonly tool_calls?: readonly ToolCallDelta[]
 }
 

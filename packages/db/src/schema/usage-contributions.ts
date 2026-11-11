@@ -1,4 +1,15 @@
-import { date, index, jsonb, pgTable, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
+import {
+  check,
+  date,
+  index,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core"
 
 /** Compact durable idempotency facts survive raw retention; never expire ahead of history. */
 export interface UsageContribution {
@@ -42,6 +53,15 @@ export const usageContributions = pgTable(
   (table) => [
     primaryKey({ columns: [table.kind, table.id] }),
     index("usage_contributions_day_idx").on(table.day),
-    index("usage_contributions_source_idx").on(table.source, table.id),
+    // `coverage().legacy` asks "is any receipt in the window not live?" — `<>` rides no btree, so
+    // on an install with none the EXISTS read every receipt in the window. Partial on the rare
+    // rows: empty after the cutover, so the probe is O(1). Replaces the unread
+    // `usage_contributions_source_idx (source, id)` (0044).
+    index("usage_contributions_legacy_day_idx").on(table.day).where(sql`${table.source} <> 'live'`),
+    check("usage_contributions_kind_known", sql`${table.kind} in ('attempt', 'terminal')`),
+    check(
+      "usage_contributions_source_known",
+      sql`${table.source} in ('live', 'legacy_pending', 'legacy_baseline', 'legacy_unbanked', 'legacy_overlap')`,
+    ),
   ],
 )

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm"
 import type { Database } from "../client"
 import type { scheduledTask, scheduledTaskOutcome } from "../schema/enums"
 import { type ScheduledTaskRunRow, scheduledTaskRuns } from "../schema/scheduled-task-runs"
@@ -70,6 +70,12 @@ export interface ScheduledTaskRepository {
    */
   lastSuccess(task: ScheduledTaskName): Promise<ScheduledTaskRunRow | undefined>
   /**
+   * {@link ScheduledTaskRepository.lastRun} and {@link ScheduledTaskRepository.lastSuccess} for
+   * every task at once, in two statements — the tasks screen used to issue two per task. A task
+   * that never ran (or never succeeded) is absent from the matching map.
+   */
+  latestPerTask(): Promise<ScheduledTaskLatest>
+  /**
    * Deletes one bounded batch of *finished* runs older than `cutoff`, oldest
    * first, and returns how many went.
    *
@@ -89,7 +95,12 @@ export interface ScheduledTaskRepository {
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
 }
 
-/** The four periodic tasks, from the `scheduled_task` Postgres enum. */
+export interface ScheduledTaskLatest {
+  readonly lastRun: ReadonlyMap<ScheduledTaskName, ScheduledTaskRunRow>
+  readonly lastSuccess: ReadonlyMap<ScheduledTaskName, ScheduledTaskRunRow>
+}
+
+/** The periodic tasks, from the `scheduled_task` Postgres enum. */
 export type ScheduledTaskName = (typeof scheduledTask.enumValues)[number]
 
 /** `partial` means the batch limit was hit and the next run continues. */
@@ -200,6 +211,11 @@ export function createScheduledTaskRepository(db: Database): ScheduledTaskReposi
       return rows[0]
     },
 
+    latestPerTask: async () => {
+      const [runs, successes] = await Promise.all([latestRows(db, false), latestRows(db, true)])
+      return { lastRun: byTask(runs), lastSuccess: byTask(successes) }
+    },
+
     deleteOlderThan: (cutoff, limit) =>
       deleteOldestBatch({
         db,
@@ -211,4 +227,28 @@ export function createScheduledTaskRepository(db: Database): ScheduledTaskReposi
         narrowedBy: isNotNull(scheduledTaskRuns.finishedAt),
       }),
   }
+}
+
+/**
+ * One row per enum value, each a `limit 1` probe of `(task, started_at)` walked backwards — a
+ * `distinct on (task)` would read every row of the retained history to keep fourteen. The lateral
+ * picks ids; the outer select is the typed row read.
+ */
+function latestRows(db: Database, successOnly: boolean): Promise<ScheduledTaskRunRow[]> {
+  const success = successOnly ? sql`and r.outcome = 'success'` : sql``
+  const latestIds = sql`(
+    select latest.id
+    from unnest(enum_range(null::scheduled_task)) as t(task)
+    cross join lateral (
+      select r.id from scheduled_task_runs r
+      where r.task = t.task ${success}
+      order by r.started_at desc
+      limit 1
+    ) latest
+  )`
+  return db.select().from(scheduledTaskRuns).where(sql`${scheduledTaskRuns.id} in ${latestIds}`)
+}
+
+function byTask(rows: readonly ScheduledTaskRunRow[]): Map<ScheduledTaskName, ScheduledTaskRunRow> {
+  return new Map(rows.map((row) => [row.task, row]))
 }

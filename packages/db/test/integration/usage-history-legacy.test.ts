@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import type { SQL } from "drizzle-orm"
 import { eq } from "drizzle-orm"
+import { PgDialect } from "drizzle-orm/pg-core"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createUsageHistoryMaintenance } from "../../src/repositories/usage-history-maintenance"
+import { createUsageHistoryRepository } from "../../src/repositories/usage-history-repository"
 import { accounts } from "../../src/schema/accounts"
 import { usageContributions } from "../../src/schema/usage-contributions"
 import { usageDaily } from "../../src/schema/usage-daily"
@@ -52,7 +55,7 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
       .sql.unsafe("alter table usage_daily enable trigger usage_history_baseline_seal")
     await fixture.db().delete(accounts).where(eq(accounts.id, account.id))
     await fixture.get().sql.unsafe("alter table usage_records drop constraint fixture_legacy_fk")
-    const before = await fixture.history().totals(fixture.window)
+    const before = await fixture.history().totals(fixture.window, {})
     expect(await fixture.history().backfill({ limit: 1 })).toEqual({
       processed: 1,
       remaining: true,
@@ -61,7 +64,7 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
       processed: 0,
       remaining: false,
     })
-    expect(await fixture.history().totals(fixture.window)).toEqual(before)
+    expect(await fixture.history().totals(fixture.window, {})).toEqual(before)
     expect(await fixture.history().coverage(fixture.window)).toMatchObject({
       legacy: true,
       incomplete: true,
@@ -86,7 +89,7 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
     expect(first.processed).toBe(1)
     expect((await fixture.history().backfill({ limit: 1 })).processed).toBe(0)
     const window = { from: new Date("1984-01-06"), to: new Date("1984-01-07") }
-    expect(await fixture.history().totals(window)).toMatchObject({ attempts: 2, tokensIn: 6 })
+    expect(await fixture.history().totals(window, {})).toMatchObject({ attempts: 2, tokensIn: 6 })
     expect(await fixture.history().coverage(window)).toMatchObject({
       legacy: true,
       incomplete: true,
@@ -101,11 +104,14 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
       incomplete: true,
       requestsBasis: "mixed-legacy",
     })
-    expect(await fixture.history().totals(partial)).toMatchObject({ attempts: 0 })
-    expect(await fixture.history().series(partial, "hour")).toHaveLength(0)
+    expect(await fixture.history().totals(partial, {})).toMatchObject({ attempts: 0 })
+    expect(await fixture.history().series(partial, "hour", undefined, {})).toHaveLength(0)
     expect(
-      (await fixture.history().totals({ from: new Date("1984-01-05"), to: new Date("1984-01-06") }))
-        .attempts,
+      (
+        await fixture
+          .history()
+          .totals({ from: new Date("1984-01-05"), to: new Date("1984-01-06") }, {})
+      ).attempts,
     ).toBe(7)
   })
   test("set-based backfill is atomic above 2000 rows and preserves pending receipt facts", async () => {
@@ -140,7 +146,7 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
       expect(
         await fixture
           .history()
-          .totals({ from: new Date("1984-01-09"), to: new Date("1984-01-10") }),
+          .totals({ from: new Date("1984-01-09"), to: new Date("1984-01-10") }, {}),
       ).toMatchObject({ attempts: 0, tokensIn: 0 })
     } finally {
       await fixture.get().sql.unsafe("drop trigger fixture_backfill_failure on usage_contributions")
@@ -161,7 +167,9 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
       payloadHash: held?.payloadHash,
     })
     expect(
-      await fixture.history().totals({ from: new Date("1984-01-09"), to: new Date("1984-01-10") }),
+      await fixture
+        .history()
+        .totals({ from: new Date("1984-01-09"), to: new Date("1984-01-10") }, {}),
     ).toMatchObject({ attempts: 2201, requests: 0, tokensIn: 6603 })
     expect(await fixture.history().backfill({ limit: 5000 })).toEqual({
       processed: 0,
@@ -250,7 +258,40 @@ describe.skipIf(!historyUrl)("conservative resumable legacy history", () => {
     expect(await maintenance.backfill({ limit: 1 })).toEqual({ processed: 1, remaining: true })
     expect(await maintenance.backfill({ limit: 1 })).toEqual({ processed: 0, remaining: false })
     expect(
-      await fixture.history().totals({ from: new Date("1984-01-16"), to: new Date("1984-01-19") }),
+      await fixture
+        .history()
+        .totals({ from: new Date("1984-01-16"), to: new Date("1984-01-19") }, {}),
     ).toMatchObject({ attempts: 3, tokensIn: 9, requests: 0 })
+  })
+
+  test("the legacy probe rides the partial index, so an all-live install answers in O(1)", async () => {
+    await fixture.usage().insertBatch({
+      attempts: Array.from({ length: 200 }, (_, i) =>
+        historyAttempt({ createdAt: new Date(Date.UTC(1984, 2, 1 + (i % 20), 1, i)) }),
+      ),
+      terminals: [],
+    })
+    const captured: { sql: string; params: unknown[] }[] = []
+    const real = fixture.db()
+    const recording = new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop !== "execute") return Reflect.get(target, prop, receiver)
+        return (query: SQL) => {
+          captured.push(new PgDialect().sqlToQuery(query))
+          return real.execute(query)
+        }
+      },
+    })
+    await createUsageHistoryRepository(recording).coverage()
+    const coverage = captured.find((q) => q.sql.includes("as legacy"))
+    expect(coverage).toBeDefined()
+    const plan = await fixture.get().sql.begin(async (tx) => {
+      await tx.unsafe("set local enable_seqscan = off")
+      // Planner statistics for the fresh fixture: without them the partial index's size is unknown.
+      await tx.unsafe("analyze usage_contributions")
+      const rows = await tx.unsafe(`explain ${coverage?.sql}`, (coverage?.params ?? []) as never[])
+      return rows.map((row) => String(Object.values(row)[0])).join("\n")
+    })
+    expect(plan).toContain("usage_contributions_legacy_day_idx")
   })
 })

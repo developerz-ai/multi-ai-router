@@ -43,7 +43,14 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     },
     // A request held only by the router's own recovery bookkeeping waits for the permit instead of
     // answering 429 (`dataplane/recovery-wait.ts`); polled on the coordinator's own tick.
-    recoveryWait: { budgetMs: env.recovery.requestWaitMs, intervalMs: env.recovery.intervalMs },
+    recoveryWait: {
+      budgetMs: env.recovery.requestWaitMs,
+      probeBudgetMs: env.recovery.probeWaitMs,
+      intervalMs: env.recovery.intervalMs,
+    },
+    bufferedBodyMaxBytes: env.upstreamBufferedBodyMaxBytes,
+    maxTranslationSseFrameBytes: env.translation.maxSseFrameBytes,
+    translationDropLogWindowMs: env.translation.dropLogWindowSeconds * 1_000,
     upstreamTimeoutMs: failover.upstreamTimeoutMs,
     // A streamed attempt's clocks: failover on a hung upstream, an honest error on a stalled stream,
     // and a total sized for long generations rather than for hangs (`dataplane/upstream-deadline.ts`).

@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/db",
-  "version": "2.55.0",
+  "version": "2.56.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -24,7 +24,6 @@
   "scripts": {
     "build": "tsc --build",
     "clean": "tsc --build --clean",
-    "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check",
     "migrate": "bun run src/migrate.ts"

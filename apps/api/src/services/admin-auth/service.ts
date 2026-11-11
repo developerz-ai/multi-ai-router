@@ -1,7 +1,16 @@
 import { AdminAuthError, CsrfTokenError } from "@multi-ai-router/core"
-import { AUDIT_KINDS, AUDIT_SUBJECTS } from "../admin/audit"
+import { AUDIT_KINDS } from "../admin/audit"
+import { UNKNOWN_CLIENT_IP } from "./clientIp"
 import { type AdminAuthConfig, resolveAdminAuthConfig } from "./config"
 import { csrfTokenMatches, mintCsrfToken } from "./csrf"
+import {
+  ADMIN_LOGIN_FAILED_MESSAGE,
+  AdminLoginThrottledError,
+  createAuditFire,
+  LOCAL_ADMIN_USERNAME,
+  UNKNOWN_ADMIN_SUBJECT,
+} from "./login-outcomes"
+import { createCachedLocalConfigured, sessionPrincipalAdmitted } from "./principal"
 import type {
   AdminAuthDeps,
   AdminAuthService,
@@ -24,74 +33,30 @@ export type {
   LoginCompleteResult,
   LoginStartResult,
 } from "./service-types"
+export { ADMIN_LOGIN_FAILED_MESSAGE, AdminLoginThrottledError, LOCAL_ADMIN_USERNAME }
 
 const NOT_AUTHENTICATED = "Admin authentication required"
-/** What a caller that cannot resolve a peer address records, so the field is always present. */
-const UNKNOWN_IP = "unknown"
-/**
- * The audit subject for a sign-in that failed before a principal existed. Deliberately not one of
- * the configured admin emails: an OIDC rejection means the router never accepted an identity, and
- * naming a real operator on a row they may have had nothing to do with is a false attribution.
- */
-const UNKNOWN_ADMIN_SUBJECT = "unknown"
-
-/**
- * The one sentence every local-login failure carries, byte-identical to the OIDC
- * callback's. A wrong password, an unconfigured door, and a locked-out address
- * are indistinguishable on the wire on purpose: the answer that names its
- * reason is a probe oracle. The audit log carries the real kind.
- */
-export const ADMIN_LOGIN_FAILED_MESSAGE = "Single sign-on verification failed. Try again."
-
-/** The session username a password login runs under — one principal, no user table. */
-export const LOCAL_ADMIN_USERNAME = "local-admin"
-
-/**
- * The per-IP lockout tripped. Not a `RouterError`: core's closed code table has
- * no honest code for it, and the route renders the `429` + `Retry-After` itself
- * with the same generic body every other failure gets.
- */
-export class AdminLoginThrottledError extends Error {
-  readonly retryAfterSeconds: number
-
-  constructor(retryAfterSeconds: number) {
-    super("too many failed sign-in attempts")
-    this.name = "AdminLoginThrottledError"
-    this.retryAfterSeconds = retryAfterSeconds
-  }
-}
-
+const UNKNOWN_IP = UNKNOWN_CLIENT_IP
+/** `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`' default — how stale "is a password set" may be. */
+const DEFAULT_LOCAL_CREDENTIAL_TTL_MS = 60_000
 export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
   const config = resolveAdminAuthConfig(deps.config)
   const store = deps.store ?? createMemorySessionStore()
   const now = deps.now ?? (() => Date.now())
   const signingKey = deriveSessionSigningKey(deps.env.encryptionKey)
+  const localConfigured = createCachedLocalConfigured(
+    deps.local,
+    deps.localCredentialTtlMs ?? DEFAULT_LOCAL_CREDENTIAL_TTL_MS,
+    now,
+  )
+  const throttleOptions = { evictionIntervalMs: deps.throttleEvictionIntervalMs }
 
-  // Audit reporting must never delay or decide an authentication result.
-  function fireAudit(kind: string, detail: Record<string, unknown>, subjectId?: string): void {
-    const recorder = deps.audit
-    if (recorder === undefined) return
-    const event = {
-      kind,
-      subjectType: AUDIT_SUBJECTS.admin,
-      // The IdP-asserted email is the stable identifier, not the typed username — there is no
-      // username anymore. Every OIDC caller passes it explicitly, which is what makes an audit
-      // row attributable now that `ADMIN_OIDC_ADMIN_EMAIL` admits several operators: the *configured*
-      // value is a list and would name whichever entry happened to sort first, not whoever signed
-      // in. A local password login has no email; it records its own constant subject.
-      subjectId: subjectId ?? LOCAL_ADMIN_USERNAME,
-      detail,
-    }
-    try {
-      void recorder.record(event).catch(() => {
-        // Deliberately empty: the append is reporting, and reporting never fails a login.
-      })
-    } catch {
-      // A sink that throws synchronously is the same non-event as one whose promise rejects.
-    }
-  }
+  const fireAudit = createAuditFire(deps.audit)
 
-  const oidcThrottle = createLoginThrottle(config)
+  const oidcThrottle = createLoginThrottle(config, throttleOptions)
+  // Its own buckets: one sign-in is a start and a callback, and charging both to one bucket would
+  // halve the attempts an operator gets.
+  const callbackThrottle = createLoginThrottle(config, throttleOptions)
 
   async function startLogin(ip = UNKNOWN_IP): Promise<LoginStartResult> {
     if (deps.oidc == null) {
@@ -135,10 +100,26 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     ip: string
   }): Promise<LoginCompleteResult> {
     if (deps.oidc == null) throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
+    // Before the state is consumed: an unthrottled callback was one `oauth_states` query and one
+    // audit row per unauthenticated hit.
+    const keys = [ipThrottleKey(input.ip)]
+    const at = now()
+    const decision = callbackThrottle.check(keys, at)
+    if (!decision.allowed) {
+      if (decision.firstDenial) {
+        fireAudit(
+          AUDIT_KINDS.adminLoginFailed,
+          { ip: input.ip, method: "oidc", reason: "throttled" },
+          UNKNOWN_ADMIN_SUBJECT,
+        )
+      }
+      throw new AdminLoginThrottledError(decision.retryAfterSeconds)
+    }
     let principal: { readonly email: string; readonly subject: string }
     try {
       principal = await deps.oidc.complete({ code: input.code, state: input.state })
     } catch (err) {
+      callbackThrottle.recordFailure(keys, at)
       // Symmetry with `completeLocalLogin`, which has always audited its rejections. Without this
       // the audit feed showed OIDC logins that succeeded and nothing at all for the ones that did
       // not — so a console reporting "sign-in failed" left no row behind to explain it, and the
@@ -157,19 +138,25 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       )
       throw err
     }
+    // A completed sign-in is not an attack: the starts and callbacks it took stop counting.
+    oidcThrottle.reset(keys)
+    callbackThrottle.reset(keys)
     return issueSession({
-      // The session's `username` is the IdP-asserted email so the audit log
-      // and the console match the human-readable identity the operator
-      // logged in with.
-      username: principal.email,
+      // The session's `username` is the IdP-asserted email, lowercased like the allowlist it was
+      // admitted by, so `authenticate` re-checks it against that list and `bin/admin
+      // revoke-sessions --user` finds it whatever case the IdP asserted.
+      username: principal.email.toLowerCase(),
       subjectId: principal.email,
       ip: input.ip,
       auditDetail: { subject: principal.subject, email: principal.email, method: "oidc" },
     })
   }
 
-  const localLoginThrottle = createLoginThrottle(config)
+  const localLoginThrottle = createLoginThrottle(config, throttleOptions)
   let activePasswordChecks = 0
+  // One audit row per saturation episode, not per refused request; an episode ends when the
+  // last running check does.
+  let saturationReported = false
 
   async function completeLocalLogin(input: {
     password: string
@@ -181,11 +168,17 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     const nowMs = now()
     const decision = localLoginThrottle.check(keys, nowMs)
     if (!decision.allowed || activePasswordChecks >= config.maxConcurrentLogins) {
-      fireAudit(
-        AUDIT_KINDS.adminLoginFailed,
-        { ip: input.ip, method: "local", reason: "throttled" },
-        LOCAL_ADMIN_USERNAME,
-      )
+      // The lockout transition is audited, not every refusal after it: a refused request is
+      // unauthenticated, and a row per refusal is a write an attacker can repeat forever.
+      const firstDenial = decision.allowed ? !saturationReported : decision.firstDenial
+      if (decision.allowed) saturationReported = true
+      if (firstDenial) {
+        fireAudit(
+          AUDIT_KINDS.adminLoginFailed,
+          { ip: input.ip, method: "local", reason: "throttled" },
+          LOCAL_ADMIN_USERNAME,
+        )
+      }
       throw new AdminLoginThrottledError(decision.allowed ? 1 : decision.retryAfterSeconds)
     }
 
@@ -199,6 +192,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       verified = (await deps.local?.verify(input.password)) ?? false
     } finally {
       activePasswordChecks -= 1
+      if (activePasswordChecks === 0) saturationReported = false
     }
     if (!verified) {
       fireAudit(
@@ -210,6 +204,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     }
 
     localLoginThrottle.reset(keys)
+    localConfigured.remember(true)
     return issueSession({
       username: LOCAL_ADMIN_USERNAME,
       subjectId: LOCAL_ADMIN_USERNAME,
@@ -228,6 +223,16 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
 
     const session = await store.get(id)
     if (session === undefined) throw new AdminAuthError(NOT_AUTHENTICATED)
+    const admitted = sessionPrincipalAdmitted(session.username, {
+      localUsername: LOCAL_ADMIN_USERNAME,
+      localConfigured: session.username === LOCAL_ADMIN_USERNAME && (await localConfigured.get()),
+      oidc: deps.env.adminOidc,
+    })
+    if (!admitted) {
+      // The password was removed or the email left the allowlist: the session goes with it.
+      await store.delete(session.id)
+      throw new AdminAuthError(NOT_AUTHENTICATED)
+    }
 
     const nowMs = now()
     if (sessionExpiryMs(session) <= nowMs) {
@@ -258,7 +263,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     ready: () => Promise.resolve(),
     methods: async () => ({
       oidc: deps.oidc != null,
-      local: (await deps.local?.isConfigured()) ?? false,
+      local: await localConfigured.get(),
     }),
     startLogin,
     completeLogin,

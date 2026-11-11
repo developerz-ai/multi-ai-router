@@ -60,7 +60,8 @@ export function relayResponse(
 
   const passthrough = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
-      // Enqueue first. Everything after this line happens on time the client already has.
+      // Enqueue first, so the chunk is queued before any observer work. The reader resumes only in
+      // a later microtask, so the observer below still runs before the client sees this chunk.
       controller.enqueue(chunk)
       const first = bytes === 0
       bytes += chunk.length

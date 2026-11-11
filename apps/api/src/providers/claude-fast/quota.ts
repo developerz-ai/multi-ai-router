@@ -19,6 +19,8 @@ export function reportFastQuota(headers: Headers, report?: (info: unknown) => vo
       utilization: number(headers.get(`${prefix}${key}-utilization`)),
       overageStatus: headers.get(`${prefix}overage-status`),
       overageResetsAt: number(headers.get(`${prefix}overage-reset`)),
+      // Measured on every response, not raised near a limit (`claude-sdk/quota.ts` `ingest`).
+      utilizationSource: "continuous",
     })
   }
   const status = headers.get(`${prefix}status`)

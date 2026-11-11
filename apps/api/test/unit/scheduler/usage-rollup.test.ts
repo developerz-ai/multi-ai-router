@@ -80,4 +80,56 @@ describe("the usage history registration task", () => {
     ).toEqual({ outcome: "partial", itemsProcessed: 0 })
     expect(calls).toBe(1)
   })
+
+  // 08.2 / 10.5 / 12.9: the floored backfill never sees rows a lock-free writer landed below the
+  // watermark, so a full pass runs on its own long cadence.
+  test("runs a full scan first and then once per configured period, floored otherwise", async () => {
+    const modes: boolean[] = []
+    const task = createUsageRollupTask({
+      history: {
+        backfill: async ({ fullScan }) => {
+          modes.push(fullScan === true)
+          return { processed: 0, remaining: false }
+        },
+      },
+      intervalMs: 60_000,
+      batchSize: 2,
+      fullScanEveryMs: 24 * 3_600_000,
+    })
+    const tick = (offsetHours: number) =>
+      task.run({
+        now: new Date(NOW.getTime() + offsetHours * 3_600_000),
+        logger: silentLogger(),
+        signal: new AbortController().signal,
+      })
+    await tick(0)
+    await tick(1)
+    await tick(23)
+    await tick(24)
+    await tick(25)
+    expect(modes).toEqual([true, false, false, true, false])
+  })
+
+  test("an interrupted full scan resumes as a full scan", async () => {
+    const modes: boolean[] = []
+    let first = true
+    const task = createUsageRollupTask({
+      history: {
+        backfill: async ({ fullScan }) => {
+          modes.push(fullScan === true)
+          const remaining = first
+          first = false
+          return { processed: 0, remaining }
+        },
+      },
+      intervalMs: 60_000,
+      batchSize: 2,
+      fullScanEveryMs: 24 * 3_600_000,
+    })
+    const signal = new AbortController().signal
+    await task.run({ now: NOW, logger: silentLogger(), signal })
+    await task.run({ now: NOW, logger: silentLogger(), signal })
+    await task.run({ now: NOW, logger: silentLogger(), signal })
+    expect(modes).toEqual([true, true, false])
+  })
 })

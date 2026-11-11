@@ -180,3 +180,75 @@ describe("the encoder", () => {
     expect(createSseParser().push(encoded)).toEqual([{ event: "x", data: "one\ntwo" }])
   })
 })
+
+describe("long lines (06.1)", () => {
+  function feed(parser: ReturnType<typeof createSseParser>, text: string, size: number) {
+    const frames: { event: string | null; data: string }[] = []
+    for (let at = 0; at < text.length; at += size)
+      frames.push(...parser.push(text.slice(at, at + size)))
+    frames.push(...parser.flush())
+    return frames
+  }
+
+  test("a 2 MiB single data line in 1 KiB chunks is one frame equal to the input", () => {
+    const payload = "x".repeat(2 * 1024 * 1024)
+    const frames = feed(createSseParser(), `data: ${payload}\r\n\r\n`, 1024)
+    expect(frames).toHaveLength(1)
+    expect(frames[0]?.data).toBe(payload)
+  })
+
+  test("a `\\r\\n` split across chunks of a long line still ends one line", () => {
+    const payload = "y".repeat(10_000)
+    const parser = createSseParser()
+    expect(parser.push(`data: ${payload}\r`)).toEqual([])
+    expect(parser.push("\n\r")).toEqual([{ event: null, data: payload }])
+    expect(parser.push("\ndata: z\n\n")).toEqual([{ event: null, data: "z" }])
+  })
+
+  test("parse time is linear in line length (4 MiB vs 1 MiB in 4 KiB chunks)", () => {
+    const time = (bytes: number) => {
+      const text = `data: ${"a".repeat(bytes)}\n\n`
+      const started = performance.now()
+      feed(createSseParser(), text, 4096)
+      return performance.now() - started
+    }
+    time(1024 * 1024) // warm the JIT
+    const small = Math.max(time(1024 * 1024), 1)
+    const large = time(4 * 1024 * 1024)
+    // Linear is ~4x; the quadratic scan this replaced measured ~16x and 637 ms for the 1 MiB case.
+    expect(large / small).toBeLessThan(10)
+    expect(large).toBeLessThan(1000)
+  })
+})
+
+describe("frame cap (06.13)", () => {
+  test("an unterminated line past the cap fails with translation_pending_overflow and no frame", () => {
+    const parser = createSseParser({ maximumFrameLength: 100 })
+    expect(parser.push(`data: ${"x".repeat(60)}`)).toEqual([])
+    expect(parser.failure()).toBeNull()
+    expect(parser.push("x".repeat(60))).toEqual([])
+    expect(parser.failure()?.errorClass).toBe("translation_pending_overflow")
+    expect(parser.push("\n\n")).toEqual([])
+    expect(parser.flush()).toEqual([])
+  })
+
+  test("data lines gathered without a blank line count toward the cap", () => {
+    const parser = createSseParser({ maximumFrameLength: 100 })
+    for (let i = 0; i < 9; i += 1) parser.push(`data: ${"y".repeat(10)}\n`)
+    expect(parser.failure()).toBeNull()
+    parser.push(`data: ${"y".repeat(20)}\n`)
+    expect(parser.failure()?.errorClass).toBe("translation_pending_overflow")
+  })
+
+  test("a frame at the cap is emitted", () => {
+    const parser = createSseParser({ maximumFrameLength: 100 })
+    const payload = "z".repeat(94) // "data: " + 94 = 100 code units
+    expect(parser.push(`data: ${payload}`)).toEqual([])
+    expect(parser.push("\n\n")).toEqual([{ event: null, data: payload }])
+    expect(parser.failure()).toBeNull()
+  })
+
+  test("a non-positive cap is a programming error", () => {
+    expect(() => createSseParser({ maximumFrameLength: 0 })).toThrow(RangeError)
+  })
+})

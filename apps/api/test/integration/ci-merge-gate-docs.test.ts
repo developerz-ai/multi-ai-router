@@ -50,7 +50,7 @@ const REVERSED = `
 Reversed merge guidance
 
 A merge waits for the bench gate to pass. A merge then reads the advisory, ui-geometry, lint,
-typecheck, test and build reports before it goes green.
+typecheck, test, build and image reports before it goes green.
 `
 
 describe("the ci workflow", () => {
@@ -66,6 +66,7 @@ describe("the ci workflow", () => {
       "bench",
       "ui-geometry",
       "build",
+      "image",
     ])
   })
 
@@ -77,8 +78,8 @@ describe("the ci workflow", () => {
     expect(bench).toMatch(/^ {4}continue-on-error: true$/m)
   })
 
-  test("keeps advisory and ui-geometry gates", () => {
-    for (const name of ["advisory", "ui-geometry"]) {
+  test("keeps advisory, ui-geometry and image gates", () => {
+    for (const name of ["advisory", "ui-geometry", "image"]) {
       // No `continue-on-error` anywhere in the job, at job or step level: a finding, and an
       // assessment that could not complete, both turn the build red.
       expect(withoutComments(jobBlock(WORKFLOW, name))).not.toContain("continue-on-error")
@@ -121,6 +122,7 @@ describe("the merge guidance", () => {
       "bench is called a gate but the workflow reports it",
       "ui-geometry is called a report but the workflow gates on it",
       "build is called a report but the workflow gates on it",
+      "image is called a report but the workflow gates on it",
     ])
   })
 })

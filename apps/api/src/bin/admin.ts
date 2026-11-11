@@ -1,6 +1,13 @@
-import { createAdminCredentialRepository, createDatabase, runMigrations } from "@multi-ai-router/db"
+import {
+  type AdminSessionRepository,
+  createAdminCredentialRepository,
+  createAdminSessionRepository,
+  createDatabase,
+  runMigrations,
+} from "@multi-ai-router/db"
 import {
   createLocalAdminCredentials,
+  LOCAL_ADMIN_USERNAME,
   LOCAL_PASSWORD_MAX_LENGTH,
   LOCAL_PASSWORD_MIN_LENGTH,
   type LocalAdminCredentials,
@@ -12,6 +19,11 @@ import {
  *
  *   bun apps/api/src/bin/admin.ts set-password     (two hidden prompts; or two lines on stdin)
  *   bun apps/api/src/bin/admin.ts delete-password  (removes the hash row — the door closes)
+ *   bun apps/api/src/bin/admin.ts revoke-sessions [--user <email>]  (signs sessions out)
+ *
+ * Changing or removing the password also deletes every password-login session in the same run:
+ * a rotated password that leaves the leaked one's session alive rotated nothing. Running routers
+ * stop honoring a deleted session within `ADMIN_SESSION_REVALIDATE_SECONDS`.
  *
  * The credential is typed, never passed as an argument: a password on argv
  * lands in the process list and the shell history. When stdin is a TTY it is
@@ -27,6 +39,10 @@ import {
 const USAGE = `usage:
   bin/admin set-password      set or replace the local admin password (typed twice, hidden)
   bin/admin delete-password   remove it — password sign-in is off again
+  bin/admin revoke-sessions [--user <email>]
+                              sign out every admin session, or one operator's
+
+set-password and delete-password also sign out every password-login session.
 
 With no ADMIN_OIDC_* variables set, the local password is the router's only
 admin sign-in; removing it makes boot refuse until one method is configured.
@@ -111,7 +127,22 @@ async function readPipedLines(): Promise<[string, string]> {
   return [first, second]
 }
 
-async function setPassword(credentials: LocalAdminCredentials): Promise<void> {
+/** The sign-out half of a credential change, and the whole of `revoke-sessions`. */
+async function revokeSessions(
+  sessions: AdminSessionRepository,
+  username: string | null,
+): Promise<number> {
+  return username === null ? await sessions.deleteAll() : await sessions.deleteByUsername(username)
+}
+
+function signedOutLine(count: number): string {
+  return `  ${count} admin session${count === 1 ? "" : "s"} signed out (running routers drop them within ADMIN_SESSION_REVALIDATE_SECONDS).\n`
+}
+
+async function setPassword(
+  credentials: LocalAdminCredentials,
+  sessions: AdminSessionRepository,
+): Promise<void> {
   const [first, second] = process.stdin.isTTY
     ? await readHiddenLines(["New admin password: ", "Repeat admin password: "])
     : await readPipedLines()
@@ -132,9 +163,11 @@ async function setPassword(credentials: LocalAdminCredentials): Promise<void> {
     }
     throw error
   }
+  const revoked = await revokeSessions(sessions, LOCAL_ADMIN_USERNAME)
 
   process.stdout.write(
     "local admin password set — the argon2id hash is in Postgres; the password itself is nowhere.\n" +
+      signedOutLine(revoked) +
       "  The login page now offers password sign-in, alongside SSO if OIDC is configured.\n" +
       "  Close the door again with: bin/admin delete-password\n" +
       "  Boot refuses while this credential exists and PUBLIC_URL is not loopback, unless\n" +
@@ -142,24 +175,43 @@ async function setPassword(credentials: LocalAdminCredentials): Promise<void> {
   )
 }
 
-async function deletePassword(credentials: LocalAdminCredentials): Promise<void> {
+async function deletePassword(
+  credentials: LocalAdminCredentials,
+  sessions: AdminSessionRepository,
+): Promise<void> {
   const removed = await credentials.remove()
+  // Even with no row: a password session that outlived its row is exactly what this cleans up.
+  const revoked = await revokeSessions(sessions, LOCAL_ADMIN_USERNAME)
   if (!removed) {
-    process.stdout.write("no local admin password was set — nothing to remove.\n")
+    process.stdout.write(
+      `no local admin password was set — nothing to remove.\n${signedOutLine(revoked)}`,
+    )
     return
   }
   process.stdout.write(
     "local admin password removed — password sign-in is off.\n" +
+      signedOutLine(revoked) +
       "  If no ADMIN_OIDC_* variables are set either, boot now refuses until one\n" +
       "  sign-in method is configured — see docs/idea/13-admin-oidc.md.\n",
   )
 }
 
+/** `revoke-sessions`' argument: nothing, or `--user <email>`. Usernames are stored lowercased. */
+function revokeTarget(args: readonly string[]): string | null {
+  if (args.length === 0) return null
+  const [flag, email] = args
+  if (args.length !== 2 || flag !== "--user" || email === undefined || email.trim() === "") {
+    fail(USAGE, 2)
+  }
+  return email.trim().toLowerCase()
+}
+
 const verb = process.argv[2]
-if (verb !== "set-password" && verb !== "delete-password") {
+if (verb !== "set-password" && verb !== "delete-password" && verb !== "revoke-sessions") {
   process.stderr.write(`${USAGE}\n`)
   process.exit(2)
 }
+const target = verb === "revoke-sessions" ? revokeTarget(process.argv.slice(3)) : null
 
 // Migrations first, exactly like boot: the table the verb writes to is one of
 // them, and both are idempotent, so a fresh database and a pending one converge.
@@ -171,8 +223,15 @@ try {
   const credentials = createLocalAdminCredentials({
     repository: createAdminCredentialRepository(handle.db),
   })
-  if (verb === "set-password") await setPassword(credentials)
-  else await deletePassword(credentials)
+  const sessions = createAdminSessionRepository(handle.db)
+  if (verb === "set-password") await setPassword(credentials, sessions)
+  else if (verb === "delete-password") await deletePassword(credentials, sessions)
+  else {
+    const revoked = await revokeSessions(sessions, target)
+    process.stdout.write(
+      `${target === null ? "every admin session" : `admin sessions for ${target}`} revoked.\n${signedOutLine(revoked)}`,
+    )
+  }
 } finally {
   await handle.close()
 }

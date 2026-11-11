@@ -11,6 +11,7 @@ export {
   type AccountMetric,
   createMetrics,
   type MetricsOptions,
+  type RequestMetricSample,
   type RouterMetrics,
   type SdkConcurrencySample,
   type UsageQueueSample,
@@ -29,5 +30,6 @@ export {
   type RegistryOptions,
 } from "./registry"
 export { createRuntimeMetrics, type RuntimeMetricsDeps } from "./runtime"
-export { captureException, initSentry, redactSentryEvent } from "./sentry"
+export { createProcessSampler, type ProcessSample, type ProcessSampler } from "./self-metrics"
+export { captureException, flushSentry, initSentry, redactSentryEvent } from "./sentry"
 export { createSeries, type RouterSeries } from "./series"

@@ -1,4 +1,11 @@
 [test]
+# tmp/ holds cloned upstream repos read for provider research; they ship thousands
+# of their own tests that fail here. Excluded in config rather than by a bin/test
+# flag so every `bun test` started at the root honours it, not only the wrapper.
+# (`bun test` does not read .gitignore, and positional filters are substrings:
+# `bun test apps` would also match tmp/**/apps/**.)
+pathIgnorePatterns = ["**/tmp/**"]
+
 # database-gate first: it decides whether this run is allowed to proceed at all,
 # and there is no reason to pay for happy-dom and the Solid/Babel pipeline before
 # finding out. See apps/api/test/support/database-gate.ts.

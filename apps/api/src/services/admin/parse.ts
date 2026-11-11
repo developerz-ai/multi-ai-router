@@ -1,5 +1,6 @@
 import { RequestTooLargeError } from "@multi-ai-router/core"
 import { z } from "zod"
+import { DEFAULT_ADMIN_JSON_MAX_BYTES } from "../../config/admin-bodies"
 import { readBoundedJsonBody } from "./bounded-json"
 import { type AdminResult, invalid, ok } from "./result"
 
@@ -14,7 +15,7 @@ import { type AdminResult, invalid, ok } from "./result"
 /** A body that is not JSON is a validation failure, never a 500. */
 export async function readJsonBody(
   request: Request,
-  options: { readonly maximumBytes: number } = { maximumBytes: 1024 * 1024 },
+  options: { readonly maximumBytes: number } = { maximumBytes: DEFAULT_ADMIN_JSON_MAX_BYTES },
 ): Promise<unknown> {
   try {
     return await readBoundedJsonBody(request, options)

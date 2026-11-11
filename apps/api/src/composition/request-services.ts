@@ -1,6 +1,7 @@
 import { createSdkInvoker, createSdkModelLister, createSdkUsageGaugeProbe } from "../providers"
 import { fastProfileState } from "../providers/claude-fast/availability"
 import { readFastCredential } from "../providers/claude-fast/credential"
+import { createFastCredentialCache } from "../providers/claude-fast/credential-cache"
 import { createFastInvoker } from "../providers/claude-fast/invoker"
 import { UpstreamAdmissionRefused } from "../providers/upstream-admission"
 import type { createCredentialCipherFromEnv } from "../services/crypto/fromEnv"
@@ -9,11 +10,11 @@ import {
   createDispatcher,
   createRateLimiter,
   createRouterKeyVerifier,
-  repositoryScopeLoader,
   sessionStoreFromEnv,
   stampLastUsed,
 } from "../services/dataplane"
 import { createActiveRequestRegistry } from "../services/dataplane/active-requests"
+import { repositoryCandidateLoader } from "../services/dataplane/auth/scope"
 import {
   type CatalogRefreshDeps,
   createSubscriptionModelRefresh,
@@ -43,13 +44,16 @@ export function createRequestServices(
   const { usageGauge, usage, metrics } = telemetry
   // --- data plane -----------------------------------------------------------
   const verifier = createRouterKeyVerifier({
-    repository: keys,
+    // Prefix row and scope targets in one statement: a miss is one indexed query, scoped or not.
+    loadCandidates: repositoryCandidateLoader(keys),
     cipher,
-    loadScope: repositoryScopeLoader(keys),
     cache: {
       maxEntries: env.dataPlane.keyCacheMax,
       ttlMs: env.dataPlane.keyCacheTtlSeconds * 1_000,
       negativeTtlMs: env.dataPlane.keyCacheNegativeTtlSeconds * 1_000,
+      negativeMaxEntries: env.keyVerification.negativeCacheMax,
+      maxPendingLoads: env.keyVerification.maxPendingLoads,
+      staleOnErrorMs: env.keyVerification.staleOnErrorSeconds * 1_000,
     },
     // Fired, never awaited: `lastUsedAt` is reporting, and a request must not wait on it.
     onVerified: stampLastUsed(keys, logger, now),
@@ -92,6 +96,12 @@ export function createRequestServices(
     freshness: credentialFreshness,
     cliPathOverride: env.claudeCliPath,
     usageGauge,
+    pacing: {
+      idleMs: env.claudeSdkPacing.streamIdleMs,
+      heartbeatMs: env.claudeSdkPacing.streamHeartbeatMs,
+    },
+    denyHoldMs: env.claudeSdkPacing.denyHoldMs,
+    teardownMs: env.claudeSdkPacing.teardownMs,
     onIgnoredOption: (detail) =>
       logger.debug("subscription request option dropped", {
         component: "claude-sdk",
@@ -111,6 +121,13 @@ export function createRequestServices(
       component: "claude-fast",
       profile: fastProfile,
     })
+  // The fenced read spawns two processes; it runs only when `.credentials.json` changed (05.2).
+  const fastCredentials = createFastCredentialCache({
+    read: (accountId, configDir) =>
+      ownership.withMetadataOwner(accountId, () => readFastCredential(configDir)),
+    now: () => now().getTime(),
+    admitted: (accountId) => ownership.isRevoked?.(accountId) !== true,
+  })
   const fastInvoker = fastEnabled
     ? createFastInvoker({
         sdk: invokeSdk,
@@ -119,8 +136,12 @@ export function createRequestServices(
         now: () => now().getTime(),
         credential: (accountId, configDir) => {
           if (configDir !== cli.configDirs.pathFor(accountId)) throw new UpstreamAdmissionRefused()
-          return ownership.withMetadataOwner(accountId, () => readFastCredential(configDir))
+          return fastCredentials.read(accountId, configDir)
         },
+        forgetCredential: (accountId) => fastCredentials.forget(accountId),
+        nativeSchemaTimeoutMs: env.claudeSdkPacing.fastNativeSchemaTimeoutMs,
+        nativeSchemaMemoSize: env.claudeSdkPacing.fastNativeSchemaMemoSize,
+        logger,
         resolveModel: (accountId, model) => {
           if (model.startsWith("claude-")) return model
           const tag = model.endsWith("[1m]") ? "[1m]" : ""
@@ -130,11 +151,8 @@ export function createRequestServices(
             ? `${descriptor.resolvedModel}${tag}`
             : null
         },
-        onFallback: (reason) =>
-          logger.debug("Claude fast mode request uses SDK fallback", {
-            component: "claude-fast",
-            reason,
-          }),
+        // Counted; the invoker itself warns once per account and reason (05.12).
+        onFallback: (reason) => metrics.observeFastFallback(reason),
       })
     : undefined
   const usageGaugeProbe = createSdkUsageGaugeProbe({
@@ -169,6 +187,7 @@ export function createRequestServices(
     catalog: modelCatalog,
     cipher,
     timeoutMs: env.failover.upstreamTimeoutMs,
+    maxResponseBytes: env.modelListingMaxBytes,
     fetch: (request) => fetch(request),
     subscription: {
       lister: sdkModelLister,

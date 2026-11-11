@@ -4,6 +4,10 @@
 #   bin/admin set-password       set or replace it (typed twice, hidden; or two
 #                                lines on stdin when piped)
 #   bin/admin delete-password    remove it — password sign-in is off again
+#   bin/admin revoke-sessions [--user <email>]
+#                                sign out every admin session, or one operator's
+#
+# set-password and delete-password also sign out every password-login session.
 #
 # The credential lives ONLY as an argon2id hash in Postgres — never in .env, a
 # compose file, or an image layer. A fresh database has no row, so the door is

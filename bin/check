@@ -1,11 +1,12 @@
 #!/bin/sh
 # The gate: lint, typecheck, test, build — the four offline CI jobs, in order.
 #
-# Not the whole CI gate. CI also gates on the `advisory` job (it needs the
-# network, to reach OSV.dev) and the `ui-geometry` job (it needs a browser, for
-# the headless layout check) — neither belongs in a local gate, so both stay
-# in CI. The `bench` job is a report (job-level `continue-on-error`): it never
-# fails the build.
+# Not the whole CI gate. CI also runs `ui-geometry` (it needs a browser, for the
+# headless layout check; a required check), `image` (it needs Docker, to build
+# the release Dockerfile) and `advisory` (it needs the network, to reach
+# OSV.dev; it gates main's colour and every release, not a merge) — none belongs
+# in a local gate, so they stay in CI. The `bench` job is a report (job-level
+# `continue-on-error`).
 #
 # Run this before committing. If it passes here the offline jobs pass on the PR
 # too; if it fails here you have the failure locally with a fast loop, instead
@@ -42,7 +43,7 @@ if [ -z "$(bin/lib/database-url)" ]; then
     would pass on less than CI runs. Give it a database:
 
       bin/setup                     starts the dev Postgres and writes DATABASE_URL to .env
-      DATABASE_URL=… bin/check      point at a Postgres 16+ you already run
+      DATABASE_URL=… bin/check      point at a Postgres you already run (CI tests 18)
 
     \`bun test\` reads .env / .env.test and ignores .env.local: a URL set only in
     .env.local, or blanked in .env.test, is not the one this run would use."

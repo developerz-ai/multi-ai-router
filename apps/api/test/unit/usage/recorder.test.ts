@@ -265,6 +265,100 @@ describe("a write the database refuses", () => {
   })
 })
 
+/**
+ * 07.4 / 12.3: on 2026-10-31 a Postgres restart outlasted two flushes and three batches were
+ * discarded ("usage batch write failed twice — records lost") while the queue sat nearly empty.
+ */
+describe("a transient outage keeps records until the database is back", () => {
+  function outage(flushes: number): UsageWriter & {
+    readonly batches: UsageRecord[][]
+    readonly calls: () => number
+  } {
+    const inner = collectingWriter()
+    let remaining = flushes
+    let calls = 0
+    return {
+      batches: inner.batches,
+      calls: () => calls,
+      write(batch) {
+        calls += 1
+        if (remaining > 0) {
+          remaining -= 1
+          return Promise.reject(new Error("getaddrinfo ENOTFOUND pg-production-0"))
+        }
+        return inner.write(batch)
+      },
+      isTransient: () => true,
+    }
+  }
+
+  test("thirty refused flushes lose nothing below the ceiling, in order", async () => {
+    const writer = outage(30)
+    const observed: number[] = []
+    const recorder = createUsageRecorder(writer, {
+      batchSize: 2,
+      onRecord: (held) => void observed.push(held.attempt),
+    })
+    let next = 1
+    for (let flush = 0; flush < 31; flush += 1) {
+      for (let i = 0; i < 3; i += 1) recorder.record(record({ attempt: next++ }))
+      await recorder.flush()
+    }
+    await recorder.flush()
+    const total = next - 1
+    expect(writer.batches.flat().map((held) => held.attempt)).toEqual(
+      Array.from({ length: total }, (_, i) => i + 1),
+    )
+    expect(recorder.stats()).toMatchObject({ depth: 0, written: total, writeDiscarded: 0 })
+    // Observed once each, never re-fed on retry.
+    expect(observed).toEqual(Array.from({ length: total }, (_, i) => i + 1))
+    // One write attempt per refused flush: the pass still ends at the first refusal.
+    expect(writer.calls()).toBeGreaterThan(30)
+  })
+
+  test("at the retry buffer's ceiling the oldest are dropped and counted", async () => {
+    const writer = outage(Number.POSITIVE_INFINITY)
+    const overflow: number[] = []
+    const recorder = createUsageRecorder(writer, {
+      batchSize: 2,
+      retryBufferMax: 4,
+      onRetryOverflow: (records) => void overflow.push(records),
+    })
+    for (let attempt = 1; attempt <= 8; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush() // [1,2] refused; [3,4] spilled into the buffer → 4 held
+    await recorder.flush() // [1,2] refused again; [5,6] spilled → 6 > 4, drop [1,2]
+    expect(overflow).toEqual([2])
+    expect(recorder.stats()).toMatchObject({ depth: 6, writeDiscarded: 2, dropped: 0 })
+  })
+})
+
+describe("a batch the writer can never accept", () => {
+  test("costs only its poison row once bisected", async () => {
+    const writer = collectingWriter()
+    const recorder = createUsageRecorder(
+      {
+        write(batch) {
+          if (batch.some((held) => held.attempt === 3))
+            return Promise.reject(new Error("UsageIdentityConflict"))
+          return writer.write(batch)
+        },
+      },
+      { batchSize: 8 },
+    )
+    for (let attempt = 1; attempt <= 8; attempt += 1) recorder.record(record({ attempt }))
+    await recorder.flush() // refused once — may be a blip
+    await recorder.flush() // refused again — bisected
+    await recorder.flush()
+    expect(
+      writer.batches
+        .flat()
+        .map((held) => held.attempt)
+        .sort((a, b) => a - b),
+    ).toEqual([1, 2, 4, 5, 6, 7, 8])
+    expect(recorder.stats()).toMatchObject({ depth: 0, written: 7, writeDiscarded: 1 })
+  })
+})
+
 describe("stop() — invisible loss is the one thing this module promises not to do", () => {
   test("records the writer keeps refusing are counted as abandoned, never silently stranded", async () => {
     // The failure case first. Before the count, stop() coalesced onto a pass that ended at the

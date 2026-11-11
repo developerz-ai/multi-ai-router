@@ -1,6 +1,14 @@
-import { z } from "zod"
 import { renderErrorBody } from "../../../errors/render"
-import { eventType, mergeUsage, readBlockIndex } from "../shared/anthropic-stream-events"
+import {
+  blockDeltaSchema,
+  blockStartSchema,
+  eventType,
+  mergeUsage,
+  messageDeltaSchema,
+  messageStartSchema,
+  readBlockIndex,
+  startedArguments,
+} from "../shared/anthropic-stream-events"
 import { type ChunkDelta, chatStreamChunk, type ToolCallDelta } from "../shared/chat-stream-chunk"
 import { parseUpstreamError } from "../shared/errors"
 import type { OpenAiFinishReason } from "../shared/stop-reason"
@@ -76,40 +84,6 @@ export interface AnthropicToOpenAiChatStreamOptions {
   readonly model?: string | undefined
 }
 
-const messageStartSchema = z.looseObject({
-  message: z
-    .looseObject({
-      id: z.string().nullish().catch(null),
-      model: z.string().nullish().catch(null),
-      usage: z.unknown().optional(),
-    })
-    .nullish(),
-})
-
-const blockStartSchema = z.looseObject({
-  index: z.number().int().nonnegative(),
-  content_block: z.looseObject({
-    type: z.string(),
-    text: z.string().nullish().catch(null),
-    id: z.string().nullish().catch(null),
-    name: z.string().nullish().catch(null),
-  }),
-})
-
-const blockDeltaSchema = z.looseObject({
-  index: z.number().int().nonnegative(),
-  delta: z.looseObject({
-    type: z.string(),
-    text: z.string().nullish().catch(null),
-    partial_json: z.string().nullish().catch(null),
-  }),
-})
-
-const messageDeltaSchema = z.looseObject({
-  delta: z.looseObject({ stop_reason: z.string().nullish().catch(null) }).nullish(),
-  usage: z.unknown().optional(),
-})
-
 export function anthropicToOpenAiChatStream(
   options: AnthropicToOpenAiChatStreamOptions,
 ): StreamTranslator {
@@ -123,6 +97,8 @@ export function anthropicToOpenAiChatStream(
   /** Anthropic block index → openai call ordinal, for the blocks whose deltas have somewhere to go. */
   const toolCalls = new Map<number, number>()
   const argumentBlocks = new Set<number>()
+  /** Arguments a block stated on its start (`startedArguments`), sent if no delta follows. */
+  const startedInputs = new Map<number, string>()
   /** Blocks of the structured-output tool: their JSON fragments are the message content. */
   const structuredBlocks = new Set<number>()
   let structuredSeen = false
@@ -156,6 +132,7 @@ export function anthropicToOpenAiChatStream(
       const ordinal = nextToolCall
       nextToolCall += 1
       toolCalls.set(index, ordinal)
+      startedInputs.set(index, startedArguments(block.input))
       const call: ToolCallDelta = {
         index: ordinal,
         id: block.id ?? "",
@@ -283,9 +260,11 @@ export function anthropicToOpenAiChatStream(
           if (ordinal === undefined) return NO_EVENTS
           toolCalls.delete(index)
           const hadArguments = argumentBlocks.delete(index)
+          const stated = startedInputs.get(index) ?? "{}"
+          startedInputs.delete(index)
           return hadArguments
             ? NO_EVENTS
-            : [chunk({ tool_calls: [{ index: ordinal, function: { arguments: "{}" } }] }, null)]
+            : [chunk({ tool_calls: [{ index: ordinal, function: { arguments: stated } }] }, null)]
         }
         case "message_delta":
           return onMessageDelta(payload)

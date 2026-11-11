@@ -1,12 +1,12 @@
 import type { AccountStatus } from "@multi-ai-router/core"
-import { and, asc, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, type SQL, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { type AccountRow, accounts } from "../schema/accounts"
 import { quotaWindows } from "../schema/quota-windows"
 import { sessions } from "../schema/sessions"
 import { createAccountAuthorization } from "./account-authorization"
 import { createAccountLifecycle } from "./account-lifecycle"
-import type { AccountRepository } from "./account-types"
+import type { AccountListFilter, AccountRepository } from "./account-types"
 import { withAdminMutationRetry } from "./admin-mutation-conflict"
 import { createBackgroundAccountEligibility } from "./background-account-eligibility"
 import { createObservedQuotaWindowMutation } from "./observed-quota-window"
@@ -31,6 +31,7 @@ import { createQuotaWindowMutations } from "./quota-window-mutations"
 export type {
   AccountListFilter,
   AccountRepository,
+  AccountSummaryRow,
   CreateAccountInput,
   UpdateAccountInput,
 } from "./account-types"
@@ -38,12 +39,23 @@ export type {
 export interface AccountRepositoryOptions {
   /** Runtime injects the configured duration; 30s fallback supports standalone/test factories. */
   readonly recoveryCooldownMs?: number
+  /**
+   * `markUsed` skips an account whose stamp is younger than this. Its readers are the idle probe
+   * (week-granular) and a console timestamp, so stamping on every one-second usage flush rewrote
+   * each busy account row — ciphertext and jsonb included — for no reader. `0` stamps every flush.
+   */
+  readonly lastUsedMinIntervalMs?: number
 }
+
+/** The `lastUsedMinIntervalMs` a standalone factory gets. */
+export const ACCOUNT_LAST_USED_MIN_INTERVAL_DEFAULT_MS = 60_000
 export function createAccountRepository(
   db: DatabaseExecutor,
   options: AccountRepositoryOptions = {},
 ): AccountRepository {
   const recoveryCooldownMs = options.recoveryCooldownMs ?? 30_000
+  const lastUsedMinIntervalMs =
+    options.lastUsedMinIntervalMs ?? ACCOUNT_LAST_USED_MIN_INTERVAL_DEFAULT_MS
   const lifecycle = createAccountLifecycle(db, recoveryCooldownMs)
   const setStatus = async (
     id: string,
@@ -85,16 +97,22 @@ export function createAccountRepository(
       return required(rows[0], "create")
     },
 
-    list: (filter) => {
-      const predicates = [
-        ...(filter?.status === undefined ? [] : [eq(accounts.status, filter.status)]),
-        ...(filter?.provider === undefined ? [] : [eq(accounts.provider, filter.provider)]),
-      ]
-      const query = db.select().from(accounts)
-      return predicates.length === 0
-        ? query.orderBy(asc(accounts.createdAt))
-        : query.where(and(...predicates)).orderBy(asc(accounts.createdAt))
-    },
+    list: (filter) =>
+      db.select().from(accounts).where(listFilter(filter)).orderBy(asc(accounts.createdAt)),
+
+    listSummaries: (filter) =>
+      db
+        .select({
+          id: accounts.id,
+          label: accounts.label,
+          provider: accounts.provider,
+          status: accounts.status,
+          lastUsedAt: accounts.lastUsedAt,
+          createdAt: accounts.createdAt,
+        })
+        .from(accounts)
+        .where(listFilter(filter))
+        .orderBy(asc(accounts.createdAt)),
 
     findById: async (id) => {
       const rows = await db.select().from(accounts).where(eq(accounts.id, id)).limit(1)
@@ -200,8 +218,14 @@ export function createAccountRepository(
           lastUsedAt: sql`greatest(${accounts.lastUsedAt}, ${at.toISOString()}::timestamptz)`,
         })
         // `inArray` de-duplicates for us at the SQL level — one row updated per distinct id,
-        // however many times it appeared in the batch.
-        .where(inArray(accounts.id, [...new Set(ids)]))
+        // however many times it appeared in the batch. A stamp younger than the interval is left
+        // alone: no row version is written at all, rather than one per flush.
+        .where(
+          and(
+            inArray(accounts.id, [...new Set(ids)]),
+            sql`(${accounts.lastUsedAt} is null or ${accounts.lastUsedAt} <= ${at.toISOString()}::timestamptz - make_interval(secs => ${lastUsedMinIntervalMs / 1000}::double precision))`,
+          ),
+        )
     },
 
     ...createBackgroundAccountEligibility(db),
@@ -220,6 +244,14 @@ export function createAccountRepository(
         .orderBy(asc(quotaWindows.accountId), asc(quotaWindows.window))
     },
   }
+}
+
+/** `undefined` (no WHERE) when the filter names nothing. */
+function listFilter(filter: AccountListFilter | undefined): SQL | undefined {
+  return and(
+    filter?.status === undefined ? undefined : eq(accounts.status, filter.status),
+    filter?.provider === undefined ? undefined : eq(accounts.provider, filter.provider),
+  )
 }
 
 /**

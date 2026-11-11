@@ -1,7 +1,7 @@
 import type { ProviderId } from "@multi-ai-router/core"
 import type { PriceOverrideRow } from "@multi-ai-router/db"
 import { createSnapshotRefresh } from "../snapshots/refresh"
-import { lookupRates } from "./prices"
+import { lookupRatesByKeys } from "./prices"
 import { type ModelRates, modelLookupKeys, type RateLookupContext } from "./rates"
 
 /**
@@ -49,6 +49,11 @@ export interface PriceBookDeps {
   readonly now?: () => Date
   /** Injected so a test is deterministic; production leaves it alone. */
   readonly jitter?: (intervalMs: number) => number
+  /**
+   * A timer refresh that failed. At most one call per interval, so it is throttled by the timer
+   * itself. Absent, a failing refresh is silent and another replica's edit never lands here.
+   */
+  readonly onRefreshError?: (error: unknown) => void
 }
 
 /** `provider -> normalized model -> rates`. Empty until the first successful load. */
@@ -69,9 +74,9 @@ export function createPriceBook(deps: PriceBookDeps): PriceBook {
 
   const schedule = (): void => {
     timer = setTimeout(() => {
-      // Swallowed on purpose: a periodic refresh that throws must not take the process down, and
-      // the next tick retries. The snapshot stays as it was.
-      void refresh().catch(() => undefined)
+      // A periodic refresh that throws must not take the process down, and the next tick retries.
+      // The snapshot stays as it was; the failure goes to `onRefreshError`.
+      void refresh().catch((error: unknown) => deps.onRefreshError?.(error))
       if (timer !== null) schedule()
     }, jitter(deps.refreshIntervalMs))
     timer.unref?.()
@@ -130,18 +135,19 @@ function lookupIndexed(
 ): ModelRates | null {
   const scoped =
     context?.accountId === undefined ? undefined : overrides.get(`${context.accountId}/${provider}`)
-  const [exact, familyKey] = modelLookupKeys(model)
-  const accountRate = scoped?.get(exact) ?? scoped?.get(familyKey)
+  // Normalised once per priced attempt; every tier below reads the same two keys.
+  const keys = modelLookupKeys(model)
+  const [name, family] = keys
+  const accountRate = scoped?.get(name) ?? scoped?.get(family)
   if (accountRate !== undefined) return accountRate
   const table = overrides.get(provider)
   if (table !== undefined) {
     // Both keys are tried against the overrides before the shipped table is consulted at all:
     // an operator who priced the family meant it to cover the dated pin too.
-    const [name, family] = modelLookupKeys(model)
     const override = table.get(name) ?? table.get(family)
     if (override !== undefined) return override
   }
-  return lookupRates(provider, model, context)
+  return lookupRatesByKeys(provider, keys, context)
 }
 
 /** Admin coverage uses the same precedence as the warm request price book. */

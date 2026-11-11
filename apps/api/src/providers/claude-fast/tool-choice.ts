@@ -1,3 +1,5 @@
+import { anthropicOutputSchema } from "../../services/translate/shared/anthropic-output-schema"
+import { type DropSink, IGNORE_DROPS } from "../../services/translate/shared/drops"
 import { STRUCTURED_OUTPUT_TOOL } from "../../services/translate/shared/structured-output-anthropic"
 import { nativeStructuredSchema } from "./native-schema"
 
@@ -29,9 +31,18 @@ import { nativeStructuredSchema } from "./native-schema"
  */
 export type FastToolAdaptation = "forced-tool" | "structured-output" | null
 
-export function adaptFastToolChoice(body: Readonly<Record<string, unknown>>): {
+export function adaptFastToolChoice(
+  body: Readonly<Record<string, unknown>>,
+  options: {
+    readonly native?: boolean
+    /** Where the reduction reports a constraint it restated as text (`anthropic-output-schema.ts`). */
+    readonly onDrop?: DropSink
+  } = {},
+): {
   readonly body: Readonly<Record<string, unknown>>
   readonly adapted: FastToolAdaptation
+  /** The schema sent as `output_config.format`, when the adaptation is `structured-output`. */
+  readonly nativeSchema?: Readonly<Record<string, unknown>>
 } {
   const choice = body.tool_choice
   if (!isRecord(choice) || (choice.type !== "tool" && choice.type !== "any")) {
@@ -46,15 +57,19 @@ export function adaptFastToolChoice(body: Readonly<Record<string, unknown>>): {
   const unforced: Record<string, unknown> = { ...rest }
   if (isRecord(body.thinking) && body.thinking.type === "disabled") delete unforced.thinking
 
-  const schema = kept[0]?.input_schema
-  // Native only where Anthropic accepts the schema (`native-schema.ts`); json_object's bare
-  // `{type:"object"}`, or any node leaving `additionalProperties` open, rides the adapted tool.
-  if (
-    choice.name === STRUCTURED_OUTPUT_TOOL &&
-    declared.length === 1 &&
-    isRecord(schema) &&
-    nativeStructuredSchema(schema)
-  ) {
+  const declaredSchema = kept[0]?.input_schema
+  const structured =
+    options.native !== false && choice.name === STRUCTURED_OUTPUT_TOOL && declared.length === 1
+  // Reduced to the subset Anthropic compiles first: an unsupported keyword (`maxItems`, …) is
+  // restated in the node's description rather than sent, and `null` (too deep or too large) keeps
+  // the tool. Then `native-schema.ts` decides: closed objects, no recursion, inside the budget.
+  // `native: false` is the invoker's retry after Anthropic refused or stalled on the native schema.
+  const reduced =
+    structured && isRecord(declaredSchema)
+      ? anthropicOutputSchema(declaredSchema, options.onDrop ?? IGNORE_DROPS)
+      : null
+  const schema = reduced?.schema
+  if (schema !== undefined && nativeStructuredSchema(schema)) {
     const existing = isRecord(body.output_config) ? body.output_config : {}
     return {
       body: {
@@ -65,6 +80,7 @@ export function adaptFastToolChoice(body: Readonly<Record<string, unknown>>): {
         output_config: { ...existing, format: { type: "json_schema", schema } },
       },
       adapted: "structured-output",
+      nativeSchema: schema,
     }
   }
   return {

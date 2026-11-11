@@ -85,9 +85,14 @@ export interface UsageHistoryRepository {
   withSnapshot<T>(
     callback: (history: UsageHistoryRepository, raw: UsageReadRepository) => Promise<T>,
   ): Promise<T>
-  /** Bounded exact source-era registration; never guesses legacy terminal ownership. */
+  /**
+   * Bounded exact source-era registration; never guesses legacy terminal ownership. A fresh sweep
+   * starts at the banked-through watermark; `fullScan` starts at the table's first row instead, to
+   * adopt rows a lock-free pre-2.16 writer landed below it. Run that on a long cadence only.
+   */
   backfill(input: {
     readonly limit: number
+    readonly fullScan?: boolean
   }): Promise<{ readonly processed: number; readonly remaining: boolean }>
   /** DB-clock closed-day reconciliation of V2 receipts only; legacy baselines are immutable. */
   rollupDay(day: Date): Promise<number>

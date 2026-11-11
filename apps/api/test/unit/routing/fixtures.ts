@@ -44,7 +44,7 @@ export function subscription(
   id: string,
   overrides: Partial<AccountSnapshot> = {},
 ): AccountSnapshot {
-  return account(id, { provider: "anthropic-oauth", ...overrides })
+  return account(id, { provider: "anthropic-oauth", carriesSession: true, ...overrides })
 }
 
 export function pool(

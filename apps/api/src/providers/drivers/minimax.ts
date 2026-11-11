@@ -2,7 +2,7 @@ import { z } from "zod"
 import { createHttpDriver } from "../driver"
 import { codeRule, messageRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
-import type { ProviderDriver, UpstreamErrorFacts } from "../types"
+import type { FailureClassification, ProviderDriver, UpstreamErrorFacts } from "../types"
 import { miniMaxQuotaRead } from "./minimax-quota"
 
 /**
@@ -91,7 +91,7 @@ export function inspectMiniMaxSuccess(body: unknown) {
     retryable: kind !== "invalid-request",
     signal: `minimax:base_resp-${BALANCE_CODES.includes(value) || THROTTLE_CODES.includes(value) || AUTH_CODES.includes(value) || SERVER_CODES.includes(value) || INVALID_REQUEST_CODES.includes(value) ? value : "unknown"}`,
     rateLimit: null,
-  } satisfies import("../types").FailureClassification
+  } satisfies FailureClassification
 }
 
 export const miniMaxDriver: ProviderDriver = {
@@ -111,11 +111,16 @@ export const miniMaxDriver: ProviderDriver = {
     rules: [
       codeRule("credits-exhausted", "minimax:base_resp-1008", BALANCE_CODES),
       codeRule("rate-limited", "minimax:base_resp-1002", THROTTLE_CODES),
-      messageRule("rate-limited", "minimax:token-plan-limit", TOKEN_PLAN_LIMIT),
+      messageRule("rate-limited", "minimax:token-plan-limit", TOKEN_PLAN_LIMIT, {
+        statuses: [429],
+      }),
       codeRule("auth", "minimax:base_resp-1004", AUTH_CODES),
       codeRule("server-error", "minimax:base_resp-server", SERVER_CODES),
       codeRule("invalid-request", "minimax:base_resp-invalid", INVALID_REQUEST_CODES),
     ],
   }),
   quotaRead: miniMaxQuotaRead,
+  // The idle keepalive/probe's one minimal turn: the cheapest current model this provider serves.
+  // Provenance: carried from `scheduler/tasks/idle-account-probe.ts` IDLE_PROBE_MODELS (sweep 101).
+  idleProbeModel: "MiniMax-M2",
 }

@@ -13,9 +13,34 @@ export function translationPendingLimit(value: number | undefined): number {
 
 interface Evidence {
   readonly hash: Hash
+  /** The running hash's digest, kept until another fragment is hashed. */
+  digest?: Buffer | undefined
   length: number
   final: boolean
 }
+
+type RecoveredKind = "text" | "refusal" | "arguments"
+
+interface RecoveredEvent {
+  readonly kind: RecoveredKind
+  readonly done: boolean
+  /** The `.delta` type a recovered event is re-emitted as. */
+  readonly delta: string
+}
+
+/** Each recovered event type → what it carries, so a delta costs one Map lookup. */
+const RECOVERED_EVENTS: ReadonlyMap<string, RecoveredEvent> = new Map(
+  (
+    [
+      ["response.output_text", "text"],
+      ["response.refusal", "refusal"],
+      ["response.function_call_arguments", "arguments"],
+    ] as const
+  ).flatMap(([prefix, kind]): [string, RecoveredEvent][] => [
+    [`${prefix}.delta`, { kind, done: false, delta: `${prefix}.delta` }],
+    [`${prefix}.done`, { kind, done: true, delta: `${prefix}.delta` }],
+  ]),
+)
 
 /** Final snapshots can fill a missing suffix, never replace bytes already emitted. */
 export function createResponsesSnapshotRecovery(options: ResponsesRecoveryOptions = {}) {
@@ -32,16 +57,11 @@ export function createResponsesSnapshotRecovery(options: ResponsesRecoveryOption
   } => {
     const type = event.type
     if (typeof type !== "string") return { event }
-    const kind = type.startsWith("response.output_text.")
-      ? "text"
-      : type.startsWith("response.refusal.")
-        ? "refusal"
-        : type.startsWith("response.function_call_arguments.")
-          ? "arguments"
-          : null
-    if (kind === null || (!type.endsWith(".delta") && !type.endsWith(".done"))) return { event }
-    if (type.endsWith(".done") && event.item_id == null && event.output_index == null)
-      return { event: { ...event, type: type.replace(/\.done$/, ".delta"), delta: "" } }
+    const read = RECOVERED_EVENTS.get(type)
+    if (read === undefined) return { event }
+    const { kind, done, delta: deltaType } = read
+    if (done && event.item_id == null && event.output_index == null)
+      return { event: { ...event, type: deltaType, delta: "" } }
     const id = typeof event.item_id === "string" ? `id:${event.item_id}` : null
     const index = typeof event.output_index === "number" ? `index:${event.output_index}` : null
     const byId = id === null ? undefined : aliases.get(id)
@@ -78,17 +98,20 @@ export function createResponsesSnapshotRecovery(options: ResponsesRecoveryOption
       state = { hash: createHash("sha256"), length: 0, final: false }
       evidence.set(key, state)
     }
-    const done = type.endsWith(".done")
     const value = event[done ? kind : "delta"]
     if (typeof value !== "string") return { event: { ...event, delta: "" } }
     let delta = value
     if (done) {
       // UTF-16 code units preserve lone surrogates and split surrogate pairs exactly. Hash only
       // new fragments and this final prefix, avoiding repeated accumulated-prefix hashing.
-      const prefix = createHash("sha256")
-        .update(Buffer.from(value.slice(0, state.length), "utf16le"))
-        .digest()
-      if (value.length < state.length || !prefix.equals(state.hash.copy().digest()))
+      if (value.length < state.length) {
+        return { event, error: "Final Responses snapshot disagrees with emitted content" }
+      }
+      const prefix = createHash("sha256").update(value.slice(0, state.length), "utf16le").digest()
+      // A repeated final mirror (`.done` then `output_item.done`) compares against the digest kept
+      // at finalization instead of re-digesting the running hash.
+      state.digest ??= state.hash.copy().digest()
+      if (!prefix.equals(state.digest))
         return { event, error: "Final Responses snapshot disagrees with emitted content" }
       if (state.final && value.length !== state.length)
         return { event, error: "Responses final snapshot changed after finalization" }
@@ -96,9 +119,12 @@ export function createResponsesSnapshotRecovery(options: ResponsesRecoveryOption
     } else if (state.final && delta.length > 0) {
       return { event, error: "Responses delta arrived after its final snapshot" }
     }
-    state.hash.update(Buffer.from(delta, "utf16le"))
+    if (delta.length > 0) {
+      state.hash.update(delta, "utf16le")
+      state.digest = undefined
+    }
     state.length += delta.length
     state.final ||= done
-    return { event: { ...event, type: type.replace(/\.done$/, ".delta"), delta } }
+    return { event: { ...event, type: deltaType, delta } }
   }
 }

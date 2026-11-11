@@ -1,49 +1,21 @@
 import postgres from "postgres"
 import { DATABASE_POOL_DEFAULTS } from "./client"
-import type { PoolSample } from "./pool-metrics"
+import { leaseOnce } from "./session-advisory-lease"
+import type {
+  SessionAdvisoryLease,
+  SessionAdvisoryLockPoolHandle,
+  SessionAdvisoryLockPoolOptions,
+  SessionAdvisoryLockResult,
+} from "./session-advisory-lock-types"
+import { boundedQuery, type Generation } from "./session-advisory-query"
 
-/** Capacity is local admission pressure; busy means the same key is already owned. */
-export type SessionAdvisoryLockResult<T> =
-  | { acquired: true; value: T }
-  | { acquired: false; reason: "busy" | "capacity" | "aborted" }
-/**
- * One held advisory lock. A session lock lives on one reserved connection, so it must never
- * outlive that connection: `release` is idempotent, and the lease also releases itself when the
- * holder's signal aborts or the pool stops or loses its session.
- */
-export interface SessionAdvisoryLease {
-  release(): Promise<void>
-}
-export interface SessionAdvisoryLock {
-  tryRun<T>(
-    key: number,
-    signal: AbortSignal,
-    work: (lockSignal: AbortSignal) => Promise<T>,
-  ): Promise<SessionAdvisoryLockResult<T>>
-  /** Takes the lock without running work; the caller holds it until `lease.release()`. */
-  tryAcquire(
-    key: number,
-    signal: AbortSignal,
-  ): Promise<SessionAdvisoryLockResult<SessionAdvisoryLease>>
-}
-export interface SessionAdvisoryLockPoolOptions {
-  readonly lockClass: number
-  readonly url: string
-  readonly maxConnections?: number
-  readonly connectTimeoutSeconds?: number
-  readonly closeTimeoutSeconds?: number
-}
-export interface SessionAdvisoryLockPoolHandle extends SessionAdvisoryLock {
-  close(): Promise<void>
-  poolStats(): PoolSample
-}
-interface Generation {
-  sql: ReturnType<typeof postgres>
-  occupied: number
-  holders: Set<AbortController>
-  retired: boolean
-  disposal?: Promise<void>
-}
+export type {
+  SessionAdvisoryLease,
+  SessionAdvisoryLock,
+  SessionAdvisoryLockPoolHandle,
+  SessionAdvisoryLockPoolOptions,
+  SessionAdvisoryLockResult,
+} from "./session-advisory-lock-types"
 
 export function createSessionAdvisoryLockPool(
   options: SessionAdvisoryLockPoolOptions,
@@ -102,36 +74,7 @@ export function createSessionAdvisoryLockPool(
     return created
   }
 
-  async function query<T>(
-    owner: Generation,
-    pending: PromiseLike<T>,
-    signal?: AbortSignal,
-  ): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let rejectStopped: (error: Error) => void = () => undefined
-    const stopped = new Promise<never>((_, reject) => {
-      rejectStopped = reject
-    })
-    const stop = () => {
-      void retire(owner).catch(() => undefined)
-      rejectStopped(new Error("session advisory query interrupted"))
-    }
-    const result = Promise.resolve(pending)
-    // Pool disposal prevents a late successful acquisition from retaining an unobserved lock.
-    void result.catch(() => undefined)
-    signal?.addEventListener("abort", stop, { once: true })
-    timer = setTimeout(stop, connectTimeout * 1000)
-    if (signal?.aborted || owner.retired) stop()
-    try {
-      return await Promise.race([result, stopped])
-    } catch (error) {
-      await retire(owner)
-      throw error
-    } finally {
-      clearTimeout(timer)
-      signal?.removeEventListener("abort", stop)
-    }
-  }
+  const query = boundedQuery(retire, connectTimeout)
 
   /** Everything tryRun and tryAcquire share, from admission to a held, session-locked key. */
   interface HeldLock {
@@ -290,33 +233,10 @@ export function createSessionAdvisoryLockPool(
   ): Promise<SessionAdvisoryLockResult<SessionAdvisoryLease>> {
     const held = await acquire(key, signal)
     if (!held.acquired) return held
-    const { controller } = held
-    let released = false
-    let resolveFinished: () => void = () => undefined
-    const finished = new Promise<void>((resolve) => {
-      resolveFinished = resolve
-    })
-    // Tracked beside run() operations, so close() waits for a lease's release the same way.
-    active.add(finished)
-    let release: () => Promise<void>
-    const onAbort = (): void => {
-      void release().catch(() => undefined)
+    return {
+      acquired: true,
+      value: leaseOnce(held.controller.signal, () => releaseHeld(held, true), active),
     }
-    release = async (): Promise<void> => {
-      if (released) return
-      released = true
-      controller.signal.removeEventListener("abort", onAbort)
-      try {
-        await releaseHeld(held, true)
-      } finally {
-        resolveFinished()
-        active.delete(finished)
-      }
-    }
-    // acquire() checked the holder signal before handing over; cover the gap since.
-    controller.signal.addEventListener("abort", onAbort, { once: true })
-    if (controller.signal.aborted) void onAbort()
-    return { acquired: true, value: { release } }
   }
   return {
     tryRun: (id, signal, work) => {

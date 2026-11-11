@@ -8,7 +8,11 @@ interface CallbackPageOptions {
   readonly bodyExtra?: string
 }
 
-/** A self-contained HTML page. Mirrors the pattern in `oauth-callback.ts`. */
+/**
+ * A self-contained HTML page — no asset, no token, and no interpolation that is not escaped. The
+ * one renderer for both browser-facing callbacks: the admin OIDC sign-in here and the provider
+ * OAuth capture in `oauth-callback.ts`.
+ */
 export function callbackPage(
   title: string,
   detail: string,

@@ -1,7 +1,18 @@
 import { createWriterLifecycle } from "../shutdown/writer-lifecycle"
 import { createBoundedQueue } from "./queue"
 import type { UsageRecord } from "./record"
+import {
+  DEFAULT_USAGE_BATCH_SIZE,
+  DEFAULT_USAGE_FLUSH_INTERVAL_MS,
+  DEFAULT_USAGE_QUEUE_MAX,
+  DEFAULT_USAGE_RETRY_BUFFER_MAX,
+  type UsageRecorder,
+  type UsageRecorderOptions,
+  type UsageWriter,
+} from "./recorder-types"
 import type { UsageRequestTerminal } from "./request-terminal"
+
+export * from "./recorder-types"
 
 type QueuedUsage = UsageRecord | UsageRequestTerminal
 const isAttempt = (event: QueuedUsage): event is UsageRecord => "eventId" in event
@@ -14,102 +25,24 @@ const isAttempt = (event: QueuedUsage): event is UsageRecord => "eventId" in eve
  * injected {@link UsageWriter}. A request never waits on an insert, never opens a transaction, and
  * never fails because the database is slow — docs/idea/01-architecture.md, performance budget.
  *
- * A refused batch gets **one** more try, on the next flush. A database is unavailable for a second
- * far more often than it is unavailable permanently, and a batch thrown away on the first rejection
- * turns a blip into deleted rows. One retry is the whole ladder: a batch the writer will never
- * accept — a row it rejects, a statement past a bind ceiling — would otherwise sit at the head of
- * the queue forever and starve every record behind it. So it is retried once, then discarded, and
- * both the retry and the discard are counted (`router_usage_write_failures_total`) rather than
- * whispered into a log line nobody is tailing.
+ * A refused batch is held and retried, and the writer says why it was refused
+ * ({@link UsageWriter.isTransient}):
+ *
+ * - **Transient** — the database is restarting, failing over, out of connections. The batch is kept
+ *   and retried on every flush with no attempt cap, and each refused flush also moves one batch from
+ *   the live queue into the retry buffer, so an outage holds up to `maxQueued + retryBufferMax`
+ *   records. At the buffer's ceiling the *oldest* held records are dropped and counted as discarded
+ *   (`onRetryOverflow`) — an outage outlasting the buffer loses its oldest records, never its newest.
+ * - **Not transient** (or unclassified) — a row the writer rejects, a statement past a bind ceiling.
+ *   One retry on the next flush, then the batch is bisected down to single rows and only the rows
+ *   that still fail are discarded, so one poison row costs one record rather than its batch.
+ *
+ * Every refusal and every discard is counted (`router_usage_write_failures_total`) rather than
+ * whispered into a log line nobody is tailing, and the pass always ends at the first refusal.
  *
  * The writer is a dependency rather than a database handle for two reasons: `packages/db` owns
  * SQL (a repository, not a service, issues the insert), and every test here runs against an array.
  */
-
-export interface UsageWriter {
-  /** Persists one batch. May reject; the recorder retries it once, then counts it and moves on. */
-  write(batch: readonly UsageRecord[], terminals?: readonly UsageRequestTerminal[]): Promise<void>
-}
-
-/** What `onWriteError` is handed: the rejection, the records it refused, and their fate. */
-export interface UsageWriteFailure {
-  readonly error: unknown
-  readonly batch: readonly UsageRecord[]
-  readonly terminals: readonly UsageRequestTerminal[]
-  /**
-   * False when the batch went back for its one retry — reporting is late, nothing is lost yet.
-   * True when that retry was refused too and the records were dropped. The two are different
-   * incidents and read differently: one is a blip, the other is data loss.
-   */
-  readonly discarded: boolean
-}
-
-export interface UsageRecorderOptions {
-  readonly shutdownDrainMs?: number
-  /**
-   * Queue ceiling. On overflow the oldest records are shed — reporting degrades, traffic does not.
-   * A batch awaiting its retry is held beside the queue rather than in it, so peak memory is
-   * `maxQueued + batchSize` records: a full queue must not shed the one batch already in hand.
-   */
-  readonly maxQueued?: number
-  readonly batchSize?: number
-  readonly flushIntervalMs?: number
-  /** Called once per shed record, so the drop counter and the warn log have a source. */
-  readonly onShed?: (record: QueuedUsage) => void
-  /** Called once per refused batch — twice for one that fails, retries, and fails again. */
-  readonly onWriteError?: (failure: UsageWriteFailure) => void
-  /**
-   * Called at most once, from `stop()`, with how many records were still unwritten when shutdown
-   * gave up on them — a retry batch the writer refused again, and the queue behind it. Invisible
-   * loss is the one thing this module promises not to do, and records that die with the process
-   * must be counted like records shed or discarded, not merely absent.
-   */
-  readonly onAbandoned?: (records: number) => void
-  /**
-   * Called once per record as the batch drains — which is to say on the flush timer, never on
-   * the request path. This is where metrics are fed from: an observation costs a map lookup and
-   * an add, and even that belongs off the critical path (CLAUDE.md non-negotiable 8).
-   *
-   * Called whether or not the write succeeds: the record is a fact about what the router did,
-   * and a database that rejected the row does not un-do the attempt it describes. Exactly once
-   * per record, though — a retried batch is not re-observed, or a blip in Postgres would show up
-   * on the dashboard as upstream attempts the router never made. It must not throw; one that does
-   * would take a batch's remaining records with it.
-   */
-  readonly onRecord?: (record: UsageRecord) => void
-}
-
-/** Defaults, all overridable: no retention window, interval, or limit is a constant in code. */
-export const DEFAULT_USAGE_QUEUE_MAX = 10_000
-export const DEFAULT_USAGE_BATCH_SIZE = 200
-export const DEFAULT_USAGE_FLUSH_INTERVAL_MS = 1_000
-
-export interface UsageStats {
-  readonly rejectedAfterStop: number
-  /** Queued records, the batch waiting for its retry included. */
-  readonly depth: number
-  readonly dropped: number
-  readonly written: number
-  /** Records the writer refused. Counts both tries of a batch that failed twice. */
-  readonly writeFailures: number
-  /** The subset of the above that was lost: a batch whose retry was refused as well. */
-  readonly writeDiscarded: number
-}
-
-export interface UsageRecorder {
-  /** Enqueue. Synchronous, non-throwing, off the critical path. */
-  record(record: UsageRecord): void
-  recordTerminal(terminal: UsageRequestTerminal): void
-  /**
-   * Drains and writes everything queued, stopping at the first refused batch — the next one would
-   * meet the same database. Used by tests and by graceful shutdown.
-   */
-  flush(): Promise<void>
-  start(): void
-  /** Stops the timer and flushes what is left. */
-  stop(): Promise<void>
-  stats(): UsageStats
-}
 
 export function createUsageRecorder(
   writer: UsageWriter,
@@ -119,6 +52,9 @@ export function createUsageRecorder(
   const batchSize = options.batchSize ?? DEFAULT_USAGE_BATCH_SIZE
   const intervalMs = options.flushIntervalMs ?? DEFAULT_USAGE_FLUSH_INTERVAL_MS
 
+  const retryBufferMax = options.retryBufferMax ?? DEFAULT_USAGE_RETRY_BUFFER_MAX
+  const observe = options.onRecord
+
   let timer: ReturnType<typeof setInterval> | null = null
   let inFlight: Promise<void> | null = null
   let rejectedAfterStop = 0
@@ -127,47 +63,137 @@ export function createUsageRecorder(
   let writeFailures = 0
   let writeDiscarded = 0
   /**
-   * The batch a refused write handed back, drained ahead of the queue on the next pass. Held here
-   * rather than pushed onto the queue's head so that overflow — which sheds the oldest, and these
-   * *are* the oldest — cannot delete it before it gets the retry it is waiting for.
+   * Refused records, oldest first, drained ahead of the queue. Held here rather than pushed onto
+   * the queue's head so that queue overflow — which sheds the oldest, and these *are* the oldest —
+   * cannot delete them; this buffer has its own ceiling and its own drop accounting.
    */
-  let retry: readonly QueuedUsage[] | null = null
+  let held: QueuedUsage[] = []
+  /** The head batch was refused once for a reason that may be permanent; next refusal bisects. */
+  let suspect = false
 
-  /** Returns false when the pass should end: the writer just refused, so the next batch would too. */
-  const writeBatch = async (batch: readonly QueuedUsage[], retried: boolean): Promise<boolean> => {
-    const attempts = batch.filter(isAttempt)
-    const terminals = batch.filter((event): event is UsageRequestTerminal => !isAttempt(event))
-    const observe = options.onRecord
-    if (observe !== undefined && !retried) for (const record of attempts) observe(record)
+  const split = (batch: readonly QueuedUsage[]) => ({
+    attempts: batch.filter(isAttempt),
+    terminals: batch.filter((event): event is UsageRequestTerminal => !isAttempt(event)),
+  })
+
+  const transient = (error: unknown): boolean => {
+    try {
+      return writer.isTransient?.(error) ?? false
+    } catch {
+      return false
+    }
+  }
+
+  /** Queue → buffer, observed exactly once: a retried record is never re-fed to the metrics. */
+  const takeFromQueue = (): QueuedUsage[] => {
+    const batch = queue.drain(batchSize)
+    if (observe !== undefined) for (const event of batch) if (isAttempt(event)) observe(event)
+    return batch
+  }
+
+  const hold = (records: readonly QueuedUsage[], atHead: boolean): void => {
+    held = atHead ? [...records, ...held] : [...held, ...records]
+    const excess = held.length - retryBufferMax
+    if (excess <= 0) return
+    held = held.slice(excess)
+    writeFailures += excess
+    writeDiscarded += excess
+    options.onRetryOverflow?.(excess)
+  }
+
+  const write = async (batch: readonly QueuedUsage[]): Promise<void> => {
+    const { attempts, terminals } = split(batch)
     unsettled = batch.length
     try {
       await writer.write(attempts, terminals)
       written += batch.length
+    } finally {
+      unsettled = 0
+    }
+  }
+
+  /**
+   * Halves a batch the writer has already refused twice down to single rows and discards only what
+   * still fails. Returns the records it could not settle because the database went away mid-way.
+   */
+  const isolate = async (
+    batch: readonly QueuedUsage[],
+    lost: QueuedUsage[],
+  ): Promise<readonly QueuedUsage[]> => {
+    if (batch.length === 1) {
+      lost.push(...batch)
+      return []
+    }
+    const middle = Math.ceil(batch.length / 2)
+    const left = await settle(batch.slice(0, middle), lost)
+    if (left.length > 0) return [...left, ...batch.slice(middle)]
+    return settle(batch.slice(middle), lost)
+  }
+
+  const settle = async (
+    batch: readonly QueuedUsage[],
+    lost: QueuedUsage[],
+  ): Promise<readonly QueuedUsage[]> => {
+    try {
+      await write(batch)
+      return []
+    } catch (error) {
+      return transient(error) ? batch : isolate(batch, lost)
+    }
+  }
+
+  /** Returns false when the pass should end: the writer just refused, so the next batch would too. */
+  const writeHead = async (
+    batch: readonly QueuedUsage[],
+    wasSuspect: boolean,
+  ): Promise<boolean> => {
+    try {
+      await write(batch)
       return true
     } catch (error) {
       writeFailures += batch.length
-      // One retry, then gone: a batch the writer can never accept would otherwise come back
-      // forever and starve every record behind it.
-      if (retried) writeDiscarded += batch.length
-      else retry = batch
-      options.onWriteError?.({ error, batch: attempts, terminals, discarded: retried })
+      const { attempts, terminals } = split(batch)
+      if (transient(error)) {
+        hold(batch, true)
+        // The outage is the database's, not this batch's: keep draining the live queue into the
+        // retry buffer at the flush rate so the queue's own overflow never sheds newer records
+        // while older ones are safe here.
+        hold(takeFromQueue(), false)
+        options.onWriteError?.({ error, batch: attempts, terminals, discarded: false })
+        return false
+      }
+      if (!wasSuspect) {
+        hold(batch, true)
+        suspect = true
+        options.onWriteError?.({ error, batch: attempts, terminals, discarded: false })
+        return false
+      }
+      const lost: QueuedUsage[] = []
+      const left = await isolate(batch, lost)
+      if (left.length > 0) hold(left, true)
+      if (lost.length > 0) {
+        writeDiscarded += lost.length
+        const dropped = split(lost)
+        options.onWriteError?.({
+          error,
+          batch: dropped.attempts,
+          terminals: dropped.terminals,
+          discarded: true,
+        })
+      }
       return false
-    } finally {
-      unsettled = 0
     }
   }
 
   const drainAll = async (): Promise<void> => {
     for (;;) {
       if (!lifecycle.canWrite()) return
-      // Taken before the write so a failure can put it back — and so the retry lands on the *next*
-      // pass, one flush interval later, rather than hitting the same unavailable database twice in
-      // the same breath.
-      const retried = retry
-      retry = null
-      const batch = retried ?? queue.drain(batchSize)
+      const fromHeld = held.length > 0
+      const batch = fromHeld ? held.splice(0, batchSize) : takeFromQueue()
       if (batch.length === 0) return
-      if (!(await writeBatch(batch, retried !== null))) return
+      const wasSuspect = fromHeld && suspect
+      suspect = false
+      if (!(await writeHead(batch, wasSuspect))) return
     }
   }
 
@@ -183,8 +209,8 @@ export function createUsageRecorder(
 
   const lifecycle = createWriterLifecycle({
     flush,
-    pending: () => queue.depth + (retry?.length ?? 0),
-    outstanding: () => queue.depth + (retry?.length ?? 0) + unsettled,
+    pending: () => queue.depth + held.length,
+    outstanding: () => queue.depth + held.length + unsettled,
     timeoutMs: options.shutdownDrainMs ?? 15_000,
     warn: (pending) => options.onAbandoned?.(pending),
   })
@@ -223,7 +249,7 @@ export function createUsageRecorder(
 
     stats: () => ({
       rejectedAfterStop,
-      depth: queue.depth + (retry?.length ?? 0),
+      depth: queue.depth + held.length,
       dropped: queue.dropped,
       written,
       writeFailures,

@@ -200,6 +200,16 @@ export function withCredentialMetadata(
         value: await overlayOne(result.value, observed, deps.now(), logins.get(id) ?? null),
       }
     },
+    // A deleted account's cached metadata outlived it; account churn kept one per dead id
+    // (plan 101, 03.9). Pruned once the delete committed.
+    remove: async (id) => {
+      const result = await service.remove(id)
+      if (result.ok) {
+        cache.delete(id)
+        owners.delete(id)
+      }
+      return result
+    },
   }
 }
 

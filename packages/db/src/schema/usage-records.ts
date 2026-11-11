@@ -165,6 +165,10 @@ export const usageRecords = pgTable(
       .where(sql`${table.clientRequestId} is not null`),
     // The retention sweep deletes by age in bounded batches.
     index("usage_records_created_at_idx").on(table.createdAt),
+    // Per-account window gauges (`tokensSince`) and the account filter of the usage reads lead
+    // with `account_id`. Migration 0044 also INCLUDEs the four token columns so the gauge is an
+    // index-only scan; drizzle cannot express INCLUDE, so that part lives in the SQL only.
+    index("usage_records_account_created_idx").on(table.accountId, table.createdAt),
   ],
 )
 

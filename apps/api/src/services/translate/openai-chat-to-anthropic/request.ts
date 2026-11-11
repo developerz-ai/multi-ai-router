@@ -1,9 +1,5 @@
-import type {
-  AnthropicBlock,
-  AnthropicRequest,
-  AnthropicTextBlock,
-  AnthropicToolChoice,
-} from "../shared/anthropic"
+import { parseOpenAiChatRequest } from "../parse-ingress"
+import type { AnthropicBlock, AnthropicRequest, AnthropicTextBlock } from "../shared/anthropic"
 import { DEFAULT_MAX_TOKENS } from "../shared/anthropic"
 import type { AnthropicTurn } from "../shared/anthropic-turns"
 import {
@@ -20,14 +16,17 @@ import type {
   ParsedOpenAiChatRequest,
   ParsedOpenAiChatToolCall,
 } from "../shared/openai-chat"
-import { openAiChatRequestSchema } from "../shared/openai-chat"
 import { anthropicReasoningFromEffort } from "../shared/reasoning-effort"
-import { assertTranslatableToAnthropic, parseRequest, rejectField } from "../shared/reject"
+import {
+  assertNoLegacyFunctions,
+  assertTranslatableToAnthropic,
+  rejectField,
+} from "../shared/reject"
 import {
   assertNoReservedTool,
-  forcesToolUse,
   structuredOutputToAnthropic,
 } from "../shared/structured-output-anthropic"
+import { anthropicToolPolicy } from "../shared/tool-choice"
 import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../shared/tools"
 
 /**
@@ -36,7 +35,7 @@ import { inputFromArguments, toolChoiceToAnthropic, toolsToAnthropic } from "../
  *
  * **Anthropic requires strict `user`/`assistant` alternation and OpenAI does not**, so this
  * direction is where the transcript is reshaped. Consecutive same-role turns are **merged**, never
- * reordered (`06-protocol-translation.md:119-121`): merging concatenates content the model was
+ * reordered (`06-protocol-translation.md#message-roles-and-content-blocks`): merging concatenates content the model was
  * already going to read in that order, while reordering would change what it was told. Every
  * `role:"tool"` message becomes a `tool_result` block on a **user** turn, which is where Anthropic
  * puts results — several in a row therefore merge into one turn, exactly as Anthropic expects.
@@ -79,8 +78,16 @@ export function openAiChatToAnthropicRequest(
   body: unknown,
   options: OpenAiChatToAnthropicOptions = {},
 ): AnthropicRequest {
-  const request = parseRequest(openAiChatRequestSchema, body, "openai-chat")
+  return openAiChatToAnthropicRequestFromParsed(parseOpenAiChatRequest(body), options)
+}
+
+/** {@link openAiChatToAnthropicRequest} over a body already parsed once for every candidate (`dataplane/translate-body.ts`). */
+export function openAiChatToAnthropicRequestFromParsed(
+  request: ParsedOpenAiChatRequest,
+  options: OpenAiChatToAnthropicOptions = {},
+): AnthropicRequest {
   assertTranslatableToAnthropic(request)
+  assertNoLegacyFunctions(request)
   assertNoReservedTool(request.tools)
   const structured = structuredOutputToAnthropic(request.response_format, request.tools)
 
@@ -135,7 +142,17 @@ export function openAiChatToAnthropicRequest(
     rejectField("messages", "carries no user or assistant turn: an anthropic request needs one")
   }
 
-  const tool_choice = structured?.tool_choice ?? clientToolChoice(request)
+  // The structured-output force carries no parallel policy: it is the only tool in the request.
+  const policy =
+    structured === undefined
+      ? anthropicToolPolicy(
+          request.tool_choice === undefined
+            ? undefined
+            : toolChoiceToAnthropic(request.tool_choice),
+          request.parallel_tool_calls,
+          request.tools !== undefined && request.tools.length > 0,
+        )
+      : anthropicToolPolicy(structured.tool_choice, undefined, true)
   return {
     model: request.model,
     messages,
@@ -152,14 +169,14 @@ export function openAiChatToAnthropicRequest(
     tools:
       structured?.tools ??
       (request.tools === undefined ? undefined : toolsToAnthropic(request.tools)),
-    tool_choice,
+    tool_choice: policy.tool_choice,
     ...anthropicReasoningFromEffort(
       request.reasoning_effort,
       "reasoning_effort",
       options.onDrop ?? IGNORE_DROPS,
     ),
     // Last, so it wins over `reasoning_effort`: a forced tool call and thinking cannot share a request.
-    ...(forcesToolUse(tool_choice) ? { thinking: { type: "disabled" as const } } : {}),
+    ...(policy.thinking === undefined ? {} : { thinking: policy.thinking }),
     // Top-level only toward a surface that states it takes the field: a compatible vendor's clone of
     // the Messages API may predate automatic caching and refuse it. Block-level markers are the
     // dialect's own and go everywhere.
@@ -178,23 +195,6 @@ function systemPrompt(blocks: readonly AnthropicTextBlock[]): AnthropicRequest["
 
 function hasMarker(request: ParsedOpenAiChatRequest): boolean {
   return request.messages.some((message) => lastMarker(message.content) !== undefined)
-}
-
-function clientToolChoice(request: ParsedOpenAiChatRequest): AnthropicToolChoice | undefined {
-  const choice =
-    request.tool_choice === undefined ? undefined : toolChoiceToAnthropic(request.tool_choice)
-  if (
-    request.parallel_tool_calls === undefined ||
-    request.parallel_tool_calls === null ||
-    request.tools === undefined ||
-    request.tools.length === 0
-  ) {
-    return choice
-  }
-  return {
-    ...(choice ?? { type: "auto" as const }),
-    disable_parallel_tool_use: !request.parallel_tool_calls,
-  }
 }
 
 function assistantBlocks(

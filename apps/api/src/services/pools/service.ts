@@ -1,7 +1,8 @@
 import type {
   AccountRepository,
-  AccountRow,
+  AccountSummaryRow,
   AdminMutationRepository,
+  PoolMemberRow,
   PoolRepository,
   PoolRow,
 } from "@multi-ai-router/db"
@@ -50,7 +51,7 @@ export interface PoolsService {
 
 export interface PoolsServiceDeps {
   readonly pools: Pick<PoolRepository, "list" | "findById" | "listMembers" | "listMembersForPools">
-  readonly accounts: Pick<AccountRepository, "list">
+  readonly accounts: Pick<AccountRepository, "listSummaries">
   readonly mutations: AdminMutationRepository
   /** Runs immediately after commit, before rendering a response. */
   readonly onCommitted: (id: string, kind: PoolMutationKind) => void | Promise<void>
@@ -63,8 +64,8 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
    * The admin plane is not the hot path, and a per-member lookup here would be
    * N queries to answer one screen.
    */
-  const accountIndex = async (): Promise<ReadonlyMap<string, AccountRow>> =>
-    new Map((await deps.accounts.list()).map((account) => [account.id, account]))
+  const accountIndex = async (): Promise<ReadonlyMap<string, AccountSummaryRow>> =>
+    new Map((await deps.accounts.listSummaries()).map((account) => [account.id, account]))
 
   const render = async (pool: PoolRow): Promise<PoolView> =>
     toPoolView(pool, await deps.pools.listMembers(pool.id), await accountIndex())
@@ -76,7 +77,14 @@ export function createPoolsService(deps: PoolsServiceDeps): PoolsService {
         deps.pools.listMembersForPools(pools.map((pool) => pool.id)),
         accountIndex(),
       ])
-      return ok(pools.map((pool) => toPoolView(pool, members, accounts)))
+      // Grouped once: filtering every member per pool was quadratic in the pools screen (01.11).
+      const byPool = new Map<string, PoolMemberRow[]>()
+      for (const member of members) {
+        const group = byPool.get(member.poolId)
+        if (group === undefined) byPool.set(member.poolId, [member])
+        else group.push(member)
+      }
+      return ok(pools.map((pool) => toPoolView(pool, byPool.get(pool.id) ?? [], accounts)))
     },
 
     get: async (id) => {

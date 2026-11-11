@@ -1,35 +1,31 @@
-import type { Dialect, RouterError } from "@multi-ai-router/core"
 import { noteRequestFacts } from "../../errors/router-object"
-import { PROVIDER_REGISTRY } from "../../providers"
-import type { Candidate } from "../routing"
-import { type FailoverOptions, selectAccounts } from "../routing"
+import type { FailoverOptions } from "../routing"
 import { createRequestIdentity, type UsageRequestIdentity } from "../usage/request-identity"
 import { admitRoutingModel, refuseEncodedBody } from "./body/preflight"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { readTrackedRequestBody } from "./body-progress"
 import { runChain } from "./chain"
+import { preflightRefusal } from "./chain-preparation"
 import { countTokensEstimateResponse } from "./count-estimate"
 import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-config"
-import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "./dispatcher-config"
-import { resolveEgress } from "./egress/mode"
 import { keyRateLimitedError } from "./limits"
 import type { RequestProgress } from "./observe"
 import { planCandidates } from "./plan"
-import { attemptRecord, errorClassOf, outcomeOf } from "./records"
-import { hintRecoveryRejections } from "./recovery-hints"
 import { createRequestRecovery } from "./recovery-wait"
 import { costRequested } from "./relay-cost-optin"
 import { createRequestAccounting, type RequestAccounting } from "./request-accounting"
 import { requestLifetime } from "./request-lifetime"
+import { requestSelector } from "./request-select"
 import { requestTerminalObserver } from "./request-terminal"
 import { createRotationCounters } from "./rotation"
 import { ROUTER_ATTEMPTS_HEADER, withHeaders } from "./router-headers"
 import { createRuntime } from "./runtime"
+import { sharedRuntimeInput } from "./runtime-shared"
 import { sessionBindings } from "./session-binding"
-import { buildSnapshot } from "./snapshot"
 import { createTranslatedRequestBody } from "./translate-body"
-import { type RoutableAccount, SYSTEM_CLOCK, type UpstreamOperation } from "./types"
-import { unservableOutcome } from "./unservable"
+import { createTranslationDropLog, dropReporter } from "./translation-drop-log"
+import { SYSTEM_CLOCK } from "./types"
+import { emptyChainOutcome } from "./unservable-scope"
 
 /**
  * The request lifecycle, steps 3-12 of `docs/idea/01-architecture.md`:
@@ -46,73 +42,6 @@ import { unservableOutcome } from "./unservable"
  * labelled estimate instead of a refusal (`count-estimate.ts`).
  */
 
-/** Dropped fields one log line spells out; bounds one field, not an operator knob. */
-const MAX_REPORTED_DROPS = 20
-
-/**
- * Whether an account **could have served** this request's operation, health aside.
- *
- * This is the question the empty chain asks about an account selection held back: its verdict is
- * the answer only if the account would have served the request had it been healthy. An OpenAI
- * account asked to count tokens never could — it states no counting endpoint — so its cooldown
- * says nothing about this request, and the shape gap is the truth.
- *
- * A Claude subscription is the harder case, because **the estimate is not a serving capability**:
- * the Agent SDK states no token-count call, so a subscription can never be asked for a count, awake
- * or cooling. Yet its health still decides the answer when the scope holds nothing but
- * subscriptions — there the estimate *is* this scope's answer, and the subscription's cooldown is
- * what stands between the client and it, so the honest reply is the `429` a clock recovers.
- *
- * Beside any account that states a counting endpoint of its own, the estimate is not the answer at
- * all: the scope has a provider-shaped gap, the request is refused by name, and a subscription's
- * cooldown is not the reason.
- */
-function couldHaveServed(input: {
-  readonly account: RoutableAccount
-  readonly operation: UpstreamOperation
-  readonly ingress: Dialect
-  /** Whether the router's own estimate is this scope's answer. */
-  readonly estimateIsTheAnswer: boolean
-}): boolean {
-  const mode = resolveEgress(input.ingress, input.account, input.operation).mode
-  // A subscription is never addressed upstream for a count: the Agent SDK states no such call, and
-  // the router will not forge one. Its health is a verdict on the account, not on the operation.
-  if (mode === "estimate") return input.estimateIsTheAnswer
-  // Every other account is judged by the egress gate: one that states the endpoint could have
-  // served it, and one that does not never could, awake or cooling.
-  return mode !== "rejected"
-}
-
-/**
- * Whether an account is a Claude subscription — served by the Agent SDK, not over HTTP.
- *
- * Asked of the provider registry rather than of a provider id: "is this account a subscription" is
- * the transport seam, and a comparison on the id would spread a fact the registry already owns.
- */
-function isSubscription(account: RoutableAccount): boolean {
-  return PROVIDER_REGISTRY[account.driver.provider].transport === "agent-sdk"
-}
-
-/**
- * Whether every account the router could have picked for this request is a Claude subscription.
- *
- * The candidates, not the whole scope: an account the operator switched off is not in the running,
- * and the same question the plan asks of them (`plan.estimable`) is asked of the accounts that
- * survived selection. A scope whose live members are all subscriptions has no provider to ask, so
- * the router's own estimate is its answer; a scope holding one OpenAI account beside them has a
- * provider-shaped gap, the estimate is not its answer, and a subscription's cooldown is not the
- * reason the request fails.
- */
-function everyCandidateIsASubscription(
-  candidates: readonly Candidate[],
-  accounts: ReadonlyMap<string, RoutableAccount>,
-): boolean {
-  return candidates.every((candidate) => {
-    const account = accounts.get(candidate.account.id)
-    return account !== undefined && isSubscription(account)
-  })
-}
-
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
   const call = deps.fetch ?? ((request: Request) => fetch(request))
@@ -124,8 +53,14 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       ? undefined
       : { elapsed: clock.elapsed, onWait: deps.onBindingWait },
   )
+  // The runtime fields every request shares, built once per dispatcher.
+  const shared = sharedRuntimeInput(deps, options, clock, call)
   // Per pool, per replica, in memory — the caller-owned half of `round-robin` (`rotation.ts`).
   const rotation = createRotationCounters()
+  const dropLog = createTranslationDropLog({
+    windowMs: options.translationDropLogWindowMs,
+    now: () => clock.elapsed(),
+  })
 
   /** Progress shares the request start and discovered model with accounting. */
   const serve = async (
@@ -158,7 +93,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     // A bound SDK session belongs to its original account before routing selection.
     const binding =
       deps.sessions && session.source !== "unbound"
-        ? await bindings.read(input.key.id, session.key)
+        ? await bindings.read(input.key.id, session.key, input.key.scope)
         : undefined
     input.request.signal.throwIfAborted()
 
@@ -171,36 +106,22 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       signal: input.request.signal,
       log,
       lease: input.activeRequest,
+      probing: deps.recovery?.probing?.bind(deps.recovery),
+      // A deliberate wait is not router work: it stays out of `router_overhead_seconds` (12.4).
+      onWaited: (milliseconds) => {
+        progress.recoveryWaitMs += milliseconds
+      },
     })
     const runtime = createRuntime({
+      ...shared,
       ...(recovery.lease === undefined ? {} : { activeRequest: recovery.lease }),
-      health: deps.health,
-      ...(options.selection?.unknownResetRetryAfterSeconds === undefined
-        ? {}
-        : { unknownResetRetryAfterSeconds: options.selection.unknownResetRetryAfterSeconds }),
-      ...(options.selection?.quotaSpentThreshold === undefined
-        ? {}
-        : { quotaSpentThreshold: options.selection.quotaSpentThreshold }),
-      ...(deps.recovery === undefined ? {} : { recovery: deps.recovery }),
-      cipher: deps.cipher,
-      call,
-      ...(deps.invokeSdk === undefined ? {} : { invokeSdk: deps.invokeSdk }),
       ...(deps.sessions === undefined || session.source === "unbound"
         ? {}
         : { sessions: deps.sessions }),
-      ...(deps.quota === undefined ? {} : { quota: deps.quota }),
-      ...(deps.prices === undefined ? {} : { prices: deps.prices }),
       sessionKeySource: session.source,
       clientToolLoop: session.clientToolLoop,
-      clock,
-      timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
-      ...(options.upstreamStream === undefined ? {} : { streamDeadlines: options.upstreamStream }),
-      ...(deps.reasoningSealer === undefined ? {} : { reasoningSealer: deps.reasoningSealer }),
-      ...(options.upstreamErrorMaxBytes === undefined
-        ? {}
-        : { errorMaxBytes: options.upstreamErrorMaxBytes }),
       bodyReadMs: progress.bodyReadMs,
-      responseObservationMaxBytes: options.responseObservationMaxBytes ?? 65_536,
+      recoveryWaitMs: () => progress.recoveryWaitMs,
       record: accounting.record,
       recordTerminal: accounting.recordTerminal,
       selectTerminal: accounting.selectTerminal,
@@ -218,40 +139,23 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       requestStarted,
     })
 
-    const fail = (error: RouterError): never => {
-      runtime.record(
-        attemptRecord({
-          ...runtime.preflightAttribution(),
-          timing: runtime.timing(startedAt, requestStarted, 0),
-          outcome: outcomeOf(error),
-          streamed: false,
-          httpStatus: null,
-          errorClass: errorClassOf(error),
-        }),
-      )
-      throw error
-    }
+    const fail = preflightRefusal(runtime, startedAt, requestStarted)
 
     // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
-    const select = () => {
-      const selection = selectAccounts(
-        buildSnapshot(deps.recovery?.catalog ?? deps.catalog, deps.health, clock.now(), rotation),
-        {
-          sessionKey: session.key,
-          model,
-          keyScope: input.key.scope,
-          binding,
-          rotationCounter: rotation.current(null),
-        },
-        options.selection,
-      )
-      // Advanced in the read's synchronous step, or concurrent requests share one counter.
-      if (selection.decision.binding.state !== "honored") {
-        for (const group of selection.decision.groups) rotation.advance(group.poolId)
-      }
-      hintRecoveryRejections(selection.decision.rejected, deps.recovery, model, clock.now())
-      return selection
-    }
+    const select = requestSelector({
+      catalog: deps.recovery?.catalog ?? deps.catalog,
+      health: deps.health,
+      recovery: deps.recovery,
+      clock,
+      rotation,
+      selection: options.selection,
+      request: {
+        sessionKey: session.key,
+        model,
+        keyScope: input.key.scope,
+        binding,
+      },
+    })
 
     // Injected clock: identical recorded bodies convert to identical bytes.
     const translation = {
@@ -263,19 +167,20 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       thinkingDefaultModels: options.translation?.thinkingDefaultModels,
     }
     // `warn`: the caller was answered without something it sent (06-protocol-translation.md).
-    const translated = createTranslatedRequestBody(body.bytes, translation, (pair, drops) =>
-      log?.warn("translation dropped fields", {
-        component: "translate",
-        ingress: pair.ingress,
-        egress: pair.egress,
-        dropped: drops.length,
-        fields: drops.slice(0, MAX_REPORTED_DROPS).map((drop) => `${drop.field} ${drop.reason}`),
-      }),
+    const translated = createTranslatedRequestBody(
+      body.bytes,
+      translation,
+      dropReporter(dropLog, log, input.key.id),
     )
 
     // Loops only while the router's own recovery hold is the obstacle (`recovery-wait.ts`).
     for (;;) {
       const selection = await recovery.select(select)
+      // Whether the model resolved against the catalog: the request metric labels an unknown one
+      // `other`, since a client-typed string is unbounded.
+      progress.modelKnown =
+        selection.ok ||
+        selection.decision.rejected.some((entry) => entry.reason !== "model-unsupported")
       progress.pools = selection.decision.groups
         .map((group) => group.poolName)
         .filter((name): name is string => name !== null)
@@ -284,30 +189,23 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
       const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)
       if (plan.servable.length === 0) {
-        // Off the served path: this second catalog read happens only once the chain is empty.
-        const accounts = new Map(deps.catalog.accounts().map((one) => [one.id, one]))
-        // Whether the router's own estimate is this scope's answer, decided once per empty chain.
-        const estimateIsTheAnswer = everyCandidateIsASubscription(selection.candidates, accounts)
-        const outcome = unservableOutcome({
+        const outcome = emptyChainOutcome({
           plan,
           decision: selection.decision,
-          capable: (accountId) => {
-            const account = accounts.get(accountId)
-            if (account === undefined) return false
-            return couldHaveServed({
-              account,
-              operation,
-              ingress: input.ingress,
-              estimateIsTheAnswer,
-            })
-          },
+          candidates: selection.candidates,
+          catalog: deps.catalog,
+          operation,
+          ingress: input.ingress,
           now: clock.now(),
         })
+        if (outcome.kind !== "estimate") return fail(outcome.error)
         // A scope holding nothing but Claude subscriptions has no provider to ask for a count: the
         // Agent SDK states no such call. The router answers for itself, and says so in the body.
-        if (outcome.kind === "estimate")
-          return countTokensEstimateResponse(body.bytes, runtime, startedAt, requestStarted)
-        return fail(outcome.error)
+        // No relay owns this response, so the request's lease ends here — the held wrapper would
+        // keep it, since no chain ever settled it (02.3).
+        const estimate = countTokensEstimateResponse(body.bytes, runtime, startedAt, requestStarted)
+        input.activeRequest?.release()
+        return estimate
       }
 
       // Kept: the transcript follows the turn to whichever subscription serves it
@@ -351,6 +249,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
               : { reasonMaxChars: options.log.reasonMaxChars }),
           }),
         fail,
+        plan.servable.map((entry) => entry.account.id),
       )
       if (response !== "retry") return response
     }
@@ -367,6 +266,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         requestStarted: clock.elapsed(),
         model: null,
         bodyReadMs: 0,
+        recoveryWaitMs: 0,
       }
       const accounting = createRequestAccounting(
         scopedInput,

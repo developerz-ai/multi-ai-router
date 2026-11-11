@@ -13,9 +13,9 @@
  * later reset may push the instant out ({@link lengthenRefusal}).
  */
 
-import { backoffMs, reportedReset } from "./backoff"
+import { backoffMs, boundedReportedReset, reportedResetSource } from "./backoff"
 import type { BreakerOptions, BreakerState } from "./breaker"
-import type { AttemptFailure } from "./failover"
+import type { AttemptFailure } from "./failure-kind"
 
 /**
  * {@link BreakerOptions.authFailureCooldownMs}. Long enough that a key the provider genuinely
@@ -97,14 +97,15 @@ export function lengthenRefusal(
   state: BreakerState,
   reading: Pick<AttemptFailure, "resetsAt" | "retryAfterSeconds" | "resetSource">,
   now: Date,
+  maxReportedResetSeconds?: number,
 ): BreakerState {
-  const reset = reportedReset(reading, now)
+  const reset = boundedReportedReset(reading, now, maxReportedResetSeconds)
   const standing = state.cooldownUntil
   if (reset === null || standing === undefined) return state
-  if (standing.getTime() >= reset.getTime()) return state
+  if (standing.getTime() >= reset.at.getTime()) return state
   return {
     ...state,
-    cooldownUntil: reset,
-    cooldownSource: reading.resetSource ?? "provider-reported",
+    cooldownUntil: reset.at,
+    cooldownSource: reportedResetSource(reset, reading.resetSource),
   }
 }

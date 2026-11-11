@@ -1,4 +1,5 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
+import { type ParsedOpenAiResponsesRequest, parseOpenAiResponsesRequest } from "../parse-ingress"
 import { type DropSink, IGNORE_DROPS } from "../shared/drops"
 import type {
   OpenAiChatMessage,
@@ -11,15 +12,13 @@ import type {
   ParsedOpenAiResponsesContent,
   ParsedOpenAiResponsesItem,
 } from "../shared/openai-responses"
-import { openAiResponsesRequestSchema, UNSUPPORTED } from "../shared/openai-responses"
+import { UNSUPPORTED } from "../shared/openai-responses"
+import { assertPlainTextFormat, rejectField } from "../shared/reject"
 import {
-  assertPlainTextFormat,
   assertStatelessResponses,
   dropEncryptedReasoning,
-  parseRequest,
-  rejectField,
   rejectStatefulItem,
-} from "../shared/reject"
+} from "../shared/reject-responses"
 import {
   collapse,
   contentText,
@@ -28,7 +27,7 @@ import {
   partText,
   userParts,
 } from "../shared/responses-chat-content"
-import { toolChoiceFromOpenAiResponses, toolsFromOpenAiResponses } from "../shared/tools"
+import { responsesToolsAsChat } from "../shared/responses-tools"
 
 /**
  * `POST /v1/responses` body → a Chat Completions body. Pure: no clock, no store, no network, no
@@ -92,7 +91,14 @@ export function openAiResponsesToOpenAiChatRequest(
   body: unknown,
   options: OpenAiResponsesToOpenAiChatOptions = {},
 ): OpenAiChatRequest {
-  const request = parseRequest(openAiResponsesRequestSchema, body, "openai-responses")
+  return openAiResponsesToOpenAiChatRequestFromParsed(parseOpenAiResponsesRequest(body), options)
+}
+
+/** {@link openAiResponsesToOpenAiChatRequest} over a body already parsed once for every candidate (`dataplane/translate-body.ts`). */
+export function openAiResponsesToOpenAiChatRequestFromParsed(
+  request: ParsedOpenAiResponsesRequest,
+  options: OpenAiResponsesToOpenAiChatOptions = {},
+): OpenAiChatRequest {
   const onDrop = options.onDrop ?? IGNORE_DROPS
   assertStatelessResponses(request, onDrop)
   assertPlainTextFormat(request)
@@ -127,6 +133,8 @@ export function openAiResponsesToOpenAiChatRequest(
     rejectField("input", "carries no message: an openai-chat request needs at least one")
   }
 
+  const tooling = responsesToolsAsChat(request.tools, request.tool_choice, onDrop)
+  const emptied = request.tools !== undefined && tooling.tools === undefined
   // `undefined` members are dropped by `JSON.stringify` on the way out, so an absent field stays
   // absent rather than becoming an explicit null the upstream has to interpret.
   return {
@@ -141,12 +149,10 @@ export function openAiResponsesToOpenAiChatRequest(
     // Without this an OpenAI stream reports no usage at all, and the terminal events we synthesize
     // back toward the client would have to carry null tokens every time.
     stream_options: request.stream === true ? { include_usage: true } : undefined,
-    tools: request.tools === undefined ? undefined : toolsFromOpenAiResponses(request.tools),
-    tool_choice:
-      request.tool_choice === undefined
-        ? undefined
-        : toolChoiceFromOpenAiResponses(request.tool_choice),
-    parallel_tool_calls: request.parallel_tool_calls ?? undefined,
+    tools: tooling.tools,
+    tool_choice: tooling.tool_choice,
+    // OpenAI refuses a parallel policy beside no tools, so it goes when translation emptied them.
+    parallel_tool_calls: emptied ? undefined : (request.parallel_tool_calls ?? undefined),
     // The nesting is the only difference between the two spellings, so the word itself is untouched.
     reasoning_effort: request.reasoning?.effort ?? undefined,
   }

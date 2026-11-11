@@ -24,8 +24,9 @@ import type { CatalogData } from "./load"
  *   nicety.
  *
  * A failed refresh keeps the previous snapshot and reports the error to the
- * caller. Serving slightly stale routing beats serving none: the alternative is
- * a total outage because a periodic query timed out.
+ * caller — on the timer, to `onRefreshError`, so a snapshot going stale is a log
+ * line and not a silence. Serving slightly stale routing beats serving none: the
+ * alternative is a total outage because a periodic query timed out.
  */
 
 export interface RoutingCatalogStore extends RoutingCatalog {
@@ -38,6 +39,11 @@ export interface RoutingCatalogStore extends RoutingCatalog {
   stop(): void
   /** When the held snapshot was last replaced. `null` before the first successful load. */
   loadedAt(): Date | null
+  /**
+   * One account by id, from an index built once per installed snapshot — so a request that needs
+   * one account (`plan.ts`, the orchestrator) never walks or re-indexes the whole catalog.
+   */
+  account(id: string): RoutableAccount | undefined
 }
 
 export interface RoutingCatalogStoreDeps {
@@ -49,35 +55,47 @@ export interface RoutingCatalogStoreDeps {
   readonly now?: () => Date
   /** Injected so a test is deterministic; production leaves it alone. */
   readonly jitter?: (intervalMs: number) => number
+  /**
+   * A timer tick's refresh failed; the previous snapshot stays installed and the next tick retries.
+   * Absent, the failure is dropped — which only a test should accept: the composition root wires it
+   * to a warn line, so routing on an hours-old catalog is never silent.
+   */
+  readonly onRefreshError?: (error: unknown) => void
 }
 
-const EMPTY: CatalogData = { accounts: [], pools: [] }
+interface Installed {
+  readonly data: CatalogData
+  readonly byId: ReadonlyMap<string, RoutableAccount>
+}
+
+const EMPTY: Installed = { data: { accounts: [], pools: [] }, byId: new Map() }
 
 export function createRoutingCatalog(deps: RoutingCatalogStoreDeps): RoutingCatalogStore {
   const now = deps.now ?? (() => new Date())
   const jitter = deps.jitter ?? defaultJitter
-  let data: CatalogData = EMPTY
+  let installed: Installed = EMPTY
   let loadedAt: Date | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   const { refresh, refreshAfterMutation } = createSnapshotRefresh(deps.load, (next) => {
     deps.onInstalled?.(next.accounts)
-    data = next
+    installed = { data: next, byId: new Map(next.accounts.map((account) => [account.id, account])) }
     loadedAt = now()
   })
 
   const schedule = (): void => {
     timer = setTimeout(() => {
-      // Swallowed on purpose: a periodic refresh that throws must not take the
-      // process down, and the next tick retries. The snapshot stays as it was.
-      void refresh().catch(() => undefined)
+      // Never rethrown: a periodic refresh that throws must not take the process down, and the
+      // next tick retries. The snapshot stays as it was; the failure goes to `onRefreshError`.
+      void refresh().catch((error: unknown) => deps.onRefreshError?.(error))
       if (timer !== null) schedule()
     }, jitter(deps.refreshIntervalMs))
     timer.unref?.()
   }
 
   return {
-    accounts: (): readonly RoutableAccount[] => data.accounts,
-    pools: (): readonly PoolSnapshot[] => data.pools,
+    accounts: (): readonly RoutableAccount[] => installed.data.accounts,
+    pools: (): readonly PoolSnapshot[] => installed.data.pools,
+    account: (id) => installed.byId.get(id),
     refresh,
     refreshAfterMutation,
     start: () => {

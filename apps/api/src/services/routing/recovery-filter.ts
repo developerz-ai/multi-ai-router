@@ -41,6 +41,22 @@ export function recoveryAwaitsProbe(
   if (until !== undefined && until.getTime() > now.getTime()) return false
   return findSpentWindow(account, now, threshold) === null
 }
+/**
+ * Nothing holds this account out of rotation right now: overlaid status `active`, no breaker clock
+ * running, no spent window, and no recovery generation still gating it. An operator re-check of
+ * such an account has nothing to recover, so it publishes a settled generation instead of a probe
+ * permit that would gate every request but one (plan 101, 03.1).
+ */
+export function accountIsLiveHealthy(
+  account: AccountSnapshot,
+  now: Date,
+  threshold: number,
+): boolean {
+  if (account.status !== "active" || recoveryIsGated(account)) return false
+  const until = account.health.cooldownUntil
+  if (until !== undefined && until.getTime() > now.getTime()) return false
+  return findSpentWindow(account, now, threshold) === null
+}
 /** Only the exact captured persisted evidence may be bypassed by the designated permit. */
 export function recoveryAllowsQuota(
   account: AccountSnapshot,

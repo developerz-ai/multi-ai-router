@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { inArray } from "drizzle-orm"
-import { advisoryLockKey, withAdvisoryLock } from "../../src/advisory-lock"
+import { advisoryLockKey } from "../../src/advisory-lock"
 import { createDatabase, type Database, type DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createScheduledTaskRepository } from "../../src/repositories/scheduled-task-repository"
+import { createSchedulerLockPool } from "../../src/scheduler-lock"
 import { scheduledTaskRuns } from "../../src/schema/scheduled-task-runs"
 
 /**
@@ -48,12 +49,17 @@ afterAll(async () => {
 describe.skipIf(!runnable)("advisory lock contention against a live database", () => {
   test("two concurrent holders of the same key: exactly one acquires, exactly one run row", async () => {
     if (handle === undefined) throw new Error("unreachable: describe.skipIf gates this")
-    const sql = handle.sql
     const repo = createScheduledTaskRepository(db)
     const key = advisoryLockKey(`test-scheduler-contention-${crypto.randomUUID()}`)
+    // Two lock pools: two replicas, each with its own session.
+    const pools = [0, 1].map(() =>
+      createSchedulerLockPool({ url, maxConnections: 1, closeTimeoutSeconds: 0.1 }),
+    )
 
-    const runOnce = async (): Promise<{ acquired: boolean; id?: string }> => {
-      const run = await withAdvisoryLock(sql, key, async () => {
+    const runOnce = async (index: number): Promise<{ acquired: boolean; id?: string }> => {
+      const pool = pools[index]
+      if (pool === undefined) throw new Error("unreachable")
+      const run = await pool.tryRun(key, new AbortController().signal, async () => {
         const id = await repo.begin("janitor_sweep", MARKER)
         // Hold the lock long enough that the other concurrent call is
         // guaranteed to observe it taken, not win a race against an empty gap.
@@ -64,7 +70,9 @@ describe.skipIf(!runnable)("advisory lock contention against a live database", (
       return run.acquired ? { acquired: true, id: run.value } : { acquired: false }
     }
 
-    const [a, b] = await Promise.all([runOnce(), runOnce()])
+    const [a, b] = await Promise.all([runOnce(0), runOnce(1)]).finally(() =>
+      Promise.all(pools.map((pool) => pool.close())),
+    )
     const winners = [a, b].filter((result) => result.acquired)
     expect(winners).toHaveLength(1)
 
@@ -79,12 +87,12 @@ describe.skipIf(!runnable)("advisory lock contention against a live database", (
 
   test("a released lock lets the very next tick acquire it again", async () => {
     if (handle === undefined) throw new Error("unreachable: describe.skipIf gates this")
-    const sql = handle.sql
     const repo = createScheduledTaskRepository(db)
     const key = advisoryLockKey(`test-scheduler-sequential-${crypto.randomUUID()}`)
+    const pool = createSchedulerLockPool({ url, maxConnections: 1, closeTimeoutSeconds: 0.1 })
 
     const runOnce = async (): Promise<boolean> => {
-      const run = await withAdvisoryLock(sql, key, async () => {
+      const run = await pool.tryRun(key, new AbortController().signal, async () => {
         const id = await repo.begin("janitor_sweep", MARKER)
         await repo.finish(id, { outcome: "success", itemsProcessed: 1 }, MARKER)
         runIds.push(id)
@@ -92,11 +100,14 @@ describe.skipIf(!runnable)("advisory lock contention against a live database", (
       return run.acquired
     }
 
-    // Sequential, not concurrent: proves `finish` releasing the connection
-    // (`withAdvisoryLock`'s `finally`) actually frees the lock rather than
+    // Sequential, not concurrent: proves the run's release actually frees the lock rather than
     // leaking it on the session until the pool recycles the connection.
-    expect(await runOnce()).toBe(true)
-    expect(await runOnce()).toBe(true)
-    expect(await runOnce()).toBe(true)
+    try {
+      expect(await runOnce()).toBe(true)
+      expect(await runOnce()).toBe(true)
+      expect(await runOnce()).toBe(true)
+    } finally {
+      await pool.close()
+    }
   })
 })

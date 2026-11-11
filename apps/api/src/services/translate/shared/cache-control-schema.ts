@@ -30,9 +30,13 @@ export function lastMarker(
   parts: readonly object[] | string | null | undefined,
 ): CacheControl | undefined {
   if (typeof parts !== "object" || parts === null) return undefined
-  for (const part of parts.toReversed()) {
+  // From the end without a reversed copy: called once per message, and again by `hasMarker`.
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]
     const control =
-      "cache_control" in part ? (part.cache_control as CacheControl | undefined) : undefined
+      part !== undefined && "cache_control" in part
+        ? (part.cache_control as CacheControl | undefined)
+        : undefined
     if (control !== undefined) return control
   }
   return undefined

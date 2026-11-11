@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, inArray, lte, or, sql } from "drizzle-orm"
-import type { Database } from "../client"
+import type { DatabaseExecutor } from "../client"
 import { type AdminSessionRow, adminSessions } from "../schema/admin-sessions"
 
 /**
@@ -28,9 +28,18 @@ export interface AdminSessionRepository {
    * `partial`, the same signal every other sweep gives `runSweeps`.
    */
   deleteExpiredBefore(cutoff: Date, limit: number): Promise<number>
+  /**
+   * Revokes every session of one identity — the local admin after a password change or removal,
+   * an operator dropped from the allowlist. Returns how many went. Unbounded on purpose: one
+   * identity holds a handful of rows, and a revocation that stopped at a batch limit would leave
+   * a live cookie behind.
+   */
+  deleteByUsername(username: string): Promise<number>
+  /** Revokes every session of every identity ("sign everyone out"). Returns how many went. */
+  deleteAll(): Promise<number>
 }
 
-export function createAdminSessionRepository(db: Database): AdminSessionRepository {
+export function createAdminSessionRepository(db: DatabaseExecutor): AdminSessionRepository {
   return {
     find: async (idHash) => {
       const rows = await db
@@ -94,6 +103,19 @@ export function createAdminSessionRepository(db: Database): AdminSessionReposito
         .delete(adminSessions)
         .where(inArray(adminSessions.idHash, soonestExpired))
         .returning({ idHash: adminSessions.idHash })
+      return deleted.length
+    },
+
+    deleteByUsername: async (username) => {
+      const deleted = await db
+        .delete(adminSessions)
+        .where(eq(adminSessions.username, username))
+        .returning({ idHash: adminSessions.idHash })
+      return deleted.length
+    },
+
+    deleteAll: async () => {
+      const deleted = await db.delete(adminSessions).returning({ idHash: adminSessions.idHash })
       return deleted.length
     },
   }

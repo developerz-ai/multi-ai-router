@@ -448,3 +448,38 @@ describe("createTestNowService — a provider's busy backend", () => {
     })
   }
 })
+
+// Plan 101, 03.8: a router recovery probe stamped the operator's cooldown, so the button answered
+// `tested: false` though the operator had pressed nothing.
+describe("createTestNowService — the operator's own cooldown", () => {
+  test("a router recovery probe does not spend it", async () => {
+    const { service } = harness({ fetch: async () => jsonResponse(200, { content: [] }) })
+    const probe = await service.test("acc-1", {
+      model: "glm-4.7",
+      recovery: { startGuard: async () => {}, rateLimitSink: () => {} },
+    })
+    expect(probe.ok && probe.value.tested).toBe(true)
+    expect(service.lastCheckedAt("acc-1")).toBeNull()
+
+    const pressed = await service.test("acc-1", { model: "glm-4.7" })
+    expect(pressed.ok && pressed.value.tested).toBe(true)
+  })
+
+  test("a stamp past its cooldown is pruned on the next press (plan 101, 03.9)", async () => {
+    const { service, advance } = harness({
+      fetch: async () => jsonResponse(200, { content: [] }),
+    })
+    await service.test("acc-1", { model: "glm-4.7" })
+    expect(service.lastCheckedAt("acc-1")).not.toBeNull()
+    advance(60_000)
+    await service.test("acc-1", { model: "glm-4.7" })
+    expect(service.lastCheckedAt("acc-1")?.getTime()).toBe(NOW.getTime() + 60_000)
+  })
+
+  test("an operator press still spends it", async () => {
+    const { service } = harness({ fetch: async () => jsonResponse(200, { content: [] }) })
+    await service.test("acc-1", { model: "glm-4.7" })
+    const again = await service.test("acc-1", { model: "glm-4.7" })
+    expect(again.ok && again.value.tested).toBe(false)
+  })
+})

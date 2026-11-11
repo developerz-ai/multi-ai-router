@@ -6,8 +6,9 @@ import { type CacheControl, cacheControlSchema } from "./cache-control-schema"
  * The OpenAI Chat Completions request, in the two shapes translation needs — same split as
  * `shared/anthropic.ts`: `Parsed*` is what arrives, the unsuffixed family is what we emit.
  *
- * Four fields are declared here purely so they can be **refused by name** (`n`, `logprobs`,
- * `top_logprobs`, `response_format`); `shared/reject.ts` owns that call. The documented hints — `seed`,
+ * Some fields are declared here purely so they can be **refused by name** (`n`, `logprobs`,
+ * `top_logprobs`, the legacy `functions` / `function_call`); `shared/reject.ts` owns that call.
+ * `response_format` is carried (`shared/structured-output.ts`, `shared/structured-output-anthropic.ts`). The documented hints — `seed`,
  * `frequency_penalty`, `presence_penalty`, `logit_bias`, `user` — are deliberately absent instead,
  * because "not in the schema" is exactly what dropping them means
  * (docs/idea/06-protocol-translation.md#known-lossy-edges).
@@ -46,7 +47,11 @@ const unsupportedPart = z
   .refine((part) => !KNOWN_PART_TYPES.has(part.type), { message: "malformed content part" })
   .transform((part) => ({ type: UNSUPPORTED_PART, actual: part.type }) as const)
 
-export const openAiChatPartSchema = z.union([textPart, imagePart, unsupportedPart])
+// Dispatched on `type` first: a part pays for its own parser only (see `anthropicBlockSchema`).
+export const openAiChatPartSchema = z.union([
+  z.discriminatedUnion("type", [textPart, imagePart]),
+  unsupportedPart,
+])
 
 const contentSchema = z.union([z.string(), z.array(openAiChatPartSchema)])
 
@@ -72,7 +77,10 @@ export const openAiChatMessageSchema = z.discriminatedUnion("role", [
   }),
 ])
 
-/** `strict` is stripped; a tool with no `function` is refused by name in `shared/tools.ts`. */
+/**
+ * `strict` is read to carry it onto openai-responses, which states the same flag, and stripped
+ * toward Anthropic; a tool with no `function` is refused by name in `shared/tools.ts`.
+ */
 export const openAiChatToolSchema = z.looseObject({
   type: z.string().optional(),
   function: z
@@ -80,6 +88,7 @@ export const openAiChatToolSchema = z.looseObject({
       name: z.string(),
       description: z.string().optional(),
       parameters: z.record(z.string(), z.unknown()).optional(),
+      strict: z.boolean().nullish().catch(undefined),
     })
     .optional(),
 })
@@ -118,6 +127,11 @@ export const openAiChatRequestSchema = z.object({
   prompt_cache_key: z.string().nullish(),
   // OpenRouter's top-level automatic-caching marker; carried toward Anthropic only.
   cache_control: cacheControlSchema,
+  // The pre-`tools` spelling of function calling. Declared only to be refused by name
+  // (`assertNoLegacyFunctions`): stripping it would answer a tool-using caller with a turn that
+  // never knew its functions existed.
+  functions: z.unknown().optional(),
+  function_call: z.unknown().optional(),
 })
 
 export type ParsedOpenAiChatRequest = z.infer<typeof openAiChatRequestSchema>
@@ -169,6 +183,8 @@ export interface OpenAiChatTool {
     readonly name: string
     readonly description?: string | undefined
     readonly parameters: Record<string, unknown>
+    /** Carried between the two OpenAI dialects only; absent means the upstream's default. */
+    readonly strict?: boolean | undefined
   }
 }
 

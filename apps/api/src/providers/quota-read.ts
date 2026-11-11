@@ -18,6 +18,14 @@ export interface ProviderQuotaRead {
   /** Statuses meaning "this credential holds no plan to read": a skip, not a failure. */
   readonly noPlanStatuses: ReadonlySet<number>
   /**
+   * Whether a 2xx body is a well-formed answer that states **no plan window at all** — a key without
+   * the plan this endpoint describes. A skip, not a failure: logging it as `quota:unreadable` every
+   * tick made the sweep report `partial` forever and hid every real failure behind it (tesote, 384
+   * of 415 runs since 2026-11-07; sweep 101, 12.10). Asked only when {@link read} returned `null`.
+   * Absent: every unreadable body is a failure.
+   */
+  noPlan?(body: unknown): boolean
+  /**
    * Zod at the boundary: `null` for a shape this build cannot read, never a partial reading.
    *
    * A signal because that is the only way a reading reaches an Account (`RateLimitSignal.quotaWindows`).

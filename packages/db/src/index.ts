@@ -9,7 +9,7 @@
 export type { AdvisoryLockRun } from "./advisory-lock"
 
 // --- leader election --------------------------------------------------------
-export { advisoryLockKey, advisoryUnlock, tryAdvisoryLock, withAdvisoryLock } from "./advisory-lock"
+export { advisoryLockKey } from "./advisory-lock"
 export type {
   Database,
   DatabaseExecutor,
@@ -44,10 +44,14 @@ export type {
   AccountListFilter,
   AccountRepository,
   AccountRepositoryOptions,
+  AccountSummaryRow,
   CreateAccountInput,
 } from "./repositories/account-repository"
 // --- repositories -----------------------------------------------------------
-export { createAccountRepository } from "./repositories/account-repository"
+export {
+  ACCOUNT_LAST_USED_MIN_INTERVAL_DEFAULT_MS,
+  createAccountRepository,
+} from "./repositories/account-repository"
 export type {
   AdminCredentialRepository,
   UpsertAdminCredentialInput,
@@ -65,7 +69,11 @@ export type {
 export { createAdminMutationRepository } from "./repositories/admin-mutation-repository"
 export type { AdminSessionRepository } from "./repositories/admin-session-repository"
 export { createAdminSessionRepository } from "./repositories/admin-session-repository"
-export type { ApiKeyRepository } from "./repositories/api-key-repository"
+export type {
+  ApiKeyListRow,
+  ApiKeyRepository,
+  ApiKeyWithTargets,
+} from "./repositories/api-key-repository"
 export { createApiKeyRepository } from "./repositories/api-key-repository"
 export type { ApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
 export { createApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
@@ -83,6 +91,12 @@ export type {
 } from "./repositories/catalog-snapshot-repository"
 export { createCatalogSnapshotRepository } from "./repositories/catalog-snapshot-repository"
 export type {
+  ExhaustedWatchRepository,
+  ExhaustedWatchRow,
+  ExhaustedWatchState,
+} from "./repositories/exhausted-watch-repository"
+export { createExhaustedWatchRepository } from "./repositories/exhausted-watch-repository"
+export type {
   AccountCatalogAge,
   AccountCatalogAttempt,
   ModelCatalogEntry,
@@ -94,7 +108,10 @@ export type {
   OauthStateRepository,
 } from "./repositories/oauth-state-repository"
 export { createOauthStateRepository } from "./repositories/oauth-state-repository"
-export type { AccountQuotaObservation } from "./repositories/observed-quota-window"
+export type {
+  AccountQuotaObservation,
+  ObservedQuotaWindowWrite,
+} from "./repositories/observed-quota-window"
 export type {
   CreatePoolInput,
   PoolMemberInput,
@@ -110,8 +127,10 @@ export {
   createPriceOverrideRepository,
   PriceOverrideAccountConflict,
 } from "./repositories/price-override-repository"
+export type { QuotaWindowWrite } from "./repositories/quota-window-mutations"
 export type {
   FinishScheduledTaskInput,
+  ScheduledTaskLatest,
   ScheduledTaskName,
   ScheduledTaskOutcome,
   ScheduledTaskRepository,
@@ -139,6 +158,7 @@ export {
   toUtcDay,
 } from "./repositories/usage-daily-repository"
 export type { UsageExportRow } from "./repositories/usage-export-repository"
+export type { UsageHistoryRepositoryOptions } from "./repositories/usage-history-repository"
 export { createUsageHistoryRepository } from "./repositories/usage-history-repository"
 export type {
   UsageHistoryCoverage,

@@ -5,6 +5,7 @@ import type { SdkConcurrency, SdkSlot } from "./concurrency"
 import { ALWAYS_FRESH, type CredentialFreshness } from "./credential-freshness"
 import { isolatedOptions } from "./options"
 import { type OwnerLaunchFactory, ownedQuery } from "./owned-query"
+import { settlesWithin } from "./turn-lifecycle"
 
 /**
  * An Agent SDK `query()` that **never sends a turn**: the subprocess comes up, completes its
@@ -57,7 +58,7 @@ export interface OpenIdleQueryInput {
   readonly beforeBackgroundUpstreamStart?: AsyncBackgroundStartGuard
   /** Whose per-Account subprocess slot this takes. */
   readonly accountId: string
-  /** The isolated `CLAUDE_CONFIG_DIR`. Also the subprocess's working directory. */
+  /** The isolated `CLAUDE_CONFIG_DIR`. Never the working directory: that is the neutral workspace. */
   readonly configDir: string
   /** Which `claude` binary to spawn — `resolveClaudeCli`'s answer, resolved by the caller first. */
   readonly cliPath: string
@@ -160,7 +161,9 @@ export async function openIdleQuery(input: OpenIdleQueryInput): Promise<IdleQuer
     // own cleanup. Every step is best-effort — a process that is already gone is the goal.
     held.release()
     controller.abort()
-    await opened?.return?.()?.catch(() => undefined)
+    // Bounded like a turn's teardown (`turn-lifecycle.ts`, 101 finding 05.8): the subprocess is
+    // already aborted, so a `return()` that never settles must not keep the slot.
+    await settlesWithin(Promise.resolve(opened?.return?.()), input.timeoutMs)
     slot.release()
   }
 

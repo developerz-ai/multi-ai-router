@@ -40,13 +40,17 @@ describe.skipIf(!historyUrl)("immutable history subjects and scoped prices", () 
     await fixture.db().delete(pools).where(eq(pools.id, pool.id))
     const [stored] = await fixture.db().select().from(usageRecords)
     expect(stored).toMatchObject({ accountId: account.id, apiKeyId: key.id, poolId: pool.id })
-    const before = await fixture.history().totals(fixture.window)
+    const before = await fixture.history().totals(fixture.window, {})
     expect(await fixture.usage().deleteOlderThan(new Date("1984-02-01"), 10)).toBe(2)
     await fixture.history().rollupDay(row.createdAt as Date)
     await fixture.history().rollupDay(terminal.settledAt)
-    expect(await fixture.history().totals(fixture.window)).toEqual(before)
-    expect((await fixture.history().breakdown(fixture.window, "accountId"))[0]?.id).toBe(account.id)
-    expect((await fixture.history().breakdown(fixture.window, "poolId"))[0]?.id).toBe(pool.id)
+    expect(await fixture.history().totals(fixture.window, {})).toEqual(before)
+    expect(
+      (await fixture.history().breakdown(fixture.window, "accountId", undefined, {}))[0]?.id,
+    ).toBe(account.id)
+    expect(
+      (await fixture.history().breakdown(fixture.window, "poolId", undefined, {}))[0]?.id,
+    ).toBe(pool.id)
     expect(await fixture.usage().insertBatch({ attempts: [row], terminals: [terminal] })).toEqual({
       insertedAttempts: 0,
       insertedTerminals: 0,
@@ -76,7 +80,10 @@ describe.skipIf(!historyUrl)("immutable history subjects and scoped prices", () 
     })
     expect(await repo.list()).toEqual(initial)
     await expect(
-      repo.replaceAll([{ ...global, accountId: account.id, provider: "anthropic" }], new Date()),
+      repo.replaceAll(
+        [{ ...global, accountId: account.id, provider: "anthropic-api" as const }],
+        new Date(),
+      ),
     ).rejects.toBeInstanceOf(PriceOverrideAccountConflict)
     expect(await repo.list()).toEqual(initial)
     await fixture.db().delete(accounts).where(eq(accounts.id, account.id))
@@ -88,7 +95,7 @@ describe.skipIf(!historyUrl)("immutable history subjects and scoped prices", () 
       count = await fixture.history().deleteOlderThan(new Date("1984-02-01"), 1)
       expect(count).toBeLessThanOrEqual(1)
     } while (count)
-    expect(await fixture.history().totals(fixture.window)).toMatchObject({
+    expect(await fixture.history().totals(fixture.window, {})).toMatchObject({
       attempts: 0,
       requests: 0,
     })
