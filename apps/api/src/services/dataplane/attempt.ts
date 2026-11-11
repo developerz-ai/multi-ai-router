@@ -64,9 +64,27 @@ export type AttemptOutcome =
        * chain folds this attempt (`chain-error.ts`). The fast transport's own request refusal.
        */
       readonly verdict?: RouterError
-      /** The row's `errorClass` when the router, not the upstream, ended the attempt. */
+      /**
+       * The row's `errorClass` when the router, not the upstream, ended the attempt — or
+       * {@link SUCCESS_WALL_ERROR_CLASS} when the wall was read out of an upstream `2xx`.
+       */
       readonly errorClass?: string
+      /**
+       * The status the upstream actually answered, when `upstream.status` is not it: a wall read
+       * out of a `2xx` carries the status the client is owed there, while the usage row records
+       * the upstream's own (`docs/idea/08-observability.md`, `httpStatus`).
+       */
+      readonly answeredStatus?: number
     }
+
+/**
+ * The `errorClass` mark of a wall the peek read out of an upstream `2xx` (`success-wall.ts`).
+ * The attempt's `upstream.status` carries the status the client is owed (`429` / `402` / `503`),
+ * but `finishFailedAttempt` writes the row's `httpStatus` from `answeredStatus`, the upstream's own
+ * `2xx`, and this mark as `errorClass`. A real upstream `4xx` keeps its status and a NULL class, so
+ * the rate of walls in `2xx` is countable in prod (`router_upstream_errors_total`, `usage_records`).
+ */
+export const SUCCESS_WALL_ERROR_CLASS = "success_wall"
 
 export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const { plan } = input
@@ -188,6 +206,8 @@ async function decideAnswer(
     return {
       kind: "failure",
       failure: toAttemptFailure(peeked.status, classification, rateLimit),
+      errorClass: SUCCESS_WALL_ERROR_CLASS,
+      answeredStatus: response.status,
       classification,
       rateLimit: attemptReading(classification, rateLimit),
       upstream: {

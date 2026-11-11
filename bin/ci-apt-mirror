@@ -1,0 +1,38 @@
+#!/bin/bash
+# CI only: pin apt to archive.ubuntu.com when a mirror the runner image lists does not resolve.
+#
+# The GitHub-hosted image's apt reads its mirrors from /etc/apt/apt-mirrors.txt, Azure first. A dead
+# Azure mirror is not skipped: apt retries it, with a DNS timeout, for every index and every package
+# before the next mirror answers, which outlasts a job's timeout. So each listed host is probed once
+# and the file is rewritten to archive.ubuntu.com alone when any of them does not resolve. A file that
+# is absent is left alone (a runner that does not use mirror+file: needs nothing).
+#
+# APT_MIRRORS_FILE overrides the path, so the script is testable without sudo.
+set -euo pipefail
+
+file="${APT_MIRRORS_FILE:-/etc/apt/apt-mirrors.txt}"
+fallback="http://archive.ubuntu.com/ubuntu/"
+
+if [ ! -f "$file" ]; then
+  echo "ci-apt-mirror: $file does not exist; apt sources left alone"
+  exit 0
+fi
+
+dead=""
+while IFS= read -r host; do
+  if ! timeout 5 getent hosts "$host" >/dev/null 2>&1; then
+    dead="${dead:+$dead }$host"
+  fi
+done < <(grep -oE '^https?://[^/[:space:]]+' "$file" | sed -E 's|^https?://||' | sort -u || true)
+
+if [ -z "$dead" ]; then
+  echo "ci-apt-mirror: every mirror in $file resolves; left untouched"
+  exit 0
+fi
+
+if [ "$(id -u)" -eq 0 ] || [ -w "$file" ]; then
+  printf '%s\n' "$fallback" >"$file"
+else
+  printf '%s\n' "$fallback" | sudo tee "$file" >/dev/null
+fi
+echo "ci-apt-mirror: $dead did not resolve; $file now lists only $fallback"

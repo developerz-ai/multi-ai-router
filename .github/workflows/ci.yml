@@ -125,8 +125,9 @@ jobs:
       # test bootstrap itself (idempotent, same code path as boot).
       - name: install native test prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc libc6-dev
+          bin/ci-apt-mirror
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends gcc libc6-dev
       - run: bin/test
 
   advisory:
@@ -236,10 +237,14 @@ jobs:
       # runner image: DejaVu is the font stack bin/ui-geometry pins text metrics
       # to, and the browser build is whatever the pinned playwright in
       # package.json resolves to — never `latest`.
+      # A dead mirror in the runner's apt list costs a DNS timeout per file, which outlasts the job
+      # timeout; bin/ci-apt-mirror pins apt to archive.ubuntu.com when one does not resolve. The
+      # installs below fail the step if a package is unreachable. `--with-deps` calls the same apt.
       - name: install pinned fonts and headless Chromium
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+          bin/ci-apt-mirror
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends fonts-dejavu-core
           bunx playwright install --with-deps chromium
       - run: bin/ui-geometry
 
@@ -261,8 +266,9 @@ jobs:
       # only main-branch pushes would notice.
       - name: install native build prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc libc6-dev
+          bin/ci-apt-mirror
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends gcc libc6-dev
       - run: bun run build
 
   image:

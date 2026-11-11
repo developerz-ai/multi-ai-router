@@ -27,6 +27,7 @@ export function finishFailedAttempt(
     outcome.upstream,
     at,
     outcome.errorClass ?? null,
+    outcome.answeredStatus ?? outcome.upstream?.status ?? null,
   )
   logAttemptFailure(
     ctx.log,
@@ -61,6 +62,8 @@ export function recordAttemptFailure(
   upstream: UpstreamError | null,
   at: AttemptClock,
   errorClass: string | null = null,
+  /** The upstream's own status; differs from `upstream.status` only for a wall read out of a 2xx. */
+  httpStatus: number | null = upstream?.status ?? null,
 ): UsageRecord {
   const event = attemptRecord({
     ...ctx.runtime.attribution(attempt, servable),
@@ -69,7 +72,7 @@ export function recordAttemptFailure(
     timing: ctx.runtime.timing(at.startedAt, at.started, at.upstreamMs),
     outcome: failureOutcome(failure.kind),
     streamed: false,
-    httpStatus: upstream?.status ?? null,
+    httpStatus,
     errorClass,
   })
   ctx.runtime.record(event)
