@@ -78,9 +78,11 @@ export type AttemptOutcome =
     }
 
 /**
- * A wall the peek read out of an upstream `2xx` (`success-wall.ts`). The row carries the status
- * the wall was owed, so without this mark it reads exactly like an upstream `4xx` and the rate of
- * walls in `2xx` cannot be counted in prod (`router_upstream_errors_total`, `usage_records`).
+ * The `errorClass` mark of a wall the peek read out of an upstream `2xx` (`success-wall.ts`).
+ * The attempt's `upstream.status` carries the status the client is owed (`429` / `402` / `503`),
+ * but `finishFailedAttempt` writes the row's `httpStatus` from `answeredStatus`, the upstream's own
+ * `2xx`, and this mark as `errorClass`. A real upstream `4xx` keeps its status and a NULL class, so
+ * the rate of walls in `2xx` is countable in prod (`router_upstream_errors_total`, `usage_records`).
  */
 export const SUCCESS_WALL_ERROR_CLASS = "success_wall"
 

@@ -38,10 +38,74 @@ function rateLimited(): Response {
   )
 }
 
-async function records(responses: readonly (() => Response)[]): Promise<UsageRecord[]> {
-  const accounts: RoutableAccount[] = ["a", "b"].map((id) =>
-    account(id, { provider: "anthropic-api", cipher: CRYPTOR }),
-  )
+interface Scenario {
+  readonly accounts: readonly RoutableAccount[]
+  readonly ingress: "anthropic" | "openai-responses"
+  readonly path: string
+  readonly body: Record<string, unknown>
+}
+
+const ANTHROPIC: Scenario = {
+  accounts: ["a", "b"].map((id) => account(id, { provider: "anthropic-api", cipher: CRYPTOR })),
+  ingress: "anthropic",
+  path: "/v1/messages",
+  body: { model: "m", max_tokens: 8, stream: true, messages: [{ role: "user", content: "hi" }] },
+}
+
+/** A MiniMax pair on its anthropic surface; a drained balance is a `base_resp` envelope in a `200`. */
+const MINIMAX: Scenario = {
+  ...ANTHROPIC,
+  accounts: ["a", "b"].map((id) => account(id, { provider: "minimax", cipher: CRYPTOR })),
+  body: { ...ANTHROPIC.body, stream: false },
+}
+
+/** A Codex account: its access token carries the `chatgpt_account_id` claim the driver requires. */
+function codexAccount(id: string): RoutableAccount {
+  const token = `eyJhbGciOiJub25lIn0.${Buffer.from(
+    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: id } }),
+  ).toString("base64url")}.sig`
+  return {
+    ...account(id, { provider: "openai-oauth", cipher: CRYPTOR }),
+    authMaterial: CRYPTOR.encrypt(JSON.stringify({ accessToken: token })),
+  }
+}
+
+const CODEX: Scenario = {
+  accounts: [codexAccount("a"), codexAccount("b")],
+  ingress: "openai-responses",
+  path: "/v1/responses",
+  body: { model: "gpt-6.1-sol", input: "hi" },
+}
+
+const CODEX_CREATED =
+  'event: response.created\ndata: {"type":"response.created","response":{"id":"r","status":"in_progress"}}\n\n'
+const CODEX_FAILED = `${CODEX_CREATED}event: response.failed\ndata: {"type":"response.failed","response":{"id":"r","status":"failed","error":{"code":"usage_limit_reached","message":"spent"}}}\n\n`
+const CODEX_COMPLETED = `${CODEX_CREATED}event: response.completed\ndata: {"type":"response.completed","response":{"id":"r","status":"completed","output":[]}}\n\n`
+
+const MINIMAX_BROKE = { base_resp: { status_code: 1008, status_msg: "insufficient balance" } }
+const MESSAGE = {
+  id: "msg_1",
+  type: "message",
+  role: "assistant",
+  model: "m",
+  content: [{ type: "text", text: "served" }],
+  stop_reason: "end_turn",
+  usage: { input_tokens: 3, output_tokens: 1 },
+}
+
+function json(body: unknown): () => Response {
+  return () =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+}
+
+async function records(
+  responses: readonly (() => Response)[],
+  scenario: Scenario = ANTHROPIC,
+): Promise<UsageRecord[]> {
+  const accounts = scenario.accounts
   const rows: UsageRecord[] = []
   const dispatcher = createDispatcher({
     catalog: catalog(accounts),
@@ -51,7 +115,7 @@ async function records(responses: readonly (() => Response)[]): Promise<UsageRec
     fetch: mockUpstream(responses).fetch,
   })
   const response = await dispatcher.dispatch({
-    ingress: "anthropic",
+    ingress: scenario.ingress,
     requestId: "req-success-wall-record",
     key: {
       id: "key",
@@ -62,14 +126,9 @@ async function records(responses: readonly (() => Response)[]): Promise<UsageRec
       rateLimitWindowSeconds: null,
       expiresAt: null,
     },
-    request: new Request("http://router.test/v1/messages", {
+    request: new Request(`http://router.test${scenario.path}`, {
       method: "POST",
-      body: JSON.stringify({
-        model: "m",
-        max_tokens: 8,
-        stream: true,
-        messages: [{ role: "user", content: "hi" }],
-      }),
+      body: JSON.stringify(scenario.body),
     }),
   })
   expect(response.status).toBe(200)
@@ -80,6 +139,22 @@ async function records(responses: readonly (() => Response)[]): Promise<UsageRec
 describe("the usage row of a walled attempt", () => {
   test("a wall peeked out of a 2xx records the upstream's 200, marked success_wall", async () => {
     const [walled, served] = await records([sse(WALL_IN_200), sse(STREAM)])
+
+    expect(walled).toMatchObject({ httpStatus: 200, errorClass: "success_wall" })
+    expect(walled?.outcome).not.toBe("success")
+    expect(served).toMatchObject({ outcome: "success", httpStatus: 200 })
+  })
+
+  test("a MiniMax base_resp wall in a 200 records the upstream's 200, marked success_wall", async () => {
+    const [walled, served] = await records([json(MINIMAX_BROKE), json(MESSAGE)], MINIMAX)
+
+    expect(walled).toMatchObject({ httpStatus: 200, errorClass: "success_wall" })
+    expect(walled?.outcome).not.toBe("success")
+    expect(served).toMatchObject({ outcome: "success", httpStatus: 200 })
+  })
+
+  test("a Codex response.failed wall in a 200 records the upstream's 200, marked success_wall", async () => {
+    const [walled, served] = await records([sse(CODEX_FAILED), sse(CODEX_COMPLETED)], CODEX)
 
     expect(walled).toMatchObject({ httpStatus: 200, errorClass: "success_wall" })
     expect(walled?.outcome).not.toBe("success")
