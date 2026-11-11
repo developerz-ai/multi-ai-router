@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { type JSX, render } from "solid-js/web"
+import type { JSX } from "solid-js"
+import { render } from "solid-js/web"
 import type { AccountView, SubscriptionCredentialView } from "../../src/lib/api/types"
 import { summarizeSubscriptions } from "../../src/lib/subscription-login"
 import { CredentialCell } from "../../src/routes/accounts/CredentialCell"

@@ -4,7 +4,11 @@ import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import type { AccountView, ApiKeyView, PoolView } from "../../src/lib/api/types"
 import { KeyFormDialog } from "../../src/routes/keys/KeyFormDialog"
-import { type KeyFormValues, toCreateKeyInput } from "../../src/routes/keys/key-form-values"
+import {
+  type KeyFormValues,
+  toCreateKeyInput,
+  toUpdateKeyInput,
+} from "../../src/routes/keys/key-form-values"
 import { fire, selectOption, typeInto } from "../support/dom"
 
 /**
@@ -54,9 +58,12 @@ const ACCOUNT: AccountView = {
   dialect: null,
   modelAliases: null,
   supportedModels: null,
+  windowTokenLimits: null,
   weight: 100,
   priority: 0,
+  billing: "metered",
   tokenExpiresAt: null,
+  lastUsedAt: null,
   createdAt: "2026-07-24T12:00:00.000Z",
   updatedAt: "2026-07-24T12:00:00.000Z",
 }
@@ -424,6 +431,58 @@ describe("KeyFormDialog minting a successor", () => {
       dispose()
       container.remove()
     }
+  })
+})
+
+describe("KeyFormDialog rate limit", () => {
+  test("one half alone is refused and says so — never read as no ceiling", () => {
+    // The prod fingerprint: Requests typed, seconds forgotten → minted unlimited, or on an edit
+    // the stored ceiling silently removed.
+    let submitted: KeyFormValues | undefined
+    withMount(base({ apiKey: key(), onSubmit: (values) => (submitted = values) }), () => {
+      typeInto(fieldByLabel("Per (seconds)"), "")
+      expect(document.body.textContent).toContain("Fill in both halves of the rate limit")
+      submitForm()
+      expect(submitted).toBeUndefined()
+    })
+  })
+
+  test("a number box's exponent form is the number it shows: 1e3 is a thousand, not one", () => {
+    let submitted: KeyFormValues | undefined
+    withMount(base({ onSubmit: (values) => (submitted = values) }), () => {
+      typeInto(fieldByLabel("Name"), "ci")
+      typeInto(fieldByLabel("Requests"), "1e3")
+      typeInto(fieldByLabel("Per (seconds)"), "60")
+      submitForm()
+      expect(submitted?.rateLimit).toEqual({ requests: 1000, windowSeconds: 60 })
+    })
+  })
+})
+
+describe("toUpdateKeyInput", () => {
+  const values: KeyFormValues = {
+    name: "renamed",
+    owner: null,
+    ownerKind: null,
+    tool: null,
+    purpose: null,
+    scope: { kind: "all" },
+    rateLimit: null,
+    expiresAt: "2020-01-01T00:00:00.000Z",
+  }
+
+  test("an expired key's untouched expiry is not re-sent, so it can still be renamed", () => {
+    const stored = key({ expiresAt: "2020-01-01T00:00:00.000Z" })
+    const patch = toUpdateKeyInput(values, stored)
+    expect("expiresAt" in patch).toBe(false)
+    expect(patch.name).toBe("renamed")
+    expect(patch.rateLimit).toBeNull()
+  })
+
+  test("a changed or cleared expiry is sent", () => {
+    const stored = key({ expiresAt: "2030-01-01T00:00:00.000Z" })
+    expect(toUpdateKeyInput(values, stored).expiresAt).toBe("2020-01-01T00:00:00.000Z")
+    expect(toUpdateKeyInput({ ...values, expiresAt: null }, stored).expiresAt).toBeNull()
   })
 })
 

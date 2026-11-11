@@ -4,12 +4,12 @@ import { Button } from "../../components/Button"
 import { SelectField, TextField } from "../../components/Field"
 import { Modal } from "../../components/Modal"
 import { errorMessage } from "../../lib/api/errors"
-import type { KeyScopeInput, RateLimitInput } from "../../lib/api/router-keys"
+import type { KeyScopeInput } from "../../lib/api/router-keys"
 import type { AccountView, ApiKeyView, KeyOwnerKind, PoolView } from "../../lib/api/types"
 import { fromDateTimeInput, toDateTimeInput } from "../../lib/datetime-input"
 import { KeyAttributionFields } from "./KeyAttributionFields"
 import styles from "./KeyFormDialog.module.scss"
-import { type KeyFormValues, labelOrNull } from "./key-form-values"
+import { type KeyFormValues, labelOrNull, parseRateLimit } from "./key-form-values"
 
 // Re-exported because the dialog's other caller — the onboarding panel — mints
 // through the same contract. `key-form-values.ts` is the home, not this file.
@@ -116,28 +116,24 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
       : { kind: "accounts", accountIds: targets() }
   }
 
-  /**
-   * Both halves or neither: a count with no window is not a rate limit, and the
-   * API refuses one. An empty pair is `null` — no ceiling — which on an edit is
-   * how an existing one is removed.
-   */
-  const rateLimit = (): RateLimitInput | null => {
-    const count = Number.parseInt(requests(), 10)
-    const seconds = Number.parseInt(windowSeconds(), 10)
-    if (!Number.isFinite(count) || !Number.isFinite(seconds)) return null
-    return { requests: count, windowSeconds: seconds }
-  }
+  const rateLimit = () => parseRateLimit(requests(), windowSeconds())
 
   /** Named, not silent: a submit that does nothing reads as a broken button. */
-  const blocker = () =>
-    buildScope() === undefined
-      ? `Choose at least one ${scope() === "pools" ? "pool" : "account"}, or set the scope to "all".`
-      : null
+  const blocker = () => {
+    if (buildScope() === undefined) {
+      return `Choose at least one ${scope() === "pools" ? "pool" : "account"}, or set the scope to "all".`
+    }
+    if (rateLimit() === undefined) {
+      return "Fill in both halves of the rate limit — requests and seconds — or empty both for no ceiling."
+    }
+    return null
+  }
 
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
     const resolved = buildScope()
-    if (resolved === undefined) return
+    const limit = rateLimit()
+    if (resolved === undefined || limit === undefined) return
 
     props.onSubmit({
       name: name().trim(),
@@ -146,7 +142,7 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
       tool: labelOrNull(tool()),
       purpose: labelOrNull(purpose()),
       scope: resolved,
-      rateLimit: rateLimit(),
+      rateLimit: limit,
       expiresAt: fromDateTimeInput(expiresAt()),
     })
   }
@@ -243,7 +239,7 @@ export function KeyFormDialog(props: KeyFormDialogProps) {
             value={requests()}
           />
           <TextField
-            hint="Window in seconds. Both halves or neither — empty both to remove the ceiling."
+            hint="Window in seconds. Both halves or neither — empty both to remove the ceiling; one alone is refused."
             inputmode="numeric"
             label="Per (seconds)"
             min="1"

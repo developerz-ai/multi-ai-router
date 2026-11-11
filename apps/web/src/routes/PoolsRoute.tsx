@@ -168,13 +168,13 @@ export default function PoolsRoute() {
                 title="No pools yet"
               />
             }
-            when={rows.length > 0}
+            when={rows().length > 0}
           >
             <Table
               caption="Pools, their policy, and how many members are eligible right now."
               columns={columns}
               rowId={(pool) => pool.id}
-              rows={rows}
+              rows={rows()}
             />
           </Show>
         )}

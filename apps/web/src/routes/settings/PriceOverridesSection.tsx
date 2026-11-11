@@ -191,7 +191,7 @@ export function PriceOverridesSection() {
         {(view) => (
           <>
             <PriceCoverage
-              prices={view.prices}
+              prices={view().prices}
               onPrice={(id, chosenProvider, name) => {
                 setAccountId(id)
                 setProvider(chosenProvider)
@@ -200,32 +200,32 @@ export function PriceOverridesSection() {
             />
 
             <PriceTableControls
-              hidden={visible(view).hidden}
-              matched={visible(view).matched}
+              hidden={visible(view()).hidden}
+              matched={visible(view()).matched}
               onQuery={setQuery}
               onShowAll={setShowAll}
               query={query()}
               showAll={showAll()}
-              shown={visible(view).rows.length}
-              total={rows(view).length}
+              shown={visible(view()).rows.length}
+              total={rows(view()).length}
             />
 
             <PriceTable
-              accounts={view.prices.accounts}
+              accounts={view().prices.accounts}
               invalid={badCell}
               onEdit={edit}
               onRevert={revert}
-              rows={visible(view).rows}
+              rows={visible(view()).rows}
               value={cellValue}
             />
 
             <PriceAddForm
-              accounts={view.prices.accounts}
+              accounts={view().prices.accounts}
               accountId={accountId()}
               onAccount={setAccountId}
               error={addError()}
               model={model()}
-              onAdd={() => add(view)}
+              onAdd={() => add(view())}
               onModel={setModel}
               onProvider={(value) => {
                 setProvider(value)
@@ -235,9 +235,9 @@ export function PriceOverridesSection() {
               providers={providerList()}
             />
 
-            <Show when={unparseable(view).length > 0}>
+            <Show when={unparseable(view()).length > 0}>
               <p class={styles.error} role="alert">
-                <For each={unparseable(view)}>
+                <For each={unparseable(view())}>
                   {(row) => (
                     <span class={styles.line}>
                       {row.provider} / {row.model} has a rate that is not a number of dollars.
@@ -255,17 +255,17 @@ export function PriceOverridesSection() {
             </Show>
 
             <div class={styles.bar}>
-              <p class={styles.summary}>{summarise(view, diffFor(view))}</p>
+              <p class={styles.summary}>{summarise(view(), diffFor(view()))}</p>
               <div class={styles.actions}>
-                <Show when={dirty(view)}>
+                <Show when={dirty(view())}>
                   <Button onClick={discard} tone="ghost">
                     Discard changes
                   </Button>
                 </Show>
                 <Button
                   busy={save.isPending}
-                  disabled={!dirty(view) || unparseable(view).length > 0}
-                  onClick={() => attemptSave(view)}
+                  disabled={!dirty(view()) || unparseable(view()).length > 0}
+                  onClick={() => attemptSave(view())}
                   tone="primary"
                 >
                   Save price overrides
@@ -277,15 +277,15 @@ export function PriceOverridesSection() {
               <ConfirmDialog
                 busy={save.isPending}
                 confirmLabel="Save and remove"
-                consequences={removalConsequences(diffFor(view), view.prices.shipped)}
+                consequences={removalConsequences(diffFor(view()), view().prices.shipped)}
                 error={save.error}
                 onClose={() => {
                   save.reset()
                   setConfirming(false)
                 }}
-                onConfirm={() => commit(view)}
+                onConfirm={() => commit(view())}
                 open
-                subject={`${diffFor(view).removed.length} price override(s)`}
+                subject={`${diffFor(view()).removed.length} price override(s)`}
                 title="This save removes price overrides"
               />
             </Show>

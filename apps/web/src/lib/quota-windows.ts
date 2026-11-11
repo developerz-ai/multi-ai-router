@@ -1,5 +1,6 @@
 import type { AccountStatus, QuotaWindowKind, UtilizationSource } from "@multi-ai-router/core"
 import type { QuotaUtilizationSource, QuotaWindowView } from "./api/types"
+import { MEASURED_NOTE, measuredFraction, measuredSeries, measuredText } from "./quota-measured"
 import {
   describeInstant,
   NEEDS_TOPUP,
@@ -90,51 +91,6 @@ const UTILIZATION_NOTE: Readonly<Record<UtilizationSource | "gauge", string>> = 
   // never shows for it. Claiming "the provider exposes no signal" for a never-read Claude sub
   // sent operators hunting a provider problem that did not exist (#69).
   none: "No reading yet — readings arrive as the account serves traffic, or on a Test now.",
-}
-
-/**
- * What a bar drawn from *our own* counting says about itself.
- *
- * The distinction is the whole point and it is stated wherever the bar is: the provider published
- * no number, so this is the router's measurement against a ceiling the operator typed. It can be
- * wrong in both directions — Anthropic meters differently than we count, and the ceiling is a
- * guess — which is exactly why it never reaches routing.
- */
-const MEASURED_NOTE =
-  "Measured by this router against the limit you configured — not a figure the provider reported. Anthropic publishes no numeric limit and counts differently than we do."
-
-/**
- * `0..1` of the configured ceiling, or null when either half is missing.
- *
- * Checks for *finite numbers* rather than `!== null`: an older router, or any response that simply
- * omits these fields, delivers `undefined` — which slips past a null check and turns the division
- * into `NaN`, and `NaN !== null` is true, so a gauge would render an unread window as a filled bar
- * with a nonsense label. Both fields are validated, not assumed.
- */
-function measuredFraction(window: QuotaWindowView): number | null {
-  const used = window.tokensUsed
-  const limit = window.tokenLimit
-  if (!Number.isFinite(used) || !Number.isFinite(limit)) return null
-  if (used === null || limit === null || limit <= 0) return null
-  return Math.min(1, Math.max(0, used / limit))
-}
-
-/** `"1.2M / 3M"` — the counts, because a bare percentage hides which ceiling it is a share of. */
-function measuredText(window: QuotaWindowView): string {
-  const used = window.tokensUsed
-  const limit = window.tokenLimit
-  // Same validation as the fraction: the text and the bar must never disagree about whether there
-  // is a reading at all.
-  if (measuredFraction(window) === null || used === null || limit === null) {
-    return formatUtilization(null)
-  }
-  return `${compactTokens(used)} / ${compactTokens(limit)}`
-}
-
-function compactTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
-  if (value >= 1_000) return `${Math.round(value / 1_000)}k`
-  return String(value)
 }
 
 /** The fallback names the fact it lacks: a reading arrived, and this build cannot say from where. */
@@ -260,7 +216,9 @@ export function describeQuotaWindow(
     // where a threshold-triggered source reports nothing at all, which is most of every window.
     utilization: window.utilization ?? measured,
     utilizationText:
-      window.utilization === null ? measuredText(window) : formatUtilization(window.utilization),
+      window.utilization === null
+        ? (measuredText(window) ?? formatUtilization(null))
+        : formatUtilization(window.utilization),
     utilizationSource: window.utilizationSource,
     utilizationNote:
       window.utilization === null && measured !== null
@@ -282,21 +240,6 @@ export function describeQuotaWindow(
         ? measuredSeries(window)
         : [],
   }
-}
-
-/**
- * The window's consumption curve, or empty.
- *
- * Validated the same way `measuredFraction` is and for the same reason: an older router, or any
- * response that omits the field, delivers `undefined`, and a chart handed `undefined` renders an
- * empty box that looks like a broken component rather than an absent measurement. A single point
- * is dropped too — one slice is a dot, not a trend, and `Sparkline` would draw it as a flat line
- * across the whole width, which claims a shape nobody measured.
- */
-function measuredSeries(window: QuotaWindowView): readonly number[] {
-  const series = window.tokenSeries
-  if (!Array.isArray(series) || series.length < 2) return []
-  return series.every((value) => Number.isFinite(value)) ? series : []
 }
 
 /**

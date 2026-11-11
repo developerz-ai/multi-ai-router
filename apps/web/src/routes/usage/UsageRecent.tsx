@@ -1,4 +1,4 @@
-import { createSignal, createUniqueId, For, Show } from "solid-js"
+import { createEffect, createSignal, createUniqueId, For, onCleanup, Show } from "solid-js"
 import { EmptyState } from "../../components/EmptyState"
 import { SelectField, TextField } from "../../components/Field"
 import { QueryBoundary } from "../../components/QueryBoundary"
@@ -35,14 +35,28 @@ import styles from "./UsageRecent.module.scss"
  * This panel owns its query rather than taking rows as props — the same shape `AuditLogSection`
  * has, and for the same reason: the filters belong to the feed, not to the screen around it.
  */
+/**
+ * A typed id is a query key and an indexed lookup that only an exact id can match, so a request
+ * per keystroke was 36 requests and 36 cache entries for one uuid. The feed waits for a pause.
+ */
+export const REQUEST_ID_DEBOUNCE_MS = 300
+
 export function UsageRecent() {
   const [limit, setLimit] = createSignal<number>(RECENT_LIMIT_DEFAULT)
   const [filter, setFilter] = createSignal<RecentFilter>("all")
   const [requestId, setRequestId] = createSignal("")
+  /** What the query asks for: the box's value once typing pauses, not every keystroke. */
+  const [appliedId, setAppliedId] = createSignal("")
   const headingId = createUniqueId()
   const now = createNow(10_000)
 
-  const trimmedId = () => requestId().trim()
+  createEffect(() => {
+    const next = requestId().trim()
+    const timer = setTimeout(() => setAppliedId(next), REQUEST_ID_DEBOUNCE_MS)
+    onCleanup(() => clearTimeout(timer))
+  })
+
+  const trimmedId = () => appliedId()
   const page = useRecentAttempts(() => ({
     limit: limit(),
     filter: filter(),
@@ -105,9 +119,9 @@ export function UsageRecent() {
         {(data) => (
           <Show
             fallback={<EmptyState icon="usage" {...emptyFor(filter(), trimmedId())} />}
-            when={data.attempts.length > 0}
+            when={data().attempts.length > 0}
           >
-            <RecentAttemptsTable attempts={data.attempts} limit={data.limit} nowMs={now()} />
+            <RecentAttemptsTable attempts={data().attempts} limit={data().limit} nowMs={now()} />
           </Show>
         )}
       </QueryBoundary>

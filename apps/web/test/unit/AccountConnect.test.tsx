@@ -4,6 +4,7 @@ import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import type { AccountView } from "../../src/lib/api/types"
 import { AccountConnect } from "../../src/routes/accounts/AccountConnect"
+import { ReconnectSequence } from "../../src/routes/accounts/ReconnectSequence"
 
 /**
  * The guided "Reconnect all" run hands `AccountConnect` a fresh `AccountView` on every refetch —
@@ -177,6 +178,66 @@ describe("AccountConnect with autoBegin", () => {
       finish?.click()
       expect(advanced).toBe(1)
       expect(skipped).toBe(0)
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+})
+
+describe("ReconnectSequence", () => {
+  test("stopping on a later step starts no login on the first account", async () => {
+    const begins: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const match = /\/accounts\/([^/]+)\/(re)?connect$/.exec(url)
+      if (init?.method === "POST" && match !== null) {
+        begins.push(match[1] ?? "")
+        return Response.json({
+          accountId: match[1],
+          mode: "reconnect",
+          authorizeUrl: "https://example.test/authorize",
+          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          capture: "paste",
+        })
+      }
+      return Response.json([])
+    }) as typeof fetch
+
+    const queue = [account({ id: "acc-1" }), account({ id: "acc-2", label: "claude-max-2" })]
+    const [open, setOpen] = createSignal(true)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const dispose = render(
+      () => (
+        <QueryClientProvider client={client}>
+          <ReconnectSequence
+            accounts={queue}
+            connectFlow="claude-cli"
+            nowMs={Date.now()}
+            onClose={() => setOpen(false)}
+            open={open()}
+            queue={open() ? queue : []}
+          />
+        </QueryClientProvider>
+      ),
+      container,
+    )
+    const button = (label: string) =>
+      [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)
+    try {
+      await settle()
+      expect(begins).toEqual(["acc-1"])
+
+      button("Skip this account")?.click()
+      await settle()
+      expect(begins).toEqual(["acc-1", "acc-2"])
+
+      button("Stop")?.click()
+      await settle()
+      expect(open()).toBe(false)
+      expect(begins).toEqual(["acc-1", "acc-2"])
     } finally {
       dispose()
       container.remove()

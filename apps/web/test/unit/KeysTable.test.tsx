@@ -34,7 +34,6 @@ function withMount(
         usage={new Map()}
         usageBucket="day"
         usageLoading={false}
-        usageWindowLabel="7d"
         {...overrides}
       />
     ),

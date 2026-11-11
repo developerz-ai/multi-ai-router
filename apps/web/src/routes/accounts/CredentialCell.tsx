@@ -1,4 +1,4 @@
-import { Show } from "solid-js"
+import { createMemo, Show } from "solid-js"
 import { Badge } from "../../components/Badge"
 import { Button } from "../../components/Button"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
@@ -42,7 +42,8 @@ export interface CredentialCellProps {
  * repeated here because the operator's eye is on the reason, not three columns to the right.
  */
 export function CredentialCell(props: CredentialCellProps) {
-  const login = () => describeLoginExpiry(props.account, props.nowMs)
+  // Read six times per render; computed once per tick.
+  const login = createMemo(() => describeLoginExpiry(props.account, props.nowMs))
   const badge = () => subscriptionBadge(credentialOf(props.account))
 
   return (

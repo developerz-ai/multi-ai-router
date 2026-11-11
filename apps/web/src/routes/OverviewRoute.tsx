@@ -118,7 +118,7 @@ export default function OverviewRoute() {
         .length,
   )
 
-  const columns = (): readonly Column<StatusCount>[] => [
+  const columns: readonly Column<StatusCount>[] = [
     { id: "status", header: "Status", cell: (row) => <StatusDot status={row.status} /> },
     { id: "count", header: "Accounts", numeric: true, cell: (row) => String(row.count) },
     {
@@ -233,7 +233,7 @@ export default function OverviewRoute() {
           {() => (
             <Table
               caption="Accounts by status. cooling_down and exhausted are counted separately — one is a clock, the other is a purchase."
-              columns={columns()}
+              columns={columns}
               rowId={(row) => row.status}
               rows={counts()}
             />

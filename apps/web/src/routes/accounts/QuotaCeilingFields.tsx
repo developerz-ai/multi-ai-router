@@ -2,6 +2,7 @@ import type { QuotaWindowKind } from "@multi-ai-router/core"
 import { For, Show } from "solid-js"
 import { TextField } from "../../components/Field"
 import type { AccountView, ProviderTransport } from "../../lib/api/types"
+import { readNumberInput } from "../../lib/number-input"
 import {
   QUOTA_WINDOW_DISPLAY_ORDER,
   quotaWindowLabel,
@@ -57,8 +58,8 @@ export function parseCeilings(
   for (const kind of CEILING_WINDOWS) {
     const raw = (values[kind] ?? "").trim()
     if (raw.length === 0) continue
-    const parsed = Number.parseInt(raw, 10)
-    if (!Number.isFinite(parsed) || parsed <= 0) continue
+    const parsed = readNumberInput(raw)
+    if (parsed === null || parsed <= 0) continue
     limits[kind] = parsed
   }
   return Object.keys(limits).length > 0 ? limits : null

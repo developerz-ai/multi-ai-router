@@ -14,12 +14,22 @@ import { queryKeys } from "./query-keys"
  * after the usage screen is a cache hit rather than a second aggregate over the same rows. Those
  * tables never pass filters; the Usage page passes the ones in its URL.
  */
+/**
+ * How long a summary counts as fresh. Longer than the console default on purpose: one summary is
+ * a couple of dozen aggregates over the raw usage rows server-side, and the accounts and keys
+ * tables read the 7-day one too — so under the default every tab refocus on any of three screens
+ * re-ran all of them. A minute-old aggregate is not a stale one; a mutation that changes usage
+ * still invalidates it at once.
+ */
+export const USAGE_SUMMARY_STALE_MS = 60_000
+
 export function useUsageSummary(range: Accessor<UsageRange>, filters?: Accessor<UsageFilters>) {
   return useQuery(() => {
     const active = filters?.() ?? NO_USAGE_FILTERS
     return {
       queryKey: queryKeys.usage.summary(range(), active),
       queryFn: () => fetchUsageSummary(range(), active),
+      staleTime: USAGE_SUMMARY_STALE_MS,
     }
   })
 }
@@ -29,6 +39,8 @@ export function useUsageReports() {
   return useQuery(() => ({
     queryKey: queryKeys.usage.reports(),
     queryFn: fetchUsageReports,
+    // A stored report is identified by its week, not an `id`.
+    reconcile: "periodStart",
   }))
 }
 

@@ -7,6 +7,7 @@ import { StatusDot } from "../../components/StatusDot"
 import { errorMessage } from "../../lib/api/errors"
 import type { CreatePoolInput } from "../../lib/api/pools"
 import type { AccountView, PoolView } from "../../lib/api/types"
+import { readNumberInput } from "../../lib/number-input"
 import styles from "./PoolFormDialog.module.scss"
 
 /**
@@ -118,8 +119,8 @@ export function PoolFormDialog(props: PoolFormDialogProps) {
     // An emptied box is held as-is rather than coerced to 0: `weight: 0` would drop the member
     // out of the weighted policy entirely, which is not what clearing a field means. The number
     // input's own `min`/`step` refuse the submit until it reads a real value again.
-    const parsed = Number.parseInt(raw, 10)
-    if (!Number.isFinite(parsed)) return
+    const parsed = readNumberInput(raw)
+    if (parsed === null) return
     setMembers(
       members().map((member) =>
         member.accountId === accountId ? { ...member, [field]: parsed } : member,

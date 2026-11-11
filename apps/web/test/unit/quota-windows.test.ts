@@ -32,6 +32,8 @@ function window(overrides: Partial<QuotaWindowView> = {}): QuotaWindowView {
     resetSource: "provider-reported",
     lastCheckedAt: new Date(NOW).toISOString(),
     spent: false,
+    tokensUsed: null,
+    tokenLimit: null,
     ...overrides,
   }
 }

@@ -27,7 +27,7 @@ function attempt(over: Partial<RecentAttempt> = {}): RecentAttempt {
     key: { id: "key-1", label: "dev-laptops", note: null },
     account: { id: "acct-1", label: "claude-max-01", note: null },
     pool: { id: null, label: null, note: "none" },
-    provider: "anthropic",
+    provider: "anthropic-api",
     model: "claude-sonnet-5",
     upstreamModel: "claude-sonnet-5",
     ingressDialect: "anthropic",

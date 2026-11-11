@@ -70,7 +70,7 @@ describe("the class table", () => {
   })
 
   test("every id in the table is the id of its own entry", () => {
-    for (const [id, klass] of Object.entries(FAILURE_CLASSES)) expect(klass.id).toBe(id)
+    for (const [id, klass] of Object.entries(FAILURE_CLASSES)) expect<string>(klass.id).toBe(id)
   })
 
   test("the headline classes are real classes, in the order non-negotiable 7 names them", () => {

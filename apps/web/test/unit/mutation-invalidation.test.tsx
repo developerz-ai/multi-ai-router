@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
+import { clearSession } from "../../src/lib/api/session"
 import type { ApiKeyView, PoolView } from "../../src/lib/api/types"
+import { useCreateAccount } from "../../src/lib/queries/accounts"
 import { useCreatePool, useDeletePool, usePools, useUpdatePool } from "../../src/lib/queries/pools"
 import { queryKeys } from "../../src/lib/queries/query-keys"
 import {
@@ -12,6 +14,7 @@ import {
   useRevokeKey,
   useUpdateKey,
 } from "../../src/lib/queries/router-keys"
+import { useLocalLogin } from "../../src/lib/queries/session"
 import { useAuditLog, useSavePriceOverrides } from "../../src/lib/queries/settings"
 
 /**
@@ -69,7 +72,7 @@ function poolRow(overrides: Partial<PoolView> = {}): PoolView {
       {
         accountId: "acct-1",
         label: "claude-1",
-        provider: "anthropic",
+        provider: "anthropic-api",
         status: "active",
         weight: 1,
         priority: 1,
@@ -86,6 +89,10 @@ function keyRow(overrides: Partial<ApiKeyView> = {}): ApiKeyView {
     id: "key-1",
     name: "ci-runner",
     prefix: "mar_live_9f2c",
+    owner: null,
+    ownerKind: null,
+    tool: null,
+    purpose: null,
     scope: { kind: "all", poolIds: [], accountIds: [] },
     rateLimit: null,
     expiresAt: null,
@@ -122,7 +129,7 @@ describe("pool mutations invalidate the pools cache", () => {
                   priority: 1,
                   accountId: "acct-1",
                   label: "claude-1",
-                  provider: "anthropic",
+                  provider: "anthropic-api",
                   status: "active",
                 },
               ],
@@ -142,7 +149,7 @@ describe("pool mutations invalidate the pools cache", () => {
               {
                 accountId: "acct-1",
                 label: "claude-1",
-                provider: "anthropic",
+                provider: "anthropic-api",
                 status: "active",
                 weight,
                 priority: 1,
@@ -465,6 +472,57 @@ describe("audited mutations invalidate the audit log", () => {
       expect(calls.filter((c) => c === "GET /api/admin/audit").length).toBeGreaterThan(before)
     } finally {
       dispose()
+    }
+  })
+})
+
+describe("mutations whose variables hold a secret leave nothing in the mutation cache", () => {
+  test("account create: after reset, no cached mutation carries the credential", async () => {
+    globalThis.fetch = (async () =>
+      Response.json({ id: "acc-1", label: "x" })) as unknown as typeof fetch
+    const client = newClient()
+    let create: ReturnType<typeof useCreateAccount> | undefined
+    const harness = mountHarness(client, () => {
+      create = useCreateAccount()
+      return null
+    })
+    try {
+      await create?.mutateAsync({ label: "x", provider: "zai", credential: "sk-upstream-secret" })
+      create?.reset()
+      await settle()
+      const held = client
+        .getMutationCache()
+        .getAll()
+        .filter((mutation) => JSON.stringify(mutation.state.variables ?? null).includes("secret"))
+      expect(held).toHaveLength(0)
+    } finally {
+      harness.dispose()
+      client.clear()
+    }
+  })
+
+  test("local login: after the screen lets go, the password is not cached", async () => {
+    globalThis.fetch = (async () =>
+      Response.json({ username: "admin", csrfToken: "t" })) as unknown as typeof fetch
+    const client = newClient()
+    let login: ReturnType<typeof useLocalLogin> | undefined
+    const harness = mountHarness(client, () => {
+      login = useLocalLogin()
+      return null
+    })
+    try {
+      await login?.mutateAsync("hunter2-password")
+      login?.reset()
+      await settle()
+      const held = client
+        .getMutationCache()
+        .getAll()
+        .filter((mutation) => mutation.state.variables === "hunter2-password")
+      expect(held).toHaveLength(0)
+    } finally {
+      harness.dispose()
+      client.clear()
+      clearSession()
     }
   })
 })

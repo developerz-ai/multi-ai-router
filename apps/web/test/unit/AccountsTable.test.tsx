@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
+import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import type { AccountView, ProviderDescriptor } from "../../src/lib/api/types"
-import { NO_USAGE } from "../../src/lib/usage-index"
+import { NO_USAGE, type UsageRowSummary } from "../../src/lib/usage-index"
 import { AccountsTable } from "../../src/routes/accounts/AccountsTable"
 import { typeInto } from "../support/dom"
 
 const PROVIDER: ProviderDescriptor = {
-  id: "anthropic",
+  id: "anthropic-api",
   transport: "http",
-  authKind: "api_key",
+  authKind: "api-key",
   nativeDialect: "anthropic",
   supportedDialects: ["anthropic"],
   requiresBaseUrl: false,
@@ -17,13 +18,15 @@ const PROVIDER: ProviderDescriptor = {
   connectFlow: null,
   creatable: true,
   reason: null,
+  defaultBilling: "metered",
+  billingFixed: false,
 }
 
 function account(overrides: Partial<AccountView>): AccountView {
   return {
     id: "acc-1",
     label: "prod-claude-1",
-    provider: "anthropic",
+    provider: "anthropic-api",
     status: "active",
     hasCredential: true,
     configDir: null,
@@ -82,7 +85,6 @@ function withMount(
           usage={new Map()}
           usageBucket="day"
           usageLoading={false}
-          usageWindowLabel="7d"
           {...overrides}
         />
       </QueryClientProvider>
@@ -108,7 +110,7 @@ describe("AccountsTable", () => {
           availability: {
             configuredStatus: "exhausted",
             resetsAt: "2026-07-27T00:00:00.000Z",
-            resetSource: "reported",
+            resetSource: "provider-reported",
             lastCheckedAt: "2026-07-26T00:00:00.000Z",
             consecutiveFailures: 0,
             inFlight: 0,
@@ -135,7 +137,7 @@ describe("AccountsTable", () => {
           availability: {
             configuredStatus: "cooling_down",
             resetsAt: "2026-07-26T01:00:00.000Z",
-            resetSource: "reported",
+            resetSource: "provider-reported",
             lastCheckedAt: "2026-07-26T00:00:00.000Z",
             consecutiveFailures: 1,
             inFlight: 0,
@@ -368,11 +370,60 @@ describe("AccountsTable", () => {
   test("usage cell renders a dash while loading, never a zero", () => {
     withMount(
       [account({})],
-      { usage: new Map([["acc-1", NO_USAGE]]), usageLoading: true, usageWindowLabel: "today" },
+      { usage: new Map([["acc-1", NO_USAGE]]), usageLoading: true },
       (container) => {
         expect(container.textContent).toContain("—")
         expect(container.textContent ?? "").not.toMatch(/\b0 req/)
       },
     )
+  })
+
+  test("a usage refetch replaces no cell: the typed model survives and the traffic figure updates", () => {
+    const [usage, setUsage] = createSignal<ReadonlyMap<string, UsageRowSummary>>(new Map())
+    const container = document.createElement("div")
+    document.body.appendChild(container)
+    const dispose = render(
+      () => (
+        <QueryClientProvider client={new QueryClient()}>
+          <AccountsTable
+            accounts={[account({})]}
+            nowMs={Date.parse("2026-07-26T00:00:00.000Z")}
+            discoveringId={null}
+            onConnect={() => {}}
+            onDelete={() => {}}
+            onDisable={() => {}}
+            onDiscoverModels={() => {}}
+            onEdit={() => {}}
+            onEnable={() => {}}
+            onRecheck={() => {}}
+            onTest={() => {}}
+            providerFor={() => PROVIDER}
+            recheckingId={null}
+            testingId={null}
+            usage={usage()}
+            usageBucket="day"
+            usageLoading={false}
+          />
+        </QueryClientProvider>
+      ),
+      container,
+    )
+    try {
+      const cells = [...container.querySelectorAll("td")]
+      const input = container.querySelector<HTMLInputElement>('input[placeholder="model name"]')
+      if (input === null) throw new Error("model input missing")
+      typeInto(input, "claude-x")
+
+      setUsage(new Map([["acc-1", { ...NO_USAGE, requests: 4321 }]]))
+
+      const after = [...container.querySelectorAll("td")]
+      expect(after.length).toBe(cells.length)
+      expect(after.every((cell, index) => cell === cells[index])).toBe(true)
+      expect(input.value).toBe("claude-x")
+      expect(container.textContent).toContain("4.3k req")
+    } finally {
+      dispose()
+      container.remove()
+    }
   })
 })

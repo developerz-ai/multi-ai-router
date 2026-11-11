@@ -13,6 +13,7 @@ import {
   type DeviceConnectStatus,
   getDeviceConnectStatus,
 } from "../api/connect"
+import { invalidateAccountReaders } from "./account-readers"
 import { queryKeys } from "./query-keys"
 
 // Connect is three mutations and no query.
@@ -50,6 +51,8 @@ export function useCompleteConnect() {
       readonly id: string
       readonly pasted: string
     }): Promise<ConnectCompleted> => completeConnect(args),
+    // `pasted` is the provider's authorization code. See `router-keys.ts` for the cache rule.
+    gcTime: 0,
     onSettled: () => invalidateAccountReaders(client),
   }))
 }
@@ -65,15 +68,6 @@ export function useCancelConnect() {
     mutationFn: (id: string): Promise<ConnectCancelled> => cancelConnect(id),
     onSettled: () => invalidateAccountReaders(client),
   }))
-}
-
-async function invalidateAccountReaders(client: ReturnType<typeof useQueryClient>): Promise<void> {
-  await Promise.all([
-    client.invalidateQueries({ queryKey: queryKeys.accounts.root() }),
-    client.invalidateQueries({ queryKey: queryKeys.pools.root() }),
-    // Completing or abandoning a login is audited; the log must not wait for a reload.
-    client.invalidateQueries({ queryKey: queryKeys.audit.root() }),
-  ])
 }
 
 export function useBeginDeviceConnect() {

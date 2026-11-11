@@ -112,7 +112,7 @@ export default function SettingsRoute() {
               caption="Providers are defined in code, not in a table — adding one is a single file under apps/api/src/providers/."
               columns={columns}
               rowId={(provider) => provider.id}
-              rows={rows}
+              rows={rows()}
             />
           )}
         </QueryBoundary>

@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { A, createMemoryHistory, MemoryRouter, Route, useNavigate } from "@solidjs/router"
+import {
+  A,
+  createMemoryHistory,
+  MemoryRouter,
+  Route,
+  type RouteSectionProps,
+  useNavigate,
+} from "@solidjs/router"
 import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import { render } from "solid-js/web"
 
@@ -75,7 +82,7 @@ describe("router lifecycle across console and login navigation", () => {
         <MemoryRouter history={history}>
           <Route
             path="/"
-            component={(props) => (
+            component={(props: RouteSectionProps) => (
               <>
                 <A href="/" end activeClass="current">
                   Overview

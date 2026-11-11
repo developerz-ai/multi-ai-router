@@ -53,10 +53,10 @@ export default function AccountsRoute() {
   /** The accounts a "Reconnect all" run walks, or null while none is running. */
   const [reconnectQueue, setReconnectQueue] = createSignal<readonly AccountView[] | null>(null)
 
-  const filter = createMemo<AccountListFilter>(() => ({
-    ...(status() === "" ? {} : { status: status() as AccountStatus }),
-    ...(provider() === "" ? {} : { provider: provider() as ProviderId }),
-  }))
+  // Status filters client-side on the live status; the API's `?status=` misses live-only states.
+  const filter = createMemo<AccountListFilter>(() =>
+    provider() === "" ? {} : { provider: provider() as ProviderId },
+  )
 
   const accounts = useAccounts(filter)
   const pools = usePools()
@@ -64,8 +64,8 @@ export default function AccountsRoute() {
   const providers = useProviders()
   const providerList = () => (providers.isSuccess ? (providers.data ?? []) : [])
   const accountList = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
-
-  const groups = createMemo(() => groupAccountsByProvider(accountList(), groupingNow()))
+  const shown = () => accountList().filter((row) => status() === "" || row.status === status())
+  const groups = createMemo(() => groupAccountsByProvider(shown(), groupingNow()))
   const groupOrder = createMemo(() => groups().map((group) => group.provider))
   const groupFor = (provider: string) => groups().find((group) => group.provider === provider)
 
@@ -173,7 +173,7 @@ export default function AccountsRoute() {
         loading={<TableSkeleton label="Loading accounts" rows={5} />}
         query={accounts}
       >
-        {(rows) => (
+        {() => (
           <Show
             fallback={
               <AccountsEmpty
@@ -185,7 +185,7 @@ export default function AccountsRoute() {
                 }}
               />
             }
-            when={rows.length > 0}
+            when={groups().length > 0}
           >
             <div class={styles.groups}>
               <For each={groupOrder()}>

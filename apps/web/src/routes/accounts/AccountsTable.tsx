@@ -8,6 +8,7 @@ import type { TestAccountInput } from "../../lib/api/accounts"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { billingConsequence } from "../../lib/billing"
 import { formatDate, formatRelative, formatTimestamp } from "../../lib/format"
+import { TABLE_USAGE_WINDOW_LABEL } from "../../lib/queries/table-usage"
 import { parseInstant } from "../../lib/quota-windows"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
@@ -39,7 +40,6 @@ export interface AccountsTableProps {
   readonly usage: ReadonlyMap<string, UsageRowSummary>
   readonly usageBucket: "hour" | "day"
   readonly usageLoading: boolean
-  readonly usageWindowLabel: string
   readonly onRecheck: (id: string) => void
   readonly onTest: (input: TestAccountInput) => void
   readonly onDiscoverModels: (id: string) => void
@@ -61,7 +61,9 @@ export interface AccountsTableProps {
  * back to the account-level line, which is the whole story for an API key.
  */
 export function AccountsTable(props: AccountsTableProps) {
-  const columns = (): readonly Column<AccountView>[] => [
+  // Built once: every cell reads its props lazily, so nothing here needs to rebuild a column —
+  // and a rebuilt column recreates that column's `<td>` in every row.
+  const columns: readonly Column<AccountView>[] = [
     {
       id: "label",
       header: "Account",
@@ -132,7 +134,7 @@ export function AccountsTable(props: AccountsTableProps) {
       // trend, the count and both spend figures with their meaning on hover. The keys table keeps
       // the two-column form; here twelve columns compete for the width.
       id: "usage",
-      header: `Usage · ${props.usageWindowLabel}`,
+      header: `Usage · ${TABLE_USAGE_WINDOW_LABEL}`,
       cell: (account) => (
         <TrafficCell
           bucket={props.usageBucket}
@@ -273,7 +275,7 @@ export function AccountsTable(props: AccountsTableProps) {
         props.caption ??
         "Upstream accounts. Reset is shown as absolute time and countdown, labelled by how much the instant can be trusted."
       }
-      columns={columns()}
+      columns={columns}
       rowId={(account) => account.id}
       rows={props.accounts}
     />

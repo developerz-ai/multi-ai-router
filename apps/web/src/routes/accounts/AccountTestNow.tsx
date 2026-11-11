@@ -82,7 +82,7 @@ export function AccountTestNow(props: AccountTestNowProps) {
               <Show
                 fallback={
                   <span class={styles.line}>
-                    On cooldown — next test {formatRelative(result().nextAllowedAt, props.nowMs)}
+                    {cooldownLine(result().nextAllowedAt, props.nowMs)}
                   </span>
                 }
                 when={result().tested}
@@ -117,4 +117,16 @@ export function AccountTestNow(props: AccountTestNowProps) {
       />
     </div>
   )
+}
+
+/**
+ * A refused press's note. The result sits in the cache after the cooldown ends, and once it has
+ * "next test" is in the past — "On cooldown — next test 9m ago" said the opposite of the truth.
+ */
+export function cooldownLine(nextAllowedAt: string, nowMs: number): string {
+  const at = Date.parse(nextAllowedAt)
+  if (Number.isFinite(at) && at > nowMs) {
+    return `On cooldown — next test ${formatRelative(nextAllowedAt, nowMs)}`
+  }
+  return "Cooldown over — ready to test again"
 }

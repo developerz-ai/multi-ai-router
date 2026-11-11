@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, on } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { AccountView, ProviderConnectFlow } from "../../lib/api/types"
 import { AccountConnect } from "./AccountConnect"
 
@@ -49,10 +49,14 @@ export function ReconnectSequence(props: ReconnectSequenceProps) {
 
   // The cursor goes back to zero on the way out, not only on the way in: `current` is a memo and
   // would otherwise hand the *previous* run's last account to the dialog for one render when the
-  // next run opens — long enough for `autoBegin` to start a login on the wrong row.
+  // next run opens — long enough for `autoBegin` to start a login on the wrong row. Closed first
+  // and in one batch: resetting the cursor while the run is still open pointed `current` at
+  // account zero, and `autoBegin` started a login on it on the way out.
   const close = () => {
-    setIndex(0)
-    props.onClose()
+    batch(() => {
+      props.onClose()
+      setIndex(0)
+    })
   }
 
   const advance = () => {

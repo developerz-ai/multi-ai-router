@@ -11,12 +11,11 @@ import { useUsageSummary } from "./usage"
 /** The two dimensions that have a table of their own. Narrowed, so no caller can pass a third. */
 export type TableUsageDimension = Extract<UsageDimension, "key" | "account">
 
-/** What a table needs to render a usage column, in the four props the tables take. */
+/** What a table needs to render a usage column, in the three props the tables take. */
 export interface TableUsage {
   readonly usage: ReadonlyMap<string, UsageRowSummary>
   readonly usageBucket: "hour" | "day"
   readonly usageLoading: boolean
-  readonly usageWindowLabel: string
 }
 
 /**
@@ -27,6 +26,13 @@ export interface TableUsage {
  * window controls on two screens is how they come to disagree about what "this week" means.
  */
 const TABLE_USAGE_WINDOW: UsageWindow = "7d"
+
+/**
+ * The tables' usage-column header names this window. A constant, not a prop: a header threaded
+ * through the reactive usage object made every summary refetch rebuild every column — and with
+ * them every `<td>` in every row, wiping a half-typed input.
+ */
+export const TABLE_USAGE_WINDOW_LABEL = usageWindowLabel(TABLE_USAGE_WINDOW)
 
 /**
  * Usage for one dimension, ready to spread onto a table.
@@ -45,7 +51,6 @@ export function useTableUsage(dimension: TableUsageDimension): () => TableUsage 
     usage: index(),
     usageBucket: summary.data?.bucket ?? "day",
     usageLoading: summary.isPending,
-    usageWindowLabel: usageWindowLabel(TABLE_USAGE_WINDOW),
   })
 }
 

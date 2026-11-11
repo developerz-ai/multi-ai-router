@@ -10,6 +10,10 @@ import {
 // the console could write it, so the entire measured-bar path was dead code.
 
 describe("parseCeilings", () => {
+  test("an exponent-form box is the number the browser accepted, not its leading digit", () => {
+    expect(parseCeilings({ five_hour: "1e6" })).toEqual({ five_hour: 1_000_000 })
+  })
+
   test("all boxes empty is null — the clear-everything spelling, never an empty object", () => {
     // `{}` and `null` are different PATCH bodies: `{}` would store an empty map, `null` clears
     // the column. Only the second removes the bars.

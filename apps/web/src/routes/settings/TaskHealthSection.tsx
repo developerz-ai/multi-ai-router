@@ -35,7 +35,7 @@ export function TaskHealthSection() {
   const tasks = useTasks()
   const now = createNow(30_000)
 
-  const columns = (): readonly Column<TaskHealthRow>[] => [
+  const columns: readonly Column<TaskHealthRow>[] = [
     {
       id: "task",
       header: "Task",
@@ -136,9 +136,9 @@ export function TaskHealthSection() {
                 title="No scheduled tasks"
               />
             }
-            when={rows.length > 0}
+            when={rows().length > 0}
           >
-            <Show when={attention(rows)}>
+            <Show when={attention(rows())}>
               {(troubled) => (
                 <Banner
                   title={`${troubled().length} background task${troubled().length === 1 ? "" : "s"} need attention`}
@@ -153,9 +153,9 @@ export function TaskHealthSection() {
 
             <Table
               caption="One row per scheduled task. Runs are recorded as they settle; exactly one replica holds each task's advisory lock, so a skipped run on another replica is not a failure."
-              columns={columns()}
+              columns={columns}
               rowId={(row) => row.task}
-              rows={rows}
+              rows={rows()}
             />
           </Show>
         )}

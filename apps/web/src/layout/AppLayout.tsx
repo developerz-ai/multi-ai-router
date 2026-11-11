@@ -2,6 +2,7 @@ import { A, type RouteSectionProps, useLocation, useNavigate } from "@solidjs/ro
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
 import { Button } from "../components/Button"
 import { Icon } from "../components/Icon"
+import { ScreenErrorBoundary } from "../components/ScreenErrorBoundary"
 import { ThemeToggle } from "../components/ThemeToggle"
 import { sessionLost } from "../lib/api/session"
 import { createFocusTrap } from "../lib/focus-trap"
@@ -165,7 +166,10 @@ export default function AppLayout(props: RouteSectionProps) {
       </nav>
 
       <main class={styles.main} id="main" tabindex="-1">
-        {props.children}
+        {/* Inside `<main>`, so a screen that fails to load leaves the nav usable. */}
+        <ScreenErrorBoundary resetKey={() => location.pathname}>
+          {props.children}
+        </ScreenErrorBoundary>
       </main>
     </div>
   )

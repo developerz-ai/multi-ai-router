@@ -41,9 +41,13 @@ function account(
     baseUrl: null,
     dialect: null,
     modelAliases: null,
+    supportedModels: null,
+    windowTokenLimits: null,
     weight: tuning.weight,
     priority: tuning.priority,
+    billing: "metered",
     tokenExpiresAt: null,
+    lastUsedAt: null,
     createdAt: "2026-07-24T12:00:00.000Z",
     updatedAt: "2026-07-24T12:00:00.000Z",
   }

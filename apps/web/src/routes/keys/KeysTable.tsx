@@ -6,6 +6,7 @@ import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
 import type { ApiKeyView } from "../../lib/api/types"
 import { formatDate, formatRelative, formatWindow } from "../../lib/format"
+import { TABLE_USAGE_WINDOW_LABEL } from "../../lib/queries/table-usage"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
 import styles from "./KeysTable.module.scss"
@@ -19,8 +20,6 @@ export interface KeysTableProps {
   readonly usage: ReadonlyMap<string, UsageRowSummary>
   readonly usageBucket: "hour" | "day"
   readonly usageLoading: boolean
-  /** The window these figures cover, for the column header — "7 days". */
-  readonly usageWindowLabel: string
   readonly onReveal: (key: ApiKeyView) => void
   readonly onEdit: (key: ApiKeyView) => void
   /** Mints a fresh key carrying this one's attribution — see the action's comment. */
@@ -42,7 +41,9 @@ export interface KeysTableProps {
  * beside it in the COST column, metered and notional printed apart and never summed.
  */
 export function KeysTable(props: KeysTableProps) {
-  const columns = (): readonly Column<ApiKeyView>[] => [
+  // Built once: every cell reads its props lazily, so nothing here needs to rebuild a column —
+  // and a rebuilt column recreates that column's `<td>` in every row.
+  const columns: readonly Column<ApiKeyView>[] = [
     {
       id: "name",
       header: "Name",
@@ -87,7 +88,7 @@ export function KeysTable(props: KeysTableProps) {
     },
     {
       id: "usage",
-      header: `Usage · ${props.usageWindowLabel}`,
+      header: `Usage · ${TABLE_USAGE_WINDOW_LABEL}`,
       cell: (key) => (
         <UsageCell
           bucket={props.usageBucket}
@@ -103,7 +104,7 @@ export function KeysTable(props: KeysTableProps) {
       // columns compete for the width.
       // What survives both layouts: metered and notional are printed apart, never summed.
       id: "cost",
-      header: `Cost · ${props.usageWindowLabel}`,
+      header: `Cost · ${TABLE_USAGE_WINDOW_LABEL}`,
       cell: (key) => (
         <SpendCell loading={props.usageLoading} usage={usageFor(props.usage, key.id)} />
       ),
@@ -164,7 +165,7 @@ export function KeysTable(props: KeysTableProps) {
   return (
     <Table
       caption="Router keys. Values stay readable — select Reveal on any row."
-      columns={columns()}
+      columns={columns}
       rowId={(key) => key.id}
       rows={props.keys}
     />

@@ -7,7 +7,7 @@ import { queryKeys } from "./query-keys"
  *
  * `retry: false` because the failure this query exists to detect is a 401, and
  * retrying a 401 only delays the redirect to the login screen by a round trip.
- * Every other query in the console keeps the client default of one retry.
+ * Every other query keeps the client default: one retry for a `5xx` or transport failure.
  */
 export function useSession() {
   return useQuery(() => ({
@@ -46,6 +46,8 @@ export function useLocalLogin() {
   const client = useQueryClient()
   return useMutation(() => ({
     mutationFn: (password: string) => login(password),
+    // The variable is the admin password. See `router-keys.ts` for the mutation-cache rule.
+    gcTime: 0,
     onSuccess: (session) => {
       client.setQueryData(queryKeys.session(), session)
     },
