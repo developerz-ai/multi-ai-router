@@ -12,7 +12,7 @@ export interface OnboardingCounts {
 /**
  * The walk is done once an account and a key exist. Until then the panel nudges toward a pool,
  * because pooling is the product (CLAUDE.md) — but a pool is not a precondition for a working
- * deployment: a key can be scoped straight to accounts, and a deployment run that way (tesote's
+ * deployment: a key can be scoped straight to accounts, and a deployment run that way (a customer deployment's
  * router: two accounts, two account-scoped keys, live traffic) kept a "Get your first working key"
  * banner on its Overview forever, telling an operator with a working key to go get one.
  */

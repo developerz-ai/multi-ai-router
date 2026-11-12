@@ -23,7 +23,7 @@ export const UNVERIFIED_KEY_ID = "none"
  * key, a key store that could not answer, any throw in the guard — so `router_requests_total`
  * sees every request that reached a data-plane route, not only those that got as far as routing.
  * Without it a key-store outage's 503s (or a stray 500 in the guard) were invisible to every alert
- * built on that counter (tesote, 2.56.0).
+ * built on that counter (a customer deployment, 2.56.0).
  *
  * Mounted first on each inference route. A request the dispatcher took over is left to the
  * dispatcher, so nothing is counted twice. A body Bun itself refuses (over `maxRequestBodySize`)

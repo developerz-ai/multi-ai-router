@@ -72,6 +72,12 @@ __pycache__/
 .ai-task-master/
 .playwright-mcp/
 
+# The operator console's MCP config: a local tool configuration with this
+# operator's own browser path in it. The file's own note says it must never
+# hold credentials; it must not hold a home directory either. Untracked, and
+# each operator keeps their own copy.
+.ui-debugger-mcp.json
+
 # Editors
 .idea/
 .vscode/

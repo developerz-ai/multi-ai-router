@@ -501,7 +501,7 @@ Every window is `advisory: true`, every reading `limited: false`, and an unreada
 `quota:unreadable` warning: the same rules as `opencode-go` above. A reading that parses and states
 no plan window at all — z.ai's `limits: []`, or only the MCP `TIME_LIMIT` — is a key without a
 Coding Plan: the reader answers `NO_PLAN` and the read is `skipped` (`quota:no-plan`), not a failure
-logged every tick (tesote, sweep 101, 12.10 — the live shape that account gets is still uncaptured;
+logged every tick (a customer deployment, sweep 101, 12.10 — the live shape that account gets is still uncaptured;
 a token window this build cannot read stays `quota:unreadable`). Success bodies, here and on the
 model listing, are read up to `MODEL_LISTING_MAX_BYTES` (default 8 MB) and refused past it. The z.ai weekly `nextResetTime`
 read live was `2026-11-10T02:02:31.996Z` — the `1310` message's `2026-11-10 10:02:31` read as UTC+8,

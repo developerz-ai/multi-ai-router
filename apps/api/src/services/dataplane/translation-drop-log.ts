@@ -3,7 +3,7 @@ import type { TranslationDrop } from "../translate/shared/drops"
 import { dropSignature } from "../translate/shared/drops"
 
 /**
- * One `translation dropped fields` warn per (key, dialect pair, drop signature) per window: tesote
+ * One `translation dropped fields` warn per (key, dialect pair, drop signature) per window: a customer deployment
  * logged 15,379 identical lines (plan 101, 12.15) for one client re-sending one body. Repeats inside
  * the window go to `debug`. Bounded: the oldest signature is forgotten once `maxEntries` are held.
  */

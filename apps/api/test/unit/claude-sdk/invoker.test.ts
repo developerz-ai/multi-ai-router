@@ -227,7 +227,7 @@ describe("the launch every turn is given", () => {
           body: body({
             messages: [{ role: "user", content: "hi" }],
             system:
-              "Be terse.\n\nHere is some useful information about the environment you are running in:\n<env>\n  Working directory: /home/sebastian/workspace/tesote/tesote.ai\n  Platform: linux\n</env>\n",
+              "Be terse.\n\nHere is some useful information about the environment you are running in:\n<env>\n  Working directory: /home/router/workspace/router/router.ai\n  Platform: linux\n</env>\n",
           }),
         }),
       )
