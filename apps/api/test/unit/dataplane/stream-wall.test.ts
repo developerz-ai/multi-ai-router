@@ -157,6 +157,7 @@ describe("a streaming client, upstream breaks after content", () => {
       signal: "upstream_error",
       attempts: 1,
       request_id: REQUEST_ID,
+      reconnect: [],
     })
   })
 })

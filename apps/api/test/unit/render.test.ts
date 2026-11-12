@@ -34,6 +34,7 @@ function bare(wall: Wall, scope: WallScope, retryable: boolean) {
     signal: null,
     attempts: 0,
     request_id: null,
+    reconnect: [],
   }
 }
 

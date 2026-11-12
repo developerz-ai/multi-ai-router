@@ -69,6 +69,8 @@ describe("routing/no-candidates.ts — the pool's own verdict", () => {
         { accountId: "id-kimi", state: "needs-reauth" },
         { accountId: "id-or", state: "exhausted" },
       ],
+      // Beside the frozen words, not in them: the render adds the sentence (`errors/reconnect.ts`).
+      reconnect: [{ accountId: "id-kimi", label: "kimi" }],
     })
   })
 
@@ -234,6 +236,7 @@ describe("services/admin/result.ts — an admin refusal", () => {
           signal: null,
           attempts: 0,
           request_id: "req-admin",
+          reconnect: [],
         },
       },
     })

@@ -1,5 +1,5 @@
 import { noteRequestFacts } from "../../errors/router-object"
-import type { FailoverOptions } from "../routing"
+import { type FailoverOptions, poolNames, reconnectDetail } from "../routing"
 import { createRequestIdentity, type UsageRequestIdentity } from "../usage/request-identity"
 import { admitRoutingModel, refuseEncodedBody } from "./body/preflight"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
@@ -18,7 +18,7 @@ import { requestLifetime } from "./request-lifetime"
 import { requestSelector } from "./request-select"
 import { requestTerminalObserver } from "./request-terminal"
 import { createRotationCounters } from "./rotation"
-import { ROUTER_ATTEMPTS_HEADER, withHeaders } from "./router-headers"
+import { ROUTER_ATTEMPTS_HEADER, reconnectHeaders, withHeaders } from "./router-headers"
 import { createRuntime } from "./runtime"
 import { sharedRuntimeInput } from "./runtime-shared"
 import { sessionBindings } from "./session-binding"
@@ -181,9 +181,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       progress.modelKnown =
         selection.ok ||
         selection.decision.rejected.some((entry) => entry.reason !== "model-unsupported")
-      progress.pools = selection.decision.groups
-        .map((group) => group.poolName)
-        .filter((name): name is string => name !== null)
+      progress.pools = poolNames(selection.decision.groups)
+      progress.reconnect = reconnectDetail(selection.decision.rejected).reconnect
       // A `blocked` binding is kept: its account returns on a clock (`invalidated`: see below).
       if (!selection.ok) return fail(selection.error)
 
@@ -287,10 +286,12 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         accounting.respond(response)
         return withHeaders(response, {
           [ROUTER_ATTEMPTS_HEADER]: String(accounting.answeredAttempts(response)),
+          ...reconnectHeaders(progress.reconnect),
         })
       } catch (error) {
         const { error: failure } = lifetime.fail(error)
-        noteRequestFacts(failure, { ...accounting.facts(), pools: progress.pools ?? [] })
+        const { pools = [], reconnect } = progress
+        noteRequestFacts(failure, { ...accounting.facts(), pools, reconnect })
         throw failure
       }
     },

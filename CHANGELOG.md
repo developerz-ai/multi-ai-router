@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.59.0] — 2026-11-11
+
+### Added
+
+- **An answer says which account needs reconnecting, so a client agent can tell its human.** An account in `needs_reauth` (a lost subscription login or OAuth grant) used to show up only as `kimi needs re-auth` inside a pool sentence, with nothing saying what to do or where. A router-authored error now ends with `. Reconnect needed: account <label> (<provider>) lost its login — a router admin must reconnect it at <PUBLIC_URL>/accounts`, which Claude Code prints after `API Error:`. That covers the pool verdict that names such a member (`503`, or the `429`/`402` it rides on) and any `clock`/`capacity`/`human` failure while selection skipped one. `error.router.reconnect` carries the same accounts as `{account, label, provider, url}` (`[]` when none). Every data-plane answer, a success included, carries `x-router-reconnect-needed: <labels>` when the key's scope held such an account, and the upstream body is left untouched. Labels are the ones pool sentences already print to the same key holder, and only accounts in that key's scope are named. The thrown messages are not edited and the suffix is added at render, so the frozen sentences developerz.ai reads still open the rendered text verbatim. Spec: `docs/idea/06-protocol-translation.md#reconnect-needed`. Regression: `apps/api/test/integration/reconnect-needed.test.ts`, `apps/api/test/unit/errors/reconnect.test.ts`.
+
 ## [2.58.0] — 2026-11-11
 
 ### Fixed
@@ -2199,3 +2205,4 @@ your tooling config.
 [2.57.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.0
 [2.57.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.1
 [2.58.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.58.0
+[2.59.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.59.0

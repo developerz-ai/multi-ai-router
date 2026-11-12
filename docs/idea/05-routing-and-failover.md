@@ -893,7 +893,9 @@ needs a top-up (…)` when the leading clause was the recoverable one. The numbe
 always add up to the pool the request saw: "2 of 3" with the third unmentioned read as though one
 account were healthy (#88). A `probe-in-flight` hold is the router's own and is never worded as quota: it reads `is settling a
 recovery probe`, and a group mixing it with cooldowns reads `rate limited or out of quota, or
-settling a recovery probe`. Still a `429` — clock-recoverable.
+settling a recovery probe`. Still a `429` — clock-recoverable. A `needs_reauth` member also closes
+the rendered sentence with who to reconnect and where
+([06-protocol-translation.md](06-protocol-translation.md#reconnect-needed)).
 
 Two details of the `429`'s honesty:
 

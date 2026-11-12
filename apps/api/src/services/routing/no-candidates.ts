@@ -105,6 +105,7 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
       ...(entry.resetsAt === undefined ? {} : { resetsAt: entry.resetsAt }),
     })),
     pools: poolNames(input.groups),
+    ...reconnectDetail(input.rejected),
   })
 
   const recoverable = input.rejected.filter((entry) =>
@@ -155,6 +156,24 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
     `no eligible account${where(input.groups)}: ${input.rejected.map(describe).join(", ")}`,
     { ...(total > 0 ? { wall: "human" } : {}), detail: pool(input.rejected[0]?.reason) },
   )
+}
+
+/**
+ * The members a human must reconnect, for the sentence and `error.router.reconnect` the transport
+ * renders from them (`errors/reconnect.ts`). Absent when there are none, so a verdict that names
+ * no such account carries exactly the detail it always did.
+ */
+export function reconnectDetail(
+  rejected: readonly RejectedCandidate[],
+): Pick<RouterErrorDetail, "reconnect"> {
+  const reconnect = rejected
+    .filter((entry) => entry.reason === "needs-reauth")
+    .map((entry) => ({
+      accountId: entry.accountId,
+      label: entry.label,
+      ...(entry.provider === undefined ? {} : { provider: entry.provider }),
+    }))
+  return reconnect.length === 0 ? {} : { reconnect }
 }
 
 /** What the reset instant is, and how it was obtained. Carried together so neither renders alone. */

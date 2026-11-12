@@ -72,6 +72,7 @@ describe("error.router — every ingress dialect", () => {
           signal: "anthropic:rate_limit_error",
           attempts: 2,
           request_id: res.headers.get("x-request-id"),
+          reconnect: [],
         })
         expect(router.retry_after_s).toBe(42)
         expect(router.reset_at).not.toBeNull()

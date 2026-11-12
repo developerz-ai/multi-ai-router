@@ -806,7 +806,9 @@ receives an Anthropic-shaped error even when the account that failed was an Open
 Agent-SDK one. Router-origin errors (`NoHealthyAccountError`, `QuotaExhaustedError`, …) use the same
 shape with a stable HTTP status. `param` and `code` are best-effort and may be null. No error body
 ever carries credential material; an account appears only as its operator label inside a router
-sentence and as an opaque reference in `error.router` — never a row id or a provider-side identity.
+sentence (and, for an account that needs reconnecting, beside its opaque reference in
+`error.router.reconnect` and in `x-router-reconnect-needed` — [below](#reconnect-needed)) and as an
+opaque reference elsewhere in `error.router` — never a row id or a provider-side identity.
 
 #### The router error object
 
@@ -866,6 +868,7 @@ bytes were already sent`.
 | `signal` | Scrubbed like the message. The machine token that decided it: a classifier signal (`anthropic:rate_limit_error`, `openai:insufficient_quota`), a filter reason, `no-account-in-scope`, `timeout`; `null` when none |
 | `attempts` | Upstream attempts made before the router answered; `0` when none |
 | `request_id` | The request id, as `x-request-id` |
+| `reconnect` | Accounts a human must reconnect for this to be served, as `{account, label, provider, url}`; `[]` when none ([below](#reconnect-needed)) |
 
 #### Router response headers
 
@@ -878,8 +881,27 @@ On every data-plane answer — success or failure, stream or body (`dataplane/ro
 | `x-router-served-model` | the model the upstream was asked for, after the account's alias map | an account answered, including its own relayed error |
 | `x-router-provider` | that account's provider id | same |
 | `x-router-account` | that account, opaque (as in `error.router.accounts`) | same |
+| `x-router-reconnect-needed` | the labels of in-scope accounts selection dropped as `needs_reauth`, each URI-component-encoded, `, `-joined | at least one was dropped — on a success too ([below](#reconnect-needed)) |
 
 A stream carries them on its headers, before its first byte; nothing waits on them.
+
+#### Reconnect needed
+
+An account in `needs_reauth` (a lost subscription login or OAuth grant) waits on a person, and the
+person is usually behind a client agent that only reads what the API answers. So the answer says
+it, in words that agent can relay: which account, and where to reconnect it.
+
+| The request was | What it carries |
+|---|---|
+| refused by the router — a pool verdict naming a `needs_reauth` member (`503`, or the `429`/`402` its remainder clause rides on), or any other failure whose `wall` is `clock`, `capacity` or `human` while selection dropped one | the sentence ends `. Reconnect needed: account <label> (<provider>) lost its login — a router admin must reconnect it at <PUBLIC_URL>/accounts` (`accounts … lost their login … them` for several; `in the router console (Accounts page)` with no `PUBLIC_URL`); `error.router.reconnect` lists each as `{account: acct_…, label, provider, url}`; the header below |
+| served, or answered by an upstream's own relayed error | `x-router-reconnect-needed` only — the body is the upstream's, untouched (non-negotiable 10) |
+| refused for the request or its scope (`wall` `request` / `scope`) | nothing: no reconnect fixes a bad body or a model outside the key |
+
+Claude Code prints an Anthropic error's `message` after `API Error:` (`Request rejected (429) ·` for a
+`429`), so the sentence is the instruction a person sees. The thrown message is not edited: the
+suffix is added at render (`errors/reconnect.ts`, `errors/render.ts`), so every frozen sentence still
+opens the rendered one verbatim. Only in-scope accounts are named, by the label every pool sentence
+already prints to the same key holder; the console link is the Accounts page, never a row id.
 
 **A context overflow is always recognisable**, because it is the one failure a client recovers from
 on its own (compact the transcript, retry). An upstream code `context_length_exceeded` or a message
