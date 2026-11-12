@@ -3,7 +3,7 @@ import { account } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, post, settle } from "./harness"
 
 /**
- * Production, 2026-10-16: tesote.ai's chat-completions turns routed to ChatGPT (Codex) accounts read
+ * Production, 2026-10-16: a customer deployment's chat-completions turns routed to ChatGPT (Codex) accounts read
  * 16–22% of their prompt from cache on later steps of one turn — identical prefix, seconds apart —
  * against 98.5% for the same turns via OpenRouter. The caller sent `prompt_cache_key` (and an
  * `x-session-id` naming the same conversation); the translator dropped the key, and the upstream
@@ -108,7 +108,7 @@ describe("chat completions → Codex: the caller's prompt cache key reaches the 
 
 /**
  * Production, 2026-10-17: Claude Code and developerz.ai turns on `/v1/messages` routed to a ChatGPT
- * (Codex) account read 17.4% of input from cache over 7d (7.0% on the tesote router) against 91–96%
+ * (Codex) account read 17.4% of input from cache over 7d (7.0% on that customer's router) against 91–96%
  * via passthrough vendors; 43% of a growing conversation's later turns read 0. An Anthropic body
  * has no `prompt_cache_key`, so the upstream was sent neither the field nor `session-id`.
  */

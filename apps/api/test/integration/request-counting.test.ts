@@ -4,7 +4,7 @@ import { bearer, harness, MESSAGE, post } from "./harness"
 
 /**
  * Every request that reaches a data-plane route counts in `router_requests_total` exactly once
- * (tesote, 2.56.0): a request refused before dispatch — an unknown key, a key store that could not
+ * (a customer deployment, 2.56.0): a request refused before dispatch — an unknown key, a key store that could not
  * answer — used to be invisible to every alert built on that counter.
  */
 const ANSWER = { id: "msg_1", type: "message", content: [{ type: "text", text: "hi" }] }

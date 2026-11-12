@@ -1031,7 +1031,7 @@ transport as one `translation dropped fields` line per conversion, naming ingres
 count, and each field with its structural reason. It is a `warn` once per (key, ingress, egress,
 drop signature) per `TRANSLATION_DROP_LOG_WINDOW_SECONDS` (default 3600) and `debug` for repeats
 inside the window, from a bounded memory of 4 096 signatures (`dataplane/translation-drop-log.ts`):
-one client re-sending one body logged 15,379 identical warns on tesote (plan 101, 12.15). Documented *hints* (`top_k`, `cache_control`, a
+one client re-sending one body logged 15,379 identical warns on one customer deployment (plan 101, 12.15). Documented *hints* (`top_k`, `cache_control`, a
 thinking block) are not reported: every request carries some, and a line per request says nothing.
 A response-level surface — a warning field or header the *caller* can read — is still **DEFERRED**. It also compounds: current Anthropic models reject
 `temperature` / `top_p` / `top_k` outright, so the same field is a `400` on the HTTP path and a

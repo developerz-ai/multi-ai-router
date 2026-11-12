@@ -4,7 +4,7 @@ import { createLogger } from "../../../src/logging/logger"
 import { accountRow, harness, NOW, spentParked, tokenResponse } from "./refresh-fixtures"
 
 /**
- * Prod, 2026-11-06 13:28:24Z, tesote: an openai-oauth account answered 401 "Your authentication
+ * Prod, 2026-11-06 13:28:24Z, a customer deployment: an openai-oauth account answered 401 "Your authentication
  * token has expired. Please try refreshing it." with a stored expiry a week ahead, and was parked
  * `needs_reauth` with no refresh attempted. The expiry timer could never have fired.
  */

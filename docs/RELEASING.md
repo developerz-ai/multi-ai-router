@@ -157,7 +157,7 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
   automates this. Open the image-pin PR in `developerz-ai/infrastructure`
   (`stacks/apps/multi-ai-router/manifests/deployment.yml`, the
   `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z` image line) and in every other
-  deployment repo that pins the router (the tesote stack's production overlay),
+  deployment repo that pins the router (a customer stack's production overlay),
   update each stack README's "deployed" version in the same PR, and link the
   PRs from the GitHub Release. After they sync, confirm the pod reports the
   version: `curl -s https://<router>/healthz` → `"version":"X.Y.Z"`.

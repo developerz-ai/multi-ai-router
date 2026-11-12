@@ -6,7 +6,7 @@ import { createEventTally } from "../../../src/services/dataplane/stream-cap"
 import type { UsageRecord } from "../../../src/services/usage"
 import { account, catalog, cipher } from "./fixtures"
 
-// Plan 101, 12.8: 119 Codex streams on tesote ended at 895–905 s with no `response.completed`
+// Plan 101, 12.8: 119 Codex streams on one customer deployment ended at 895–905 s with no `response.completed`
 // (http 200, streamed, error_class `upstream_error`, tokens_out 0). The router has no 900 s clock:
 // the upstream ends them. They must be named (`codex:stream-cap`) and the failure line must say
 // which event types arrived — never cut by the router, never retried after bytes.

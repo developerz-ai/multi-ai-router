@@ -8,7 +8,7 @@ import type { SelectionDecision, SelectionResult } from "../../../src/services/r
 import { clock } from "./fixtures"
 
 /**
- * Plan 101, 12.5 (tesote, 2026-11-09 20:02): a zai recovery probe took 21 s to settle while every
+ * Plan 101, 12.5 (a customer deployment, 2026-11-09 20:02): a zai recovery probe took 21 s to settle while every
  * waiter's 5 s budget ran out behind it, so the router answered `429` with the account about to
  * serve. Past the budget, a hold that is a probe already on the wire is ridden to its outcome.
  */

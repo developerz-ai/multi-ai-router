@@ -20,7 +20,7 @@ export interface ProviderQuotaRead {
   /**
    * Whether a 2xx body is a well-formed answer that states **no plan window at all** — a key without
    * the plan this endpoint describes. A skip, not a failure: logging it as `quota:unreadable` every
-   * tick made the sweep report `partial` forever and hid every real failure behind it (tesote, 384
+   * tick made the sweep report `partial` forever and hid every real failure behind it (a customer deployment, 384
    * of 415 runs since 2026-11-07; sweep 101, 12.10). Asked only when {@link read} returned `null`.
    * Absent: every unreadable body is a failure.
    */

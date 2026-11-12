@@ -15,8 +15,8 @@ import {
 /** Verbatim, as opencode's `environment()` builder emits it. */
 const ENV_PREAMBLE = `Here is some useful information about the environment you are running in:
 <env>
-  Working directory: /home/sebastian/workspace/tesote/tesote.ai
-  Workspace root folder: /home/sebastian/workspace/tesote/tesote.ai
+  Working directory: /home/router/workspace/router/router.ai
+  Workspace root folder: /home/router/workspace/router/router.ai
   Is directory a git repo: yes
   Platform: linux
 </env>

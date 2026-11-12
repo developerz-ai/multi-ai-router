@@ -194,7 +194,7 @@ function describeSilent(
  * must (`docs/idea/05-routing-and-failover.md`).
  *
  * `streamCap`: the Codex backend drops a Responses stream at about fifteen minutes with no
- * `response.completed` and no error frame. Provenance: tesote production, 119 attempts over 14 d
+ * `response.completed` and no error frame. Provenance: a customer production deployment, 119 attempts over 14 d
  * ending at 895–905 s (http 200, streamed, tokens_out 0 — usage only arrives in the completed
  * frame); no router or edge clock is 900 s (plan 101, 12.8). Blast radius: only the label of an
  * already-failed attempt.
