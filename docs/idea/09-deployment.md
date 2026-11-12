@@ -13,10 +13,24 @@ they sweep against.
 `docker compose up -d` brings up **two services**: the router and a PostgreSQL 18 container, with a
 named volume for the Postgres data directory and a health check gating the router's start. The
 compose file supplies `DATABASE_URL` itself. The operator fills `ENCRYPTION_KEY` in `.env` and picks
-a sign-in method: the `ADMIN_OIDC_*` relying-party settings, or one
-`docker compose exec router bun run dist/api/admin.js set-password` run after the stack is up (the
-local password lives as an argon2id hash in Postgres, never in `.env`). See
-[13-admin-oidc.md](13-admin-oidc.md) for both.
+a sign-in method: the `ADMIN_OIDC_*` relying-party settings, or a local admin password written after
+the stack is up (it lives as an argon2id hash in Postgres, never in `.env`). The password is not an
+`exec`: with no sign-in method configured the router refuses to boot, so under
+`restart: unless-stopped` the container crash-loops and `exec` never has a running container to
+attach to. Run the admin verb as a one-off container instead — `--entrypoint bun` overrides the
+image's own entrypoint (`tini -- bun run dist/api/index.js`), which would otherwise boot the server
+rather than the admin verb, and `--no-deps` leaves the already-running Postgres alone — then restart
+the router, because the sign-in method list is read at boot and the boot that refuses is the only
+evaluation:
+
+```bash
+docker compose run --rm --no-deps --entrypoint bun router run dist/api/admin.js set-password
+docker compose restart router
+```
+
+(A password set against an already-running router takes effect without a restart, within
+`ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`; this one needs one only because the router never got past
+boot.) See [13-admin-oidc.md](13-admin-oidc.md) for both.
 
 ```yaml
 # docker-compose.yml — abridged; the shipped file carries the full comments
@@ -779,7 +793,7 @@ same-dialect passthrough (the common case) does no body parsing at all; see
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Container exits immediately, log names a variable | Zod env validation failed | Read the named variable in the exit message. Most common: `ENCRYPTION_KEY` is not 32 bytes of base64, or a partial `ADMIN_OIDC_*` block (issuer, client id and redirect URI, plus `ADMIN_OIDC_ADMIN_EMAIL` and/or `ADMIN_OIDC_REQUIRED_CLAIMS`, are all required once any is set), or a malformed `ADMIN_OIDC_REQUIRED_CLAIMS` entry. See [13-admin-oidc.md](13-admin-oidc.md). |
-| Container exits immediately, log says "no admin sign-in method is configured" | No `ADMIN_OIDC_*` variables and no local admin password — boot requires one of the two | Set the OIDC block, or run `bin/admin set-password` (`docker compose exec router bun run dist/api/admin.js set-password` in the shipped image). See [13-admin-oidc.md](13-admin-oidc.md). |
+| Container exits immediately, log says "no admin sign-in method is configured" | No `ADMIN_OIDC_*` variables and no local admin password — boot requires one of the two | Set the OIDC block, or run `bin/admin set-password` (in the shipped image: `docker compose run --rm --no-deps --entrypoint bun router run dist/api/admin.js set-password`, then `docker compose restart router` — `docker compose exec` cannot work here, because the boot refusal keeps the container crash-looping under `restart: unless-stopped` and `exec` never attaches; the one-off container overrides the image entrypoint, `tini -- bun run dist/api/index.js`, so the admin verb runs instead of the server, and the restart re-reads the sign-in method list, which boot alone evaluates). See [13-admin-oidc.md](13-admin-oidc.md). |
 | Container exits immediately, log names `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC` | A local admin password exists and `PUBLIC_URL` is not loopback — the fail-closed rule for a password-only door on a public address | Remove the password (`bin/admin delete-password`), unset `PUBLIC_URL`, or accept the risk by setting `ADMIN_LOCAL_LOGIN_ALLOW_PUBLIC=true`. See [13-admin-oidc.md](13-admin-oidc.md). |
 | Account stuck in `needs_reauth` | Background refresh failed — refresh token revoked upstream, password changed, or the provider changed its flow. For a **Claude subscription** the ordinary cause is the calendar: its refresh token hard-expires ~30 days after login regardless of use, the CLI reports `Failed to authenticate: OAuth session expired and could not be refreshed`, and the router parks the account | Click **Reconnect** on `/accounts`. It re-runs the same OAuth flow against the existing row, preserving id, pool membership, and usage history. |
 | How do I connect a ChatGPT/Codex account? | It connects by device code only | In the connect dialog press **Get a code**, open the page it shows (`https://auth.openai.com/codex/device`) in any browser, sign in, enter the code; the dialog finishes on its own. Leave the dialog open (a background tab is fine) — the router polls only while the console asks. See [03-providers.md](03-providers.md#signing-in-with-a-code-device-code-flow). |
