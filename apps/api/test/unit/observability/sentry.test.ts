@@ -25,7 +25,7 @@ const credentialEvent = {
   environment: "production",
   request: {
     method: "POST",
-    url: "https://router.ai.developerz.ai/v1/messages",
+    url: "https://router.invalid/v1/messages",
     headers: {
       authorization: "Bearer sk-ant-credinheader",
       "x-api-key": "sk-apikeyinheader",
@@ -144,7 +144,7 @@ describe("redactSentryEvent — credential-leak security gate", () => {
     expect(safe.release).toBe("2.4.0")
     expect(safe.environment).toBe("production")
     expect(safe.request?.method).toBe("POST")
-    expect(safe.request?.url).toBe("https://router.ai.developerz.ai/v1/messages")
+    expect(safe.request?.url).toBe("https://router.invalid/v1/messages")
   })
 
   test("does not mutate the event it was given — a dropped capture must not alter caller state", () => {
