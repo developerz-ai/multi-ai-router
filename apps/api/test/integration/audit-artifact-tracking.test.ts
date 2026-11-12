@@ -3,17 +3,19 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 /**
- * The two audit-evidence files the 2026 full-router-audit plan documents link directly must
- * stay eligible to track.
+ * The two audit-evidence files the removed 2026 full-router-audit plan documents linked must
+ * now be EXCLUDED by the broad ignore rules, and `.gitignore` must carry no negation that
+ * re-opens them.
  *
- * The defect this guards: the plan documents link two evidence files the ignore rules made
- * uncommittable — `13-production.md` links `evidence/production.sql`, swallowed by the
- * repo-wide `*.sql` database-dump rule, and the `04-`/`05-`/`06-` slices all link
- * `04-06-unit-tests.log`, swallowed by the repo-wide `*.log` rule — so those links were dead
- * on every fresh checkout: the evidence could never be committed, because the same rules that
- * keep dumps and logs out of the tree matched these paths too. Two scoped negations in
- * `.gitignore` carve out exactly those paths; everything else the broad rules hold stays
- * held, and the standing migrations carve-out is untouched.
+ * The premise inverted with the purge: the internal sweep/audit plans were removed from the
+ * public tree under developerz-ai/multi-ai-router#390 — `13-production.md`, the 04-/05-/06-
+ * slices, and every other document that linked these two evidence files are gone — so the two
+ * scoped negations that once kept `evidence/production.sql` and `04-06-unit-tests.log`
+ * committable lost their only reason to exist. Without them the repo-wide `*.sql` dump rule
+ * and `*.log` rule hold those paths like any other capture, and nothing may add a carve-out
+ * back: the raw production captures that actually sat under that plan tree
+ * (`evidence/production-db.txt`, `evidence/production-logs.json`) went with it, and an orphan
+ * negation would only re-admit a path nobody should commit to again.
  *
  * Git itself is the oracle, invoked as a real `git check-ignore -v --no-index` subprocess,
  * for the same reason `bin/verify-version` is tested that way: the artifact under test is
@@ -23,20 +25,18 @@ import { fileURLToPath } from "node:url"
  * `.gitignore` line produced it, and `--no-index` keeps the verdicts rule-based (a tracked
  * path would otherwise read as eligible without any rule saying so).
  *
- * ELIGIBILITY IS RULE EVALUATION, NEVER PRESENCE. Both artifacts are absent from the tree and
- * this change adds none of them — regenerating them is out of scope — and every assertion
- * here passes with them absent, because `git check-ignore` evaluates the ignore rules
- * against the path and never opens the file. Nothing here reads production data or
- * credentials: `production.sql` is a queries-only capture, unlike the pg_dump output the
- * `*.sql` rule exists for.
+ * EXCLUSION IS RULE EVALUATION, NEVER ABSENCE. Both artifacts and the plan tree around them
+ * are gone from the checkout, and every assertion here still passes — `git check-ignore`
+ * evaluates the ignore rules against the path and never opens the file. Nothing here reads
+ * production data or credentials.
  */
 
 const ROOT = fileURLToPath(new URL("../../../../", import.meta.url))
 
-/** The queries-only capture `13-production.md` links, repo-relative. */
+/** The queries-only capture the removed `13-production.md` linked, repo-relative. */
 const PRODUCTION_SQL = "docs/plans/2026/10/02/102-full-router-audit/evidence/production.sql"
 
-/** The baseline unit-run capture the 04-, 05- and 06- slices link, repo-relative. */
+/** The baseline unit-run capture the removed 04-, 05- and 06- slices linked, repo-relative. */
 const UNIT_TESTS_LOG = "docs/plans/2026/10/02/102-full-router-audit/04-06-unit-tests.log"
 
 /** The committed migration the standing migrations carve-out must keep eligible. */
@@ -100,27 +100,20 @@ function expectExcludedBy(rel: string, pattern: string): void {
 
 const GITIGNORE = readFileSync(`${ROOT}.gitignore`, "utf8")
 
-/** The 1-based line of the .gitignore line that equals `exact`, failing loudly when absent. */
-function gitignoreLine(exact: string): number {
-  const at = GITIGNORE.split("\n").indexOf(exact)
-  if (at === -1) throw new Error(`.gitignore has no line exactly ${JSON.stringify(exact)}`)
-  return at + 1
-}
-
-describe("the audit evidence the plan documents link", () => {
-  test("evidence/production.sql is eligible to track, by its own negation", () => {
-    expectEligibleBy(PRODUCTION_SQL, `!${PRODUCTION_SQL}`)
+describe("the evidence paths the removed plans linked", () => {
+  test("evidence/production.sql is now excluded by the broad *.sql rule", () => {
+    expectExcludedBy(PRODUCTION_SQL, "*.sql")
   })
 
-  test("04-06-unit-tests.log is eligible to track, by its own negation", () => {
-    expectEligibleBy(UNIT_TESTS_LOG, `!${UNIT_TESTS_LOG}`)
+  test("04-06-unit-tests.log is now excluded by the broad *.log rule", () => {
+    expectExcludedBy(UNIT_TESTS_LOG, "*.log")
   })
 })
 
 describe("the broad rules keep their grip", () => {
   test("a sibling SQL dump in the same evidence directory stays ignored by *.sql", () => {
-    // The negation is the one path, not the directory or the basename — anything else the
-    // dump rule caught before must still be caught.
+    // The dump rule never scoped to one basename — anything under that directory a capture
+    // could land at is held by the broad rule alone.
     expectExcludedBy(
       "docs/plans/2026/10/02/102-full-router-audit/evidence/some-other-capture.sql",
       "*.sql",
@@ -149,14 +142,12 @@ describe("the broad rules keep their grip", () => {
 })
 
 describe("the .gitignore edit itself", () => {
-  test("carries each negation exactly once, after the broad rule it escapes", () => {
-    // Ordering is load-bearing: last match wins, so a negation placed above its broad rule
-    // would be dead text while the check-ignore assertions above still fail loudly.
-    expect(gitignoreLine(`!${PRODUCTION_SQL}`)).toBeGreaterThan(gitignoreLine("*.sql"))
-    expect(gitignoreLine(`!${UNIT_TESTS_LOG}`)).toBeGreaterThan(gitignoreLine("*.log"))
+  test("carries no negation for either artifact path", () => {
+    // The carve-outs went with the plans: a line naming either path would only re-admit a
+    // capture nothing should commit to again.
     const lines = GITIGNORE.split("\n")
-    expect(lines.filter((line) => line === `!${PRODUCTION_SQL}`)).toHaveLength(1)
-    expect(lines.filter((line) => line === `!${UNIT_TESTS_LOG}`)).toHaveLength(1)
+    expect(lines.filter((line) => line === `!${PRODUCTION_SQL}`)).toHaveLength(0)
+    expect(lines.filter((line) => line === `!${UNIT_TESTS_LOG}`)).toHaveLength(0)
   })
 
   test("leaves the migrations carve-out exactly as it was", () => {

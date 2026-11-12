@@ -2,6 +2,14 @@
 
 Execution plans written by `/planx` for another AI (usually `/feature`) to implement. Plan only — no code.
 
+The tree currently holds no plan documents. The internal sweep/audit plans
+(`2026/10/02/101-deep-bug-sweep`, `2026/10/02/102-full-router-audit`,
+`2026/11/10/101-end-to-end-deep-sweep`) were removed from the public tree under
+developerz-ai/multi-ai-router#390 because they carried internal material —
+internal organisations and private repos, production hosts, database captures
+and customer names. Nothing internal remains here; git history is untouched.
+New plans are written per the layout below.
+
 ## Layout
 
 ```

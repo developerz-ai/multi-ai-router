@@ -35,9 +35,10 @@ import { fileURLToPath } from "node:url"
  * and `bun` is the runtime's, not a person's. This file spells out neither
  * spelling of a home root: it is tracked, and it is scanned like every other.
  *
- * `docs/plans/` is out of scope: those files are internal working documents
- * that are being taken out of the public tree under their own issue, and they
- * carry the operator's own path. When they go, this exclusion goes with them.
+ * `docs/plans/` is in scope like every other directory: the internal plans
+ * that once needed a carve-out were removed from the public tree under
+ * developerz-ai/multi-ai-router#390, and the surviving `docs/plans/README.md`
+ * carries no home directory. No exclusion remains.
  *
  * The rules are functions, and the last describe block proves each one fires.
  * A guard that cannot fail is not a guard.
@@ -69,18 +70,16 @@ const CUSTOMER_NAME = ["teso", "te"].join("")
 /**
  * The paths the rule does not cover, and why.
  *
- * `docs/plans/` are internal working documents that are being taken out of the
- * public tree under developerz-ai/multi-ai-router#390, and they carry the
- * operator's own path. `.dz/` is the platform's own working directory: the
- * platform writes those files, so a guard that covered them would fail the
- * platform's own commits rather than a change made here — and the committed
- * brief names two private repositories on a line that tells the release lane
- * where to roll, so it cannot be edited without breaking that lane. The
- * carve-outs are prose until those files go, so they name the issue that
- * removes them: drop each entry together with its directory, and nothing here
- * fails on its own if that stalls.
+ * `.dz/` is the platform's own working directory: the platform writes those
+ * files, so a guard that covered them would fail the platform's own commits
+ * rather than a change made here — and the committed brief names two private
+ * repositories on a line that tells the release lane where to roll, so it
+ * cannot be edited without breaking that lane. The `docs/plans/` entry this
+ * list once carried went with its directory: the internal plans were removed
+ * from the public tree under developerz-ai/multi-ai-router#390, and the
+ * surviving `docs/plans/README.md` is scanned like every other tracked file.
  */
-const EXCLUDED = [/^docs\/plans\//, /^\.dz\//]
+const EXCLUDED = [/^\.dz\//]
 
 /**
  * The tracked files, from git's own index. A `git ls-files` that cannot run is

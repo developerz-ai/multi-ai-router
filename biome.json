@@ -10,8 +10,7 @@
       "!tmp",
       "!**/*.md",
       "!packages/db/migrations",
-      "!.claude",
-      "!docs/plans"
+      "!.claude"
     ]
   },
   "formatter": {
