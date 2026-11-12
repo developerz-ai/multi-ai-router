@@ -16,7 +16,7 @@
  * unwanted — it is that a second copy of it exists. Deleting the rule as cleanup re-opens a `400`
  * no failover can route around, because it fails identically on every account in the pool.
  *
- * Provenance, all measured on this router 2026-09-05 against `router.ai.developerz.ai`: the same
+ * Provenance, all measured on this router 2026-09-05 against `router.invalid`: the same
  * 56 KB opencode system prompt succeeds with the preamble section removed and fails with it
  * present, on `default`, `opus`, `sonnet`, `haiku` and `claude-opus-5` alike, and on every account
  * in the pool. The remaining rules are the same class of tell, recorded by Meridian's

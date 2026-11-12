@@ -1,4 +1,5 @@
 {
+  "_note": "This file is tracked, so it is public: it must never hold a credential and must never name an internal service endpoint. The organisation's own servers resolve their address and their token from the environment — MCP_GATEWAY_URL / MCP_GATEWAY_TOKEN and DB_GATEWAY_URL / DB_GATEWAY_TOKEN — and fall back to the reserved .invalid hosts below, which resolve nowhere. Add a server that needs more than an environment variable locally instead: `claude mcp add --scope local ...` keeps it out of this file and out of the repository.",
   "mcpServers": {
     "ui-debugger": {
       "command": "npx",
@@ -13,18 +14,18 @@
       "command": "codegraph",
       "args": ["serve", "--mcp"]
     },
-    "developerz": {
+    "mcp-gateway": {
       "type": "http",
-      "url": "https://mcp.developerz.ai/v1/mcp",
+      "url": "${MCP_GATEWAY_URL:-https://mcp.invalid}",
       "headers": {
-        "Authorization": "Bearer ${DEVELOPERZ_API_KEY}"
+        "Authorization": "Bearer ${MCP_GATEWAY_TOKEN}"
       }
     },
-    "db-mcp-gateway": {
+    "db-gateway": {
       "type": "http",
-      "url": "https://db.developerz.ai/mcp",
+      "url": "${DB_GATEWAY_URL:-https://db.invalid}",
       "headers": {
-        "Authorization": "Bearer ${DBMCP_SVC_TOKEN}"
+        "Authorization": "Bearer ${DB_GATEWAY_TOKEN}"
       }
     }
   }
