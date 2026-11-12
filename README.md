@@ -138,7 +138,14 @@ cp .env.example .env
 docker compose up -d
 ```
 
-No identity provider to point it at? Skip the `ADMIN_OIDC_*` block entirely and run `docker compose exec router bun run dist/api/admin.js set-password` once it's up — a local admin password, stored as an argon2id hash in Postgres and never in `.env` (from a checkout, the same verb is `bin/admin set-password`). The login page shows whichever methods exist; `GET /api/admin/auth/methods` says the same. Boot refuses when neither is configured.
+No identity provider to point it at? Skip the `ADMIN_OIDC_*` block entirely and set a local admin password instead — stored as an argon2id hash in Postgres, never in `.env` (from a checkout, the same verb is `bin/admin set-password`). Don't reach for `docker compose exec` here: with no sign-in method configured the router refuses to boot, so under `restart: unless-stopped` the container crash-loops and there is never a running container for `exec` to attach to. Instead, run the admin verb as a one-off container, then restart the router:
+
+```bash
+docker compose run --rm --no-deps --entrypoint bun router run dist/api/admin.js set-password
+docker compose restart router
+```
+
+`--entrypoint bun` is what makes this work: it overrides the image's entrypoint (`tini -- bun run dist/api/index.js`), which would otherwise boot the server instead of the admin verb, and `--no-deps` leaves the already-running Postgres alone. The restart is required because the sign-in method list is read at boot — boot refuses when none is configured, and the check only re-runs on a fresh boot. (A password set against an already-running router takes effect on its own, within `ADMIN_CREDENTIAL_METADATA_TTL_SECONDS`; this router never got past boot.) The login page shows whichever methods exist; `GET /api/admin/auth/methods` says the same. Boot refuses when neither is configured.
 
 The admin console uses generic OIDC discovery, PKCE, and signed ID-token verification. Zitadel is production-tested; Keycloak, Authentik, and Auth0 use the same config-only contract. See [`docs/idea/13-admin-oidc.md`](docs/idea/13-admin-oidc.md) for both sign-in paths, client registration, claim requirements, and troubleshooting.
 

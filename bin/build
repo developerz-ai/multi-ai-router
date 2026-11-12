@@ -29,10 +29,20 @@ bun build apps/api/src/providers/claude-fast/profile-check.ts --target=bun --out
 
 # The local-admin verb ships too: `bin/admin set-password` is the first-run
 # setup flow (docs/idea/13-admin-oidc.md), and the image is where a fresh
-# deployment runs it — `docker compose exec router bun run dist/api/admin.js
-# set-password`. Bundled, not copied from src, because the runtime stage has no
-# source tree, and resolving `../migrations` from dist/api lands on the same
-# copied folder as the server's own boot migrations.
+# deployment runs it. It is NOT `docker compose exec` on the router service: the
+# boot refuses to serve when no sign-in method exists (OIDC or a local
+# credential), and with `restart: unless-stopped` that fresh container
+# crash-loops, so `exec` can never attach. The working first-run sequence is a
+# one-off container with the entrypoint replaced so `bun run dist/api/admin.js
+# set-password` runs instead of the server —
+#   docker compose run --rm --no-deps --entrypoint bun router run dist/api/admin.js set-password
+#   docker compose restart router
+# (`--no-deps` because the stack's postgres is already up; the restart because
+# the sign-in method list is read at boot, so the crash-looping router only
+# sees the new password row on a fresh boot — an already-running router picks
+# it up without one). Bundled, not copied from src, because the runtime stage
+# has no source tree, and resolving `../migrations` from dist/api lands on the
+# same copied folder as the server's own boot migrations.
 bun build apps/api/src/bin/admin.ts --target=bun --outfile dist/api/admin.js
 
 # Migrations are data, not code — `bun build` cannot bundle a directory of .sql

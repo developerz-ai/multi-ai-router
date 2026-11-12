@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The internal sweep/audit plans and their evidence left the public tree** (developerz-ai/multi-ai-router#390). `docs/plans/2026/` held three internal working plans — the 2026-10-02 deep bug sweep, the 2026-10-02 full router audit and the 2026-11-10 end-to-end deep sweep — plus the audit's `evidence/` directory, which included raw production database and log captures, internal organisation and private-repo names, and customer deployment detail. All 83 files are deleted; `docs/plans/README.md` remains and records the removal. The `.gitignore` carve-outs that pinned two never-committed evidence artifacts are gone (the broad `*.sql`/`*.log` rules already cover those paths), the guard tests now assert exactly that, and `docs/idea/08-observability.md` no longer links to the deleted evidence. Git history is untouched — this purge covers HEAD only.
 
+### Fixed
+
+- **The no-IdP install instructions were deadlocked.** `README.md` and `docs/idea/09-deployment.md` told the operator to set the first local admin password with `docker compose exec router bun run dist/api/admin.js set-password` after `docker compose up -d` — but boot refuses to start when no sign-in method is configured, so under `restart: unless-stopped` the router container crash-loops and `exec` never has a running container to attach to. Both now document the working path: `docker compose run --rm --no-deps --entrypoint bun router run dist/api/admin.js set-password` (the entrypoint override keeps the image entrypoint, `tini -- bun run dist/api/index.js`, from booting the server instead of the admin verb) followed by `docker compose restart router`, because the sign-in method list is evaluated at boot and the refusing boot is the only evaluation. Documentation only: no compose, schema or runtime change, no version bump.
+
 ## [2.59.0] — 2026-11-11
 
 ### Added
