@@ -29,11 +29,6 @@ data/
 # disk, just untracked) and fails only on a fresh checkout.
 !packages/db/migrations/**/*.sql
 
-# ...but the audit's saved read-only queries ARE evidence the plan documents link directly
-# (13-production.md) — queries only, unlike the credential-bearing dumps the *.sql rule exists
-# for. Without this negation the link is dead on every fresh checkout.
-!docs/plans/2026/10/02/102-full-router-audit/evidence/production.sql
-
 # Per-Account CLAUDE_CONFIG_DIR trees. These hold live Claude subscription
 # credentials in cleartext — the single most dangerous thing that could land in
 # a commit. See docs/idea/07-security.md.
@@ -55,11 +50,6 @@ tmp/
 logs/
 npm-debug.log*
 bun-debug.log*
-
-# ...but the audit's baseline unit-run capture IS evidence: the 04-, 05- and 06- plan slices
-# link it directly, and without this negation those links are dead on every fresh checkout.
-# Only this one capture is tracked — every other log stays ignored.
-!docs/plans/2026/10/02/102-full-router-audit/04-06-unit-tests.log
 
 # Caches
 .cache/

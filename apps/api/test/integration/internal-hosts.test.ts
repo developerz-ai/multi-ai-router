@@ -24,12 +24,10 @@ import { fileURLToPath } from "node:url"
  * that would also read a developer's untracked scratch file — the same reason
  * `audit-artifact-tracking.test.ts` asks git about its own ignore rules.
  *
- * `docs/plans/` is out of scope: those files are internal working documents
- * that are being taken out of the public tree under
- * developerz-ai/multi-ai-router#390, and they name the deployment. The
- * carve-out is prose until that lands, so this line names the issue that
- * removes it: drop the entry together with the directory, and nothing here
- * fails on its own if that stalls.
+ * `docs/plans/` needed a carve-out while the internal plans lived in the
+ * tree: they were removed from the public tree under
+ * developerz-ai/multi-ai-router#390, and the exclusion went with them. Every
+ * tracked file is now scanned.
  *
  * The rules are functions, and the last describe block proves each one fires.
  * A guard that cannot fail is not a guard.
@@ -45,9 +43,6 @@ const PERMITTED_OWN_HOSTS = new Set(["developerz.ai", "www.developerz.ai"])
 
 /** Any host on our own domain. */
 const OWN_HOST = /\b(?:[a-z0-9-]+\.)*developerz\.ai\b/gi
-
-/** The paths the rule does not cover, and why. */
-const EXCLUDED = [/^docs\/plans\//]
 
 /**
  * The tracked files, from git's own index. A `git ls-files` that cannot run is
@@ -108,7 +103,6 @@ describe("the public tree", () => {
     const offenders: string[] = []
     let read = 0
     for (const path of tracked) {
-      if (EXCLUDED.some((pattern) => pattern.test(path))) continue
       const file = readText(path)
       if (!file.read) continue
       read += 1
