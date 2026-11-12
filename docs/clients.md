@@ -263,6 +263,7 @@ The OpenAI dialects use the same object: `{"error":{"message":…,"type":…,"pa
 | `accounts`, `pools` | Opaque account references (`acct_…`) and pool names, for the operator |
 | `signal` | The machine token that decided it (`anthropic:rate_limit_error`, `cooling-down`, …) |
 | `attempts`, `request_id` | Upstream attempts made, and the id to quote to the operator |
+| `reconnect` | Accounts in your scope that lost their login and must be reconnected by a router admin, as `{account, label, provider, url}` (`url` is the console's Accounts page, `null` without `PUBLIC_URL`); `[]` when none. The message ends with the same instruction in words, so relay it to your human |
 
 Match on `code` and `error.router`, never on the English `message`. The sentences are kept stable
 for now, but they are not a contract. The enums can gain values, so parse them tolerantly. An
@@ -303,6 +304,7 @@ On every data-plane answer, success or failure, stream or not, before the first 
 | `x-router-served-model` | The model the upstream was asked for, after the account's alias map |
 | `x-router-provider` | The serving account's provider id |
 | `x-router-account` | The serving account, opaque (`acct_…`) |
+| `x-router-reconnect-needed` | Set only when an account in your key's scope lost its login (`needs_reauth`) and was skipped: its labels, each URI-encoded, `, `-joined. Your answer still came from another account; tell your router admin. A router-authored error says the same in its message and in `error.router.reconnect` |
 | `x-router-session-restart` | Set only when a Claude-subscription session had to start fresh on another account (`failover`, or the reason the binding was dropped). Turns the upstream remembered are gone, so resend the full history |
 
 ### Retries: let the router do it

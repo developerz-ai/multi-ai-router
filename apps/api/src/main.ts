@@ -101,6 +101,7 @@ async function main(): Promise<void> {
 
   const app = createApp({
     adminBodies: env.adminBodies,
+    publicUrl: env.publicUrl,
     logger,
     logQuietPaths: env.logQuietPaths,
     probes: {

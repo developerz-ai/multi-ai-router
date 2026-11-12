@@ -14,7 +14,7 @@ import {
   RequestAdmissionUnavailableError,
   RouterShutdownError,
 } from "../services/dataplane/active-requests"
-import { ROUTER_ATTEMPTS_HEADER } from "../services/dataplane/router-headers"
+import { ROUTER_ATTEMPTS_HEADER, reconnectHeaders } from "../services/dataplane/router-headers"
 import type { AppEnv } from "../types"
 import { deferFailureLine, failureContext } from "./logger"
 
@@ -25,9 +25,18 @@ import { deferFailureLine, failureContext } from "./logger"
  * anything else is a `500` with a generic body, its real detail logged and never returned. No
  * error body carries credential material, a stack, or the identity of an account that failed.
  */
-export function errorHandler(fallbackLog: Logger): ErrorHandler<AppEnv> {
+export function errorHandler(
+  fallbackLog: Logger,
+  /** The console's Accounts page (`errors/reconnect.ts`), from `PUBLIC_URL`; null when unset. */
+  consoleUrl: string | null = null,
+): ErrorHandler<AppEnv> {
   return (err, c) => {
-    const response = toErrorResponse(err, dialectForPath(c.req.path), c.get("requestId") ?? null)
+    const response = toErrorResponse(
+      err,
+      dialectForPath(c.req.path),
+      c.get("requestId") ?? null,
+      consoleUrl,
+    )
     const log = c.get("log") ?? fallbackLog
     // One transport line per request: the failure folds into the logger's completion line, and is
     // written here only when no request logger is tracking this request (10.15).
@@ -103,6 +112,10 @@ export function notFoundHandler(): NotFoundHandler<AppEnv> {
 function send(c: Context<AppEnv>, response: ErrorResponse): Response {
   // Every rendered error counts its upstream attempts — `0` for one refused before the dispatcher.
   c.header(ROUTER_ATTEMPTS_HEADER, String(response.body.error.router?.attempts ?? 0))
+  for (const [name, value] of Object.entries(
+    reconnectHeaders(response.body.error.router?.reconnect),
+  ))
+    c.header(name, value)
   if (response.retryAfterSeconds !== null)
     c.header("Retry-After", String(retryAfterHeaderSeconds(response.retryAfterSeconds)))
   return c.json(response.body, response.status as ContentfulStatusCode)

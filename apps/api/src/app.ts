@@ -3,6 +3,7 @@ import {
   DEFAULT_ADMIN_JSON_MAX_BYTES,
   DEFAULT_ADMIN_LOGIN_JSON_MAX_BYTES,
 } from "./config/admin-bodies"
+import { consoleAccountsUrl } from "./errors/reconnect"
 import type { Logger } from "./logging/logger"
 import { adminAuth } from "./middleware/adminAuth"
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler"
@@ -92,6 +93,8 @@ export interface AppDeps {
    * which is what a test boots and what `bin/dev` runs while Vite serves the console itself.
    */
   readonly webRoot?: string
+  /** `env.publicUrl`: where an error tells a client to reconnect an account (`errors/reconnect.ts`). */
+  readonly publicUrl?: string | null
 }
 
 /** The transport-shaped settings the admin plane needs, resolved to a value, never absent. */
@@ -135,7 +138,7 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
     requestLogger(deps.logger, { quietPaths: [...(deps.logQuietPaths ?? []), METRICS_PATH] }),
   )
 
-  app.onError(errorHandler(deps.logger))
+  app.onError(errorHandler(deps.logger, consoleAccountsUrl(deps.publicUrl ?? null)))
   app.notFound(notFoundHandler())
 
   app.route("/", healthRoutes(deps.probes))

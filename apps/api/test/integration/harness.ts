@@ -1,4 +1,5 @@
 import { Hono } from "hono"
+import { consoleAccountsUrl } from "../../src/errors/reconnect"
 import { createLogger, type Logger } from "../../src/logging/logger"
 import { errorHandler, notFoundHandler } from "../../src/middleware/errorHandler"
 import { requestLogger } from "../../src/middleware/logger"
@@ -96,6 +97,8 @@ export interface HarnessOptions {
   readonly logger?: Logger
   /** What an inference request's idle clock is restored to; only a real `Bun.serve` reads it. */
   readonly serverIdleTimeoutSeconds?: number
+  /** `PUBLIC_URL`, as `app.ts` turns it into the console link a reconnect sentence names. */
+  readonly publicUrl?: string | null
 }
 
 /**
@@ -145,7 +148,7 @@ export function harness(options: HarnessOptions) {
   const app = new Hono<AppEnv>()
   app.use("*", requestId())
   app.use("*", requestLogger(logger))
-  app.onError(errorHandler(logger))
+  app.onError(errorHandler(logger, consoleAccountsUrl(options.publicUrl ?? null)))
   app.notFound(notFoundHandler())
   app.route(
     "/",

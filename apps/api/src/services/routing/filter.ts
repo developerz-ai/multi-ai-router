@@ -59,9 +59,16 @@ export function evaluateCandidate(
   options: SelectionOptions = {},
 ): CandidateVerdict {
   const { account } = member
-  const drop = (rejected: Omit<RejectedCandidate, "accountId" | "label">): CandidateVerdict => ({
+  const drop = (
+    rejected: Omit<RejectedCandidate, "accountId" | "label" | "provider">,
+  ): CandidateVerdict => ({
     ok: false,
-    rejected: { accountId: account.id, label: account.label, ...rejected },
+    rejected: {
+      accountId: account.id,
+      label: account.label,
+      provider: account.provider,
+      ...rejected,
+    },
   })
 
   if (account.status === "disabled") return drop({ reason: "disabled" })

@@ -85,7 +85,9 @@ export {
   DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
   type NoCandidatesInput,
   noCandidatesError,
+  reconnectDetail,
 } from "./no-candidates"
+export { poolNames } from "./no-candidates-wording"
 export { spentPlanReset, withPlanReset } from "./plan-reset"
 export {
   leastUsed,

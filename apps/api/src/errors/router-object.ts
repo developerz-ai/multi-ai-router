@@ -3,6 +3,7 @@ import {
   isRetryableWall,
   isRouterError,
   QuotaExhaustedError,
+  type ReconnectAccount,
   type ResetSource,
   type Wall,
   type WalledAccount,
@@ -16,6 +17,7 @@ import {
 } from "../services/dataplane/active-requests"
 import { ClientCancelledError } from "../services/dataplane/relay-cancellation"
 import { opaqueAccountRef } from "./account-ref"
+import { type RouterReconnectEntry, reconnectEntries, reconnectOf } from "./reconnect"
 
 /**
  * `error.router`: the machine-readable verdict on every error the transport renders, in every
@@ -39,6 +41,8 @@ export interface RouterErrorObject {
   /** Upstream attempts this request made before the router answered; `0` when none. */
   readonly attempts: number
   readonly request_id: string | null
+  /** Accounts a human must reconnect for this to be served (`errors/reconnect.ts`); `[]` when none. */
+  readonly reconnect: readonly RouterReconnectEntry[]
 }
 
 export interface RouterErrorAccount {
@@ -57,6 +61,8 @@ export interface RequestFacts {
   readonly attempts: number
   readonly accounts: readonly WalledAccount[]
   readonly pools: readonly string[]
+  /** In-scope accounts selection dropped as `needs-reauth` (`errors/reconnect.ts`). */
+  readonly reconnect?: readonly ReconnectAccount[] | undefined
 }
 
 const REQUEST_FACTS = new WeakMap<object, RequestFacts>()
@@ -78,6 +84,7 @@ export function routerErrorObject(
   error: unknown,
   retryAfterSeconds: number | null,
   requestId: string | null,
+  consoleUrl: string | null = null,
 ): RouterErrorObject {
   const { wall, scope } = classify(error)
   const detail = isRouterError(error) ? error.detail : {}
@@ -103,6 +110,7 @@ export function routerErrorObject(
     signal: detail.signal === undefined ? null : redactValue(detail.signal),
     attempts: facts?.attempts ?? 0,
     request_id: requestId,
+    reconnect: reconnectEntries(reconnectOf(error, facts?.reconnect), consoleUrl),
   }
 }
 
@@ -140,6 +148,7 @@ export function verdictObject(verdict: RouterVerdict, requestId: string | null):
     signal: verdict.signal === undefined ? null : redactValue(verdict.signal),
     attempts: verdict.attempts ?? 0,
     request_id: requestId,
+    reconnect: [],
   }
 }
 

@@ -11,9 +11,11 @@ import {
   RouterShutdownError,
 } from "../services/dataplane/active-requests"
 import { ClientCancelledError } from "../services/dataplane/relay-cancellation"
+import { reconnectOf, reconnectSentence } from "./reconnect"
 import {
   type RouterErrorObject,
   type RouterVerdict,
+  requestFactsOf,
   routerErrorObject,
   verdictObject,
 } from "./router-object"
@@ -147,14 +149,21 @@ function renderContextOverflow(
 /**
  * The rendered failure, with `error.router` beside the sentence (`router-object.ts`). `requestId`
  * is the transport's own id for the request, echoed so a caller can quote it back to an operator.
+ * `consoleUrl` is the console's Accounts page (`reconnect.ts`), named when an account the request
+ * needed must be reconnected — in the sentence a person reads, and in `error.router.reconnect`.
  */
 export function toErrorResponse(
   error: unknown,
   dialect: Dialect | null,
   requestId: string | null = null,
+  consoleUrl: string | null = null,
 ): ErrorResponse {
-  const response = renderFailure(error, dialect)
-  const router = routerErrorObject(error, response.retryAfterSeconds, requestId)
+  const reconnect = reconnectSentence(
+    reconnectOf(error, requestFactsOf(error)?.reconnect),
+    consoleUrl,
+  )
+  const response = renderFailure(error, dialect, reconnect)
+  const router = routerErrorObject(error, response.retryAfterSeconds, requestId, consoleUrl)
   return { ...response, body: withRouter(response.body, router) }
 }
 
@@ -164,7 +173,7 @@ function withRouter(body: ErrorBody, router: RouterErrorObject): ErrorBody {
   return { ...body, error: { ...body.error, router } }
 }
 
-function renderFailure(error: unknown, dialect: Dialect | null): ErrorResponse {
+function renderFailure(error: unknown, dialect: Dialect | null, suffix = ""): ErrorResponse {
   if (error instanceof ClientCancelledError)
     return {
       status: 499,
@@ -191,7 +200,7 @@ function renderFailure(error: unknown, dialect: Dialect | null): ErrorResponse {
   }
   return {
     status: error.status,
-    body: renderErrorBody(dialect, error.status, error.message, error.code),
+    body: renderErrorBody(dialect, error.status, `${error.message}${suffix}`, error.code),
     // Every failure a clock will fix carries the wait it knows about; nothing else invents one.
     retryAfterSeconds:
       error instanceof RetryableRouterError

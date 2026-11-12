@@ -1,4 +1,4 @@
-import type { Dialect, UsageOutcome } from "@multi-ai-router/core"
+import type { Dialect, ReconnectAccount, UsageOutcome } from "@multi-ai-router/core"
 import { SUCCESS_OUTCOME } from "./records"
 import type { DataPlaneClock, RequestSample } from "./types"
 
@@ -32,6 +32,8 @@ export interface RequestProgress {
   modelKnown?: boolean
   /** Names of the pools selection drew from, once it has run. */
   pools?: readonly string[]
+  /** In-scope accounts selection dropped as `needs-reauth`, once it has run (`errors/reconnect.ts`). */
+  reconnect?: readonly ReconnectAccount[]
 }
 
 export function sampleOf(

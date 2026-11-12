@@ -198,6 +198,7 @@ function routerOf(res: Response, fields: Record<string, unknown>) {
     accounts: [],
     attempts: 0,
     pools: [],
+    reconnect: [],
     request_id: res.headers.get(REQUEST_ID_HEADER),
     reset_at: null,
     reset_source: null,

@@ -8,6 +8,7 @@
  */
 
 import type {
+  ProviderId,
   QuotaWindowKind,
   ResetSource,
   RouterError,
@@ -53,6 +54,8 @@ export function isRecoverableFilterReason(reason: FilterReason): reason is Recov
 export interface RejectedCandidate {
   readonly accountId: string
   readonly label: string
+  /** Set by the filter; optional so a hand-built rejection (tests, `unservable.ts`) may omit it. */
+  readonly provider?: ProviderId
   readonly reason: FilterReason
   /** When it comes back, when that is known. Absent on `exhausted` — by definition. */
   readonly resetsAt?: Date

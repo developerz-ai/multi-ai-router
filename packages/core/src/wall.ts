@@ -86,6 +86,19 @@ export interface WalledAccount {
   readonly resetsAt?: Date
 }
 
+/**
+ * An account a human must reconnect (`needs_reauth`: a lost subscription login or OAuth grant)
+ * that kept this request from being served, or served as well. The one place a machine-readable
+ * field carries an operator label: the sentence beside it already names the account by that label
+ * (docs/idea/06-protocol-translation.md#reconnect-needed), and a router-key holder is told only
+ * about accounts in its own scope.
+ */
+export interface ReconnectAccount {
+  readonly accountId: string
+  readonly label: string
+  readonly provider?: string
+}
+
 /** What a throw site knows beyond the class. Every field optional: absent renders as `null`/`[]`. */
 export interface RouterErrorDetail {
   /** Overrides the code's default scope, when the throw site knows better. */
@@ -97,6 +110,8 @@ export interface RouterErrorDetail {
   readonly accounts?: readonly WalledAccount[]
   /** Pool names the verdict covers. */
   readonly pools?: readonly string[]
+  /** In-scope accounts that need reconnecting in the console ({@link ReconnectAccount}). */
+  readonly reconnect?: readonly ReconnectAccount[]
 }
 
 /** The constructor options every `RouterError` takes. */
