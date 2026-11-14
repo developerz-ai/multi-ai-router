@@ -716,7 +716,7 @@ Anthropic reports exactly four fields: `input_tokens`, `output_tokens`, `cache_c
 | `output_tokens` | `completion_tokens` | `output_tokens` |
 | (sum) | `total_tokens` | `total_tokens` |
 | `cache_read_input_tokens` | `prompt_tokens_details.cached_tokens` (DeepSeek: top-level `prompt_cache_hit_tokens`) | `input_tokens_details.cached_tokens` |
-| `cache_creation_input_tokens` | folded into `prompt_tokens`; read back from OpenRouter's `prompt_tokens_details.cache_write_tokens` | folded into `input_tokens` |
+| `cache_creation_input_tokens` | folded into `prompt_tokens` and stated as OpenRouter's `prompt_tokens_details.cache_write_tokens` (a subset, like `cached_tokens`); read back from the same field | folded into `input_tokens` |
 | no counterpart | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` |
 
 > **Total prompt size is the sum of all three input fields** — `input_tokens` +
@@ -734,7 +734,9 @@ estimate built on it. `cache_creation_input_tokens` is never invented in the oth
 decide whether caching is paying for itself. An upstream that **does** report a write — OpenRouter's
 `prompt_tokens_details.cache_write_tokens`, inside `prompt_tokens` — has it mapped through to
 `cache_creation_input_tokens` and subtracted out of `input_tokens` beside the read; unreported, the
-field stays absent.
+field stays absent. Toward `openai-chat` the write is stated in that same field whenever Anthropic
+reported one, still folded into `prompt_tokens`: the fold alone left a client nothing to price the
+cache-write premium by.
 
 The **`UsageRecord` stores the upstream's own numbers**, not the translated ones. OpenAI streams omit
 usage unless `stream_options.include_usage` is set; translating an Anthropic stream toward

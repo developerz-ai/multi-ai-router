@@ -119,12 +119,7 @@ export function parseOpenAiChatUsage(value: unknown): OpenAiChatUsage | null {
     prompt_tokens: parsed.data.prompt_tokens ?? null,
     completion_tokens: parsed.data.completion_tokens ?? null,
     total_tokens: parsed.data.total_tokens ?? null,
-    prompt_tokens_details:
-      cached === null && written === null
-        ? undefined
-        : written === null
-          ? { cached_tokens: cached }
-          : { cached_tokens: cached, cache_write_tokens: written },
+    prompt_tokens_details: promptTokensDetails(cached, written),
     completion_tokens_details: reasoning === null ? undefined : { reasoning_tokens: reasoning },
   }
 }
@@ -178,21 +173,25 @@ export function openAiChatUsageToResponses(usage: OpenAiChatUsage): OpenAiRespon
 /**
  * Anthropic usage → openai-chat usage.
  *
- * `cache_creation_input_tokens` has no field of its own on this side and is **folded into**
- * `prompt_tokens` rather than dropped: those tokens were read by the model and billed, so leaving
- * them out of the prompt total would under-report the request.
+ * `cache_creation_input_tokens` is **folded into** `prompt_tokens` rather than dropped: those tokens
+ * were read by the model and billed, so leaving them out of the prompt total would under-report the
+ * request. It is also stated as OpenRouter's `prompt_tokens_details.cache_write_tokens` — the one
+ * openai-chat spelling a reader knows — because the fold alone hides the write premium from every
+ * client pricing this response. The field is a subset of `prompt_tokens`, exactly as
+ * `cached_tokens` is, so the total is unchanged; `usageToAnthropic` reads it back out.
  *
  * `completion_tokens_details.reasoning_tokens` is never synthesized — Anthropic reports no
  * counterpart, and an absent detail is honest where a zero would not be.
  */
 export function usageToOpenAiChat(usage: AnthropicUsage): OpenAiChatUsage {
   const cached = usage.cache_read_input_tokens
-  const prompt = sum([usage.input_tokens, usage.cache_creation_input_tokens, cached])
+  const written = usage.cache_creation_input_tokens
+  const prompt = sum([usage.input_tokens, written, cached])
   return {
     prompt_tokens: prompt,
     completion_tokens: usage.output_tokens,
     total_tokens: sum([prompt, usage.output_tokens]),
-    prompt_tokens_details: cached === null ? undefined : { cached_tokens: cached },
+    prompt_tokens_details: promptTokensDetails(cached, written),
   }
 }
 
@@ -237,6 +236,17 @@ export function anthropicUsageCounts(usage: OpenAiChatUsage | null): Record<stri
   const written = mapped?.cache_creation_input_tokens ?? null
   if (written !== null) counts.cache_creation_input_tokens = written
   return counts
+}
+
+/** Absent when neither count was reported; `cache_write_tokens` stays off the wire when unreported. */
+function promptTokensDetails(
+  cached: number | null,
+  written: number | null,
+): OpenAiChatUsage["prompt_tokens_details"] {
+  if (cached === null && written === null) return undefined
+  return written === null
+    ? { cached_tokens: cached }
+    : { cached_tokens: cached, cache_write_tokens: written }
 }
 
 /** Null only when every term is null: one known term still makes a partial total worth reporting. */

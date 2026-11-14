@@ -104,7 +104,7 @@ describe("anthropic -> openai-chat response", () => {
       prompt_tokens: 130,
       completion_tokens: 50,
       total_tokens: 180,
-      prompt_tokens_details: { cached_tokens: 20 },
+      prompt_tokens_details: { cached_tokens: 20, cache_write_tokens: 10 },
     })
 
     const withoutUsage = translate({
