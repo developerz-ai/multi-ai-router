@@ -68,7 +68,37 @@ describe("anthropic -> openai-chat: prompt_tokens is a sum, not a rename", () =>
     expect(out.prompt_tokens).toBe(130)
     expect(out.completion_tokens).toBe(50)
     expect(out.total_tokens).toBe(180)
+    expect(out.prompt_tokens_details).toEqual({ cached_tokens: 20, cache_write_tokens: 10 })
+  })
+
+  test("the cache write is stated in OpenRouter's cache_write_tokens, still inside prompt_tokens", () => {
+    // Prod, 7 days to 2026-11-14: 297 of 3,988 Claude calls through the openai-chat wire recorded a
+    // cache write, because the fold into prompt_tokens left a reader nothing to see the write by.
+    const out = usageToOpenAiChat({
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: null,
+    })
+    expect(out.prompt_tokens).toBe(110)
+    expect(out.prompt_tokens_details).toEqual({ cached_tokens: null, cache_write_tokens: 10 })
+    expect(usageToAnthropic(out)).toEqual({
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: null,
+    })
+  })
+
+  test("an unreported cache write leaves cache_write_tokens off the wire", () => {
+    const out = usageToOpenAiChat({
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: 20,
+    })
     expect(out.prompt_tokens_details).toEqual({ cached_tokens: 20 })
+    expect(out.prompt_tokens_details).not.toHaveProperty("cache_write_tokens")
   })
 
   test("cache_read_input_tokens of null omits prompt_tokens_details entirely", () => {

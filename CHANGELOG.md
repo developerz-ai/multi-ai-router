@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An Anthropic cache write is visible on the openai-chat wire.** Translating Anthropic usage toward `openai-chat` folded `cache_creation_input_tokens` into `prompt_tokens` and stated it nowhere else, so a client could not see the cache-write premium. Over 7 days to 2026-11-14, only 297 of 3,988 Claude calls a developerz.ai client made through this wire recorded a cache write. The translated usage now also carries `prompt_tokens_details.cache_write_tokens` (OpenRouter's spelling, already read back by `usageToAnthropic`) whenever Anthropic reported a write. The value stays folded into `prompt_tokens`, so `prompt_tokens`, `total_tokens` and `cached_tokens` are unchanged; an unreported write leaves the field off the wire. Covers the streaming and non-streaming paths, which share `usageToOpenAiChat`. Spec: `docs/idea/06-protocol-translation.md#usage-and-token-fields`. Regression: `apps/api/test/unit/translate/usage.test.ts`.
+
 ### Removed
 
 - **The internal sweep/audit plans and their evidence left the public tree** (developerz-ai/multi-ai-router#390). `docs/plans/2026/` held three internal working plans — the 2026-10-02 deep bug sweep, the 2026-10-02 full router audit and the 2026-11-10 end-to-end deep sweep — plus the audit's `evidence/` directory, which included raw production database and log captures, internal organisation and private-repo names, and customer deployment detail. All 83 files are deleted; `docs/plans/README.md` remains and records the removal. The `.gitignore` carve-outs that pinned two never-committed evidence artifacts are gone (the broad `*.sql`/`*.log` rules already cover those paths), the guard tests now assert exactly that, and `docs/idea/08-observability.md` no longer links to the deleted evidence. Git history is untouched — this purge covers HEAD only.
