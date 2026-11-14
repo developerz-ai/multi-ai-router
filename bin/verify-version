@@ -204,6 +204,28 @@ unlinked=$(printf '%s\n' $headings | awk -v floor="$linked_floor" -v base="$link
 [ -z "$unlinked" ] ||
   die "$changelog sections missing their footer link:$unlinked — every section since $linked_floor needs exactly one"
 
+# Present and ascending is not the same as real: eight versions were committed and
+# superseded before a tag was cut, and their footer links 404'd through every check
+# above (#399). So every link must name a tag the remote actually serves — the tags
+# are read from origin, the same place the release pages are served from. The
+# version being released is exempt: before its tag is pushed, this script is run to
+# vet the tree that will carry it. A version superseded before its tag gets a plain
+# heading ("never tagged; first released in …") and no footer link.
+#
+# Listing the tags needs the network; a failure to list them is a refusal, never a
+# pass, so an offline run cannot report links it never checked.
+tag_refs=$(git ls-remote --tags origin 'v*' 2>/dev/null) ||
+  die "could not list the release tags on origin — the changelog's footer links cannot be checked"
+remote_tags=$(printf '%s\n' "$tag_refs" | sed -n 's|.*refs/tags/v\([^^]*\).*|\1|p' | sort -u)
+
+missing_release=""
+for linked_version in $linked; do
+  [ "$linked_version" = "$version" ] && continue
+  printf '%s\n' "$remote_tags" | grep -qxF "$linked_version" || missing_release="$missing_release $linked_version"
+done
+[ -z "$missing_release" ] ||
+  die "$changelog footer links name releases that were never tagged:$missing_release — give a superseded version a plain heading and no link"
+
 if [ $# -gt 0 ]; then
   # vX.Y.Z is the tag convention (release.yml triggers on `v*`); the published
   # image tags and this constant both drop the v.
