@@ -68,18 +68,14 @@ const HOME_DIRECTORY = /\/(?:home|Users)\/([A-Za-z0-9._-]+)/gi
 const CUSTOMER_NAME = ["teso", "te"].join("")
 
 /**
- * The paths the rule does not cover, and why.
- *
- * `.dz/` is the platform's own working directory: the platform writes those
- * files, so a guard that covered them would fail the platform's own commits
- * rather than a change made here — and the committed brief names two private
- * repositories on a line that tells the release lane where to roll, so it
- * cannot be edited without breaking that lane. The `docs/plans/` entry this
- * list once carried went with its directory: the internal plans were removed
- * from the public tree under developerz-ai/multi-ai-router#390, and the
- * surviving `docs/plans/README.md` is scanned like every other tracked file.
+ * No path is excluded. `.dz/` was, while the committed release brief named two
+ * deployment repositories, one of them the customer's; #393 took them out, and
+ * the brief now points at "each deployment repository that pins the router".
+ * The platform writes into `.dz/` too, and that is the point of covering it: a
+ * customer's name or a home directory is no more public-safe because the
+ * platform wrote it. The `docs/plans/` entry this list once carried went with
+ * its directory under #390.
  */
-const EXCLUDED = [/^\.dz\//]
 
 /**
  * The tracked files, from git's own index. A `git ls-files` that cannot run is
@@ -146,7 +142,6 @@ describe("the public tree", () => {
     const offenders: string[] = []
     let read = 0
     for (const path of tracked) {
-      if (EXCLUDED.some((pattern) => pattern.test(path))) continue
       const file = readText(path)
       if (!file.read) continue
       read += 1
@@ -166,7 +161,6 @@ describe("the public tree", () => {
     const offenders: string[] = []
     let read = 0
     for (const path of tracked) {
-      if (EXCLUDED.some((pattern) => pattern.test(path))) continue
       const file = readText(path)
       if (!file.read) continue
       read += 1
