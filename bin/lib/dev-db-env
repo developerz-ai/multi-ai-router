@@ -37,12 +37,25 @@ dev_db_url() {
   printf 'postgres://router:router@localhost:%s/router\n' "$1"
 }
 
+# Ready means the router database answers a query over TCP, the way the host-side
+# migration reaches it through the published port. During initdb the image runs a
+# temporary server that listens on the container's Unix socket only, so the old
+# probe (`pg_isready` over the socket) reported ready while the TCP port was still
+# closed, and the migration was refused or reset on about half of fresh setups
+# (#402). The query also proves the `router` database exists, not just that a
+# server answers. The credentials are the container's own environment.
+dev_db_ready() {
+  $DEV_DB_COMPOSE exec -T postgres sh -c \
+    'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "select 1"' \
+    >/dev/null 2>&1
+}
+
 # Returns non-zero when the server is still not ready after ~60 s, so a caller
 # can fail instead of migrating against nothing.
 dev_db_wait() {
   printf '   waiting for postgres'
   for _ in $(seq 1 60); do
-    if $DEV_DB_COMPOSE exec -T postgres pg_isready -U router -d router >/dev/null 2>&1; then
+    if dev_db_ready; then
       printf '\n'
       return 0
     fi

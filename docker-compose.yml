@@ -150,9 +150,12 @@ services:
     restart: unless-stopped
 
     healthcheck:
-      # `pg_isready` is the cheap, official "accepting connections" probe. -U must
-      # match POSTGRES_USER or it reports a rejected connection as unhealthy.
-      test: ["CMD-SHELL", "pg_isready -U router -d router"]
+      # Healthy means the router database answers a query over TCP, the way the router
+      # reaches it across the compose network. `pg_isready` on the Unix socket is not enough:
+      # during initdb the image runs a temporary server on the socket only, and a socket
+      # probe reports it ready while TCP is still closed, so the router's first-boot
+      # migration could be refused or reset (#402). The credentials are the container's own.
+      test: ["CMD-SHELL", "PGPASSWORD=\"$$POSTGRES_PASSWORD\" psql -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -tAc 'select 1' >/dev/null"]
       interval: 5s
       timeout: 3s
       retries: 10
