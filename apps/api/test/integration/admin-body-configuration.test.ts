@@ -80,7 +80,7 @@ describe("body configuration and actual listener", () => {
       ).toBe(413)
       const body = new ReadableStream<Uint8Array>({
         start(c) {
-          c.enqueue(new TextEncoder().encode('{"password":"' + "x".repeat(64) + '"}'))
+          c.enqueue(new TextEncoder().encode(`{"password":"${"x".repeat(64)}"}`))
           c.close()
         },
       })
