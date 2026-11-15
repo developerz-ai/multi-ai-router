@@ -130,10 +130,7 @@ export function planNextAttempt(
 
   if (lastFailure.kind === "stale-session") return replayInPlace(ordered, progress, options)
   if (!isRetryable(lastFailure.kind)) return { action: "stop", reason: "not-retryable" }
-  if (
-    lastFailure.requestAttributable === true &&
-    (progress.requestAttributable ?? 0) >= (options.requestWallAfter ?? REQUEST_WALL_AFTER)
-  )
+  if (lastFailure.requestAttributable === true && walled(ordered, progress, options))
     return { action: "stop", reason: "request-wall" }
   if (
     progress.attemptedAccountIds.length >= attemptCeiling(plannedCount(ordered, progress), options)
@@ -148,6 +145,25 @@ export function planNextAttempt(
   }
 
   return attemptOn(next, ordered, progress, options)
+}
+
+/**
+ * The request wall: {@link REQUEST_WALL_AFTER} request-attributable refusals in one chain, or every
+ * attempt refused that way with no untried candidate left. The second clause is the one-account
+ * pool (developerz.ai plan 101 slice 09, R1): its only refusal is still the request's own fault, so
+ * it ends as the typed `400`, never as a capacity `503` a retry of the same key would hit again.
+ */
+function walled(
+  ordered: readonly Candidate[],
+  progress: FailoverProgress,
+  options: FailoverOptions,
+): boolean {
+  const refusals = progress.requestAttributable ?? 0
+  if (refusals >= (options.requestWallAfter ?? REQUEST_WALL_AFTER)) return true
+  const attempted = new Set(progress.attemptedAccountIds)
+  return (
+    refusals === attempted.size && ordered.every((candidate) => attempted.has(candidate.account.id))
+  )
 }
 
 /**

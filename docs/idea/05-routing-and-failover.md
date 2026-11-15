@@ -608,7 +608,12 @@ Rules:
   structured-output constraint the Agent-SDK transport cannot carry, which a fast-mode or API-key
   account serves natively) fails over once with no cooldown and no breaker strike;
   a second such answer in the same chain (`REQUEST_WALL_AFTER`, 2) stops it with reason
-  `request-wall`, rendered with `wall: "request"` — never a router `429`. Before, the chain cooled
+  `request-wall`, rendered with `wall: "request"` — never a router `429`. So does a chain whose every
+  attempt was refused that way with no untried candidate left: a one-account pool's lone refusal is
+  still the request's own, and a `503` or a held `429` would send the client back to the same
+  refusal (developerz.ai plan 101 slice 09, R1). Such a refusal counts even when its transport
+  refused before the upstream started: it is a classified verdict, not a preparation fault, so it
+  takes the failure tail (usage row, sentence, wall count). Before, the chain cooled
   each account it tried, so one client's prompt walked the pool and other tenants saw `429` until
   the cooldowns lapsed (plan 101, 05.14).
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.
