@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.60.1] — 2026-11-15
+
+### Changed
+
+- **A re-cut of 2.60.0, with no code change.** The `v2.60.0` tag was pushed on the release PR's head commit, not its squash commit on `main`, so the release gate refused it before a layer was built. Nothing was published under 2.60.0, and tags cannot be deleted here, so this patch carries the same tree as 2.60.0's `main` commit.
+
 ## [2.60.0] — 2026-11-15
 
 ### Added
@@ -2231,3 +2237,4 @@ your tooling config.
 [2.58.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.58.0
 [2.59.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.59.0
 [2.60.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.60.0
+[2.60.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.60.1
