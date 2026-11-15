@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Claude subscription turn on the `anthropic` wire states its cost.** An Agent-SDK account reached from `anthropic` ingress has no conversion pair, so the relay treated the SDK renderer's own answer as an upstream byte passthrough and stated no `usage.cost` unless the caller sent `x-router-usage: cost`, though its `UsageRecord` was priced (`notional`). A developerz.ai client on that wire, 2026-11-13..15: 0 of 94 cache-writing `claude-sonnet-5-5` rows carried a cost, while the openai-chat wire's Claude rows did. The SDK renderer writes every byte of those responses, so `relaySuccess` now stamps them like any other response the router writes: the body's `usage`, or the stream's `message_delta`, carries `cost`, `cost_source` and `cost_basis`, cache writes priced as the row prices them. A re-framed stream keeps the upstream's own `text/event-stream; charset=utf-8` header instead of dropping the charset. Same-dialect HTTP relays are unchanged: byte-for-byte, cost only on opt-in. Spec: `docs/idea/06-protocol-translation.md#per-call-cost-on-the-wire`. Regression: `apps/api/test/integration/usage-cost-wire.test.ts`.
+
 ## [2.61.0] — 2026-11-15
 
 ### Fixed
