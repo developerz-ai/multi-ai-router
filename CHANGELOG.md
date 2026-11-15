@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.60.0] — 2026-11-15
+
 ### Added
 
 - **OpenRouter accounts carry standing `provider` routing preferences.** `providerPreferences` on an account (admin API create/PATCH, and a JSON box on the console's account edit form) is OpenRouter's request `provider` object: `sort`, `quantizations`, `allow_fallbacks`, `order`, `only`, `ignore`, `require_parameters`. It is the only way to ask for fp8/bf16, since a slug suffix like `:floor` states a sort only. It is validated strictly at the write (an unknown field or value, or `{}`, is a `400`; `null` clears), and a provider whose surface reads no such field is refused with `provider_preferences_unsupported`. On egress it is merged into the body, passthrough and translated alike, and a client's own `provider` fields win field by field. A body with no `"provider"` bytes is spliced, not parsed. Accounts without preferences, and every non-OpenRouter account, are sent byte-identical bodies. Migration 0046 adds the nullable `accounts.provider_preferences` column. Spec: `docs/idea/03-providers.md#openrouter--provider-preferences-key-caps-and-per-model-throttles`. Regression: `apps/api/test/integration/openrouter-provider-preferences.test.ts`, `apps/api/test/unit/dataplane/provider-preferences.test.ts`, `apps/api/test/unit/accounts/provider-preferences.test.ts`, `apps/web/test/unit/ProviderPreferencesField.test.tsx`.
@@ -2228,3 +2230,4 @@ your tooling config.
 [2.57.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.1
 [2.58.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.58.0
 [2.59.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.59.0
+[2.60.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.60.0
