@@ -142,8 +142,17 @@ interface Ran {
 }
 
 async function verify(root: string, ...args: string[]): Promise<Ran> {
+  return verifyWith({}, root, ...args)
+}
+
+async function verifyWith(
+  env: Readonly<Record<string, string>>,
+  root: string,
+  ...args: string[]
+): Promise<Ran> {
   const child = Bun.spawn([join(root, "bin/verify-version"), ...args], {
     cwd: root,
+    env: { ...process.env, ...env },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -158,8 +167,47 @@ describe("bin/verify-version", () => {
   test("passes on this repo, for its own version, tagged and untagged", async () => {
     // The assertion that matters most: whatever the fixtures below prove, the gate has to be
     // green on the tree it actually guards, or the next tag push fails for the wrong reason.
-    expect((await verify(REPO_ROOT)).exitCode).toBe(0)
-    expect((await verify(REPO_ROOT, `v${VERSION}`)).exitCode).toBe(0)
+    // Offline, because `bin/check` is the offline gate: the tag-existence check needs origin,
+    // so it is skipped here (out loud, asserted below) and proven on the fixtures instead.
+    const offline = { VERIFY_VERSION_OFFLINE: "1" }
+    const untagged = await verifyWith(offline, REPO_ROOT)
+    expect(untagged.exitCode).toBe(0)
+    expect(untagged.output).toContain("not checked against the tags on origin")
+    expect((await verifyWith(offline, REPO_ROOT, `v${VERSION}`)).exitCode).toBe(0)
+  })
+
+  test("never skips the tag-existence check in the release workflow", async () => {
+    // The offline switch is for the test suite only. The release gate must always check.
+    const workflow = await Bun.file(join(REPO_ROOT, ".github/workflows/release.yml")).text()
+    expect(workflow).toContain("bin/verify-version")
+    expect(workflow).not.toContain("VERIFY_VERSION_OFFLINE")
+  })
+
+  test("skips only the tag-existence check offline, and says so", async () => {
+    const root = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "## [2.37.6] — 2026-10-15",
+        "",
+        "- never tagged.",
+        "",
+        "[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "",
+      ].join("\n"),
+      tags: ["2.37.7"],
+    })
+
+    const ran = await verifyWith({ VERIFY_VERSION_OFFLINE: "1" }, root)
+
+    expect(ran.exitCode).toBe(0)
+    expect(ran.output).toContain("not checked against the tags on origin")
   })
 
   test("refuses a tag that does not name the version the code reports", async () => {
