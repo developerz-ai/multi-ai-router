@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`@hono/node-server` resolves to 2.1.8, clearing the two advisories that turned `bin/advisory` and `main`'s CI red.** It arrives through `@modelcontextprotocol/sdk`, whose own range (`^1.19.9 || ^2.0.5`) already allows the fixed releases, so this is a lockfile refresh of that one entry, not an override: GHSA-jpvv-r467-5p4w (a backslash in the request path parsed as a separator, bypassing path-based access control at a reverse proxy) and GHSA-qv5m-9pm6-hqp3 (an unhandled `ECONNRESET` during an asynchronous WebSocket upgrade crashes the process), both fixed in 2.1.6. `bin/advisory` now assesses the resolved set clean (445 packages).
+
 ### Fixed
 
 - **An Anthropic cache write is visible on the openai-chat wire.** Translating Anthropic usage toward `openai-chat` folded `cache_creation_input_tokens` into `prompt_tokens` and stated it nowhere else, so a client could not see the cache-write premium. Over 7 days to 2026-11-14, only 297 of 3,988 Claude calls a developerz.ai client made through this wire recorded a cache write. The translated usage now also carries `prompt_tokens_details.cache_write_tokens` (OpenRouter's spelling, already read back by `usageToAnthropic`) whenever Anthropic reported a write. The value stays folded into `prompt_tokens`, so `prompt_tokens`, `total_tokens` and `cached_tokens` are unchanged; an unreported write leaves the field off the wire. Covers the streaming and non-streaming paths, which share `usageToOpenAiChat`. Spec: `docs/idea/06-protocol-translation.md#usage-and-token-fields`. Regression: `apps/api/test/unit/translate/usage.test.ts`.
