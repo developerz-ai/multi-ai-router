@@ -1,3 +1,4 @@
+import type { AttemptFailure } from "../routing"
 import type { AttemptOutcome } from "./attempt"
 import type { ChainContext } from "./chain"
 import { breakerOptionsFor } from "./health"
@@ -42,6 +43,21 @@ export function recordChainFailure(
     return
   }
 
+  // A throttle on this model alone (OpenRouter's upstream-provider 429, any `:free` variant): hold
+  // that model off this account until its reset and leave the account — and its limiter reading,
+  // which would cool it — alone. Every other model on the account keeps serving (prod 2026-11-14).
+  if (modelThrottle(servable, outcome.failure)) {
+    ctx.runtime.health.throttleModel(
+      servable.account.id,
+      servable.upstreamModel,
+      outcome.failure,
+      now,
+      breakerOptionsFor(servable.driver.authKind),
+    )
+    recovery?.finish("uncertain")
+    return
+  }
+
   ctx.runtime.health.recordFailure(
     servable.account.id,
     outcome.failure,
@@ -55,4 +71,12 @@ export function recordChainFailure(
   recovery?.finish("failed")
   if (applyQuota)
     ctx.runtime.health.applyRateLimit(servable.account.id, outcome.rateLimit, now, observation)
+}
+
+function modelThrottle(servable: ServableCandidate, failure: AttemptFailure): boolean {
+  if (failure.kind !== "rate-limited" || servable.kind !== "http") return false
+  return (
+    failure.modelScoped === true ||
+    servable.driver.rateLimitsPerModel?.(servable.upstreamModel) === true
+  )
 }

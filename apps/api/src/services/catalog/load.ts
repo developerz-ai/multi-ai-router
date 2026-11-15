@@ -133,6 +133,7 @@ function toRoutableAccount(
       baseUrl: row.baseUrl,
       dialect: row.dialect,
       modelAliases: row.modelAliases,
+      ...(row.providerPreferences === null ? {} : { providerPreferences: row.providerPreferences }),
     },
     billing: row.billing,
     authMaterial: row.authMaterial,

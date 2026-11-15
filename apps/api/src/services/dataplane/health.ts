@@ -5,12 +5,14 @@ import {
   type BreakerOptions,
   type BreakerState,
   HEALTHY,
+  type ModelRefusal,
   phase,
   recordFailure,
   recordSuccess,
   withPlanReset,
 } from "../routing"
 import { mergeQuotaWindows } from "../routing/quota"
+import { refuseHeld, throttleHeld } from "./health-model-holds"
 import {
   createHealthObservations,
   type HealthAccountFacts,
@@ -32,8 +34,8 @@ export interface AccountHealthState {
   readonly quotaWindows: readonly QuotaWindowState[]
   readonly lastSignalAt: Date | null
   readonly probeHeldUntil: Date | null
-  /** Upstream models this account answered `model-unsupported` for, each until its expiry (10.16). */
-  readonly refusedModels?: ReadonlyMap<string, Date>
+  /** Upstream models held off this account — refused as unknown (10.16) or throttled alone. */
+  readonly refusedModels?: ReadonlyMap<string, ModelRefusal>
 }
 
 const FRESH: AccountHealthState = {
@@ -82,6 +84,17 @@ export interface HealthStore {
   ): void
   /** Keeps `upstreamModel` off this account for `modelRefusalTtlMs` after it refused it. */
   refuseModel(accountId: string, upstreamModel: string, now: Date): void
+  /**
+   * A throttle on one model only: holds `upstreamModel` off this account until the failure's reset,
+   * or the breaker's backoff stepped per repeat, and leaves the account's own breaker untouched.
+   */
+  throttleModel(
+    accountId: string,
+    upstreamModel: string,
+    failure: AttemptFailure,
+    now: Date,
+    caller?: BreakerOptions,
+  ): void
   admitProbe(accountId: string, now: Date): ProbeAdmission
   releaseProbe(accountId: string, token?: number): void
   probeStats(): { readonly admitted: number; readonly refused: number }
@@ -223,9 +236,18 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
     refuseModel(accountId, upstreamModel, now) {
       const ttlMs = options.modelRefusalTtlMs
       if (ttlMs === undefined) return
-      const kept = [...(read(accountId).refusedModels ?? [])].filter(([, until]) => until > now)
-      kept.push([upstreamModel, new Date(now.getTime() + ttlMs)])
-      write(accountId, { refusedModels: new Map(kept) })
+      write(accountId, { refusedModels: refuseHeld(read(accountId), upstreamModel, now, ttlMs) })
+    },
+
+    throttleModel(accountId, upstreamModel, failure, now, caller) {
+      const held = throttleHeld(
+        read(accountId),
+        upstreamModel,
+        failure,
+        now,
+        breakerOptions(caller),
+      )
+      write(accountId, { refusedModels: held })
     },
 
     admitProbe(accountId, now) {

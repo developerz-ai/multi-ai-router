@@ -6,7 +6,11 @@
  * provider. `bin/test` must never reach a real upstream.
  */
 
-import { generateRouterKey, routerKeyDisplayPrefix } from "@multi-ai-router/core"
+import {
+  generateRouterKey,
+  type ProviderPreferences,
+  routerKeyDisplayPrefix,
+} from "@multi-ai-router/core"
 import type { ApiKeyRow } from "@multi-ai-router/db"
 import { providerCarriesSession } from "../../../src/providers/registry"
 import { type CredentialCipher, createCredentialCipher } from "../../../src/services/crypto/cipher"
@@ -93,6 +97,8 @@ export interface AccountOptions {
   readonly baseUrl?: string
   readonly dialect?: RoutableAccount["driver"]["dialect"]
   readonly modelAliases?: Record<string, string>
+  /** As `catalog/load.ts` copies `provider_preferences` onto the driver. */
+  readonly providerPreferences?: ProviderPreferences
   readonly snapshot?: Partial<AccountSnapshot>
   readonly cipher?: CredentialCipher
   /** Claude subscription accounts only. A path, never a credential — nothing is written to it. */
@@ -135,6 +141,9 @@ export function account(id: string, options: AccountOptions = {}): RoutableAccou
       baseUrl: options.baseUrl ?? "https://upstream.test",
       dialect: options.dialect ?? null,
       modelAliases: options.modelAliases ?? null,
+      ...(options.providerPreferences === undefined
+        ? {}
+        : { providerPreferences: options.providerPreferences }),
     },
     billing: options.billing ?? "metered",
     authMaterial: cryptor.encrypt(options.apiKey ?? `sk-${id}`),

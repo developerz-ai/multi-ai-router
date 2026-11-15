@@ -54,6 +54,7 @@ export function toAttemptFailure(
     message: classification?.signal ?? `upstream returned ${status}`,
     // The request itself is refused wherever it goes (05.14): counted toward a request wall.
     ...(classification?.requestAttributable === true ? { requestAttributable: true } : {}),
+    ...(classification?.modelScoped === true ? { modelScoped: true } : {}),
   }
 }
 

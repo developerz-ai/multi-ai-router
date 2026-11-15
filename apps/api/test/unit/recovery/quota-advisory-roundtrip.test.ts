@@ -40,6 +40,7 @@ function accountRow(): AccountRow {
     modelAliases: null,
     supportedModels: null,
     windowTokenLimits: null,
+    providerPreferences: null,
     weight: 1,
     priority: 0,
     createdAt: NOW,

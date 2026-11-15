@@ -21,7 +21,9 @@ import { describeProvider, type ProviderDescriptor } from "./providers"
  * - a dialect the provider does not serve silently falls back to its default,
  *   so the operator's choice would be quietly ignored;
  * - a subscription-only provider marked `metered` would put a per-token charge
- *   in a spend column for tokens nobody was billed for.
+ *   in a spend column for tokens nobody was billed for;
+ * - `provider` routing preferences on a surface that reads no such field would be
+ *   stored and never sent — an operator believing fp8 was enforced when nothing was.
  */
 
 /** The account state a rule judges — the row as it will be *after* the write. */
@@ -31,6 +33,8 @@ export interface AccountShape {
   readonly configDir: string | null
   readonly baseUrl: string | null
   readonly dialect: Dialect | null
+  /** Whether the account will hold `provider` routing preferences after the write. */
+  readonly hasProviderPreferences?: boolean
   /** What the operator asked for, or absent to take the provider's default. */
   readonly billing?: AccountBilling
 }
@@ -43,7 +47,8 @@ export function checkAccountShape(shape: AccountShape): AdminResult<ProviderDesc
     credentialRule(provider, shape) ??
     baseUrlRule(provider, shape) ??
     dialectRule(provider, shape) ??
-    billingRule(provider, shape)
+    billingRule(provider, shape) ??
+    providerPreferencesRule(provider, shape)
 
   return failure === null ? ok(provider) : { ok: false, failure }
 }
@@ -151,6 +156,17 @@ function billingRule(provider: ProviderDescriptor, shape: AccountShape): AdminFa
   return failure(
     `provider "${provider.id}" is sold only as a subscription and has no per-token price, so its accounts are always billed as "${provider.defaultBilling}"`,
     "billing_fixed",
+  )
+}
+
+function providerPreferencesRule(
+  provider: ProviderDescriptor,
+  shape: AccountShape,
+): AdminFailure | null {
+  if (shape.hasProviderPreferences !== true || provider.providerPreferences) return null
+  return failure(
+    `provider "${provider.id}" reads no request "provider" routing object, so "providerPreferences" would never be sent; only an aggregator that routes between endpoints (openrouter) takes them`,
+    "provider_preferences_unsupported",
   )
 }
 

@@ -50,6 +50,7 @@ export interface AccountView {
    * wherever it is drawn, never a provider fact and never read by routing.
    */
   readonly windowTokenLimits: Readonly<Partial<Record<QuotaWindowKind, number>>> | null
+  readonly providerPreferences?: Readonly<Record<string, unknown>> | null // OpenRouter `provider`
   readonly weight: number
   readonly priority: number
   /**
@@ -273,6 +274,7 @@ export interface ProviderDescriptor {
   readonly connectFlow: ProviderConnectFlow | null
   /** The OAuth flow also offers a device-code sign-in. Absent on an older API: read as false. */
   readonly deviceSignIn?: boolean
+  readonly providerPreferences?: boolean // takes `providerPreferences`; absent: an older API, false
   readonly creatable: boolean
   readonly reason: string | null
 }

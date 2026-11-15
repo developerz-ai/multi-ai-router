@@ -3,6 +3,7 @@ import {
   AccountStatus,
   Dialect,
   ProviderId,
+  ProviderPreferences,
   QuotaWindowKind,
 } from "@multi-ai-router/core"
 import { z } from "zod"
@@ -76,6 +77,11 @@ export const createAccountBody = z
      * in routing reads it, and the console labels every bar it draws as configured.
      */
     windowTokenLimits: WINDOW_TOKEN_LIMITS.optional(),
+    /**
+     * OpenRouter's request `provider` object, as standing preferences for this account. Refused for a
+     * provider whose surface reads no such field (`rules.ts`), and invalid fields are a `400`.
+     */
+    providerPreferences: ProviderPreferences.optional(),
   })
   .strict()
 
@@ -97,6 +103,8 @@ export const updateAccountBody = z
     supportedModels: SUPPORTED_MODELS.nullable().optional(),
     /** `null` clears every configured ceiling, which removes the bars rather than zeroing them. */
     windowTokenLimits: WINDOW_TOKEN_LIMITS.nullable().optional(),
+    /** `null` clears them: the account's requests go as the client sent them. */
+    providerPreferences: ProviderPreferences.nullable().optional(),
     weight: WEIGHT.optional(),
     priority: PRIORITY.optional(),
     /** Not nullable: every account is billed one of the two ways, so there is nothing to clear. */
