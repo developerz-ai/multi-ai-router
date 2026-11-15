@@ -274,6 +274,9 @@ describe("a Claude subscription turn is the router's own rendering: it states th
     cache_creation_input_tokens: 5_000,
     output_tokens: 100,
   }
+  // With a charset, as an upstream may state one: the relay keeps the header the stream came with
+  // (`relay-translate.ts`) rather than overwriting it with a bare `text/event-stream`.
+  const SDK_SSE_TYPE = "text/event-stream; charset=utf-8"
   const sse = (type: string, fields: object) =>
     `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`
   const rendered = (stream: boolean) => async (): Promise<Response> =>
@@ -299,7 +302,7 @@ describe("a Claude subscription turn is the router's own rendering: it states th
             }),
             sse("message_stop", {}),
           ].join(""),
-          SSE,
+          { headers: { "content-type": SDK_SSE_TYPE } },
         )
       : Response.json({
           id: "m",
@@ -339,7 +342,9 @@ describe("a Claude subscription turn is the router's own rendering: it states th
       responses: [],
       invokeSdk: rendered(true),
     })
-    const frames = dataFrames(await (await app.request("/v1/messages", request(true))).text())
+    const res = await app.request("/v1/messages", request(true))
+    expect(res.headers.get("content-type")).toBe(SDK_SSE_TYPE)
+    const frames = dataFrames(await res.text())
     await settle()
     const delta = frames.find((frame) => frame.type === "message_delta")
     expect(usageOf(delta)?.cost).toBe(Number(usage.rows.at(-1)?.costEstimate))
