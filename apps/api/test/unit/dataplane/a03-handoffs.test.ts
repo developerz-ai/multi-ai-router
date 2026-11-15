@@ -54,7 +54,7 @@ describe("a model the account refused stays off it for the TTL (10.16)", () => {
     const health = createHealthStore({ modelRefusalTtlMs: 60_000 })
     health.refuseModel("a", "glm-9", NOW)
     const [view] = buildSnapshot(catalog([account("a")]), health, NOW).accounts
-    expect(view?.refusedModels?.get("glm-9")?.getTime()).toBe(NOW.getTime() + 60_000)
+    expect(view?.refusedModels?.get("glm-9")?.until.getTime()).toBe(NOW.getTime() + 60_000)
 
     const off = createHealthStore()
     off.refuseModel("a", "glm-9", NOW)

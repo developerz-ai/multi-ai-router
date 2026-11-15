@@ -3,6 +3,7 @@ import type {
   AccountStatus,
   Dialect,
   ProviderId,
+  ProviderPreferences,
   WindowTokenLimits,
 } from "@multi-ai-router/core"
 import type { AccountRow, ModelAliasMap, SupportedModelList } from "@multi-ai-router/db"
@@ -50,6 +51,8 @@ export interface AccountView {
    * Anthropic publishes no numeric limit and this is the operator's own estimate.
    */
   readonly windowTokenLimits: WindowTokenLimits | null
+  /** OpenRouter `provider` routing preferences merged into this account's requests. Null: none. */
+  readonly providerPreferences: ProviderPreferences | null
   readonly weight: number
   readonly priority: number
   /**
@@ -123,6 +126,7 @@ export function toAccountView(row: AccountRow): AccountView {
     modelAliases: row.modelAliases,
     supportedModels: row.supportedModels,
     windowTokenLimits: row.windowTokenLimits ?? null,
+    providerPreferences: row.providerPreferences ?? null,
     weight: row.weight,
     priority: row.priority,
     billing: row.billing,

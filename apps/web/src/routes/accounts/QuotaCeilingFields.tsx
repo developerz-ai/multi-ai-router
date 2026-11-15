@@ -1,4 +1,4 @@
-import type { QuotaWindowKind } from "@multi-ai-router/core"
+import { QUOTA_WINDOW_SPAN_MS, type QuotaWindowKind } from "@multi-ai-router/core"
 import { For, Show } from "solid-js"
 import { TextField } from "../../components/Field"
 import type { AccountView, ProviderTransport } from "../../lib/api/types"
@@ -18,8 +18,9 @@ import styles from "./QuotaCeilingFields.module.scss"
  *
  * Shown only for Agent-SDK accounts: named quota windows are what Claude subscriptions report,
  * and a ceiling on an account with no windows draws nothing — a control that visibly does
- * nothing is worse than no control. `overage` is likewise excluded: it has no span (core's
- * `QUOTA_WINDOW_SPAN_MS`), so no bar is ever drawn for it and a box would be a silent no-op.
+ * nothing is worse than no control. `overage` and `spend_limit` are likewise excluded: neither
+ * has a span (core's `QUOTA_WINDOW_SPAN_MS`), so no bar is ever drawn for one and a box would be
+ * a silent no-op.
  *
  * These are estimates the operator owns, never provider facts — Anthropic publishes no numeric
  * limit. The bars they produce are labelled *configured/measured* wherever drawn, and nothing in
@@ -30,7 +31,9 @@ import styles from "./QuotaCeilingFields.module.scss"
 export type CeilingInputs = Readonly<Partial<Record<QuotaWindowKind, string>>>
 
 /** The windows a ceiling can measure against — every spanned window, in reading order. */
-export const CEILING_WINDOWS = QUOTA_WINDOW_DISPLAY_ORDER.filter((kind) => kind !== "overage")
+export const CEILING_WINDOWS = QUOTA_WINDOW_DISPLAY_ORDER.filter(
+  (kind) => QUOTA_WINDOW_SPAN_MS[kind] !== undefined,
+)
 
 /** Matches the API schema's bound, so a typo fails in the browser rather than as a 400. */
 const CEILING_MAX = 1_000_000_000_000

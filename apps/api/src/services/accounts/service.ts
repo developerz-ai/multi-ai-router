@@ -99,6 +99,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         configDir,
         baseUrl: body.baseUrl ?? null,
         dialect: body.dialect ?? null,
+        hasProviderPreferences: body.providerPreferences !== undefined,
         ...(body.billing === undefined ? {} : { billing: body.billing }),
       })
       if (!checked.ok) return checked
@@ -123,6 +124,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           modelAliases: body.modelAliases ?? null,
           supportedModels: body.supportedModels ?? null,
           windowTokenLimits: body.windowTokenLimits ?? null,
+          providerPreferences: body.providerPreferences ?? null,
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
           // Always written, never left to the column default: the default is right for a metered
@@ -166,6 +168,8 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         configDir: current.configDir,
         baseUrl: resolve(body.baseUrl, current.baseUrl),
         dialect: resolve(body.dialect, current.dialect ?? null),
+        hasProviderPreferences:
+          resolve(body.providerPreferences, current.providerPreferences) !== null,
         ...(body.billing === undefined ? {} : { billing: body.billing }),
       })
       if (!checked.ok) return checked
@@ -184,6 +188,9 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           ...(body.windowTokenLimits === undefined
             ? {}
             : { windowTokenLimits: body.windowTokenLimits }),
+          ...(body.providerPreferences === undefined
+            ? {}
+            : { providerPreferences: body.providerPreferences }),
           ...(body.weight === undefined ? {} : { weight: body.weight }),
           ...(body.priority === undefined ? {} : { priority: body.priority }),
           ...(body.billing === undefined ? {} : { billing: body.billing }),

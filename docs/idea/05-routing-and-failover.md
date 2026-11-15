@@ -163,6 +163,17 @@ expiry the health store sets) and filtered as `model-unsupported` until it lapse
 model stops costing one upstream round trip and one client-visible `404` per request (plan 101,
 10.16: 40 such `404`s in 37.5 h on one OpenRouter account).
 
+The same per-account map holds a model the upstream **throttled alone** (`reason: "rate-limited"`):
+a `429` the driver scopes to the model (`FailureClassification.modelScoped`, or a model id matching
+`HttpDriverConfig.modelScopedRateLimits`) holds that (account, model) pair until the refusal's own
+reset, or the breaker's backoff stepped per repeat while the hold stands, and the account's breaker
+and limiter reading are left alone (`HealthStore.throttleModel`, `dataplane/health-model-holds.ts`).
+The pair is filtered as `cooling-down` with that reset — a `429` + `Retry-After` for that model —
+and every other model on the account keeps serving. OpenRouter scopes both its relayed
+upstream-provider throttle and every `:free` variant this way; a key-level `429` on a paid model
+still cools the account (prod 2026-11-14: one `google/gemma-4-31b-it:free` `429` cooled
+`openrouter-dz-coding-30d` and its next, paid, request was refused).
+
 ### Context tags — a client hint, not part of the name
 
 Claude Code appends a context-window tag to the model it sends — `opus[1m]`, `claude-opus-5-5[1m]`,
@@ -821,7 +832,7 @@ stated.
 
 | Reading | Named by | Written by | Read by |
 |---|---|---|---|
-| **Quota window** — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage` | The provider, in a vocabulary the router shares | `RateLimitSignal.quotaWindows`, folded by the health store. The Claude subscription transport and the Codex OAuth transport speak it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §5, [03-providers.md](03-providers.md#openai-oauth--chatgptcodex-subscription)) | `quota-window-spent` in the filter, `quota-aware`, `router_quota_utilization`, the console's per-window gauges. Advisory windows (`QuotaWindowState.advisory`) are *not* read by `quota-window-spent` — see [02-domain-model.md](02-domain-model.md#quota-window-state) for the display-only rule |
+| **Quota window** — `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overage`, `spend_limit` (a metered key's own cap, OpenRouter) | The provider, in a vocabulary the router shares | `RateLimitSignal.quotaWindows`, folded by the health store. The Claude subscription transport and the Codex OAuth transport speak it ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md) §5, [03-providers.md](03-providers.md#openai-oauth--chatgptcodex-subscription)) | `quota-window-spent` in the filter, `quota-aware`, `router_quota_utilization`, the console's per-window gauges. Advisory windows (`QuotaWindowState.advisory`) are *not* read by `quota-window-spent` — see [02-domain-model.md](02-domain-model.md#quota-window-state) for the display-only rule |
 | **Limiter reading** — `requests`, `input-tokens`, `tokens`, … | The provider, in its own words | `RateLimitSignal.windows`, parsed off every HTTP response | `quota-aware` only. It never filters an account: a limiter that hit zero has already cooled the breaker down |
 
 An HTTP limiter has no `QuotaWindowKind` equivalent, so it never becomes a quota window — but it is

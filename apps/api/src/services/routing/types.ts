@@ -118,8 +118,12 @@ export interface AccountSnapshot {
    * instant the refusal stops being trusted. Learned in memory by the health store (plan 101,
    * 10.16: a delisted OpenRouter model kept being routed, one client-visible `404` per request).
    * Keyed by the upstream name after alias mapping — the name the provider actually refused.
+   *
+   * Also a model this account is **throttled** on (`reason: "rate-limited"`): a `429` the driver
+   * scopes to one model (OpenRouter's upstream-provider throttle, any `:free` variant) holds that
+   * model here until its reset, and leaves the account serving every other one.
    */
-  readonly refusedModels?: ReadonlyMap<string, Date>
+  readonly refusedModels?: ReadonlyMap<string, ModelRefusal>
   /** Client model name -> this account's upstream name. Absent means pass the name through. */
   readonly modelAliases?: Readonly<Record<string, string>>
   /** Per-window quota state. Windows reset independently; the account is blocked by any spent one. */
@@ -271,4 +275,16 @@ export interface ScopeGroup {
   readonly members: readonly ScopedAccount[]
   /** In-scope overflow member, or null. Invisible to the policy until the group filters empty. */
   readonly overflow: ScopedAccount | null
+}
+
+/**
+ * One model held off one account. `unsupported`: the provider said it does not serve the name (until
+ * `MODEL_REFUSAL_TTL_SECONDS` lapses). `rate-limited`: it throttled that model only, until `until` —
+ * the provider's reset or the breaker's own backoff, `strikes` stepping it while the hold stands.
+ */
+export interface ModelRefusal {
+  readonly until: Date
+  readonly reason: "unsupported" | "rate-limited"
+  readonly resetSource?: ResetSource
+  readonly strikes?: number
 }

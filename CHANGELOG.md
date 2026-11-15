@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.60.1] — 2026-11-15
+
+### Changed
+
+- **A re-cut of 2.60.0, with no code change.** The `v2.60.0` tag was pushed on the release PR's head commit, not its squash commit on `main`, so the release gate refused it before a layer was built. Nothing was published under 2.60.0, and tags cannot be deleted here, so this patch carries the same tree as 2.60.0's `main` commit.
+
+## [2.60.0] — 2026-11-15
+
+### Added
+
+- **OpenRouter accounts carry standing `provider` routing preferences.** `providerPreferences` on an account (admin API create/PATCH, and a JSON box on the console's account edit form) is OpenRouter's request `provider` object: `sort`, `quantizations`, `allow_fallbacks`, `order`, `only`, `ignore`, `require_parameters`. It is the only way to ask for fp8/bf16, since a slug suffix like `:floor` states a sort only. It is validated strictly at the write (an unknown field or value, or `{}`, is a `400`; `null` clears), and a provider whose surface reads no such field is refused with `provider_preferences_unsupported`. On egress it is merged into the body, passthrough and translated alike, and a client's own `provider` fields win field by field. A body with no `"provider"` bytes is spliced, not parsed. Accounts without preferences, and every non-OpenRouter account, are sent byte-identical bodies. Migration 0046 adds the nullable `accounts.provider_preferences` column. Spec: `docs/idea/03-providers.md#openrouter--provider-preferences-key-caps-and-per-model-throttles`. Regression: `apps/api/test/integration/openrouter-provider-preferences.test.ts`, `apps/api/test/unit/dataplane/provider-preferences.test.ts`, `apps/api/test/unit/accounts/provider-preferences.test.ts`, `apps/web/test/unit/ProviderPreferencesField.test.tsx`.
+
 ### Security
 
 - **`@hono/node-server` resolves to 2.1.8, clearing the two advisories that turned `bin/advisory` and `main`'s CI red.** It arrives through `@modelcontextprotocol/sdk`, whose own range (`^1.19.9 || ^2.0.5`) already allows the fixed releases, so this is a lockfile refresh of that one entry, not an override: GHSA-jpvv-r467-5p4w (a backslash in the request path parsed as a separator, bypassing path-based access control at a reverse proxy) and GHSA-qv5m-9pm6-hqp3 (an unhandled `ECONNRESET` during an asynchronous WebSocket upgrade crashes the process), both fixed in 2.1.6. `bin/advisory` now assesses the resolved set clean (445 packages).
 
 ### Fixed
 
+- **An OpenRouter key that hits a resetting spend cap comes back at the reset.** A key past its own `limit` answers `402` / `403 Key limit exceeded`, read as `credits-exhausted`, so the account parked `exhausted` whatever the cap's `limit_reset` was (prod: `openrouter-glm53-fallback`, `exhausted` since 2026-10-08). `openrouter` now reads `GET /api/v1/key` through `plan_quota_read` into a `spend_limit` window. Its reset is the next documented boundary: daily 00:00 UTC, weekly Monday 00:00 UTC, monthly the 1st 00:00 UTC. With that window fresh and spent, the same refusal cools the account until the refusal's own stated reset, or else the boundary, and the breaker's ordinary half-open probe restores it. A cap with headroom left, `limit_reset: null`, or a stale reading stays `exhausted`, as before. Regression: `apps/api/test/unit/dataplane/health-key-limit-reset.test.ts`, `apps/api/test/unit/models/openrouter-key-recovery.test.ts`, `apps/api/test/unit/providers/openrouter-key-limit.test.ts`.
+- **A throttle on one OpenRouter model no longer cools the whole account.** Prod 2026-11-14: one `google/gemma-4-31b-it:free` `429` cooled `openrouter-dz-coding-30d`, and its next request, for paid `deepseek/deepseek-v4.1-flash:floor`, was refused `1 of 1 account in pool openrouter-coding is rate limited or out of quota`. Two kinds of `429` now hold only that (account, model) pair, in the per-account `refusedModels` map the delisted-model rule already used: OpenRouter's relayed upstream-provider throttle (`Provider returned error`, signal `openrouter:upstream-throttle`) and any `429` for a `:free` variant. The hold lasts until the refusal's own reset, or the breaker's backoff stepped per repeat, and is answered `429` + `Retry-After` for that model. The account keeps serving every other model, and a key-level `429` on a paid model still cools the account. Spec: `docs/idea/05-routing-and-failover.md`. Regression: `apps/api/test/integration/openrouter-model-throttle.test.ts`.
 - **An Anthropic cache write is visible on the openai-chat wire.** Translating Anthropic usage toward `openai-chat` folded `cache_creation_input_tokens` into `prompt_tokens` and stated it nowhere else, so a client could not see the cache-write premium. Over 7 days to 2026-11-14, only 297 of 3,988 Claude calls a developerz.ai client made through this wire recorded a cache write. The translated usage now also carries `prompt_tokens_details.cache_write_tokens` (OpenRouter's spelling, already read back by `usageToAnthropic`) whenever Anthropic reported a write. The value stays folded into `prompt_tokens`, so `prompt_tokens`, `total_tokens` and `cached_tokens` are unchanged; an unreported write leaves the field off the wire. Covers the streaming and non-streaming paths, which share `usageToOpenAiChat`. Spec: `docs/idea/06-protocol-translation.md#usage-and-token-fields`. Regression: `apps/api/test/unit/translate/usage.test.ts`.
 
 ### Removed
@@ -2214,3 +2228,5 @@ your tooling config.
 [2.57.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.1
 [2.58.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.58.0
 [2.59.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.59.0
+[2.60.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.60.0
+[2.60.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.60.1

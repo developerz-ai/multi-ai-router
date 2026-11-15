@@ -537,6 +537,64 @@ Pooling is one key per real member. OpenCode's terms forbid multiple accounts us
 usage limits; a pool of member keys is the shape the plan is sold in, and buying extra workspaces to
 stack limits is not.
 
+## OpenRouter — provider preferences, key caps and per-model throttles
+
+**Provider preferences.** An `openrouter` Account may carry `providerPreferences`: OpenRouter's
+request `provider` object (openrouter.ai/docs/features/provider-routing, read 2026-11-14), the only
+way to ask for a quantization — a slug suffix (`:floor`, `:nitro`) states a sort and nothing else.
+Accepted fields: `sort` (`price` | `throughput` | `latency`), `quantizations` (OpenRouter's enum:
+`int4` … `fp32`, `unknown`), `allow_fallbacks`, `order`, `only`, `ignore`, `require_parameters`.
+Strict: an unknown field or value, or `{}`, is a `400` at the admin write; `null` clears. Which
+providers take them is the driver's `ProviderSurface.providerPreferences` (only `openrouter`); any
+other provider is refused `provider_preferences_unsupported`.
+
+On egress (`dataplane/body/provider-preferences.ts`, last step of `chain-body.ts`), passthrough and
+translated bodies alike: **a client's own `provider` fields win, field by field**; the account's
+object fills only what the client left out, one level deep. The account's object is a default for
+a whole pool of callers, and a caller naming its own `order` or `require_parameters` knows something
+about that one request the operator could not; overwriting it would second-guess a request the router
+was asked to relay. To enforce a quantization against every caller, hand the account only to keys
+whose callers do not send one. A body with no `"provider"` bytes is never parsed — the object is
+spliced after the opening brace and every other byte stays the client's; an account with no
+preferences, and every account whose surface takes none, is sent exactly the bytes it was before.
+
+```bash
+curl -s -X PATCH "$MAR/api/admin/accounts/<id>" -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"providerPreferences":{"sort":"price","quantizations":["fp8","bf16"],"allow_fallbacks":true}}'
+```
+
+The console's account edit form shows a **Provider preferences** JSON box for these accounts only.
+
+**Key caps that reset.** `openrouter` declares a `quotaRead` (`drivers/openrouter-key.ts`) on
+`GET https://openrouter.ai/api/v1/key` (openrouter.ai/docs/api-reference/limits, read 2026-11-14):
+`limit`, `limit_reset` (`daily` | `weekly` | `monthly` | null), `limit_remaining`. It becomes one
+advisory `spend_limit` window: utilization `1 − limit_remaining/limit`, reset at the next documented
+boundary — daily the next 00:00 UTC, weekly the next Monday 00:00 UTC, monthly the 1st of the next
+month 00:00 UTC — labeled `provider-reported`, and no reset at all for `limit_reset: null`. An
+uncapped key (`limit: null`) is `quota:no-plan`. Not read for an account with a base-URL override.
+
+A key past its cap answers `402` or `403 Key limit exceeded`, `credits-exhausted`. Through 2.59.0
+that parked the account `exhausted` whatever the cap's reset (prod: `openrouter-glm53-fallback`,
+`exhausted` from 2026-10-08). Now `withPlanReset` (`routing/plan-reset.ts`) reads such a refusal
+against the account's fresh `spend_limit` window: spent and naming a reset, the refusal is that
+cap — `rate-limited`, cooling until the refusal's own stated reset if it carried one (a header or
+`Retry-After`), else the boundary. Only `spend_limit` lends to a credits refusal; a cap with headroom
+left (a dead balance), no reset (needs a human), or a reading older than two
+`PLAN_QUOTA_READ_INTERVAL_MINUTES` leaves it `exhausted`. At the boundary the breaker goes half-open
+and the ordinary recovery probe brings the account back — no second recovery path. A reset past
+`ROUTING_MAX_REPORTED_RESET_SECONDS` (8 days; a monthly cap) is cut there and re-learned on the next
+refusal. An account already `exhausted` reaches this on its next bounded re-test (rule 7): the
+re-test's probe draws the same refusal, which now cools it until the boundary. A refusal that lands
+before the first reading after the cap filled is still `exhausted` until that re-test.
+
+**Per-model throttles.** A `429` OpenRouter relays from the provider serving one model (`Provider
+returned error`, metadata `… is temporarily rate-limited upstream`, signal
+`openrouter:upstream-throttle`), and any `429` for a `:free` variant (OpenRouter's free-model limits
+are separate from a key's paid traffic), holds only that (account, model) pair
+([05-routing-and-failover.md](05-routing-and-failover.md)). A key-level `429` on a paid model
+(`openrouter:code-429`) still cools the account.
+
 ## The OpenAI-shaped fleet — Groq, DeepSeek, xAI, Mistral, Together, Cerebras
 
 Six vendors that all speak OpenAI Chat Completions and differ only in how each words a failure. Each
@@ -600,7 +658,7 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `anthropic-api` | `400` · `error.type: invalid_request_error` · message **starts** `Your credit balance is too low`; or `error.type` is `billing_error` | Anthropic answers a spent console balance with **`400 invalid_request_error`**. Read the status alone and it classifies as a client mistake |
 | `openai-oauth` | `detail.code` / `error.code` / `type` in `usage_limit_reached`, `rate_limit_exceeded` (→ `rate-limited`); `account_deactivated`, `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` (→ `credits-exhausted`: on a `429`, by code, and as a `type` only `insufficient_quota`; in a stream, only from `response.error.code` of a frame whose own JSON `type` is `response.failed`) | Codex answers a spent balance with **`429`**, as OpenAI's API does, and the Codex CLI treats those four quota codes as fatal (`QuotaExceeded`, openai/codex `codex-rs/codex-api/src/sse/responses_error.rs`). The stream hook shares the lists ([05-routing-and-failover.md](05-routing-and-failover.md)) |
 | `openai-api` | `error.code` / `error.type` in `insufficient_quota`, `billing_hard_limit_reached`, `account_deactivated` | OpenAI returns **`429`** for a spent balance — the same status it uses for real rate limiting. Status alone marks a dead account `cooling_down` and retries it on a timer forever |
-| `openrouter` | on `402`/`403`, message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or on `403`, message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through as a `403`. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test. A `400`/`404` saying `is not a valid model ID` or `is no longer available` (a delisted model, prod 2026-11-09) is `model-unsupported`: the next account gets its turn and this one is not struck |
+| `openrouter` | on `402`/`403`, message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or on `403`, message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through as a `403`. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test — and, with the key's own fresh `GET /api/v1/key` reading spent, any of these key-cap refusals cools until the cap's reset boundary instead ([OpenRouter](#openrouter--provider-preferences-key-caps-and-per-model-throttles)). A `400`/`404` saying `is not a valid model ID` or `is no longer available` (a delisted model, prod 2026-11-09) is `model-unsupported`: the next account gets its turn and this one is not struck |
 | `zai` | `error.code` in `1113`, `1112`; or, on `400`/`402`/`429`, message matches `insufficient balance` / `balance is insufficient` (never a bare `account balance`, which also merely describes one) | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
 | `kimi` | `error.type` is `exceeded_current_quota_error` **unless the message reports a spent usage window** (read first — see the mirror-image table); or, on `400`/`402`/`429`, message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human. Since 2026-11-09 Kimi also sends that type on the weekly-window `429`; read on the type alone it parked a healthy account `exhausted` five times in 37 h and answered 28 requests `402` (sweep 101, 10.1) |
 | `minimax` | `base_resp.status_code` is `1008`. A spent Token Plan window — `429`, message `… Token Plan usage limit reached … (2056)` — is `rate-limited` (`minimax:token-plan-limit`), never a dead balance, though it names Credits | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |

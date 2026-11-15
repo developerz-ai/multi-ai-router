@@ -162,11 +162,10 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
   ```
 
 - **Roll the deployments — a release is not done until they run it.** Nothing
-  automates this. Open the image-pin PR in `developerz-ai/infrastructure`
-  (`stacks/apps/multi-ai-router/manifests/deployment.yml`, the
-  `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z` image line) and in every other
-  deployment repo that pins the router (a customer stack's production overlay),
-  update each stack README's "deployed" version in the same PR, and link the
+  automates this. Open an image-pin PR in every deployment repository that pins
+  the router (the `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z` image line in its
+  deployment manifest; the operator keeps the list of those repositories, and this
+  public document does not name them), update each stack README's "deployed" version in the same PR, and link the
   PRs from the GitHub Release. After they sync, confirm the pod reports the
   version: `curl -s https://<router>/healthz` → `"version":"X.Y.Z"`.
 

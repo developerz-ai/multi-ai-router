@@ -2,6 +2,7 @@ import {
   disableThinkingForForcedTool,
   keepThinkingForRequiredModel,
 } from "./body/forced-tool-thinking"
+import { withProviderPreferences } from "./body/provider-preferences"
 import { rewriteModel } from "./body/read"
 import type { ChainContext } from "./chain"
 import { sessionCacheKey } from "./egress/cache-key-header"
@@ -17,9 +18,25 @@ import type { AccountReasoningSeal } from "./reasoning-seal-context"
  * which a Claude subscription also takes since the SDK's prompt is built from Anthropic-shaped
  * bytes either way.
  *
+ * Last, on either path, an Account's standing `provider` preferences, for a surface that reads them
+ * (`body/provider-preferences.ts`): the client's own fields win, and an Account with none is sent
+ * the bytes above unchanged.
+ *
  * @throws TranslationError when a translated body has a field with no target representation.
  */
 export function bodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | null {
+  const body = shapedBodyFor(ctx, servable)
+  if (body === null || servable.kind !== "http") return body
+  const preferences = servable.account.driver.providerPreferences ?? null
+  if (
+    preferences === null ||
+    servable.driver.acceptsProviderPreferences?.(servable.account.driver) !== true
+  )
+    return body
+  return withProviderPreferences(body, preferences)
+}
+
+function shapedBodyFor(ctx: ChainContext, servable: ServableCandidate): Uint8Array | null {
   const pair = servable.translation
   if (pair !== null) {
     const translated = ctx.translated.bodyFor(

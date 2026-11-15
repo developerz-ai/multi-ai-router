@@ -28,9 +28,9 @@ the body, because it changes whenever a PR tags), unless an open issue already h
 which case rewrite its body with this run's window. Patch for fixes, minor for a feature or a
 migration, and a breaking change goes to a human (`escalate`). The body lists the commits since `$last` and any migration, and states the steps:
 version in all five manifests, `packages/core/src/version.ts` and the Dockerfile label, changelog
-finalized, `bin/verify-version v<next>`, tag, then roll the deployment image pins: one PR in
-`developerz-ai/infrastructure` and one in `tesote/infrastructure`, each linked from the GitHub
-Release (`docs/RELEASING.md` § 6). A release is not done until the deployments run it.
+finalized, `bin/verify-version v<next>`, tag, then roll the deployment image pins: one PR in each deployment repository that pins the
+router (the operator keeps that list; this public repository does not name them), each linked from
+the GitHub Release (`docs/RELEASING.md` § 6). A release is not done until the deployments run it.
 
 ## Rows
 

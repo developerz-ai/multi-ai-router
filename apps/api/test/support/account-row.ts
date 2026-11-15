@@ -21,6 +21,7 @@ export function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     modelAliases: null,
     supportedModels: null,
     windowTokenLimits: null,
+    providerPreferences: null,
     weight: 100,
     priority: 0,
     billing: "subscription",

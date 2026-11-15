@@ -27,6 +27,8 @@ export interface ClassificationRule {
    * and never applied over a reset the provider did report. See {@link withEstimatedReset}.
    */
   readonly estimatedResetSeconds?: number
+  /** Copied onto the classification: see `FailureClassification.modelScoped`. */
+  readonly modelScoped?: true
 }
 
 /**
@@ -153,6 +155,7 @@ export function classifyUpstreamFailure(
     signal: verdict.signal,
     message: facts.message,
     rateLimit: withEstimatedReset(rateLimit, matched?.estimatedResetSeconds),
+    ...(matched?.modelScoped === true ? { modelScoped: true } : {}),
   }
 }
 
@@ -197,6 +200,11 @@ export function onStatus(
     ...rule,
     when: (facts, status, stated) => statuses.includes(status) && rule.when(facts, status, stated),
   }
+}
+
+/** The same rule, its refusal about the requested model on this account rather than the account. */
+export function modelScoped(rule: ClassificationRule): ClassificationRule {
+  return { ...rule, modelScoped: true }
 }
 
 /** The same rule, carrying an estimated reset for responses that name none. */

@@ -12,10 +12,15 @@ import {
 import type { UpdateAccountInput } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
-import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
 import { DIALECT_HINT, dialectChoices, providerCredentialNote } from "../../lib/provider-display"
 import styles from "./AccountEditDialog.module.scss"
+import { BillingFields } from "./BillingFields"
 import { LoginLifetimeSummary } from "./LoginLifetimeSummary"
+import {
+  formatPreferences,
+  ProviderPreferencesField,
+  parsePreferences,
+} from "./ProviderPreferencesField"
 import {
   type CeilingInputs,
   parseCeilings,
@@ -68,6 +73,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
   const [priority, setPriority] = createSignal("")
   const [billing, setBilling] = createSignal<AccountBilling>("metered")
   const [ceilings, setCeilings] = createSignal<CeilingInputs>({})
+  const [preferences, setPreferences] = createSignal("")
 
   // Sync-from-props, re-seeded whenever the dialog opens on a different account.
   // The credential is deliberately not among them: there is nothing to seed it
@@ -87,6 +93,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
         setPriority(account === null ? "" : String(account.priority))
         setBilling(account?.billing ?? "metered")
         setCeilings(seedCeilings(account?.windowTokenLimits))
+        setPreferences(formatPreferences(account?.providerPreferences))
       },
     ),
   )
@@ -104,7 +111,9 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
     event.preventDefault()
     const account = props.account
     const parsedAliases = parseModelAliases(aliases())
-    if (account === null || !parsedAliases.ok) return
+    const prefs = parsePreferences(preferences())
+    const takesPreferences = props.provider?.providerPreferences === true
+    if (account === null || !parsedAliases.ok || (takesPreferences && !prefs.ok)) return
 
     const models = parseModelList(supportedModels())
     const aliasMap = parsedAliases.aliases
@@ -132,6 +141,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
       ...(props.provider?.transport === "agent-sdk"
         ? { windowTokenLimits: parseCeilings(ceilings()) }
         : {}),
+      ...(takesPreferences && prefs.ok ? { providerPreferences: prefs.value } : {}),
     })
   }
 
@@ -222,24 +232,12 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
           value={supportedModels()}
         />
 
-        <Show when={props.provider?.billingFixed === false}>
-          <SelectField
-            hint="How you pay for this account, and the only thing that decides whether its usage reports as spend or as an attribution. The router cannot read it off the wire — a coding plan and a metered key share an endpoint and a key shape."
-            label="Billing"
-            onChange={(event) => setBilling(event.currentTarget.value as AccountBilling)}
-            options={BILLING_OPTIONS}
-            value={billing()}
-          />
-          <p class={styles.note}>{billingConsequence(billing())}</p>
-        </Show>
-
-        <Show when={props.provider?.billingFixed === true}>
-          <p class={styles.note}>
-            Billing: <code>{props.account?.billing}</code> — not editable. This provider is sold
-            only as a subscription and has no per-token price to meter, so its usage is always
-            valued at the vendor's public API rate and reported apart from metered spend.
-          </p>
-        </Show>
+        <BillingFields
+          onChange={setBilling}
+          provider={props.provider}
+          stored={props.account?.billing}
+          value={billing()}
+        />
 
         <Field
           hint="One per line, requested = upstream. The left side is what a client sends, the right is the name that goes upstream — the only rename the router is allowed to make."
@@ -267,6 +265,12 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
             </p>
           )}
         </Show>
+
+        <ProviderPreferencesField
+          onInput={setPreferences}
+          shown={props.provider?.providerPreferences === true}
+          value={preferences()}
+        />
 
         <RoutingNumberFields
           onPriority={setPriority}
