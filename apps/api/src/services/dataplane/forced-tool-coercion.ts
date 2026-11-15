@@ -5,6 +5,7 @@ import {
 } from "../translate/shared/forced-tool-coercion"
 import type { ServableCandidate } from "./plan"
 import { DEFAULT_BUFFERED_BODY_MAX_BYTES, join, readRelayBody } from "./relay-body-read"
+import { DEFAULT_TRANSLATED_KEEPALIVE_MS } from "./relay-translate"
 
 /**
  * The response half of `translate/shared/forced-tool-coercion.ts`: a forced tool a vendor answered
@@ -21,6 +22,19 @@ import { DEFAULT_BUFFERED_BODY_MAX_BYTES, join, readRelayBody } from "./relay-bo
  */
 
 const MARKER = new TextEncoder().encode('"tool_choice"')
+const HEARTBEAT = new TextEncoder().encode(":\n\n")
+
+/**
+ * How long a held forced stream may write nothing to the client while the upstream is sending, and
+ * the clock it is measured on: the translated relay's cadence (`relay-translate.ts`), injected so a
+ * test drives it without waiting.
+ */
+export interface HeldKeepalive {
+  readonly ms: number
+  readonly now: () => number
+}
+
+const DEFAULT_KEEPALIVE: HeldKeepalive = { ms: DEFAULT_TRANSLATED_KEEPALIVE_MS, now: Date.now }
 
 /** The tool the upstream body (already in the anthropic dialect) forces, or `undefined`. */
 export function forcedToolOfBody(bytes: Uint8Array | null): string | undefined {
@@ -57,6 +71,7 @@ export function coerceForcedToolResponse(
   signal?: AbortSignal,
   newId: () => string = newToolUseId,
   maxBytes: number = DEFAULT_BUFFERED_BODY_MAX_BYTES,
+  keepalive: HeldKeepalive = DEFAULT_KEEPALIVE,
 ): Response {
   if (upstream.body === null) return upstream
   const streamed = upstream.headers.get("content-type")?.includes("text/event-stream") === true
@@ -70,7 +85,7 @@ export function coerceForcedToolResponse(
     signal === undefined ? cancelled.signal : AbortSignal.any([signal, cancelled.signal])
   const source = upstream.body
   const body = streamed
-    ? coercedStream(source, tool, newId, maxBytes, () => onCoerced(true), reading)
+    ? coercedStream(source, tool, newId, maxBytes, () => onCoerced(true), reading, keepalive)
     : new ReadableStream<Uint8Array>({
         async start(controller) {
           try {
@@ -95,6 +110,11 @@ export function coerceForcedToolResponse(
  * block means the vendor obeyed, so the held prefix is replayed and the rest relayed as it arrives;
  * a `text` or `thinking` block is read to the end and coerced as before. A stream past `maxBytes`
  * is relayed as it came rather than held without bound.
+ *
+ * While held, a quiet client window writes an SSE comment (`:`, no event, no data). A
+ * think-by-default vendor opens every forced stream with `thinking`, so without it the client got
+ * zero bytes for the whole reply and an idle timer could close a healthy request (developerz.ai
+ * plan 101 slice 09, R2). Measured on chunk arrival, as in `relay-translate.ts`.
  */
 function coercedStream(
   source: ReadableStream<Uint8Array>,
@@ -103,6 +123,7 @@ function coercedStream(
   maxBytes: number,
   onCoerced: () => void,
   signal: AbortSignal,
+  keepalive: HeldKeepalive,
 ): ReadableStream<Uint8Array> {
   const reader = source.getReader()
   const held: Uint8Array[] = []
@@ -110,6 +131,7 @@ function coercedStream(
   let text = ""
   let total = 0
   let mode: "deciding" | "coercing" | "relaying" = "deciding"
+  let lastWrite = keepalive.now()
   const onAbort = () => void reader.cancel(signal.reason).catch(() => {})
   signal.addEventListener("abort", onAbort, { once: true })
   return new ReadableStream<Uint8Array>(
@@ -149,6 +171,11 @@ function coercedStream(
               const first = firstContentBlock(text)
               if (first === "tool_use") mode = "relaying"
               else if (first !== undefined) mode = "coercing"
+            }
+            if (mode !== "relaying" && keepalive.now() - lastWrite >= keepalive.ms) {
+              lastWrite = keepalive.now()
+              controller.enqueue(HEARTBEAT.slice())
+              return
             }
           }
         } catch (error) {

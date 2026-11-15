@@ -128,6 +128,14 @@ export interface FailureClassification {
    */
   readonly requestAttributable?: boolean
   /**
+   * The refusal can never succeed for this request on this pool, however long the client waits:
+   * the Agent SDK's `claude-sdk:structured-output-unsupported` (no carrier for the field, on any
+   * clock). Only a refusal with this flag ends a chain whose every account refused it as the
+   * request wall when fewer than `REQUEST_WALL_AFTER` were tried; one that clears with time
+   * (`claude-sdk:extra-usage-gated`) keeps its held `429` (developerz.ai plan 101 slice 09, R1).
+   */
+  readonly permanentForRequest?: boolean
+  /**
    * A `rate-limited` refusal about the **model** on this account, not the account: OpenRouter's
    * relay of an upstream provider's throttle (`Provider returned error`, `… is temporarily
    * rate-limited upstream`). That model is held off this account until its reset; the account keeps

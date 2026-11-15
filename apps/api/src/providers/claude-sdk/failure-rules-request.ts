@@ -1,4 +1,5 @@
-import { any, pattern, phrase, type SdkRule } from "./failure-rules-vocabulary"
+import { any, messagePhrase, pattern, phrase, type SdkRule } from "./failure-rules-vocabulary"
+import { STRUCTURED_OUTPUT_UNCARRIED } from "./request"
 
 /**
  * The first six rows of the Agent-SDK failure classification table
@@ -35,6 +36,22 @@ export const SDK_REQUEST_FAILURE_RULES: readonly SdkRule[] = [
       "which requires a tool call, but the request declared no tools",
       "is recognized but its payload is one this router cannot read",
     ),
+  },
+  {
+    // Our own throw (`request.ts`), before any slot: this transport cannot constrain the answer's
+    // shape, and prose in its place is the silent downgrade R1 named. Retryable, because the next
+    // account may be on fast mode or an API key, which carry the field natively; and
+    // request-attributable, so no account is struck or cooled for it, and two such refusals end
+    // as the typed `400` request wall (`routing/failover.ts`).
+    kind: "server-error",
+    signal: "claude-sdk:structured-output-unsupported",
+    status: 400,
+    clientMessage:
+      "the request's structured output (output_config.format) cannot be honoured on a Claude subscription's Agent SDK transport; no account that carries it natively served the request",
+    requestAttributable: true,
+    // No clock clears it on this pool, so a one-account chain ends as the wall too.
+    permanentForRequest: true,
+    match: messagePhrase(STRUCTURED_OUTPUT_UNCARRIED.toLowerCase()),
   },
   {
     // The turn *ran* and answered free-form text where a tool call was forced: an upstream that

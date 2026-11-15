@@ -361,6 +361,7 @@ describe("the probe's query() launch — one of three call sites", () => {
     // claude.ai org connectors are a separate door from strictMcpConfig — see `env.ts`.
     expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
     expect(env.CLAUDE_CODE_SESSION_KIND).toBe("bg")
+    expect(env.DISABLE_AUTO_COMPACT).toBe("1")
   })
 })
 
@@ -566,6 +567,7 @@ describe("the launch the production invoker actually builds", () => {
     const options = await launchedOptions({
       ENABLE_CLAUDEAI_MCP_SERVERS: "true",
       CLAUDE_CODE_SESSION_KIND: "interactive",
+      DISABLE_AUTO_COMPACT: "0",
     })
     const env = options.env as Record<string, string>
 
@@ -573,6 +575,9 @@ describe("the launch the production invoker actually builds", () => {
     // strictMcpConfig governs — a separate door, closed here (`env.ts`).
     expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false")
     expect(env.CLAUDE_CODE_SESSION_KIND).toBe("bg")
+    // The client owns its context: the CLI never compacts a resumed session behind its back
+    // (developerz.ai plan 101 slice 09, R8).
+    expect(env.DISABLE_AUTO_COMPACT).toBe("1")
     // And the runtime the CLI is launched under is a decision, never a detection.
     expect(options.executable).toBe("bun")
   })

@@ -604,9 +604,18 @@ Rules:
   `model-unsupported` is the second kind that is retryable but blameless.
 - **A refusal the request itself provoked is a request wall, not a cooldown.** A failure marked
   `requestAttributable` (the Agent SDK's `claude-sdk:extra-usage-gated`: an unscrubbed harness
-  preamble every subscription refuses alike) fails over once with no cooldown and no breaker strike;
+  preamble every subscription refuses alike; and `claude-sdk:structured-output-unsupported`: a
+  structured-output constraint the Agent-SDK transport cannot carry, which a fast-mode or API-key
+  account serves natively) fails over once with no cooldown and no breaker strike;
   a second such answer in the same chain (`REQUEST_WALL_AFTER`, 2) stops it with reason
-  `request-wall`, rendered with `wall: "request"` — never a router `429`. Before, the chain cooled
+  `request-wall`, rendered with `wall: "request"` — never a router `429`. So does a chain whose every
+  attempt was refused that way with no untried candidate left, but only for a refusal no clock
+  clears on that pool (`permanentForRequest`: `claude-sdk:structured-output-unsupported`), where a
+  `503` would send the client back to the same refusal (developerz.ai plan 101 slice 09, R1). A
+  refusal that clears with time (`extra-usage-gated`) on a one-account pool keeps its held `429`:
+  the same request succeeds later. Such a refusal counts even when its transport
+  refused before the upstream started: it is a classified verdict, not a preparation fault, so it
+  takes the failure tail (usage row, sentence, wall count). Before, the chain cooled
   each account it tried, so one client's prompt walked the pool and other tenants saw `429` until
   the cooldowns lapsed (plan 101, 05.14).
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.
@@ -624,6 +633,19 @@ Rules:
 - The failure that surfaces is the **most actionable** attempt's — never simply the last one — with
   the attempt count in the error metadata and in the `UsageRecord`. Every attempt is still recorded;
   only one of them answers the client. See [Which failure the client hears](#which-failure-the-client-hears).
+
+#### Known limits and their trip conditions
+
+Accepted on purpose; each row names what would make it worth building (developerz.ai plan 101 slice 09).
+
+| Limit | Why it stands | Trip condition |
+|---|---|---|
+| No idempotency key on a non-streamed retry: an attempt that timed out after the upstream finished is billed by that upstream, then served again by the next account | No upstream in the pool honours a client idempotency key on inference, so a key would bind nothing | An upstream ships an idempotency key for inference, or usage records show attempts past `UPSTREAM_TIMEOUT_MS` with `tokens_out > 0` above 1 % of a week's non-streamed attempts |
+| Breaker and recovery clocks live in one replica's memory | Production runs one replica (`#breaker`, "Known limit: replicas") | Before a second replica is deployed |
+| Sealed Codex reasoning replays only on the account that minted it; a failover is a cold cache from that step ([06](06-protocol-translation.md)) | The seal is the upstream account's encrypted content; no other account can read it | Failover share on sealed-reasoning conversations above 5 % of their turns in a week |
+| A router-minted thinking signature is refused by a real Anthropic upstream; same key and model, a chain hop from a translated account to a passthrough one is the residual gap ([06](06-protocol-translation.md)) | Clients strip on provider/wire/model change; the residual needs one pool mixing translated and passthrough accounts for one model | A pool serving one model through both an `anthropic` passthrough account and a translated one |
+| Fast mode rewrites `system[0]` (billing block + checksum) per request, and a fast/SDK switch is a different prefix, so the next turn prefills cold ([claude-fast-mode](claude-fast-mode.md)) | Caching survives by upstream tolerance of the rewrite, observed on canaries | Cache-read share on Claude-subscription turns after a fast-mode release falls below the share before it |
+| A streaming status line waits up to `UPSTREAM_STREAM_WALL_HOLD_MS` (5 s) for a wall; a silently-thinking upstream past first byte is cut at `UPSTREAM_IDLE_TIMEOUT_MS` (55 s) | Walls arrive within milliseconds of the headers; the idle clock sits under the server's | Client header timeouts at 5 s +/- 1 s, or `upstream_timeout` rows on a provider whose own docs state a silent thinking phase longer than 55 s |
 
 Both transports answer this table. The Agent-SDK path has no upstream HTTP status of its own, so
 three consequences are spelled out:

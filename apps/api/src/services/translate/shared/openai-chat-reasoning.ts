@@ -20,11 +20,10 @@ import { z } from "zod"
  * signed with the router's tag (`router-thinking.ts`); toward an openai-chat client it is a
  * documented drop (`docs/idea/06-protocol-translation.md#known-lossy-edges`).
  *
- * Two shapes are deliberately **not** read here, and both are named in
- * `06-protocol-translation.md#known-lossy-edges` rather than left to be discovered: OpenRouter's
- * structured `reasoning_details[]`, which carries signed blocks a flat string cannot hold, and
- * Mistral's `content: [{type:"thinking", …}]`, which is not a field beside the answer but a shape the
- * answer itself takes.
+ * One shape is deliberately **not** read: OpenRouter's structured `reasoning_details[]`, which
+ * carries signed blocks a flat string cannot hold (its flat `reasoning` beside it is read). Mistral's
+ * `content: [{type:"thinking", …}]` is folded into the reasoning text before this reader sees the
+ * turn (`openai-chat-wire.ts`, `foldArrayContent`), because it is a shape the answer itself takes.
  *
  * Spread {@link openAiChatReasoningSchema} into whichever `delta` or `message` object a pair already
  * reads; the pair owns its own schema, and this is only the fragment they would otherwise each
