@@ -57,7 +57,8 @@ async function setupFixture(platform: string, compilerAvailable: boolean) {
 test("non-Linux setup without a compiler installs and migrates with an explicit CLI limitation", async () => {
   const result = await setupFixture("Darwin", false)
   expect(result.exitCode).toBe(0)
-  expect(result.calls).toContain("bun install")
+  // Frozen, so a fresh clone's lockfile is left as committed (#403).
+  expect(result.calls).toContain("bun install --frozen-lockfile")
   expect(result.calls).toContain("migrate")
   expect(result.calls).not.toContain("guardian")
   expect(result.output).toContain("CLI shared-root ownership requires Linux")
