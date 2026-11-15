@@ -16,7 +16,9 @@ and `curl`, each block already containing this deployment's base URL (`PUBLIC_UR
 console's own origin) and that key's real value. Everything below is the same content for someone
 who never opened the console.
 
-Every block uses `http://localhost:8080` and `mar_live_…` — swap in your own.
+Every block uses `http://localhost:8080` and `mar_live_…` — swap in your own. They assume a router
+is already running and you hold a key: if not, the README's [quick start](../README.md#-quick-start)
+brings one up, and the console mints the key.
 
 A base URL and a key make the first request work. Before shipping a workload, also read
 [Errors, retries and timeouts](#errors-retries-and-timeouts). The router already fails over

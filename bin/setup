@@ -24,7 +24,9 @@ if [ "$setup_platform" = Linux ]; then
 fi
 
 step "Installing dependencies"
-bun install
+# --frozen-lockfile: a fresh clone installs exactly the committed resolution and leaves bun.lock
+# as committed, instead of rewriting it on arrival (#403).
+bun install --frozen-lockfile
 ok "dependencies installed"
 
 if [ "$setup_platform" = Linux ]; then
