@@ -38,7 +38,8 @@ services:
       postgres:
         # Not just "started": the router runs its migrations before it opens the
         # listener, so a Postgres that is booting but not yet accepting connections
-        # would fail the boot outright. `service_healthy` waits for pg_isready.
+        # would fail the boot outright. `service_healthy` waits for the postgres
+        # healthcheck below: a `select 1` against the router database over TCP.
         condition: service_healthy
 
     volumes:
