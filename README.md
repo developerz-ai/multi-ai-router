@@ -128,7 +128,10 @@ Not for you if you want a semantic model picker, an agent framework, multi-tenan
 
 ## 🚀 Quick start
 
-Configure one OIDC client (or set one local password) and one encryption key, then start the stack. The bundled [`docker-compose.yml`](docker-compose.yml) brings up two services — the router and PostgreSQL 18 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you; it reads its secrets from `.env`, which is gitignored:
+Configure one OIDC client (or set one local password) and one encryption key, then start the stack. The bundled [`docker-compose.yml`](docker-compose.yml) brings up two services — the router and PostgreSQL 18 — with a healthcheck gating the router's start and `DATABASE_URL` wired in for you; it reads its secrets from `.env`, which is gitignored.
+
+You need Docker with **Compose v2.24.0 or newer** (`docker compose version`). The compose file's `env_file` entry uses the long form (`path` + `required`), and older Compose refuses the whole file with `services.router.env_file.0 must be a string`. Compose v1 (`docker-compose`) does not read it either.
+
 
 ```bash
 cp .env.example .env
@@ -446,7 +449,7 @@ Cost comes from a price table shipped with the image and overridable per provide
 | [`docs/idea/09-deployment.md#troubleshooting`](docs/idea/09-deployment.md#troubleshooting) | Symptom → cause → fix runbook: boot failures, stuck accounts, OAuth callbacks, `401`s, stale sweeps, and more |
 | [`docs/idea/10-roadmap.md`](docs/idea/10-roadmap.md) | Milestones M1–M8 and what's deferred |
 | [`docs/idea/11-anthropic-agent-sdk.md`](docs/idea/11-anthropic-agent-sdk.md) | Claude subscriptions via the Agent SDK: `query()`, per-account `CLAUDE_CONFIG_DIR`, quota events, costs |
-| [`docs/clients.md`](docs/clients.md) | Client cookbook: config-file snippets per tool, and the `curl` that proves the base URL took |
+| [`docs/clients.md`](docs/clients.md) | Client cookbook: config-file snippets per tool, and the `curl` that proves the base URL took. It assumes a router is already running; the [quick start](#-quick-start) brings one up |
 | [`docs/reusable-code.md`](docs/reusable-code.md) | Shared helpers, services, and components that already exist — and where a new shared thing belongs |
 | [`SECURITY.md`](SECURITY.md) | Supported versions, private vulnerability reporting, response SLA, scope |
 
@@ -467,7 +470,7 @@ Cost comes from a price table shipped with the image and overridable per provide
 | Lint/format | Biome |
 | Tests | `bun test` — unit (pure) + integration (HTTP, mocked upstreams) |
 | CI | GitHub Actions on GitHub-hosted runners (amd64 + native arm64) |
-| Distribution | Multi-arch image — `ghcr.io/developerz-ai/multi-ai-router`, published only on a `v*` release tag, plus a Postgres service in the bundled compose file |
+| Distribution | Multi-arch image — `ghcr.io/developerz-ai/multi-ai-router`, published only on a `v*` release tag, as `X.Y.Z` without the `v` (release `v2.59.0` is `ghcr.io/developerz-ai/multi-ai-router:2.59.0`), plus a Postgres service in the bundled compose file |
 
 ---
 
