@@ -67,6 +67,11 @@ export const DEFAULT_ACCOUNT_BILLING: AccountBilling = "metered"
  * flag because it resets on its own clock and the operator has to be able to see when. It never
  * blocks an account by itself: a spent overage matters only once an included window is spent too,
  * so the reading that filters an account out always comes from one of the four above it.
+ *
+ * `spend_limit` is a metered key's own spend cap (OpenRouter's per-key `limit`, read off
+ * `GET /api/v1/key`). It has no fixed span — `limit_reset` may be daily, weekly, monthly or never —
+ * so it draws no measured bar. It is the one window that explains a *credits* refusal: a spent cap
+ * with a reset is a clock, not a dead balance (`routing/plan-reset.ts`).
  */
 export const QuotaWindowKind = z.enum([
   "five_hour",
@@ -74,6 +79,7 @@ export const QuotaWindowKind = z.enum([
   "seven_day_opus",
   "seven_day_sonnet",
   "overage",
+  "spend_limit",
 ])
 export type QuotaWindowKind = z.infer<typeof QuotaWindowKind>
 

@@ -3,6 +3,7 @@ import type {
   AccountStatus,
   Dialect,
   ProviderId,
+  ProviderPreferences,
   QuotaWindowState,
   WindowTokenLimits,
 } from "@multi-ai-router/core"
@@ -181,6 +182,7 @@ export interface CreateAccountInput {
   /** Upstream-side model ids. Null or empty means unknown, which routing reads as passthrough. */
   readonly supportedModels?: SupportedModelList | null
   readonly windowTokenLimits?: WindowTokenLimits | null
+  readonly providerPreferences?: ProviderPreferences | null
   readonly weight?: number
   readonly priority?: number
   /**
@@ -209,6 +211,7 @@ export interface UpdateAccountInput {
   readonly modelAliases?: ModelAliasMap | null
   readonly supportedModels?: SupportedModelList | null
   readonly windowTokenLimits?: WindowTokenLimits | null
+  readonly providerPreferences?: ProviderPreferences | null
   readonly weight?: number
   readonly priority?: number
   readonly billing?: AccountBilling

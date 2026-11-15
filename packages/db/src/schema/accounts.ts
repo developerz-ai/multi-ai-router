@@ -3,6 +3,7 @@ import {
   DEFAULT_ACCOUNT_PRIORITY,
   DEFAULT_ACCOUNT_WEIGHT,
   type Dialect,
+  type ProviderPreferences,
   type WindowTokenLimits,
 } from "@multi-ai-router/core"
 import { sql } from "drizzle-orm"
@@ -156,6 +157,16 @@ export const accounts = pgTable(
      * NULL, or a window absent from the map, means no bar for that window.
      */
     windowTokenLimits: jsonb("window_token_limits").$type<WindowTokenLimits>(),
+
+    /**
+     * Standing `provider` routing preferences for an aggregator that reads one (OpenRouter's
+     * `sort` / `quantizations` / `allow_fallbacks` / …), merged into every request this account is
+     * sent; a client's own fields win. Validated at the admin write, where an account of a provider
+     * whose surface reads no such field is refused one (`services/accounts/rules.ts`).
+     *
+     * NULL means none: the body goes as before.
+     */
+    providerPreferences: jsonb("provider_preferences").$type<ProviderPreferences>(),
 
     /** Bias for the `weighted` policy. */
     weight: integer("weight").notNull().default(DEFAULT_ACCOUNT_WEIGHT),

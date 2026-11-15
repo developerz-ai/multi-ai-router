@@ -11,8 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The historical local-admin password is recorded as compromised and rotated, and the fate of its history is decided.** A tracked operator-console debug configuration carried the value between 2026-07-31 and 2026-10-02; the file is gone, no tracked file at HEAD carries it, and the audit found exactly that one such value in the whole history. The value stays readable in `main`'s history in that window and in the snapshots the archive tag preserved (developerz-ai/multi-ai-router#398 — the tag was deleted from the remote on 2026-11-12, its objects kept in a bundle off the remote and still served by SHA until the server's purge/garbage collection) until the server-side purge: the decision (developerz-ai/multi-ai-router#404) handles all history material — the pull-request refs plus the objects the deleted archive tag left unreachable — in one purge request to GitHub Support naming the objects, with no rewrite of `main`, because a rewrite that leaves the pull-request refs in place makes nothing unreadable. Until the purge is confirmed (a fresh clone plus a fetch of the pull-request refs), the material is treated as publicly readable and a clean `main` must not be read as the value being gone. The credential itself was treated as compromised and changed at every use site the audit confirmed outside the throwaway seeded development database (developerz-ai/multi-ai-router#405 holds the dated per-site record); replacements were generated at the point of use and never written into a tracked file, task record, comment, log, commit or pull-request body, and no surviving console authenticates with the historical value. The rotation path today is unchanged: `bin/admin set-password` is the local admin password's only write path, stores only an argon2id hash, and changing or removing the password deletes every password-login session in the same run, with running replicas dropping those sessions within `ADMIN_SESSION_REVALIDATE_SECONDS`. Record: `docs/idea/12-public-hygiene.md`. Documentation only: no code, schema or runtime change, no version bump.
 
+## [2.60.1] — 2026-11-15
+
+### Changed
+
+- **A re-cut of 2.60.0, with no code change.** The `v2.60.0` tag was pushed on the release PR's head commit, not its squash commit on `main`, so the release gate refused it before a layer was built. Nothing was published under 2.60.0, and tags cannot be deleted here, so this patch carries the same tree as 2.60.0's `main` commit.
+
+## [2.60.0] — 2026-11-15
+
+### Added
+
+- **OpenRouter accounts carry standing `provider` routing preferences.** `providerPreferences` on an account (admin API create/PATCH, and a JSON box on the console's account edit form) is OpenRouter's request `provider` object: `sort`, `quantizations`, `allow_fallbacks`, `order`, `only`, `ignore`, `require_parameters`. It is the only way to ask for fp8/bf16, since a slug suffix like `:floor` states a sort only. It is validated strictly at the write (an unknown field or value, or `{}`, is a `400`; `null` clears), and a provider whose surface reads no such field is refused with `provider_preferences_unsupported`. On egress it is merged into the body, passthrough and translated alike, and a client's own `provider` fields win field by field. A body with no `"provider"` bytes is spliced, not parsed. Accounts without preferences, and every non-OpenRouter account, are sent byte-identical bodies. Migration 0046 adds the nullable `accounts.provider_preferences` column. Spec: `docs/idea/03-providers.md#openrouter--provider-preferences-key-caps-and-per-model-throttles`. Regression: `apps/api/test/integration/openrouter-provider-preferences.test.ts`, `apps/api/test/unit/dataplane/provider-preferences.test.ts`, `apps/api/test/unit/accounts/provider-preferences.test.ts`, `apps/web/test/unit/ProviderPreferencesField.test.tsx`.
+
+### Security
+
+- **`@hono/node-server` resolves to 2.1.8, clearing the two advisories that turned `bin/advisory` and `main`'s CI red.** It arrives through `@modelcontextprotocol/sdk`, whose own range (`^1.19.9 || ^2.0.5`) already allows the fixed releases, so this is a lockfile refresh of that one entry, not an override: GHSA-jpvv-r467-5p4w (a backslash in the request path parsed as a separator, bypassing path-based access control at a reverse proxy) and GHSA-qv5m-9pm6-hqp3 (an unhandled `ECONNRESET` during an asynchronous WebSocket upgrade crashes the process), both fixed in 2.1.6. `bin/advisory` now assesses the resolved set clean (445 packages).
+
 ### Fixed
 
+- **An OpenRouter key that hits a resetting spend cap comes back at the reset.** A key past its own `limit` answers `402` / `403 Key limit exceeded`, read as `credits-exhausted`, so the account parked `exhausted` whatever the cap's `limit_reset` was (prod: `openrouter-glm53-fallback`, `exhausted` since 2026-10-08). `openrouter` now reads `GET /api/v1/key` through `plan_quota_read` into a `spend_limit` window. Its reset is the next documented boundary: daily 00:00 UTC, weekly Monday 00:00 UTC, monthly the 1st 00:00 UTC. With that window fresh and spent, the same refusal cools the account until the refusal's own stated reset, or else the boundary, and the breaker's ordinary half-open probe restores it. A cap with headroom left, `limit_reset: null`, or a stale reading stays `exhausted`, as before. Regression: `apps/api/test/unit/dataplane/health-key-limit-reset.test.ts`, `apps/api/test/unit/models/openrouter-key-recovery.test.ts`, `apps/api/test/unit/providers/openrouter-key-limit.test.ts`.
+- **A throttle on one OpenRouter model no longer cools the whole account.** Prod 2026-11-14: one `google/gemma-4-31b-it:free` `429` cooled `openrouter-dz-coding-30d`, and its next request, for paid `deepseek/deepseek-v4.1-flash:floor`, was refused `1 of 1 account in pool openrouter-coding is rate limited or out of quota`. Two kinds of `429` now hold only that (account, model) pair, in the per-account `refusedModels` map the delisted-model rule already used: OpenRouter's relayed upstream-provider throttle (`Provider returned error`, signal `openrouter:upstream-throttle`) and any `429` for a `:free` variant. The hold lasts until the refusal's own reset, or the breaker's backoff stepped per repeat, and is answered `429` + `Retry-After` for that model. The account keeps serving every other model, and a key-level `429` on a paid model still cools the account. Spec: `docs/idea/05-routing-and-failover.md`. Regression: `apps/api/test/integration/openrouter-model-throttle.test.ts`.
 - **An Anthropic cache write is visible on the openai-chat wire.** Translating Anthropic usage toward `openai-chat` folded `cache_creation_input_tokens` into `prompt_tokens` and stated it nowhere else, so a client could not see the cache-write premium. Over 7 days to 2026-11-14, only 297 of 3,988 Claude calls a developerz.ai client made through this wire recorded a cache write. The translated usage now also carries `prompt_tokens_details.cache_write_tokens` (OpenRouter's spelling, already read back by `usageToAnthropic`) whenever Anthropic reported a write. The value stays folded into `prompt_tokens`, so `prompt_tokens`, `total_tokens` and `cached_tokens` are unchanged; an unreported write leaves the field off the wire. Covers the streaming and non-streaming paths, which share `usageToOpenAiChat`. Spec: `docs/idea/06-protocol-translation.md#usage-and-token-fields`. Regression: `apps/api/test/unit/translate/usage.test.ts`.
 
 ### Removed
@@ -367,13 +385,13 @@ New optional env keys (defaults keep prior behaviour where one existed) are list
 - **The PR and merge guidance now names the checks that gate a merge today.** `CONTRIBUTING.md` and `.claude/commands/feature.md` (step 9) list the `ci` workflow's required checks as they are read at merge time — lint, typecheck, test, advisory, ui-geometry and build — and state that the `bench` job is a **report** (job-level `continue-on-error: true`) that never fails the build, while a regression in `router_overhead_seconds` is still a bug worth running `bin/bench` over. Both now require **every applicable gate** before a merge — the required CI checks read at merge time, the required review approval, and branch protection on `main` — instead of a remembered job list, which is what let a gate nobody remembered go unchecked. `bin/check` remains the offline subset of the same gate (lint, typecheck, test, build): the advisory gate needs the network and the ui-geometry layout gate needs a browser, so both stay CI-only. What changed: the merge-gate guidance in `CONTRIBUTING.md`, `.claude/commands/feature.md` and `README.md`, one guard test that pins it — per job now: every job must be classified the way the workflow itself runs it (job-level `continue-on-error` is a report, the rest are gates), with a reversed-classification fixture proving the matcher reads each job's classification rather than the coexistence of the words — and the `2.45.1` version bump. No workflow file, no branch-protection configuration and no runtime behaviour changed.
 - **Babel 8 and `babel-preset-solid` were tested against this repository's actual Solid JSX build, and the shipped build's Babel 7 is now a recorded blocker rather than a claim.** The test-side compile was already on Babel 8 — `apps/web/package.json` declares `@babel/core@^8.0.10`, `@babel/plugin-syntax-jsx@^8.0.1` and `@babel/preset-typescript@^8.0.7`, `bun.lock` resolves `@babel/core@8.0.10`, and `apps/web/test/support/solid-plugin.ts` runs `babel-preset-solid@^1.9.16` over every `.tsx` suite the `bunfig.toml` preload picks up — and the new suite `apps/web/test/unit/solid-jsx-build.test.ts` names that combination: it compiles JSX through the repository's own compile step, asserts the output is Solid DOM output, asserts a call with type arguments survives Babel 8's AST-field rename (`createSignal<string>("x")` compiles to `createSignal("x")`, so the compile cannot silently slide back onto a Babel 7 core), and reads the installed `@babel/core`, `babel-preset-solid` and `vite-plugin-solid` manifests to assert `@babel/core` is major 8 while the preset's declared peer range (`^7.0.0`) and `vite-plugin-solid`'s declared dependency range (`^7.23.3`) still say Babel 7. The range guard is **semantic as well as literal**: reading the declared majors catches the widening upstream actually writes (`^7.0.0 || ^8.0.0`), but satisfaction is semantic, and a range can admit Babel 8 while naming only 7 — `>=7.0.0` parses as `[7]` and installs 8 all the same — so `expectBabel7Range` also offers a concrete Babel 8 release (`8.0.0`) to the range through `Bun.semver`, the same engine `bun install` resolves with, and admission fails the suite; the closure is pinned with rejection fixtures (`>=7.0.0`, and a `>=7.0.0 <9.0.0` window that names no 8). The **shipped Vite build stays on Babel 7**: `vite-plugin-solid@2.11.14` depends on `@babel/core@^7.23.3` and `babel-preset-solid@1.9.16` peers `@babel/core@^7.0.0` (`babel-plugin-jsx-dom-expressions@0.40.11` peers `^7.20.12`), so the SPA `bin/build` bundles compiles its JSX on Babel 7 while the tests compile on Babel 8. That is a declared-range constraint, not a compiler crash, and nothing inside this repository can lift it: the shipped build moves when upstream ships a `vite-plugin-solid` that takes `@babel/core@^8` and a `babel-preset-solid` whose peer range admits Babel 8 — the stable lines are `vite-plugin-solid@2.11.14` and `babel-preset-solid@1.9.16`, and their next tags (`3.0.0-next.27`, `2.0.0-rc.2`) are prereleases. **Reproducing it**: `bun pm ls --all` — a read-only listing, nothing installed — is the command a reader runs, and its diagnostic is the two `@babel/core` versions side by side: `8.0.10` at the root (`bun.lock:109`), `7.29.7` nested under `babel-preset-solid@1.9.16` (`bun.lock:905`) and under `vite-plugin-solid@2.11.14` (`bun.lock:925`), plus a third copy under `babel-plugin-jsx-dom-expressions@0.40.11` (`bun.lock:899`). **No command in this repository fails**: that listing exits 0 and the shipped Vite build compiles its JSX on Babel 7 exactly as it did before, so there is no failing command and no stack trace to quote — the blocker is the declared ranges the new suite machine-checks, and only upstream can widen them. **No dependency range changed**: `apps/web/package.json` and `bun.lock` keep the versions above. What changed: this entry, the Babel accounts in `README.md` and `apps/web/README.md`, one test suite, and the `2.45.3` version bump — no runtime behaviour, no migration, no dependency change.
 
-## [2.44.0] — 2026-11-03
+## 2.44.0 — 2026-11-03 (never tagged; first released in [v2.45.5](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.5))
 
 ### Added
 
 - **A `count_tokens` request whose scope is subscription-only is answered with an explicitly labelled local estimate instead of a `503`.** The Agent SDK states no token-count call and the router never forges an `api.anthropic.com` request out of a subscription's credentials, so a subscription-only scope has no provider to ask. It now answers `{ "input_tokens": 1234, "estimated": true, "estimate_basis": "chars-per-token-v1" }` — Anthropic's own field name, so an unmodified client reads it as its compaction threshold, with a label that makes the number distinguishable from a measurement. The basis is a documented approximation rounded **up** (a compaction threshold that fires late blows the context window). The estimate is never accounted as tokens and never priced, its usage row is `outcome: "success"` with no error class and no account, provider or egress mode, and the `no_healthy_account` / `NoHealthyAccountError` row it replaces is gone from the usage feed. The precedence is unchanged where it was already decided: a health verdict on an account that could have counted still wins (`429` + `Retry-After`, or `402`), an Anthropic-dialect account in scope is still answered by the provider's own number, and every other scope that cannot count still gets the named `503`.
 
-## [2.43.0] — 2026-11-02
+## 2.43.0 — 2026-11-02 (never tagged; first released in [v2.45.5](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.5))
 
 ### Added
 
@@ -420,7 +438,7 @@ New optional env keys (defaults keep prior behaviour where one existed) are list
 - **Mutation probe recorded (#197).** Each of the 32 rate fields the recorded cards pin (4 models × 2 tiers × 4 fields) and the shared `LONG_CONTEXT_FROM` threshold — 33 mutations — was applied one at a time to `apps/api/src/services/cost/tables/openai.ts`, and the cost unit suite was re-run after each one. Every mutation was caught: the mutated model's standard and long cards fail on both the `openai-api` and the `openai-oauth` surface, and the threshold also fails the long-context and shipped-table cases. The table was restored byte-for-byte afterwards (sha256 `433e919010e43b7ff2f562e95bd6cdc3dfb39b574b132aa14d14236e1b25acda`, unchanged) and the unmutated cost suite is green: 90 pass, 0 fail across 5 files. The per-mutation matrix — every field, the value it was changed to, and the test that caught it — is recorded in the header of `apps/api/test/unit/cost/gpt-6-rates.test.ts`.
 - The required typecheck gate retains the production solution build and additionally checks API smoke sources and all recursive API tests, support helpers and TypeScript fixtures through a strict, non-composite no-emit project. Imported benchmark and database-test helpers are included without changing production output paths or inherited strictness. A coverage regression enumerates sources, checks representative compiler errors in smoke, unit, integration and support, and pins the `bin/check` → `bin/lint` → typecheck wiring. Runtime versions are unchanged.
 
-## [2.42.0] — 2026-11-02
+## 2.42.0 — 2026-11-02 (never tagged; first released in [v2.42.1](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.1))
 
 ### Changed
 
@@ -445,7 +463,7 @@ New optional env keys (defaults keep prior behaviour where one existed) are list
 - `docs/research/anthropic-structured-output.md` records Anthropic's contract: the current field `output_config.format`, the deprecated `output_format` spelling, the `{type: "json_schema", schema: {...}}` shape, the source and the date checked (2026-11-02), and the blast radius if Anthropic moves the field again.
 - `docs/idea/06-protocol-translation.md` gains the `output_config.format` / `output_format` row under "Known lossy edges" and names the third spelling of one feature in the "Unsupported" paragraph above the translation matrix; the `anthropic-api` row in `docs/idea/03-providers.md` points at the rule, and `docs/reusable-code.md` lists the new refusal helper.
 
-## [2.41.1] — 2026-11-02
+## 2.41.1 — 2026-11-02 (never tagged; first released in [v2.42.1](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.1))
 
 ### Fixed
 
@@ -507,7 +525,7 @@ New optional env keys (defaults keep prior behaviour where one existed) are list
 
 - `08-observability.md` replaces the "deferred to its own migration" note with the watermark, its invariant, and the exact out-of-contract writers.
 
-## [2.39.19] — 2026-10-19
+## 2.39.19 — 2026-10-19 (never tagged; first released in [v2.40.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0))
 
 ### Fixed
 
@@ -519,7 +537,7 @@ New optional env keys (defaults keep prior behaviour where one existed) are list
 - `11-anthropic-agent-sdk.md`: launch options, the scratchpad trap, the config-root `workspace/` bullet, and the session-carry row updated for the shared slug.
 - `09-deployment.md`: `CLAUDE_CONFIG_ROOT` names the `workspace/` subdirectory.
 
-## [2.39.18] — 2026-10-19
+## 2.39.18 — 2026-10-19 (never tagged; first released in [v2.40.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0))
 
 ### Fixed
 
@@ -529,7 +547,7 @@ New optional env keys (defaults keep prior behaviour where one existed) are list
 
 - `11-anthropic-agent-sdk.md`: the prompt-fidelity rules now state that `document` blocks cross as real content, with the named-omission floor.
 
-## [2.39.17] — 2026-10-19
+## 2.39.17 — 2026-10-19 (never tagged; first released in [v2.40.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0))
 
 ### Fixed
 
@@ -2013,7 +2031,7 @@ A deep-dive sweep across routing, the Agent SDK layer, usage accounting, the dat
 - `GET /api/admin/auth/session` no longer risks a `RangeError` when rendering a
   session with no expiry.
 
-## [1.0.0] — 2026-07-26
+## 1.0.0 — 2026-07-26 (never tagged; first released in [v1.1.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.1.0))
 
 First stable release. Multi AI Router is a self-hosted proxy: point your tools
 at one OpenAI/Anthropic-compatible endpoint, and it fans out across whatever
@@ -2116,7 +2134,6 @@ your tooling config.
 - README rewritten around the actual product story: your tools → Multi AI
   Router → providers.
 
-[1.0.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v1.0.0
 [2.12.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.12.2
 [2.13.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.0
 [2.13.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.13.1
@@ -2179,20 +2196,13 @@ your tooling config.
 [2.39.13]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.13
 [2.39.14]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.14
 [2.39.15]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.15
-[2.39.17]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.17
-[2.39.18]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.18
-[2.39.19]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.39.19
 [2.40.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.0
 [2.40.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.1
 [2.40.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.2
 [2.40.3]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.40.3
 [2.41.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.0
-[2.41.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.41.1
-[2.42.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.0
 [2.42.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.1
 [2.42.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.42.2
-[2.43.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.43.0
-[2.44.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.44.0
 [2.45.5]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.5
 [2.45.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.6
 [2.45.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.45.7
@@ -2222,3 +2232,5 @@ your tooling config.
 [2.57.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.57.1
 [2.58.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.58.0
 [2.59.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.59.0
+[2.60.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.60.0
+[2.60.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.60.1

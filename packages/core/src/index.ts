@@ -40,6 +40,7 @@ export {
   KeyScope,
 } from "./domain/key"
 export { AuthKind, ProviderId } from "./domain/provider"
+export { ProviderPreferences, ProviderQuantization } from "./domain/provider-preferences"
 export {
   DEFAULT_ACCOUNT_PRIORITY,
   DEFAULT_ACCOUNT_WEIGHT,

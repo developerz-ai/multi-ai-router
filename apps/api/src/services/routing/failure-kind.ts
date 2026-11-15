@@ -49,6 +49,11 @@ export interface AttemptFailure {
    * router `429` (plan 101, 05.14).
    */
   readonly requestAttributable?: boolean
+  /**
+   * A throttle on the requested model only (`FailureClassification.modelScoped`): the chain holds
+   * that model off the account instead of cooling the account (`dataplane/chain-recovery.ts`).
+   */
+  readonly modelScoped?: boolean
 }
 
 /**

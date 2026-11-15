@@ -41,6 +41,13 @@ interface Tree {
   readonly noDockerfile?: boolean
   /** Full override for `CHANGELOG.md`. Omitted writes a changelog that satisfies the gate. */
   readonly changelog?: string
+  /**
+   * The release tags `origin` serves, as versions without the `v`. Omitted tags one per footer
+   * link, so the existence check passes and the fixtures above it test what they always tested.
+   */
+  readonly tags?: readonly string[]
+  /** Point `origin` at a path that is not a repository: the tag listing fails, the gate must refuse. */
+  readonly unreachableOrigin?: boolean
 }
 
 const BASE_MEMBERS = ["apps/api", "apps/web", "packages/core", "packages/db"] as const
@@ -103,10 +110,29 @@ async function fixture(tree: Tree): Promise<string> {
       ].join("\n"),
     )
   }
-  await write(root, "CHANGELOG.md", tree.changelog ?? defaultChangelog(tree.constant))
+  const changelog = tree.changelog ?? defaultChangelog(tree.constant)
+  await write(root, "CHANGELOG.md", changelog)
   // The script resolves its own location, so it has to live where it would really live.
   await write(root, "bin/verify-version", await Bun.file(SCRIPT).text())
   await Bun.$`chmod +x ${join(root, "bin/verify-version")}`.quiet()
+
+  // The gate reads the release tags from `origin`, so the fixture is a repository whose `origin`
+  // is itself, holding one tag per footer link unless the test says otherwise.
+  const linked = [
+    ...changelog.matchAll(
+      /^\[([^\]]+)\]: https:\/\/github\.com\/developerz-ai\/multi-ai-router\/releases\/tag\/v/gm,
+    ),
+  ].map((match) => match[1])
+  await Bun.$`git init -q ${root}`.quiet()
+  await Bun.$`git -C ${root} -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m fixture`.quiet()
+  // Deduplicated (a fixture may link a version twice), and a name git cannot hold as a tag (a
+  // malformed version a test feeds the gate on purpose) is simply not tagged.
+  for (const tag of new Set(tree.tags ?? linked)) {
+    const valid = await Bun.$`git check-ref-format ${`refs/tags/v${tag}`}`.quiet().nothrow()
+    if (valid.exitCode === 0) await Bun.$`git -C ${root} tag v${tag}`.quiet()
+  }
+  const origin = tree.unreachableOrigin ? join(root, "no-such-remote") : root
+  await Bun.$`git -C ${root} remote add origin ${origin}`.quiet()
   return root
 }
 
@@ -116,8 +142,17 @@ interface Ran {
 }
 
 async function verify(root: string, ...args: string[]): Promise<Ran> {
+  return verifyWith({}, root, ...args)
+}
+
+async function verifyWith(
+  env: Readonly<Record<string, string>>,
+  root: string,
+  ...args: string[]
+): Promise<Ran> {
   const child = Bun.spawn([join(root, "bin/verify-version"), ...args], {
     cwd: root,
+    env: { ...process.env, ...env },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -132,8 +167,81 @@ describe("bin/verify-version", () => {
   test("passes on this repo, for its own version, tagged and untagged", async () => {
     // The assertion that matters most: whatever the fixtures below prove, the gate has to be
     // green on the tree it actually guards, or the next tag push fails for the wrong reason.
-    expect((await verify(REPO_ROOT)).exitCode).toBe(0)
-    expect((await verify(REPO_ROOT, `v${VERSION}`)).exitCode).toBe(0)
+    // Offline, because `bin/check` is the offline gate: the tag-existence check needs origin,
+    // so it is skipped here (out loud, asserted below) and proven on the fixtures instead.
+    const offline = { VERIFY_VERSION_OFFLINE: "1" }
+    const untagged = await verifyWith(offline, REPO_ROOT)
+    expect(untagged.exitCode).toBe(0)
+    expect(untagged.output).toContain("not checked against the tags on origin")
+    expect((await verifyWith(offline, REPO_ROOT, `v${VERSION}`)).exitCode).toBe(0)
+  })
+
+  test("never skips the tag-existence check in the release workflow", async () => {
+    // The offline switch is for the test suite only. The release gate must always check.
+    const workflow = await Bun.file(join(REPO_ROOT, ".github/workflows/release.yml")).text()
+    expect(workflow).toContain("bin/verify-version")
+    expect(workflow).not.toContain("VERIFY_VERSION_OFFLINE")
+  })
+
+  test("skips only the tag-existence check offline, and says so", async () => {
+    const root = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "## [2.37.6] — 2026-10-15",
+        "",
+        "- never tagged.",
+        "",
+        "[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "",
+      ].join("\n"),
+      tags: ["2.37.7"],
+    })
+
+    const ran = await verifyWith({ VERIFY_VERSION_OFFLINE: "1" }, root)
+
+    expect(ran.exitCode).toBe(0)
+    expect(ran.output).toContain("not checked against the tags on origin")
+  })
+
+  test("still refuses every other failure offline", async () => {
+    // The switch skips the tag lookup and nothing else: a manifest that disagrees with the
+    // source, a footer link out of order and a tag that is not the version all still refuse.
+    const offline = { VERIFY_VERSION_OFFLINE: "1" }
+    const drifted = await fixture({
+      constant: "2.38.0",
+      manifests: { "apps/api/package.json": "2.37.9" },
+    })
+    const disordered = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "## [2.37.6] — 2026-10-15",
+        "",
+        "- prior.",
+        "",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6",
+        "",
+      ].join("\n"),
+    })
+
+    expect((await verifyWith(offline, drifted)).exitCode).toBe(1)
+    expect((await verifyWith(offline, disordered)).exitCode).toBe(1)
+    expect(
+      (await verifyWith(offline, await fixture({ constant: "2.38.0" }), "v2.38.1")).exitCode,
+    ).toBe(1)
   })
 
   test("refuses a tag that does not name the version the code reports", async () => {
@@ -278,6 +386,76 @@ describe("bin/verify-version", () => {
 
     expect(ran.exitCode).toBe(1)
     expect(ran.output).toContain("2.37.4")
+  })
+
+  test("refuses a footer link whose release was never tagged", async () => {
+    // Eight links on the real changelog passed "present and ascending" and 404'd, because those
+    // versions were superseded before a tag was cut (#399). Presence is not existence.
+    const root = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "## [2.37.6] — 2026-10-15",
+        "",
+        "- superseded before its tag.",
+        "",
+        "[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "",
+      ].join("\n"),
+      tags: ["2.37.7"],
+    })
+
+    const ran = await verify(root)
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("never tagged: 2.37.6")
+  })
+
+  test("accepts a superseded version as a plain heading with no footer link", async () => {
+    // The remedy the refusal names: the section stays as history, outside the linked-section rule.
+    const root = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "## 2.37.6 — 2026-10-15 (never tagged; first released in [v2.37.7](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7))",
+        "",
+        "- superseded before its tag.",
+        "",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "",
+      ].join("\n"),
+      tags: ["2.37.7"],
+    })
+
+    expect((await verify(root)).exitCode).toBe(0)
+  })
+
+  test("lets the version being released through before its tag exists", async () => {
+    // Run by hand to vet the tree before the tag is pushed: its own link cannot resolve yet.
+    const root = await fixture({ constant: "2.38.0", tags: [] })
+
+    expect((await verify(root)).exitCode).toBe(0)
+    expect((await verify(root, "v2.38.0")).exitCode).toBe(0)
+  })
+
+  test("refuses when the release tags cannot be listed, instead of passing", async () => {
+    const root = await fixture({ constant: "2.38.0", unreachableOrigin: true })
+
+    const ran = await verify(root)
+
+    expect(ran.exitCode).toBe(1)
+    expect(ran.output).toContain("could not list the release tags on origin")
   })
 
   test("refuses a second footer link for a section that already has one", async () => {

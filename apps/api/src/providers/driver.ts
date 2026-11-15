@@ -107,6 +107,14 @@ export interface ProviderSurface {
    */
   readonly bodySessionId?: boolean
   /**
+   * The upstream reads a request `provider` object choosing which of its endpoints serves the model
+   * (OpenRouter's provider routing), so an Account may carry standing preferences for it
+   * (`ProviderPreferences`), merged into every body that Account is sent, passthrough or written
+   * (`dataplane/body/provider-preferences.ts`). Absent: an Account here may hold none, and none is
+   * ever added — a strict vendor `400`s on a field its schema does not name.
+   */
+  readonly providerPreferences?: boolean
+  /**
    * The request header this upstream requires to name the conversation, and refuses a request
    * without. Touches no body byte, so it applies to a byte relay and a translated body alike. Sent
    * the router's own conversation id (`dataplane/egress/cache-key-header.ts`), never a client value.
@@ -135,6 +143,12 @@ export interface HttpDriverConfig {
   readonly billing?: AccountBilling
   /** First entry is the default surface — the one an Account with no preference gets. */
   readonly surfaces: readonly [ProviderSurface, ...ProviderSurface[]]
+  /**
+   * Upstream model ids whose rate limits are their own, not the key's: any `429` for one is about
+   * that (account, model) and holds only that model (`ProviderDriver.rateLimitsPerModel`). Absent:
+   * a `429` is about the account unless its classification rule says otherwise.
+   */
+  readonly modelScopedRateLimits?: RegExp
   readonly rules?: readonly ClassificationRule[]
   readonly readFacts?: (body: unknown) => UpstreamErrorFacts
   readonly parseRateLimit?: (response: UpstreamResponse) => RateLimitSignal | null
@@ -194,6 +208,9 @@ export function createHttpDriver(config: HttpDriverConfig): ProviderDriver {
     keysPromptCacheByBody: (account) => surfaceFor(account).bodyCacheKey === true,
     carriesCacheControl: (account) => surfaceFor(account).cacheControl === true,
     keysSessionByBody: (account) => surfaceFor(account).bodySessionId === true,
+    acceptsProviderPreferences: (account) => surfaceFor(account).providerPreferences === true,
+    rateLimitsPerModel: (upstreamModel) =>
+      config.modelScopedRateLimits?.test(upstreamModel) === true,
     sessionHeader: (account) => surfaceFor(account).sessionHeader,
     buildHeaders: (account, credential) => {
       requireCredential(config, account, credential)

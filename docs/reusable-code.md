@@ -81,6 +81,7 @@ shipped lookup tables whose key comes from a request or upstream response.
 | Export | Where | Use it when |
 |---|---|---|
 | `AccountStatus`, `QuotaWindowKind`, `UtilizationSource`, `ResetSource`, `QuotaWindowState` | `domain/account.ts` | Any account/quota state — validation, DB enum, presentation |
+| `ProviderPreferences`, `ProviderQuantization` | `domain/provider-preferences.ts` | An account's OpenRouter `provider` routing object — the admin write contract, the stored column type, the egress merge |
 | `AccountBilling`, `DEFAULT_ACCOUNT_BILLING` | `domain/account.ts` | How an Account is billed, which decides how its usage is priced and nothing else. An **Account** property, never derived from the provider id — the same provider sells both a metered API and a flat-fee plan. The default a provider does not override, and what migration `0014` backfills |
 | `Dialect`, `EgressMode` | `domain/dialect.ts` | Ingress/egress protocol decisions |
 | `KeyScope` | `domain/key.ts` | Key scope (`all` \| `pools` \| `accounts`) |

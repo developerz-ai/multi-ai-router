@@ -51,7 +51,15 @@ re-spin's links read `X.Y.Z-rc.1`, `X.Y.Z-rc.2`, …, `X.Y.Z` — rc sections do
 enter the changelog, and the gate accepts them (#267). The link is not
 decoration: `bin/verify-version` refuses a tree whose sections since 2.25.0
 lack their footer link or whose links do not ascend — the 2.37.0–2.37.4 links
-shipped missing once (#265), and this is what catches a repeat.
+shipped missing once (#265), and this is what catches a repeat. It also refuses a
+footer link whose release was never tagged: it reads the tags from `origin`, so it
+needs the network, and failing to list them is a refusal (the test suite's run against
+this repository sets `VERIFY_VERSION_OFFLINE=1` to skip that one check out loud, so
+`bin/check` stays offline; `release.yml` never sets it). The version being released
+is exempt, because its tag does not exist yet when you run the gate by hand. A
+version superseded before its tag was cut keeps its section as a plain heading,
+`## X.Y.Z — date (never tagged; first released in [vA.B.C](…))`, with no footer
+link (#399).
 
 ## 3. Verify the gate is green
 
@@ -154,11 +162,10 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
   ```
 
 - **Roll the deployments — a release is not done until they run it.** Nothing
-  automates this. Open the image-pin PR in `developerz-ai/infrastructure`
-  (`stacks/apps/multi-ai-router/manifests/deployment.yml`, the
-  `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z` image line) and in every other
-  deployment repo that pins the router (a customer stack's production overlay),
-  update each stack README's "deployed" version in the same PR, and link the
+  automates this. Open an image-pin PR in every deployment repository that pins
+  the router (the `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z` image line in its
+  deployment manifest; the operator keeps the list of those repositories, and this
+  public document does not name them), update each stack README's "deployed" version in the same PR, and link the
   PRs from the GitHub Release. After they sync, confirm the pod reports the
   version: `curl -s https://<router>/healthz` → `"version":"X.Y.Z"`.
 

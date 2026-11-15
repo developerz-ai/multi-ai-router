@@ -62,6 +62,8 @@ export interface UpdateAccountInput {
   readonly supportedModels?: readonly string[] | null
   /** `null` clears every configured ceiling, which removes the bars rather than zeroing them. */
   readonly windowTokenLimits?: Readonly<Partial<Record<QuotaWindowKind, number>>> | null
+  /** OpenRouter's `provider` object, validated by the API. `null` clears it. */
+  readonly providerPreferences?: Readonly<Record<string, unknown>> | null
   readonly weight?: number
   readonly priority?: number
   /** Not nullable: every account is billed one of the two ways, so there is nothing to clear. */

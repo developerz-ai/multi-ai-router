@@ -30,6 +30,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "modelAliases",
       "supportedModels",
       "windowTokenLimits",
+      "providerPreferences",
       "weight",
       "priority",
       "createdAt",

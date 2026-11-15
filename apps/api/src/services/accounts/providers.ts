@@ -71,6 +71,11 @@ export interface ProviderDescriptor {
   readonly connectFlow: ProviderConnectFlow | null
   /** The provider's OAuth flow also offers a device-code sign-in (`providers/device-flow.ts`). */
   readonly deviceSignIn: boolean
+  /**
+   * The provider's surface reads a request `provider` routing object, so an Account of it may carry
+   * standing `providerPreferences` (`ProviderSurface.providerPreferences`). Asked of the driver.
+   */
+  readonly providerPreferences: boolean
   /** False means an account cannot be created for it — the console greys the option out. */
   readonly creatable: boolean
   /** Why an unimplemented or SDK-served provider is what it is. Verbatim from the registry. */
@@ -100,6 +105,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       // Asked of the driver, so a new OAuth provider becomes connectable the day its file lands.
       connectFlow: driver.oauth === undefined ? null : "oauth",
       deviceSignIn: driver.oauth?.device !== undefined,
+      providerPreferences: acceptsProviderPreferences(driver),
       creatable: true,
       reason: null,
     }
@@ -121,6 +127,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       requiresConfigDir: true,
       connectFlow: "claude-cli",
       deviceSignIn: false,
+      providerPreferences: false,
       creatable: true,
       reason: support.reason,
     }
@@ -137,6 +144,7 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
     requiresConfigDir: false,
     connectFlow: null,
     deviceSignIn: false,
+    providerPreferences: false,
     creatable: false,
     reason: support.reason,
   }
@@ -160,6 +168,11 @@ function supportedDialects(driver: ProviderDriver): readonly Dialect[] {
   return Dialect.options.filter(
     (dialect) => driver.resolveDialect({ id: PROBE_ID, provider: driver.id, dialect }) === dialect,
   )
+}
+
+/** Asked of the default surface: the only one a provider that reads the field has today. */
+function acceptsProviderPreferences(driver: ProviderDriver): boolean {
+  return driver.acceptsProviderPreferences?.({ id: PROBE_ID, provider: driver.id }) === true
 }
 
 /**

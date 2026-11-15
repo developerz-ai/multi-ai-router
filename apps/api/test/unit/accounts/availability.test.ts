@@ -36,6 +36,7 @@ function view(overrides: Partial<AccountView> = {}): AccountView {
     modelAliases: null,
     supportedModels: null,
     windowTokenLimits: null,
+    providerPreferences: null,
     weight: 1,
     priority: 0,
     billing: "subscription",

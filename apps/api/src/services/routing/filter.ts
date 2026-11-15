@@ -85,9 +85,17 @@ export function evaluateCandidate(
   if (!resolution.supported) return drop({ reason: "model-unsupported" })
   // The provider itself said it does not serve this name; trust that over the declared list
   // until the learned refusal lapses.
-  const refusedUntil = account.refusedModels?.get(resolution.upstreamModel)
-  if (refusedUntil !== undefined && refusedUntil.getTime() > now.getTime())
-    return drop({ reason: "model-unsupported" })
+  const refused = account.refusedModels?.get(resolution.upstreamModel)
+  const held = refused !== undefined && refused.until.getTime() > now.getTime()
+  if (held && refused.reason === "unsupported") return drop({ reason: "model-unsupported" })
+  // Throttled on this model only: clock-recoverable, so a `429` with its reset, and the account
+  // still serves every other model (prod 2026-11-14, a `:free` 429 cooled a paid model's account).
+  if (held && refused.reason === "rate-limited")
+    return drop({
+      reason: "cooling-down",
+      resetsAt: refused.until,
+      ...(refused.resetSource === undefined ? {} : { resetSource: refused.resetSource }),
+    })
 
   const threshold = options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD
   const spent = findSpentWindow(account, now, threshold)
