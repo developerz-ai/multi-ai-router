@@ -198,11 +198,14 @@ export function relaySuccess(
   }
   // Only inference has a completion to price.
   const priced = ctx.runtime.operation === "messages"
+  // A same-dialect HTTP relay is the upstream's bytes (non-negotiable 10): restamped only on the
+  // caller's opt-in. An Agent-SDK turn with no conversion pair is not — the SDK renderer wrote
+  // every byte of it (docs/idea/11-anthropic-agent-sdk.md §6) — so it states its cost like any
+  // other response the router writes.
   const restamp =
     servable.translation === null &&
     priced &&
-    ctx.request !== undefined &&
-    costRequested(ctx.request.headers)
+    (servable.kind === "sdk" || (ctx.request !== undefined && costRequested(ctx.request.headers)))
   // A client stream that breaks after its first byte ends with the router's error event.
   const ended = (relayed: Response): Response =>
     relayed.headers.get("content-type")?.includes("text/event-stream") === true ||

@@ -136,8 +136,9 @@ export function relayTranslatedResponse(input: TranslatedRelayInput): Response {
   if (!streamed)
     return holdTranslated(translatedBody(input, upstream.body, parsed), init, input.refusal)
   // Said outright: the client's SDK decides how to read the body from this header, and the upstream
-  // is not obliged to have sent one.
-  headers.set("content-type", EVENT_STREAM)
+  // is not obliged to have sent one. One it did send (with its `charset`) is kept.
+  if (upstream.headers.get("content-type")?.includes(EVENT_STREAM) !== true)
+    headers.set("content-type", EVENT_STREAM)
   return new Response(translatedStream(input, upstream.body), init)
 }
 

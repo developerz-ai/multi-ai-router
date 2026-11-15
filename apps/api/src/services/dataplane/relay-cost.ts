@@ -7,10 +7,10 @@ import { responseObject } from "../usage/response-usage"
 /**
  * `usage.cost` on a response the router itself writes.
  *
- * **A translated response carries it; a same-dialect one only on request.** A translated body and
- * its frames are already the router's own serialization, so one more member costs nothing. A
- * same-dialect relay is the upstream's bytes (non-negotiable 10) and reaches this module only when
- * the caller sent `x-router-usage: cost` (`relay-cost-optin.ts`). Absent is the answer otherwise,
+ * **A translated or Agent-SDK response carries it; a same-dialect HTTP relay only on request.** A
+ * translated body and an SDK-rendered one are already the router's own serialization, so one more
+ * member costs nothing. A same-dialect HTTP relay is the upstream's bytes (non-negotiable 10) and
+ * reaches this module only when the caller sent `x-router-usage: cost` (`relay-cost-optin.ts`). Absent is the answer otherwise,
  * and a caller reads absent as "not stated", the way it does on any provider without a cost.
  *
  * The figure is the `UsageRecord`'s own (`attemptCost`), priced on the upstream's counts rather than

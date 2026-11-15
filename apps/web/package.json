@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/web",
-  "version": "2.61.0",
+  "version": "2.62.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,9 +10,9 @@
   },
   "dependencies": {
     "@multi-ai-router/core": "workspace:*",
-    "@solidjs/router": "^1.0.0",
-    "@tanstack/solid-query": "^5.104.5",
-    "solid-js": "^1.9.17"
+    "@solidjs/router": "^1.0.1",
+    "@tanstack/solid-query": "^5.105.1",
+    "solid-js": "^1.9.18"
   },
   "devDependencies": {
     "@babel/core": "^8.0.10",
@@ -21,8 +21,8 @@
     "@happy-dom/global-registrator": "^21.0.4",
     "babel-preset-solid": "^1.9.16",
     "esbuild": "^0.28.2",
-    "sass-embedded": "^1.106.1",
+    "sass-embedded": "^1.107.1",
     "vite": "^8.3.5",
-    "vite-plugin-solid": "^2.11.14"
+    "vite-plugin-solid": "^2.11.15"
   }
 }
