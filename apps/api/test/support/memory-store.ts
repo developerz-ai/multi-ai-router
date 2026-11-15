@@ -81,6 +81,7 @@ export function createMemoryStore(): MemoryStore {
           billing: input.billing ?? "metered",
           lastUsedAt: null,
           windowTokenLimits: input.windowTokenLimits ?? null,
+          providerPreferences: input.providerPreferences ?? null,
           baseUrl: input.baseUrl ?? null,
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,

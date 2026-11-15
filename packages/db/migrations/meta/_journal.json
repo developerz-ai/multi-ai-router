@@ -323,6 +323,13 @@
       "when": 1794376545320,
       "tag": "0045_api_key_name_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1794700503418,
+      "tag": "0046_account_provider_preferences",
+      "breakpoints": true
     }
   ]
 }

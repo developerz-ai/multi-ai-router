@@ -127,6 +127,13 @@ export interface FailureClassification {
    * must not cool or strike this one. Absent means account-attributable as before.
    */
   readonly requestAttributable?: boolean
+  /**
+   * A `rate-limited` refusal about the **model** on this account, not the account: OpenRouter's
+   * relay of an upstream provider's throttle (`Provider returned error`, `… is temporarily
+   * rate-limited upstream`). That model is held off this account until its reset; the account keeps
+   * serving every other model (`HealthStore.throttleModel`). Absent: about the account, as before.
+   */
+  readonly modelScoped?: boolean
 }
 
 /** Parsed bounded successful-body evidence; no I/O, raw body logging, or response replacement. */

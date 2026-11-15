@@ -88,11 +88,12 @@ describe("create", () => {
     const stub = harness([accountRow])
     await createAccountRepository(stub.db).create({ label: "zai-1", provider: "zai" })
 
-    // Only the two required columns and the eight nullable ones are bound; the
+    // Only the two required columns and the nine nullable ones are bound; the
     // rest are `default` in the statement, so the schema stays the authority.
     expect(stub.only().params).toEqual([
       "zai-1",
       "zai",
+      null,
       null,
       null,
       null,
