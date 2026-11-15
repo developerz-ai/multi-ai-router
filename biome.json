@@ -34,7 +34,7 @@
         "noNonNullAssertion": "error"
       },
       "correctness": {
-        "noUnknownUnit": "off"
+        "noUnknownUnit": "error"
       }
     }
   },
@@ -49,6 +49,14 @@
         "apps/web/ui-geometry/**"
       ],
       "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+    },
+    {
+      "includes": [
+        "bin/lib/claude-trace/fast-scenarios.ts",
+        "apps/api/src/services/usage-report/types.ts",
+        "apps/web/src/styles/_tokens.scss"
+      ],
+      "linter": { "rules": { "correctness": { "noUnknownUnit": "off" } } }
     }
   ],
   "assist": {
