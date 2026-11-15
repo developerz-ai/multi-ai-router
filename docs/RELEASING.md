@@ -51,7 +51,15 @@ re-spin's links read `X.Y.Z-rc.1`, `X.Y.Z-rc.2`, …, `X.Y.Z` — rc sections do
 enter the changelog, and the gate accepts them (#267). The link is not
 decoration: `bin/verify-version` refuses a tree whose sections since 2.25.0
 lack their footer link or whose links do not ascend — the 2.37.0–2.37.4 links
-shipped missing once (#265), and this is what catches a repeat.
+shipped missing once (#265), and this is what catches a repeat. It also refuses a
+footer link whose release was never tagged: it reads the tags from `origin`, so it
+needs the network, and failing to list them is a refusal (the test suite's run against
+this repository sets `VERIFY_VERSION_OFFLINE=1` to skip that one check out loud, so
+`bin/check` stays offline; `release.yml` never sets it). The version being released
+is exempt, because its tag does not exist yet when you run the gate by hand. A
+version superseded before its tag was cut keeps its section as a plain heading,
+`## X.Y.Z — date (never tagged; first released in [vA.B.C](…))`, with no footer
+link (#399).
 
 ## 3. Verify the gate is green
 
