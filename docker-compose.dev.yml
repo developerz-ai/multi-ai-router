@@ -26,7 +26,10 @@ services:
     ports:
       - "127.0.0.1:${DEV_DB_PORT:-5433}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U router -d router"]
+      # Over TCP and against the router database, not `pg_isready` on the Unix socket: during
+      # initdb the image runs a temporary server on the socket only, which a socket probe reports
+      # as ready while the published port is still closed (#402).
+      test: ["CMD-SHELL", "PGPASSWORD=\"$$POSTGRES_PASSWORD\" psql -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\" -tAc 'select 1' >/dev/null"]
       interval: 2s
       timeout: 3s
       retries: 30
