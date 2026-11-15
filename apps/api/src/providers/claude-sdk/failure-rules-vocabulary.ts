@@ -40,6 +40,8 @@ export interface SdkRule {
   readonly match: (text: Haystack) => boolean
   /** Copied onto the classification: see `FailureClassification.requestAttributable`. */
   readonly requestAttributable?: true
+  /** Copied onto the classification: see `FailureClassification.permanentForRequest`. */
+  readonly permanentForRequest?: true
 }
 
 export type Matcher = (text: Haystack) => boolean

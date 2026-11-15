@@ -53,8 +53,23 @@ describe("a request-attributable refusal", () => {
     expect(decision.action === "attempt" && decision.candidate.account.id).toBe("c")
   })
 
-  test("a lone refusal with no untried candidate left is a request wall too (slice 09 R1)", () => {
-    expect(planNextAttempt(candidates(account("a")), answered("a"), gated)).toEqual({
+  test("a lone refusal no clock clears, with no untried candidate left, is a request wall (slice 09 R1)", () => {
+    const uncarried: AttemptFailure = {
+      kind: "server-error",
+      status: 400,
+      message: "claude-sdk:structured-output-unsupported",
+      requestAttributable: true,
+      permanentForRequest: true,
+    }
+    const progress = noteRequestAttributable(recordAttempt(NO_ATTEMPTS, "a"), uncarried)
+    expect(planNextAttempt(candidates(account("a")), progress, uncarried)).toEqual({
+      action: "stop",
+      reason: "request-wall",
+    })
+  })
+
+  test("a lone refusal that clears with time is not: extra-usage-gated keeps its held 429", () => {
+    expect(planNextAttempt(candidates(account("a")), answered("a"), gated)).not.toEqual({
       action: "stop",
       reason: "request-wall",
     })

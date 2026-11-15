@@ -122,6 +122,8 @@ describe("structured output on the Agent-SDK transport (R1)", () => {
       expect(classification.signal).toBe("claude-sdk:structured-output-unsupported")
       expect(classification.retryable).toBe(true)
       expect(classification.requestAttributable).toBe(true)
+      // No clock clears it on this pool: a one-account chain ends as the wall (failover.ts).
+      expect(classification.permanentForRequest).toBe(true)
       expect(failoverKind(classification.kind, classification.status)).toBe("server-error")
       expect(clientMessage).toContain("structured output")
     })

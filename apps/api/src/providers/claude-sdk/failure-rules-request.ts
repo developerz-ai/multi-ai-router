@@ -49,6 +49,8 @@ export const SDK_REQUEST_FAILURE_RULES: readonly SdkRule[] = [
     clientMessage:
       "the request's structured output (output_config.format) cannot be honoured on a Claude subscription's Agent SDK transport; no account that carries it natively served the request",
     requestAttributable: true,
+    // No clock clears it on this pool, so a one-account chain ends as the wall too.
+    permanentForRequest: true,
     match: messagePhrase(STRUCTURED_OUTPUT_UNCARRIED.toLowerCase()),
   },
   {

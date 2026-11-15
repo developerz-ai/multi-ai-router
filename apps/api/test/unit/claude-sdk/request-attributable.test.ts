@@ -18,6 +18,8 @@ describe("a request-attributable refusal", () => {
       expect(classification.signal).toBe("claude-sdk:extra-usage-gated")
       expect(classification.requestAttributable).toBe(true)
       expect(classification.retryable).toBe(true)
+      // It clears with time, so a one-account chain keeps the held 429 (failover.ts).
+      expect(classification).not.toHaveProperty("permanentForRequest")
     }
   })
 

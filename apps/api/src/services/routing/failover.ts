@@ -130,7 +130,7 @@ export function planNextAttempt(
 
   if (lastFailure.kind === "stale-session") return replayInPlace(ordered, progress, options)
   if (!isRetryable(lastFailure.kind)) return { action: "stop", reason: "not-retryable" }
-  if (lastFailure.requestAttributable === true && walled(ordered, progress, options))
+  if (lastFailure.requestAttributable === true && walled(ordered, progress, lastFailure, options))
     return { action: "stop", reason: "request-wall" }
   if (
     progress.attemptedAccountIds.length >= attemptCeiling(plannedCount(ordered, progress), options)
@@ -148,18 +148,22 @@ export function planNextAttempt(
 }
 
 /**
- * The request wall: {@link REQUEST_WALL_AFTER} request-attributable refusals in one chain, or every
- * attempt refused that way with no untried candidate left. The second clause is the one-account
- * pool (developerz.ai plan 101 slice 09, R1): its only refusal is still the request's own fault, so
- * it ends as the typed `400`, never as a capacity `503` a retry of the same key would hit again.
+ * The request wall: {@link REQUEST_WALL_AFTER} request-attributable refusals in one chain, or, for a
+ * refusal no clock clears ({@link AttemptFailure.permanentForRequest}), every attempt refused that
+ * way with no untried candidate left. The second clause is the one-account pool (developerz.ai plan
+ * 101 slice 09, R1): structured output the Agent SDK cannot carry never succeeds there, so it ends as
+ * the typed `400`, never a capacity `503`. A refusal that clears with time (`extra-usage-gated`)
+ * keeps its held `429` on that pool: the same request succeeds later.
  */
 function walled(
   ordered: readonly Candidate[],
   progress: FailoverProgress,
+  lastFailure: AttemptFailure,
   options: FailoverOptions,
 ): boolean {
   const refusals = progress.requestAttributable ?? 0
   if (refusals >= (options.requestWallAfter ?? REQUEST_WALL_AFTER)) return true
+  if (lastFailure.permanentForRequest !== true) return false
   const attempted = new Set(progress.attemptedAccountIds)
   return (
     refusals === attempted.size && ordered.every((candidate) => attempted.has(candidate.account.id))

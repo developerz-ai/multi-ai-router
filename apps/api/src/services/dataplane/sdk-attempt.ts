@@ -257,6 +257,7 @@ function invocationFailure(
       // SDK's own wording never becomes one (docs/idea/07-security.md).
       message: clientMessage,
       ...(classification.requestAttributable === true ? { requestAttributable: true } : {}),
+      ...(classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
     },
     classification,
     // The account's quota state rides `rate_limit_event`, never the throw (§5) — `classifySdkFailure`

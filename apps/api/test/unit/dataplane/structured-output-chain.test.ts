@@ -32,7 +32,14 @@ const ANSWER = {
   usage: { input_tokens: 5, output_tokens: 4 },
 }
 
-function harness(accounts: Parameters<typeof catalog>[0]) {
+interface HarnessOptions {
+  /** Replaces the default `query()`, which refuses to launch at all. */
+  readonly runQuery?: () => never
+  /** Leave the structured-output constraint off the body. */
+  readonly plain?: boolean
+}
+
+function harness(accounts: Parameters<typeof catalog>[0], options: HarnessOptions = {}) {
   const entries = catalog(accounts)
   const health = createHealthStore()
   let sdkCalls = 0
@@ -43,6 +50,7 @@ function harness(accounts: Parameters<typeof catalog>[0]) {
     resolveCli: () => ({ ok: true, source: "env_override", path: "/offline/claude", bytes: 1 }),
     runQuery: () => {
       launches++
+      if (options.runQuery) options.runQuery()
       throw new Error("a structured-output turn must never launch the SDK")
     },
   })
@@ -81,7 +89,9 @@ function harness(accounts: Parameters<typeof catalog>[0]) {
           model: "claude-opus-5",
           max_tokens: 64,
           messages: [{ role: "user", content: "grade this" }],
-          output_config: { format: { type: "json_schema", schema: SCHEMA } },
+          ...(options.plain
+            ? {}
+            : { output_config: { format: { type: "json_schema", schema: SCHEMA } } }),
         }),
       }),
     })
@@ -147,6 +157,26 @@ describe("a structured-output request on the Agent-SDK transport, through the ch
     expect(answer.body).toContain('"code":"invalid_request"')
     expect(answer.body).toContain("structured output")
     expect(h.counts()).toEqual({ sdkCalls: 1, launches: 0, httpCalls: 0 })
+    unstruck(h, "sub")
+  })
+
+  test("the lone-refusal wall is structured output's alone: extra-usage-gated on one account stays the 429", async () => {
+    // Extra Usage gating is a quota wall that clears with time, so a 400 would tell the client
+    // never to retry a request that succeeds later. Only a refusal that can never succeed on
+    // this pool (structured output on the Agent SDK) ends a one-account chain as the wall.
+    const h = harness([subscriptionAccount("sub")], {
+      plain: true,
+      runQuery: () => {
+        throw new Error(
+          "API Error: 400 Third-party apps now draw from your extra usage, not your plan limits.",
+        )
+      },
+    })
+
+    const answer = await outcome(h.dispatch())
+
+    expect(answer.status).toBe(429)
+    expect(h.counts().launches).toBe(1)
     unstruck(h, "sub")
   })
 })
