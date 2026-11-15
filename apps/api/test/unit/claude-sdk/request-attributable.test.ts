@@ -21,11 +21,15 @@ describe("a request-attributable refusal", () => {
     }
   })
 
-  test("no other rule carries it", () => {
+  test("only the refusals the request provokes on every Claude transport alike carry it", () => {
     const flagged = SDK_FAILURE_RULES.filter((rule) => rule.requestAttributable).map(
       (rule) => rule.signal,
     )
-    expect(flagged).toEqual(["claude-sdk:extra-usage-gated"])
+    // structured-output-unsupported: R1, `structured-output-refusal.test.ts`.
+    expect(flagged).toEqual([
+      "claude-sdk:structured-output-unsupported",
+      "claude-sdk:extra-usage-gated",
+    ])
     for (const message of [
       "API Error: 429 rate limit exceeded",
       "Credit balance is too low",

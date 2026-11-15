@@ -23,13 +23,60 @@ const streamedToolCallSchema = z.looseObject({
 
 const toolCallSchema = streamedToolCallSchema.omit({ index: true })
 
+/**
+ * Mistral's reasoning models answer with `content` as an array of chunks, `{type:"text",text}` and
+ * `{type:"thinking",thinking:[{type:"text",text}]}`, and the shape turns polymorphic mid-stream.
+ * Read as a string it was absent, and the answer text went with it (developerz.ai plan 101 slice 09,
+ * R11). Folded here, once, for every pair: text chunks become `content`; thinking chunks become the
+ * reasoning text unless the upstream also named one, which wins (never doubled). Other chunk types
+ * (references, images) state no text. A non-array `content` is untouched.
+ */
+function foldArrayContent(turn: unknown): unknown {
+  if (typeof turn !== "object" || turn === null) return turn
+  const content: unknown = Reflect.get(turn, "content")
+  if (!Array.isArray(content)) return turn
+  let text = ""
+  let thinking = ""
+  for (const chunk of content) {
+    if (typeof chunk !== "object" || chunk === null) continue
+    const type: unknown = Reflect.get(chunk, "type")
+    if (type === "text") text += stringOf(Reflect.get(chunk, "text"))
+    if (type === "thinking") thinking += thinkingText(Reflect.get(chunk, "thinking"))
+  }
+  const named = Reflect.get(turn, "reasoning_content") ?? Reflect.get(turn, "reasoning")
+  return {
+    ...turn,
+    content: text.length === 0 ? null : text,
+    ...(thinking.length > 0 && (typeof named !== "string" || named.length === 0)
+      ? { reasoning_content: thinking }
+      : {}),
+  }
+}
+
+function thinkingText(value: unknown): string {
+  if (typeof value === "string") return value
+  if (!Array.isArray(value)) return ""
+  let text = ""
+  for (const part of value) {
+    if (typeof part === "object" && part !== null) text += stringOf(Reflect.get(part, "text"))
+  }
+  return text
+}
+
+function stringOf(value: unknown): string {
+  return typeof value === "string" ? value : ""
+}
+
 function turnSchema<T extends z.ZodType>(toolCall: T) {
   return z
-    .looseObject({
-      content: z.string().nullish().catch(null),
-      ...openAiChatReasoningSchema,
-      tool_calls: z.array(toolCall).nullish().catch(null),
-    })
+    .preprocess(
+      foldArrayContent,
+      z.looseObject({
+        content: z.string().nullish().catch(null),
+        ...openAiChatReasoningSchema,
+        tool_calls: z.array(toolCall).nullish().catch(null),
+      }),
+    )
     .nullish()
     .catch(null)
 }

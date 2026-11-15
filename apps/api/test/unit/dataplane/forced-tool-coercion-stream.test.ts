@@ -109,3 +109,100 @@ describe("forced-tool streams", () => {
     expect(await reading).toBe(head + STOP)
   })
 })
+
+/**
+ * developerz.ai plan 101 slice 09, R2: a think-by-default vendor's forced stream opens with a
+ * `thinking` block, so it is always held whole for coercion, and the client used to get zero bytes
+ * for the whole reply: a silently-thinking minute reads as a dead socket to a client or proxy idle
+ * timer. While held, the stream now writes an SSE comment (no event, no data) once the client has
+ * been quiet for the keepalive window, as the translated relay does (`relay-translate.ts`).
+ */
+describe("a held forced-tool stream keeps the client's connection alive (R2)", () => {
+  const THINKING_HEAD =
+    START +
+    event("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } })
+  const thinkingDelta = event("content_block_delta", {
+    index: 0,
+    delta: { type: "thinking_delta", thinking: "hmm " },
+  })
+
+  function chunked(chunks: readonly string[], onChunk: () => void) {
+    const encoder = new TextEncoder()
+    let at = 0
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const next = chunks[at++]
+          if (next === undefined) {
+            controller.close()
+            return
+          }
+          onChunk()
+          controller.enqueue(encoder.encode(next))
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }
+
+  async function drain(response: Response): Promise<string[]> {
+    const out: string[] = []
+    const reader = response.body?.getReader()
+    for (;;) {
+      const next = await reader?.read()
+      if (next === undefined || next.done) return out
+      out.push(new TextDecoder().decode(next.value))
+    }
+  }
+
+  const tail =
+    event("content_block_stop", { index: 0 }) +
+    event("content_block_start", { index: 1, content_block: { type: "text", text: "" } }) +
+    event("content_block_delta", { index: 1, delta: { type: "text_delta", text: '{"a":1}' } }) +
+    event("content_block_stop", { index: 1 }) +
+    STOP
+
+  test("a quiet window while thinking is held writes a comment; the coerced body follows", async () => {
+    let clock = 0
+    const upstream = chunked([THINKING_HEAD, thinkingDelta, thinkingDelta, tail], () => {
+      clock += 3_000
+    })
+    let coerced = 0
+    const relayed = coerceForcedToolResponse(
+      upstream,
+      "json",
+      () => coerced++,
+      undefined,
+      () => "toolu_x",
+      undefined,
+      { ms: 5_000, now: () => clock },
+    )
+    const out = await drain(relayed)
+
+    const comments = out.filter((chunk) => chunk === ":\n\n")
+    expect(comments.length).toBeGreaterThanOrEqual(1)
+    const body = out.filter((chunk) => chunk !== ":\n\n").join("")
+    expect(body).toContain('"type":"tool_use"')
+    expect(body).toContain('"name":"json"')
+    expect(coerced).toBe(1)
+  })
+
+  test("chunks inside the window write no comment", async () => {
+    let clock = 0
+    const upstream = chunked([THINKING_HEAD, thinkingDelta, tail], () => {
+      clock += 1_000
+    })
+    const out = await drain(
+      coerceForcedToolResponse(
+        upstream,
+        "json",
+        () => {},
+        undefined,
+        () => "toolu_x",
+        undefined,
+        { ms: 5_000, now: () => clock },
+      ),
+    )
+    expect(out.filter((chunk) => chunk === ":\n\n")).toEqual([])
+  })
+})
