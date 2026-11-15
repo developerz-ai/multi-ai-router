@@ -4,6 +4,7 @@ import type {
   Dialect,
   OpenAiChatCeiling,
   ProviderId,
+  ProviderPreferences,
 } from "@multi-ai-router/core"
 import type { ModelAliasMap } from "@multi-ai-router/db"
 import type { ModelFamily } from "../services/routing/model-family"
@@ -64,6 +65,11 @@ export interface DriverAccount {
   readonly dialect?: Dialect | null
   /** `sonnet` -> `glm-4.7`. Absent, or absent for a name, means the name passes through. */
   readonly modelAliases?: ModelAliasMap | null
+  /**
+   * Standing `provider` routing preferences, honoured only where the surface reads the field
+   * ({@link ProviderDriver.acceptsProviderPreferences}). Absent or null: the body is not touched.
+   */
+  readonly providerPreferences?: ProviderPreferences | null
 }
 
 /**
@@ -189,6 +195,19 @@ export interface ProviderDriver {
    * (`ProviderSurface.bodySessionId`), so a translated body is sent one. Absent means no.
    */
   keysSessionByBody?(account: DriverAccount): boolean
+
+  /**
+   * Whether this Account's surface reads a request `provider` routing object
+   * (`ProviderSurface.providerPreferences`), so the Account's own preferences may be sent in it.
+   * Absent means no.
+   */
+  acceptsProviderPreferences?(account: DriverAccount): boolean
+
+  /**
+   * Whether this upstream model's rate limits are its own rather than the key's
+   * (`HttpDriverConfig.modelScopedRateLimits`), so its `429` holds only that model. Absent means no.
+   */
+  rateLimitsPerModel?(upstreamModel: string): boolean
 
   /**
    * The header this Account's surface requires to name the conversation

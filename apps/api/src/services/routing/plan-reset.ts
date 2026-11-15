@@ -45,13 +45,25 @@ export function spentPlanReset(
   return latest
 }
 
-/** `failure`, its reset taken from a spent plan window when it stated none of its own. */
+/**
+ * `failure`, its reset taken from a spent plan window when it stated none of its own.
+ *
+ * **A credits refusal on a spent key cap that resets is a clock.** OpenRouter answers a key past its
+ * own spend `limit` with `402` / `403 Key limit exceeded`, which reads as `credits-exhausted` and
+ * parked the account `exhausted` with no exit but the re-test ladder (prod: `openrouter-glm53-fallback`,
+ * `exhausted` from 2026-10-08). When the key's own fresh reading (`spend_limit`, from
+ * `GET /api/v1/key`) is spent and names its reset, the refusal is that cap: it becomes `rate-limited`
+ * until the reset — the refusal's own stated reset first, the reading's boundary otherwise. Only that
+ * window kind lends here. A spent *plan* window says nothing about a balance, and a cap with
+ * headroom left, no reset, or a stale reading leaves the refusal what it was: `exhausted`, a human's.
+ */
 export function withPlanReset(
   failure: AttemptFailure,
   windows: readonly QuotaWindowState[],
   now: Date,
   maxAgeMs: number,
 ): AttemptFailure {
+  if (failure.kind === "credits-exhausted") return withKeyCapReset(failure, windows, now, maxAgeMs)
   if (failure.kind !== "rate-limited") return failure
   const stated = reportedReset(failure, now) !== null && failure.resetSource !== "estimated"
   if (stated) return failure
@@ -59,4 +71,19 @@ export function withPlanReset(
   if (planReset === null) return failure
   const { retryAfterSeconds: _dropped, ...rest } = failure
   return { ...rest, resetsAt: planReset, resetSource: "provider-reported" }
+}
+
+function withKeyCapReset(
+  failure: AttemptFailure,
+  windows: readonly QuotaWindowState[],
+  now: Date,
+  maxAgeMs: number,
+): AttemptFailure {
+  const caps = windows.filter((window) => window.window === "spend_limit")
+  const capReset = spentPlanReset(caps, now, maxAgeMs)
+  if (capReset === null) return failure
+  if (reportedReset(failure, now) !== null && failure.resetSource !== "estimated")
+    return { ...failure, kind: "rate-limited" }
+  const { retryAfterSeconds: _dropped, ...rest } = failure
+  return { ...rest, kind: "rate-limited", resetsAt: capReset, resetSource: "provider-reported" }
 }

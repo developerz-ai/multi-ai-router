@@ -1,6 +1,7 @@
 import { createHttpDriver } from "../driver"
-import { codeRule, messageRule, withResetEstimate } from "../failure/classify"
+import { codeRule, messageRule, modelScoped, withResetEstimate } from "../failure/classify"
 import type { ProviderDriver } from "../types"
+import { openRouterKeyRead } from "./openrouter-key"
 
 /**
  * `openrouter` — an aggregator, and a prepaid balance. Model ids are namespaced (`vendor/model`),
@@ -78,6 +79,15 @@ const CACHE_CONTROL = true
 const BODY_SESSION_ID = true
 
 /**
+ * Provenance: openrouter.ai/docs/features/provider-routing (read 2026-11-14) — the request
+ * `provider` object (`sort`, `quantizations`, `allow_fallbacks`, `order`, `only`, `ignore`,
+ * `require_parameters`, …) picks which endpoint serves the model. The only way to ask for fp8 /
+ * bf16: a slug suffix (`:floor`, `:nitro`) states a sort and nothing else. Blast radius: every
+ * request to an `openrouter` account that carries preferences; one with none is sent as before.
+ */
+const PROVIDER_PREFERENCES = true
+
+/**
  * Every OpenRouter id is `vendor/model` (`openrouter/auto` included), so a bare name is one it cannot
  * serve: it answers `400`, and that `400` used to reach the client in place of the quota error of the
  * account that does carry the name. Unknown still passes through on the namespaced side, because an
@@ -96,6 +106,26 @@ const NAMESPACED_MODEL_ID = /^[^/\s]+\/[^/\s]\S*$/
  */
 const MODEL_REFUSED = /is not a valid model id|is no longer available/i
 
+/**
+ * A `429` OpenRouter relays from the provider serving one model — `{"error":{"message":"Provider
+ * returned error","code":429,"metadata":{"raw":"<model> is temporarily rate-limited upstream…",
+ * "provider_name":…}}}` — is that model's endpoint throttling, not this key. Provenance:
+ * openrouter.ai/docs/api-reference/errors (`metadata.provider_name` names the provider that raised
+ * it), and this router's production log, 2026-11-14: one `google/gemma-4-31b-it:free` 429 cooled the
+ * whole `openrouter-dz-coding-30d` account and its next, paid, model was refused. Blast radius: an
+ * OpenRouter 429 with that wording holds only the model it was for.
+ */
+const UPSTREAM_THROTTLE = /provider returned error|rate-limited upstream/i
+
+/**
+ * Free variants (`…:free`) carry OpenRouter's own free-model limits (`free-models-per-min`,
+ * `free-models-per-day`), separate from a key's paid traffic: a free model's `429`, whatever its
+ * wording, says nothing about the paid models on the same key. Provenance:
+ * openrouter.ai/docs/api-reference/limits ("Free usage limits"). Blast radius: a `:free` model's 429
+ * holds that model only; every other model on the account keeps serving.
+ */
+const FREE_VARIANT = /:free$/
+
 const driver = createHttpDriver({
   id: "openrouter",
   surfaces: [
@@ -105,9 +135,16 @@ const driver = createHttpDriver({
       bodyCacheKey: BODY_CACHE_KEY,
       cacheControl: CACHE_CONTROL,
       bodySessionId: BODY_SESSION_ID,
+      providerPreferences: PROVIDER_PREFERENCES,
     },
   ],
+  modelScopedRateLimits: FREE_VARIANT,
   rules: [
+    modelScoped(
+      messageRule("rate-limited", "openrouter:upstream-throttle", UPSTREAM_THROTTLE, {
+        statuses: [429],
+      }),
+    ),
     withResetEstimate(
       messageRule("rate-limited", "openrouter:key-limit-window", KEY_LIMIT_WINDOW, {
         statuses: [403],
@@ -140,4 +177,6 @@ export const openRouterDriver: ProviderDriver = {
   // would make this router's listing mostly a stale copy of someone else's. The discover button
   // still asks it whenever an operator wants the answer.
   catalogSweep: "manual",
+  // The key's own spend cap and its next reset (`openrouter-key.ts`).
+  quotaRead: openRouterKeyRead,
 }

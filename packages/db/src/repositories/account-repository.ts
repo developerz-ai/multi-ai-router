@@ -89,6 +89,7 @@ export function createAccountRepository(
           modelAliases: input.modelAliases ?? null,
           supportedModels: input.supportedModels ?? null,
           windowTokenLimits: input.windowTokenLimits ?? null,
+          providerPreferences: input.providerPreferences ?? null,
           ...(input.weight === undefined ? {} : { weight: input.weight }),
           ...(input.priority === undefined ? {} : { priority: input.priority }),
           ...(input.billing === undefined ? {} : { billing: input.billing }),
@@ -152,6 +153,9 @@ export function createAccountRepository(
           ...(patch.windowTokenLimits === undefined
             ? {}
             : { windowTokenLimits: patch.windowTokenLimits }),
+          ...(patch.providerPreferences === undefined
+            ? {}
+            : { providerPreferences: patch.providerPreferences }),
           ...(patch.weight === undefined ? {} : { weight: patch.weight }),
           ...(patch.priority === undefined ? {} : { priority: patch.priority }),
           ...(patch.billing === undefined ? {} : { billing: patch.billing }),

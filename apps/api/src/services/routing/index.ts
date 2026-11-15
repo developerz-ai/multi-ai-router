@@ -137,6 +137,7 @@ export type {
   KeyScopeSnapshot,
   LeastUsedMeasure,
   LimiterReading,
+  ModelRefusal,
   PoolMembership,
   PoolSnapshot,
   RecoverySnapshot,

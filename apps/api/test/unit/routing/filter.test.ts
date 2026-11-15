@@ -312,7 +312,9 @@ describe("a recovery gate never hides a provider-reported clock", () => {
 // not spend an upstream round trip on the same `404`.
 describe("a model the account refused", () => {
   const refused = (until: Date) =>
-    account("router", { refusedModels: new Map([["inception/mercury-2", until]]) })
+    account("router", {
+      refusedModels: new Map([["inception/mercury-2", { until, reason: "unsupported" as const }]]),
+    })
 
   test("is dropped as model-unsupported while the refusal stands", () => {
     const result = run([refused(at(60_000))], "inception/mercury-2")

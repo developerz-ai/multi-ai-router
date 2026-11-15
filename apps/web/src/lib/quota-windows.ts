@@ -55,6 +55,7 @@ export const QUOTA_WINDOW_DISPLAY_ORDER = [
   "seven_day",
   "seven_day_opus",
   "seven_day_sonnet",
+  "spend_limit",
   "overage",
 ] as const satisfies readonly QuotaWindowKind[]
 
@@ -72,6 +73,7 @@ const NAMING: Readonly<Record<QuotaWindowKind, WindowNaming>> = {
   seven_day_opus: { label: "7d Opus", title: "Seven-day window, Opus only" },
   seven_day_sonnet: { label: "7d Sonnet", title: "Seven-day window, Sonnet only" },
   overage: { label: "Overage", title: "Paid allowance beyond the included windows" },
+  spend_limit: { label: "Key cap", title: "The key's own spend limit, until its next reset" },
 }
 
 export function quotaWindowLabel(window: QuotaWindowKind): string {
