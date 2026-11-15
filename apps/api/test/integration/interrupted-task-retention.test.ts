@@ -1,15 +1,24 @@
-import { describe, expect, test } from "bun:test"
+import { beforeAll, describe, expect, test } from "bun:test"
 import {
   advisoryLockKey,
   createDatabase,
   createScheduledTaskRepository,
   createSchedulerLockPool,
+  defaultMigrationsFolder,
+  runMigrations,
 } from "@multi-ai-router/db"
 import { advisoryTaskLock } from "../../src/scheduler/lock"
 import { createInterruptedRunMaintenance } from "../../src/scheduler/orphan-runs"
 
 const url = process.env.DATABASE_URL ?? ""
 describe.skipIf(!url)("historical task retention exclusion", () => {
+  // Migrate first, like every other suite that writes to the shared database: this one used to
+  // rely on an earlier file having migrated it, and failed with "relation scheduled_task_runs does
+  // not exist" whenever bun ran it before any such file.
+  beforeAll(async () => {
+    await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
+  })
+
   test("removed orphan becomes retention eligible while an independent boot retains its live run", async () => {
     const main = createDatabase({ url, maxConnections: 1 })
     const owner = createSchedulerLockPool({ url, maxConnections: 1, closeTimeoutSeconds: 0.1 })
