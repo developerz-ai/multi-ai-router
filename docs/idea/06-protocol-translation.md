@@ -776,8 +776,10 @@ of its own),
 and `response.completed` / `response.incomplete` toward `openai-responses`, under `response.usage`.
 
 **Which responses carry it.** Every translated inference response, including a Claude subscription
-reached from an OpenAI dialect. **A same-dialect one only on request.** That body is the upstream's
-bytes (non-negotiable 10), so by default it states none. A caller that sends
+reached from an OpenAI dialect, and **every Claude subscription (Agent SDK) turn on the `anthropic`
+wire too**: the SDK renderer writes those bytes ([11](11-anthropic-agent-sdk.md) §6), so no conversion
+pair does not make them a relay. **A same-dialect HTTP relay only on request.** That body is the
+upstream's bytes (non-negotiable 10), so by default it states none. A caller that sends
 **`x-router-usage: cost`** trades byte identity for the figure on that request: the answer is
 re-framed through the translated relay with an identity pair (`relay-cost-optin.ts`) — a JSON body
 parsed and re-serialized with the cost in its `usage`, a stream re-framed per SSE event with the cost

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { account, slowStream } from "../unit/dataplane/fixtures"
+import { account, slowStream, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, post, settle } from "./harness"
 
 /**
@@ -260,6 +260,96 @@ describe("no honest number, no field", () => {
     expect(usageOf(await res.json())).toMatchObject({ cost: 0.21, cost_basis: "notional" })
     await settle()
     expect(usage.rows.at(-1)?.costBasis).toBe("notional")
+  })
+})
+
+describe("a Claude subscription turn is the router's own rendering: it states the cost", () => {
+  // The Agent SDK re-synthesizes every answer (docs/idea/11-anthropic-agent-sdk.md §6), so an
+  // anthropic-ingress turn is never upstream bytes, even with no conversion pair. Production,
+  // 2026-11-13..15: 0 of 94 cache-writing claude-sonnet-5-5 rows on the anthropic wire stated a cost.
+  const CLAUDE = "claude-opus-5-5"
+  const SDK_USAGE = {
+    input_tokens: 10,
+    cache_read_input_tokens: 1_000,
+    cache_creation_input_tokens: 5_000,
+    output_tokens: 100,
+  }
+  // With a charset, as an upstream may state one: the relay keeps the header the stream came with
+  // (`relay-translate.ts`) rather than overwriting it with a bare `text/event-stream`.
+  const SDK_SSE_TYPE = "text/event-stream; charset=utf-8"
+  const sse = (type: string, fields: object) =>
+    `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`
+  const rendered = (stream: boolean) => async (): Promise<Response> =>
+    stream
+      ? new Response(
+          [
+            sse("message_start", {
+              message: {
+                id: "m",
+                type: "message",
+                role: "assistant",
+                model: CLAUDE,
+                content: [],
+                usage: { ...SDK_USAGE, output_tokens: 1 },
+              },
+            }),
+            sse("content_block_start", { index: 0, content_block: { type: "text", text: "" } }),
+            sse("content_block_delta", { index: 0, delta: { type: "text_delta", text: "ok" } }),
+            sse("content_block_stop", { index: 0 }),
+            sse("message_delta", {
+              delta: { stop_reason: "end_turn" },
+              usage: { output_tokens: 100 },
+            }),
+            sse("message_stop", {}),
+          ].join(""),
+          { headers: { "content-type": SDK_SSE_TYPE } },
+        )
+      : Response.json({
+          id: "m",
+          type: "message",
+          role: "assistant",
+          model: CLAUDE,
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+          usage: SDK_USAGE,
+        })
+  const request = (stream: boolean) =>
+    post(
+      JSON.stringify({ model: CLAUDE, max_tokens: 64, stream, messages: CHAT.messages }),
+      bearer(),
+    )
+
+  test("anthropic ingress, JSON: the cache-writing row's notional estimate", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [],
+      invokeSdk: rendered(false),
+    })
+    const stated = usageOf(await (await app.request("/v1/messages", request(false))).json())
+    await settle()
+    const row = usage.rows.at(-1)
+    expect(row).toMatchObject({ cacheWriteTokens: 5_000, costBasis: "notional" })
+    expect(stated).toMatchObject({
+      cost: Number(row?.costEstimate),
+      cost_source: "estimated",
+      cost_basis: "notional",
+    })
+  })
+
+  test("anthropic ingress, streamed: message_delta carries it, once", async () => {
+    const { app, usage } = harness({
+      accounts: [subscriptionAccount("sub")],
+      responses: [],
+      invokeSdk: rendered(true),
+    })
+    const res = await app.request("/v1/messages", request(true))
+    expect(res.headers.get("content-type")).toBe(SDK_SSE_TYPE)
+    const frames = dataFrames(await res.text())
+    await settle()
+    const delta = frames.find((frame) => frame.type === "message_delta")
+    expect(usageOf(delta)?.cost).toBe(Number(usage.rows.at(-1)?.costEstimate))
+    expect(usageOf(delta)?.cost_basis).toBe("notional")
+    expect(frames.filter((frame) => usageOf(frame)?.cost !== undefined)).toHaveLength(1)
   })
 })
 
