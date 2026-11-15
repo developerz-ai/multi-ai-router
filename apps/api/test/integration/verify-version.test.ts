@@ -210,6 +210,40 @@ describe("bin/verify-version", () => {
     expect(ran.output).toContain("not checked against the tags on origin")
   })
 
+  test("still refuses every other failure offline", async () => {
+    // The switch skips the tag lookup and nothing else: a manifest that disagrees with the
+    // source, a footer link out of order and a tag that is not the version all still refuse.
+    const offline = { VERIFY_VERSION_OFFLINE: "1" }
+    const drifted = await fixture({
+      constant: "2.38.0",
+      manifests: { "apps/api/package.json": "2.37.9" },
+    })
+    const disordered = await fixture({
+      constant: "2.37.7",
+      changelog: [
+        "## [Unreleased]",
+        "",
+        "## [2.37.7] — 2026-10-16",
+        "",
+        "- latest.",
+        "",
+        "## [2.37.6] — 2026-10-15",
+        "",
+        "- prior.",
+        "",
+        "[2.37.7]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.7",
+        "[2.37.6]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.37.6",
+        "",
+      ].join("\n"),
+    })
+
+    expect((await verifyWith(offline, drifted)).exitCode).toBe(1)
+    expect((await verifyWith(offline, disordered)).exitCode).toBe(1)
+    expect(
+      (await verifyWith(offline, await fixture({ constant: "2.38.0" }), "v2.38.1")).exitCode,
+    ).toBe(1)
+  })
+
   test("refuses a tag that does not name the version the code reports", async () => {
     const root = await fixture({ constant: "1.0.0" })
 
