@@ -107,6 +107,12 @@ interface ProviderDriver {
   // sends the base name (05-routing-and-failover.md#context-tags--a-client-hint-not-part-of-the-name).
   readonly understandsContextTags?: boolean;
 
+  // Suffixes the upstream accepts on any model id to change only its routing — today
+  // `openrouter`'s `:floor`, `:nitro`, `:exacto`, `:online`. A suffixed name is served wherever its
+  // base id is declared, and is sent unchanged
+  // (05-routing-and-failover.md#routing-variants--served-by-their-base-id-sent-unchanged).
+  readonly routingVariants?: readonly string[];
+
   // Client model name -> upstream model id, via the Account's alias map.
   // Identity when the Account has no entry for that name.
   mapModelAlias(account: DriverAccount, requestedModel: string): string;

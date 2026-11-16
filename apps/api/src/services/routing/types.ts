@@ -108,6 +108,11 @@ export interface AccountSnapshot {
    */
   readonly understandsContextTags?: boolean
   /**
+   * The provider's routing-variant suffixes (`ProviderDriver.routingVariants`): a requested name
+   * ending in one is served wherever its base id is declared, and is sent upstream unchanged.
+   */
+  readonly routingVariants?: readonly string[]
+  /**
    * The account is served over a transport that holds a conversation server-side (the Agent SDK),
    * so a hop off it mid-session restarts that session elsewhere. Set by the catalog from the
    * provider registry's transport, never by comparing provider ids here (non-negotiable 12).

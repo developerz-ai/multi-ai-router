@@ -126,6 +126,19 @@ const UPSTREAM_THROTTLE = /provider returned error|rate-limited upstream/i
  */
 const FREE_VARIANT = /:free$/
 
+/**
+ * Routing variants: suffixes OpenRouter "accepted on every model ID and [are] never an entry in the
+ * models API" — `:nitro` (sort by throughput), `:floor` (sort by price), `:exacto` (tool-calling
+ * quality), `:online` (web search; deprecated, still accepted). Catalog variants — `:free`, `:batch`,
+ * `:thinking`, `:extended` — are their own listed ids and are deliberately absent: stripping one
+ * would admit a model the listing never named. Provenance:
+ * openrouter.ai/docs/guides/routing/model-variants (read 2026-11-15; "Only the suffixes listed on
+ * this page are variants"). Blast radius: prod 2026-11-15, `deepseek/deepseek-v4.1-flash:floor` was
+ * refused `model-unsupported` ~2,000 times in 19 h once `supportedModels` was re-listed from
+ * `/models`, which never carries a routing variant.
+ */
+const ROUTING_VARIANTS = [":floor", ":nitro", ":exacto", ":online"] as const
+
 const driver = createHttpDriver({
   id: "openrouter",
   surfaces: [
@@ -173,6 +186,7 @@ const driver = createHttpDriver({
 export const openRouterDriver: ProviderDriver = {
   ...driver,
   modelFamily: { patterns: [NAMESPACED_MODEL_ID] },
+  routingVariants: ROUTING_VARIANTS,
   // An aggregator of several hundred models it does not itself serve: mirroring its catalog hourly
   // would make this router's listing mostly a stale copy of someone else's. The discover button
   // still asks it whenever an operator wants the answer.

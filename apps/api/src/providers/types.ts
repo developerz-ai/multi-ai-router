@@ -128,6 +128,12 @@ export interface ProviderDriver {
    */
   readonly understandsContextTags?: boolean
   /**
+   * Suffixes the upstream accepts on any of its model ids to change only how the request is routed
+   * (OpenRouter's `:floor`, `:nitro`, …). A suffixed name is served wherever its base id is, and
+   * goes upstream unchanged (`services/routing/model.ts`). Absent: no suffix is ever stripped.
+   */
+  readonly routingVariants?: readonly string[]
+  /**
    * `manual`: the hourly catalog sweep never lists this provider; only the operator's discover
    * button does (`services/models/refresh.ts`). For an aggregator whose listing is someone else's
    * catalog. Absent: swept like any HTTP account.

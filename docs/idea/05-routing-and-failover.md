@@ -195,6 +195,22 @@ ChatGPT account whose discovered list held `gpt-6.1-sol` was refused as `model-u
 A stripped name differs from the requested one, so it ranks like an alias (below): an account that
 reads the tag, and so honors the context hint, goes first.
 
+### Routing variants — served by their base id, sent unchanged
+
+A provider may declare `routingVariants`: suffixes its upstream accepts on any model id to change
+only how it routes the request ([03-providers.md](03-providers.md#provider-driver-contract)). Today
+only `openrouter` does, with `:floor`, `:nitro`, `:exacto` and `:online`
+(openrouter.ai/docs/guides/routing/model-variants, read 2026-11-15: "accepted on every model ID and
+never an entry in the models API"). A requested name ending in one is served wherever its base id is
+declared in `supportedModels`, and, unlike a context tag, **goes upstream unchanged**, because the
+suffix is meaningful there. Catalog variants (`:free`, `:batch`, `:thinking`, `:extended`) are
+listed ids of their own and are never stripped; `x:free:nitro` is served where `x:free` is listed.
+An unknown base stays `model-unsupported`. Why: a hand-added `deepseek/deepseek-v4.1-flash:floor`
+dropped out of `openrouter-dz-coding-30d`'s `supportedModels` when the account was re-listed from
+`/models` (2026-11-15 ~05:38Z), and ~2,000 requests over 19 h were refused while the base id sat in
+the list. Discovery now audits (`account.models_discovered.detail.removed`) and logs every declared
+id an overwrite drops.
+
 ### A recovery permit ranks first
 
 A half-open breaker probe ranks behind every healthy account. The holder of this replica's
