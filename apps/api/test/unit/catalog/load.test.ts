@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountRow, QuotaWindowRow, RecoveryRow } from "@multi-ai-router/db"
 import { type CatalogSources, loadCatalog } from "../../../src/services/catalog"
+import { resolveModel } from "../../../src/services/routing"
 import { accountRow as durableAccountRow } from "../../support/account-row"
 
 /**
@@ -78,6 +79,27 @@ describe("loadCatalog and the declared model set", () => {
     )
     expect(accounts[0]?.snapshot.modelFamily?.patterns.length).toBeGreaterThan(0)
     expect("modelFamily" in (accounts[1]?.snapshot ?? {})).toBe(false)
+  })
+
+  test("an openrouter row carries its routing variants, so `x:floor` is served where `x` is listed", async () => {
+    // Prod 2026-11-15: `deepseek/deepseek-v4.1-flash:floor` was refused `model-unsupported` ~2,000
+    // times once `supportedModels` held only the base id. The resolver honours the suffix only if
+    // this load carries the provider's variants onto the snapshot.
+    const { accounts } = await loadCatalog(
+      sources([
+        row({ provider: "openrouter", supportedModels: ["x"] }),
+        row({ id: "22222222-2222-4222-8222-222222222222", provider: "zai" }),
+      ]),
+    )
+    const openrouter = accounts[0]?.snapshot
+    expect(openrouter?.routingVariants).toEqual([":floor", ":nitro", ":exacto", ":online"])
+    if (openrouter === undefined) return
+    expect(resolveModel(openrouter, "x:floor")).toEqual({
+      upstreamModel: "x:floor",
+      supported: true,
+      aliased: false,
+    })
+    expect("routingVariants" in (accounts[1]?.snapshot ?? {})).toBe(false)
   })
 })
 

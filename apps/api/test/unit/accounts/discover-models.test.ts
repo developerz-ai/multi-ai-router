@@ -253,3 +253,55 @@ describe("createDiscoverModelsService", () => {
     expect(seen.headers?.get("anthropic-version")).toBe("2023-06-01")
   })
 })
+
+describe("a discovery that drops declared ids", () => {
+  test("audits and logs every id the operator had that the listing no longer carries", async () => {
+    const warned: { message: string; fields: unknown }[] = []
+    const row = accountRow({
+      provider: "openrouter",
+      supportedModels: ["deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash:floor"],
+    })
+    const audited: AuditEventInput[] = []
+    const service = createDiscoverModelsService({
+      accounts: { findById: async (id) => (id === row.id ? row : undefined) },
+      write: { update: async (id) => ok({ id }) as never },
+      cipher: { decrypt: (envelope) => envelope },
+      audit: { record: async (event) => void audited.push(event) },
+      timeoutMs: 5_000,
+      log: { warn: (message, fields) => void warned.push({ message, fields }) },
+      fetch: async () =>
+        jsonResponse(200, {
+          data: [{ id: "deepseek/deepseek-v4.1-flash" }, { id: "z-ai/glm-5.3" }],
+        }),
+    })
+
+    const result = await service.discover("acc-1")
+    expect(result.ok).toBe(true)
+    expect(audited[0]?.detail).toEqual({
+      provider: "openrouter",
+      count: 2,
+      saved: true,
+      removed: ["deepseek/deepseek-v4.1-flash:floor"],
+    })
+    expect(warned).toHaveLength(1)
+    expect(warned[0]?.fields).toMatchObject({
+      accountId: "acc-1",
+      removed: ["deepseek/deepseek-v4.1-flash:floor"],
+    })
+  })
+
+  test("an empty listing removes nothing, so it reports nothing removed", async () => {
+    const row = accountRow({ supportedModels: ["glm-4.7"] })
+    const audited: AuditEventInput[] = []
+    const service = createDiscoverModelsService({
+      accounts: { findById: async () => row },
+      write: { update: async (id) => ok({ id }) as never },
+      cipher: { decrypt: (envelope) => envelope },
+      audit: { record: async (event) => void audited.push(event) },
+      timeoutMs: 5_000,
+      fetch: async () => jsonResponse(200, { data: [] }),
+    })
+    await service.discover("acc-1")
+    expect(audited[0]?.detail).toEqual({ provider: "zai", count: 0, saved: false })
+  })
+})

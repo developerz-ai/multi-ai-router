@@ -103,14 +103,30 @@ export function createDiscoverModelsService(
       if (!listed.ok) return listed
 
       const models = listed.value
+      const removed = droppedIds(account, models)
       await deps.audit.record({
         kind: AUDIT_KINDS.accountModelsDiscovered,
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: account.id,
-        // A count and a flag. Model ids are not credentials, but the audit log is a log of what
-        // happened, not a second copy of the row the write already recorded.
-        detail: { provider: account.provider, count: models.length, saved: models.length > 0 },
+        // A count and a flag, plus the ids this write takes away. Model ids are not credentials;
+        // the listing itself is not copied here — the row holds it — but what the overwrite
+        // removed exists nowhere else once it lands (prod 2026-11-15: a hand-added `:floor` id
+        // vanished silently and its traffic was refused for 19 h).
+        detail: {
+          provider: account.provider,
+          count: models.length,
+          saved: models.length > 0,
+          ...(removed.length === 0 ? {} : { removed }),
+        },
       })
+      if (removed.length > 0) {
+        deps.log?.warn("model discovery removed declared models", {
+          component: "discover-models",
+          accountId: account.id,
+          provider: account.provider,
+          removed,
+        })
+      }
 
       if (models.length === 0) {
         return ok({
@@ -135,6 +151,16 @@ export function createDiscoverModelsService(
       })
     },
   }
+}
+
+/**
+ * The declared ids the write is about to replace away. Empty when nothing will be written — an
+ * empty listing is never saved, so it removes nothing.
+ */
+function droppedIds(account: AccountRow, listed: readonly string[]): readonly string[] {
+  if (listed.length === 0) return []
+  const kept = new Set(listed)
+  return (account.supportedModels ?? []).filter((id) => !kept.has(id))
 }
 
 /**

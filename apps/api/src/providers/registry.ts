@@ -125,6 +125,12 @@ export function providerUnderstandsContextTags(id: ProviderId): boolean {
   return support.transport !== "unimplemented" && support.driver.understandsContextTags === true
 }
 
+/** The provider's routing-variant suffixes (`ProviderDriver.routingVariants`). Read at catalog build. */
+export function providerRoutingVariants(id: ProviderId): readonly string[] {
+  const support = PROVIDER_REGISTRY[id]
+  return support.transport === "http" ? (support.driver.routingVariants ?? []) : []
+}
+
 /**
  * Whether this provider's transport holds the conversation server-side (the Agent SDK), so a hop
  * off a bound account restarts the session. Read by the catalog into `AccountSnapshot.carriesSession`.

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An OpenRouter routing variant is served wherever its base model is.** `:floor`, `:nitro`, `:exacto` and `:online` are accepted on every OpenRouter model id and never appear in its `/models` listing, so a `supportedModels` list read from that listing refused them: once `openrouter-dz-coding-30d` was re-listed (2026-11-15 ~05:38Z), its hand-added `deepseek/deepseek-v4.1-flash:floor` was gone and ~2,000 requests over 19 h were refused `no account in pool openrouter-coding serves model "deepseek/deepseek-v4.1-flash:floor"` (`model-unsupported`) while `deepseek/deepseek-v4.1-flash` sat in the list. A driver now declares its `routingVariants` (only `openrouter`, from openrouter.ai/docs/guides/routing/model-variants); a requested name ending in one resolves against its base id and goes upstream unchanged. Catalog variants (`:free`, `:batch`, `:thinking`, `:extended`) are their own listed ids and are never stripped, and an unknown base is still refused. Spec: `docs/idea/05-routing-and-failover.md#routing-variants--served-by-their-base-id-sent-unchanged`. Regression: `apps/api/test/unit/routing/routing-variant.test.ts`.
+- **Model discovery says what it removed.** The discover button overwrites `supportedModels` with the upstream listing; an id the operator had declared that the listing lacks used to disappear with only a count in the audit row. The `account.models_discovered` audit detail now carries `removed` (the declared ids the write drops) and a `model discovery removed declared models` warning names them. Regression: `apps/api/test/unit/accounts/discover-models.test.ts`.
+
 ## [2.62.0] — 2026-11-15
 
 ### Fixed
