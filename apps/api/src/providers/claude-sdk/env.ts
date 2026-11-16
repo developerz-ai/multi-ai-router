@@ -111,6 +111,13 @@ export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
  *   running background agent, so a concurrent resume is refused with "is currently running as a
  *   background agent" (Meridian #630) — which `invoker.ts` recovers from with one in-place
  *   `forkSession` retry (`errors.ts` `busy-session`).
+ * - `DISABLE_AUTO_COMPACT: "1"` — the client owns its context. A resumed session lives in the
+ *   CLI's transcript, and the CLI's own auto-compact (on by default, CLI 2.1.319: "autoCompactEnabled
+ *   setting + DISABLE_AUTO_COMPACT / DISABLE_COMPACT env") would summarise it behind the client,
+ *   whose next turn then diverges from what the model saw, with nothing saying so
+ *   (developerz.ai plan 101 slice 09, R8). A full context now fails as the upstream's own
+ *   prompt-too-long, which the client can compact and resend. `DISABLE_COMPACT` is not set: it
+ *   would also refuse a `/compact` the client itself asks for.
  *
  * Applied after {@link subprocessEnv}, so no inherited value can win — these are isolation
  * decisions, not operator knobs.
@@ -118,6 +125,7 @@ export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
 export const QUERY_ENV_OVERRIDES: Readonly<Record<string, string>> = Object.freeze({
   ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   CLAUDE_CODE_SESSION_KIND: "bg",
+  DISABLE_AUTO_COMPACT: "1",
 })
 
 export interface SubprocessEnvOptions {

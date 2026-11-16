@@ -3,6 +3,7 @@ import type { AccountRow, CatalogSnapshotRepository, RecoveryRow } from "@multi-
 import {
   providerCarriesSession,
   providerModelFamily,
+  providerRoutingVariants,
   providerUnderstandsContextTags,
 } from "../../providers/registry"
 import type { RoutableAccount } from "../dataplane"
@@ -112,6 +113,7 @@ function toRoutableAccount(
       // explicit list above replaces it (`services/routing/model-family.ts`).
       ...modelFamilyOf(row),
       ...(providerUnderstandsContextTags(row.provider) ? { understandsContextTags: true } : {}),
+      ...routingVariantsOf(row),
       ...(providerCarriesSession(row.provider) ? { carriesSession: true } : {}),
       ...(quotaWindows === undefined ? {} : { quotaWindows }),
       ...(recovery === undefined
@@ -139,6 +141,11 @@ function toRoutableAccount(
     authMaterial: row.authMaterial,
     configDir: row.configDir,
   }
+}
+
+function routingVariantsOf(row: AccountRow): Pick<AccountSnapshot, "routingVariants"> {
+  const variants = providerRoutingVariants(row.provider)
+  return variants.length === 0 ? {} : { routingVariants: variants }
 }
 
 function modelFamilyOf(row: AccountRow): Pick<AccountSnapshot, "modelFamily"> {

@@ -155,6 +155,7 @@ export function classifySdkFailure(error: unknown): SdkFailure {
       rateLimit: null,
       ...(text.message === "" ? {} : { message: text.message }),
       ...(rule.requestAttributable ? { requestAttributable: true } : {}),
+      ...(rule.permanentForRequest ? { permanentForRequest: true } : {}),
     },
     clientMessage: rule.clientMessage,
     text,

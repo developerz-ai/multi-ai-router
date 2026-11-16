@@ -58,6 +58,8 @@ const requestSchema = z.looseObject({
   // option, never the turn.
   thinking: z.unknown().optional(),
   output_config: z.unknown().optional(),
+  // The pre-GA spelling of `output_config.format`. Read only to refuse it (`rejectStructuredOutput`).
+  output_format: z.unknown().optional(),
 })
 
 export type SdkRequestRole = "user" | "assistant" | "system"
@@ -127,6 +129,7 @@ export function readSdkRequest(body: Uint8Array | null): SdkRequest {
     )
   }
   rejectServerTools(result.data.tools)
+  rejectStructuredOutput(result.data.output_config, result.data.output_format)
 
   return {
     messages: readMessages(result.data.messages),
@@ -150,6 +153,31 @@ function rejectServerTools(value: unknown): void {
       )
     }
   }
+}
+
+/**
+ * Thrown, never degraded, when the client constrained the answer's shape: the Agent SDK has no
+ * carrier for `output_config.format` (or its older top-level spelling `output_format`), so launching
+ * anyway answered a `generateObject` caller free prose as a `200` (developerz.ai plan 101 slice 09,
+ * R1). The SDK's own `outputFormat` is a CLI-executed end-turn tool, which the allowlist forbids
+ * (`allowlist.ts`). Fast mode and API-key accounts carry the field natively, so the refusal is
+ * retryable: its tail is the phrase `failure-rules-request.ts` classifies as
+ * `claude-sdk:structured-output-unsupported`. Thrown before a slot is taken. Null is absence.
+ */
+export const STRUCTURED_OUTPUT_UNCARRIED =
+  "structured output (output_config.format) cannot be carried by the Claude Agent SDK transport"
+
+function rejectStructuredOutput(outputConfig: unknown, outputFormat: unknown): void {
+  const format =
+    typeof outputConfig === "object" && outputConfig !== null
+      ? Reflect.get(outputConfig, "format")
+      : undefined
+  if (
+    (format === undefined || format === null) &&
+    (outputFormat === undefined || outputFormat === null)
+  )
+    return
+  throw new Error(`the request's ${STRUCTURED_OUTPUT_UNCARRIED}`)
 }
 
 /** The variants `anthropicToolChoiceSchema` discriminates on — the near-miss test's vocabulary. */

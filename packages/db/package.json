@@ -1,6 +1,6 @@
 {
   "name": "@multi-ai-router/db",
-  "version": "2.60.1",
+  "version": "2.63.0",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
   "dependencies": {
     "@multi-ai-router/core": "workspace:*",
     "drizzle-orm": "^0.45.4",
-    "postgres": "^3.4.9"
+    "postgres": "^4.0.0"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.11"

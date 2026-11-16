@@ -18,6 +18,11 @@
  * name it sends. On an account whose provider does not declare `understandsContextTags`, a tagged
  * name the operator did not alias or list explicitly resolves as its base name, and the base name
  * is what goes upstream. Same model, hint dropped — not a substitution (non-negotiable 4).
+ *
+ * **Routing variants.** A provider may declare suffixes it accepts on any id to change only its
+ * routing (OpenRouter's `:floor`, `:nitro`). Those never appear in a listing, so a suffixed name is
+ * served wherever its base id is declared — and, unlike a context tag, goes upstream unchanged,
+ * because the suffix means something there.
  */
 
 import { ownEntry } from "@multi-ai-router/core"
@@ -61,9 +66,26 @@ function resolveExact(account: AccountSnapshot, requestedModel: string): ModelRe
  */
 function serves(account: AccountSnapshot, upstreamModel: string): boolean {
   const declared = account.supportedModels
-  if (declared !== undefined && declared.length > 0) return declared.includes(upstreamModel)
+  if (declared !== undefined && declared.length > 0) {
+    if (declared.includes(upstreamModel)) return true
+    const base = routingVariantBase(account, upstreamModel)
+    return base !== null && declared.includes(base)
+  }
   if (account.modelFamily !== undefined) return inModelFamily(account.modelFamily, upstreamModel)
   return true
+}
+
+/**
+ * The base id under a provider's routing-variant suffix (`x:floor` -> `x`), or `null` when the name
+ * carries none. A routing variant changes only how the upstream routes the request and never
+ * appears in its listing, so the declared set is checked against the base while the suffixed name
+ * is what goes upstream. Only the provider's own documented suffixes count (`routingVariants`).
+ */
+function routingVariantBase(account: AccountSnapshot, model: string): string | null {
+  const suffix = account.routingVariants?.find(
+    (candidate) => model.length > candidate.length && model.endsWith(candidate),
+  )
+  return suffix === undefined ? null : model.slice(0, -suffix.length)
 }
 
 /**

@@ -53,6 +53,42 @@ describe("a request-attributable refusal", () => {
     expect(decision.action === "attempt" && decision.candidate.account.id).toBe("c")
   })
 
+  test("a lone refusal no clock clears, with no untried candidate left, is a request wall (slice 09 R1)", () => {
+    const uncarried: AttemptFailure = {
+      kind: "server-error",
+      status: 400,
+      message: "claude-sdk:structured-output-unsupported",
+      requestAttributable: true,
+      permanentForRequest: true,
+    }
+    const progress = noteRequestAttributable(recordAttempt(NO_ATTEMPTS, "a"), uncarried)
+    expect(planNextAttempt(candidates(account("a")), progress, uncarried)).toEqual({
+      action: "stop",
+      reason: "request-wall",
+    })
+  })
+
+  test("a lone refusal that clears with time is not: extra-usage-gated keeps its held 429", () => {
+    expect(planNextAttempt(candidates(account("a")), answered("a"), gated)).not.toEqual({
+      action: "stop",
+      reason: "request-wall",
+    })
+  })
+
+  test("not while an untried candidate remains, nor when another kind of failure preceded it", () => {
+    const first = planNextAttempt(candidates(account("a"), account("b")), answered("a"), gated)
+    expect(first.action === "attempt" && first.candidate.account.id).toBe("b")
+
+    const mixed = noteRequestAttributable(
+      recordAttempt(recordAttempt(NO_ATTEMPTS, "a"), "b"),
+      gated,
+    )
+    expect(planNextAttempt(candidates(account("a"), account("b")), mixed, gated)).not.toEqual({
+      action: "stop",
+      reason: "request-wall",
+    })
+  })
+
   test("an ordinary failure folds nothing into the count", () => {
     const progress = noteRequestAttributable(NO_ATTEMPTS, { requestAttributable: undefined })
     expect(progress).toBe(NO_ATTEMPTS)

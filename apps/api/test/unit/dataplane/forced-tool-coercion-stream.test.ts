@@ -109,3 +109,232 @@ describe("forced-tool streams", () => {
     expect(await reading).toBe(head + STOP)
   })
 })
+
+/**
+ * developerz.ai plan 101 slice 09, R2: a think-by-default vendor's forced stream opens with a
+ * `thinking` block, so it is always held whole for coercion, and the client used to get zero bytes
+ * for the whole reply: a silently-thinking minute reads as a dead socket to a client or proxy idle
+ * timer. While held, the stream now writes an SSE comment (no event, no data) once the client has
+ * been quiet for the keepalive window, as the translated relay does (`relay-translate.ts`).
+ */
+describe("a held forced-tool stream keeps the client's connection alive (R2)", () => {
+  const THINKING_HEAD =
+    START +
+    event("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } })
+  const thinkingDelta = event("content_block_delta", {
+    index: 0,
+    delta: { type: "thinking_delta", thinking: "hmm " },
+  })
+
+  function chunked(chunks: readonly string[], onChunk: () => void) {
+    const encoder = new TextEncoder()
+    let at = 0
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const next = chunks[at++]
+          if (next === undefined) {
+            controller.close()
+            return
+          }
+          onChunk()
+          controller.enqueue(encoder.encode(next))
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }
+
+  async function drain(response: Response): Promise<string[]> {
+    const out: string[] = []
+    const reader = response.body?.getReader()
+    for (;;) {
+      const next = await reader?.read()
+      if (next === undefined || next.done) return out
+      out.push(new TextDecoder().decode(next.value))
+    }
+  }
+
+  const tail =
+    event("content_block_stop", { index: 0 }) +
+    event("content_block_start", { index: 1, content_block: { type: "text", text: "" } }) +
+    event("content_block_delta", { index: 1, delta: { type: "text_delta", text: '{"a":1}' } }) +
+    event("content_block_stop", { index: 1 }) +
+    STOP
+
+  test("a quiet window while thinking is held writes a comment; the coerced body follows", async () => {
+    let clock = 0
+    const upstream = chunked([THINKING_HEAD, thinkingDelta, thinkingDelta, tail], () => {
+      clock += 3_000
+    })
+    let coerced = 0
+    const relayed = coerceForcedToolResponse(
+      upstream,
+      "json",
+      () => coerced++,
+      undefined,
+      () => "toolu_x",
+      undefined,
+      { ms: 5_000, now: () => clock },
+    )
+    const out = await drain(relayed)
+
+    const comments = out.filter((chunk) => chunk === ":\n\n")
+    expect(comments.length).toBeGreaterThanOrEqual(1)
+    const body = out.filter((chunk) => chunk !== ":\n\n").join("")
+    expect(body).toContain('"type":"tool_use"')
+    expect(body).toContain('"name":"json"')
+    expect(coerced).toBe(1)
+  })
+
+  test("chunks inside the window write no comment", async () => {
+    let clock = 0
+    const upstream = chunked([THINKING_HEAD, thinkingDelta, tail], () => {
+      clock += 1_000
+    })
+    const out = await drain(
+      coerceForcedToolResponse(
+        upstream,
+        "json",
+        () => {},
+        undefined,
+        () => "toolu_x",
+        undefined,
+        { ms: 5_000, now: () => clock },
+      ),
+    )
+    expect(out.filter((chunk) => chunk === ":\n\n")).toEqual([])
+  })
+})
+
+/**
+ * The keepalive above is for a stream the router HOLDS. A stream it relays — the vendor obeyed
+ * (`tool_use` first), or the stream outgrew `maxBytes` — is the upstream's bytes and nothing else,
+ * however long the client has waited: the `mode !== "relaying"` guard in `coercedStream`.
+ */
+describe("a relayed forced-tool stream is the upstream's bytes exactly (R2 guard)", () => {
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+
+  /** Each chunk advances the clock past the keepalive window before it arrives. */
+  function jumping(chunks: readonly string[], tick: () => void) {
+    let at = 0
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const next = chunks[at++]
+          if (next === undefined) {
+            controller.close()
+            return
+          }
+          tick()
+          controller.enqueue(encoder.encode(next))
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+  }
+
+  async function relayedText(response: Response): Promise<string> {
+    let out = ""
+    const reader = response.body?.getReader()
+    for (;;) {
+      const next = await reader?.read()
+      if (next === undefined || next.done) return out
+      out += decoder.decode(next.value)
+    }
+  }
+
+  const toolUseHead =
+    START +
+    event("content_block_start", {
+      index: 0,
+      content_block: { type: "tool_use", id: "t", name: "json", input: {} },
+    })
+  const toolUseDelta = event("content_block_delta", {
+    index: 0,
+    delta: { type: "input_json_delta", partial_json: '{"a":1}' },
+  })
+
+  test("a tool_use-first stream with the clock past the window carries no comment", async () => {
+    let clock = 0
+    const chunks = [toolUseHead, toolUseDelta, event("content_block_stop", { index: 0 }), STOP]
+    let coerced = 0
+    const relayed = coerceForcedToolResponse(
+      jumping(chunks, () => {
+        clock += 60_000
+      }),
+      "json",
+      () => coerced++,
+      undefined,
+      () => "toolu_x",
+      undefined,
+      { ms: 5_000, now: () => clock },
+    )
+
+    expect(await relayedText(relayed)).toBe(chunks.join(""))
+    expect(coerced).toBe(0)
+  })
+
+  test("a stream past maxBytes with the clock past the window carries no comment", async () => {
+    let clock = 0
+    const thinking =
+      START +
+      event("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } })
+    const chunks = [
+      thinking +
+        event("content_block_delta", {
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "x".repeat(256) },
+        }),
+      event("content_block_stop", { index: 0 }),
+      STOP,
+    ]
+    const relayed = coerceForcedToolResponse(
+      jumping(chunks, () => {
+        clock += 60_000
+      }),
+      "json",
+      () => {},
+      undefined,
+      () => "toolu_x",
+      64,
+      { ms: 5_000, now: () => clock },
+    )
+
+    expect(await relayedText(relayed)).toBe(chunks.join(""))
+  })
+
+  test("a stream that outgrows maxBytes after being held keeps the upstream's bytes intact", async () => {
+    // Held first (thinking, under the ceiling), so the quiet window wrote comments; once past it
+    // the stream is relayed as it came. The comments are SSE no-ops ahead of the body; the body is
+    // the upstream's bytes in order, uncoerced.
+    let clock = 0
+    const head =
+      START +
+      event("content_block_start", { index: 0, content_block: { type: "thinking", thinking: "" } })
+    const chunks = [
+      head,
+      event("content_block_delta", {
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "x".repeat(4096) },
+      }),
+      STOP,
+    ]
+    const relayed = coerceForcedToolResponse(
+      jumping(chunks, () => {
+        clock += 60_000
+      }),
+      "json",
+      () => {},
+      undefined,
+      () => "toolu_x",
+      head.length + 16,
+      { ms: 5_000, now: () => clock },
+    )
+    const text = await relayedText(relayed)
+
+    expect(text.startsWith(":\n\n")).toBe(true)
+    expect(text.replaceAll(":\n\n", "")).toBe(chunks.join(""))
+  })
+})

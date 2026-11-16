@@ -192,9 +192,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     assertUnstartedCancellation(outcome, lifetime.started(), ctx.request.signal)
     if (outcome.kind === "success") lifetime.onStarted()
 
+    // A request-attributable refusal is a verdict even unstarted (R1): it takes the failure tail.
+    const verdict = outcome.kind === "failure" && outcome.failure.requestAttributable === true
     if (
       outcome.kind === "admission-refused" ||
-      (outcome.kind === "failure" && !lifetime.started())
+      (outcome.kind === "failure" && !lifetime.started() && !verdict)
     ) {
       quota?.close()
       lifetime.end()
