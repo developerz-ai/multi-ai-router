@@ -41,9 +41,8 @@ or anywhere in this tree.
 - `main`'s history, in commits inside that window.
 - The snapshots the archive tag preserved (#398). The tag was deleted from the remote on
   2026-11-12 and its objects kept in a bundle off the remote, but the objects are still served
-  by SHA until the purge. The audit scanned the blobs reachable only through the tag and found
-  them clean, so the value there is not tag-only material — it rides the shared history, and
-  the pull-request refs serve it like the rest of it.
+  by SHA until the purge. The value there is not tag-only material — it rides the shared
+  history, and the pull-request refs serve it like the rest of it.
 - Nothing done locally — no rewrite, no filter, no force-push — makes it unreadable before
   the purge. Section 1's single server-side request is the only thing that can.
 
