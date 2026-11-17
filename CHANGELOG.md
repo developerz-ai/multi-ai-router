@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.63.1] — 2026-11-17
+
+### Fixed
+
+- **An `exhausted` account's re-test ladder leaves room for the tick that carries it.** Rule 7's bounded re-test doubles the wait per re-test up to `EXHAUSTED_RECHECK_MAX_MINUTES` (1440, the 24 h contract bound), but a re-test only ever fires on a tick of the `cooldown_recheck` task, and the scheduler jitters every gap by `SCHEDULER_JITTER_FRACTION` (0.2) — so a wait that reached 1440 min could be carried past 24 h by the tick that fired it (up to 72 min late at the defaults: 60 min interval × 1.2). The wait now caps at `max(firstMs, maxMs - tickMs)`, where `tickMs` is the task's worst-case jittered interval (`worstCaseTickMs(intervals.cooldown_recheck, env.scheduler.jitterFraction)`), so the scheduled `dueAt` is never later than `lastRetestAt + maxMs - tickMs` — strictly under 24 h — and the ladder's own span from a re-test to the next scheduled `dueAt` is `maxMs`: waits 60, 120, 240, 480, 960, 1368, 1368 … min at the defaults (cap 1368 min = 22.8 h, tick 72 min). The re-test *instant* can still slip beyond that `dueAt` by the firing tick's own bounded run (the runner arms the next timer only once the tick has settled, so `SCHEDULER_TASK_MAX_RUN_MINUTES`, 60 min at the defaults, adds on top): the schedule bounds `dueAt`, not the millisecond the probe leaves. `maxMs` keeps its meaning as the contract bound and as the healthy-probation window; no env var and no second interval. Spec: `docs/idea/05-routing-and-failover.md`. Regression: `apps/api/test/unit/scheduler/exhausted-retest.test.ts`.
+
 ## [2.63.0] — 2026-11-16
 
 ### Fixed
@@ -2260,3 +2266,4 @@ your tooling config.
 [2.61.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.61.0
 [2.62.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.62.0
 [2.63.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.0
+[2.63.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.1

@@ -16,6 +16,7 @@ import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
 import type { SdkTranscripts } from "../../providers/claude-sdk/transcripts"
 import type { HealthStore } from "../../services/dataplane"
 import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
+import { worstCaseTickMs } from "../../services/routing/exhausted-retest"
 import type { ScheduledTask } from "../types"
 import { type AdminSessionStoreForPurge, createAdminSessionPurgeTask } from "./admin-session-purge"
 import { createConfigDirReapTask } from "./config-dir-reap"
@@ -275,6 +276,10 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       exhaustedSchedule: {
         firstMs: env.scheduler.exhaustedRecheckFirstMinutes * 60_000,
         maxMs: env.scheduler.exhaustedRecheckMaxMinutes * 60_000,
+        // The ladder stops one worst-case tick below `maxMs`, so a re-test cannot be carried past
+        // the cap by the tick that fires it. Derived from the task's own interval and jitter rather
+        // than written down, so it cannot drift from either.
+        tickMs: worstCaseTickMs(intervals.cooldown_recheck, env.scheduler.jitterFraction),
       },
     }),
     // Free plain GETs, so a batch of their own rather than the billed sweeps' small one.

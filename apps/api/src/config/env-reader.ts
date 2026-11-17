@@ -79,7 +79,10 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
   }
 
   // An hour, then doubling to a day: a drained balance costs one failed probe a day, a misread wall
-  // is back within the hour (rule 7, amended: developerz.ai#7868).
+  // is back within the hour (rule 7, amended: developerz.ai#7868). The doubling stops one
+  // `COOLDOWN_RECHECK_INTERVAL_MINUTES` tick (jitter included) short of the cap — a re-test only
+  // fires on a tick, so the scheduled wait must leave room for the tick that carries it. That
+  // headroom is derived in the scheduler wiring, not here; this reader only validates the bound.
   const exhaustedRecheckFirstMinutes = raw.EXHAUSTED_RECHECK_FIRST_MINUTES ?? 60
   const exhaustedRecheckMaxMinutes = raw.EXHAUSTED_RECHECK_MAX_MINUTES ?? 1_440
   if (exhaustedRecheckMaxMinutes < exhaustedRecheckFirstMinutes) {

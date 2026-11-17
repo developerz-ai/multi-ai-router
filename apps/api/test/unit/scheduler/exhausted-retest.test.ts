@@ -20,22 +20,54 @@ import {
 import type { RoutableAccount } from "../../../src/services/dataplane/types"
 import {
   type ExhaustedWatch,
+  retestMaxGapMs,
   retestWait,
+  retestWaitCapMs,
   stepExhaustedWatch,
+  worstCaseTickMs,
 } from "../../../src/services/routing/exhausted-retest"
 import { account, NOW } from "../routing/fixtures"
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
-const SCHEDULE = { firstMs: HOUR, maxMs: DAY }
+// One hour between ticks of the task that runs the ladder; `tickMs` is that gap widened by the
+// runner's jitter, so the wait must stop a whole tick below `maxMs`.
+const SCHEDULE = { firstMs: HOUR, maxMs: DAY, tickMs: HOUR }
 const T0 = NOW.getTime()
 
 describe("the re-test clock", () => {
-  test("doubles from an hour and stops at a day", () => {
+  test("doubles from an hour and stops one tick short of a day", () => {
     expect([0, 1, 2, 3, 4, 5, 6].map((n) => retestWait(n, SCHEDULE) / HOUR)).toEqual([
-      1, 2, 4, 8, 16, 24, 24,
+      1, 2, 4, 8, 16, 23, 23,
     ])
+  })
+
+  test("the cap leaves room for the tick that fires the re-test, so no gap passes a day", () => {
+    expect(retestWaitCapMs(SCHEDULE)).toBe(SCHEDULE.maxMs - SCHEDULE.tickMs)
+    expect(retestWait(5, SCHEDULE)).toBe(SCHEDULE.maxMs - SCHEDULE.tickMs)
+    expect(retestMaxGapMs(SCHEDULE)).toBe(SCHEDULE.maxMs)
+    expect(retestMaxGapMs(SCHEDULE)).toBeLessThanOrEqual(SCHEDULE.maxMs)
+  })
+
+  test("a tick wider than the cap's headroom floors at firstMs instead of inverting the ladder", () => {
+    // `maxMs - tickMs` is negative here, so the floor is the only thing keeping the ladder
+    // monotone. Nothing but the `Math.max` in `retestWaitCapMs` makes this hold.
+    const narrow = { firstMs: HOUR, maxMs: 2 * HOUR, tickMs: 3 * HOUR }
+
+    expect(retestWaitCapMs(narrow)).toBe(HOUR)
+    expect(retestWait(0, narrow)).toBe(HOUR)
+    expect(retestWait(5, narrow)).toBe(HOUR)
+    // With no headroom to give, the wait cannot stay under `maxMs - tickMs` (it is negative);
+    // the gap is `maxMs` plus the tick's own excess instead.
+    expect(retestMaxGapMs(narrow)).toBe(4 * HOUR)
+    expect(retestMaxGapMs(narrow)).toBeGreaterThan(narrow.maxMs)
+  })
+
+  test("a tick's worst case is its interval plus the runner's jitter", () => {
+    expect(worstCaseTickMs(HOUR, 0)).toBe(HOUR)
+    expect(worstCaseTickMs(3_600_000, 0.2)).toBe(4_320_000)
+    expect(worstCaseTickMs(3_600_000, 0.2)).toBe(72 * MINUTE)
   })
 
   test("a newly exhausted account is first re-tested an hour later, not at once", () => {
@@ -118,7 +150,7 @@ describe("the exhausted re-test lane", () => {
   test("no exhausted account goes a day without a re-test, and each one is an alert", async () => {
     const l = lane([routable("drained")])
 
-    // Hourly ticks for three days: re-tests land at +1h, +3h, +7h, +15h, +31h, +55h.
+    // Hourly ticks for three days: re-tests land at +1h, +3h, +7h, +15h, +31h, +54h.
     for (let hour = 0; hour <= 72; hour += 1) await l.tick(T0 + hour * HOUR)
 
     expect(l.rechecked).toEqual(["drained", "drained", "drained", "drained", "drained", "drained"])
@@ -127,7 +159,7 @@ describe("the exhausted re-test lane", () => {
     expect(alerts[0]).toMatchObject({ accountId: "drained", provider: "minimax", retest: 1 })
     expect(alerts[5]).toMatchObject({
       retest: 6,
-      nextRetestAt: new Date(T0 + 79 * HOUR).toISOString(),
+      nextRetestAt: new Date(T0 + 77 * HOUR).toISOString(),
     })
   })
 

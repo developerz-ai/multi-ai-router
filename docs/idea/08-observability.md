@@ -1309,7 +1309,9 @@ Four properties of the redactor are load-bearing enough to state:
 
 An `exhausted` account is capacity only a human restores, and the router re-tests it on the bounded
 clock rule 7 gives it ([05-routing-and-failover.md](05-routing-and-failover.md#the-bounded-exhausted-re-test)):
-first after `EXHAUSTED_RECHECK_FIRST_MINUTES`, then doubling to `EXHAUSTED_RECHECK_MAX_MINUTES`.
+first after `EXHAUSTED_RECHECK_FIRST_MINUTES`, then doubling to `EXHAUSTED_RECHECK_MAX_MINUTES` —
+stopping one `COOLDOWN_RECHECK_INTERVAL_MINUTES` tick (jitter included) below that cap, because the
+re-test only fires on a tick and the tick that carries it must still land inside the bound.
 Every re-test writes **one `warn` line, `exhausted account re-tested`**; a re-test that could not run
 writes `exhausted account re-test failed` at `error`. Alert on the first: a line that keeps coming
 back for the same `accountId` is a balance still waiting on a top-up.
