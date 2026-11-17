@@ -162,7 +162,7 @@ function harness(
       rechecked.push(accountId)
       return "rechecked" as const
     },
-    exhaustedSchedule: { firstMs: HOUR, maxMs: DAY },
+    exhaustedSchedule: { firstMs: HOUR, maxMs: DAY, tickMs: HOUR },
   })
   const run = (signal = new AbortController().signal) =>
     task.run({
@@ -367,7 +367,7 @@ describe("the cooldown_recheck task", () => {
       intervalMs: HOUR,
       batchSize: 5,
       recheckExhausted: async () => "rechecked" as const,
-      exhaustedSchedule: { firstMs: HOUR, maxMs: DAY },
+      exhaustedSchedule: { firstMs: HOUR, maxMs: DAY, tickMs: HOUR },
     })
 
     await task.run({

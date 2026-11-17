@@ -145,6 +145,7 @@ describe("parseEnv", () => {
       COOLDOWN_RECHECK_INTERVAL_MINUTES: "90",
       EXHAUSTED_RECHECK_FIRST_MINUTES: "30",
       EXHAUSTED_RECHECK_MAX_MINUTES: "720",
+      SCHEDULER_TASK_MAX_RUN_MINUTES: "15",
       PLAN_QUOTA_READ_INTERVAL_MINUTES: "5",
       PLAN_QUOTA_READ_BATCH_SIZE: "3",
       CONFIG_DIR_REAP_INTERVAL_MINUTES: "90",
@@ -860,7 +861,7 @@ describe("parseEnv", () => {
   })
 
   describe("EXHAUSTED_RECHECK_MAX_MINUTES", () => {
-    test("refuses a cap below the first wait, and names both", () => {
+    test("refuses a cap below the first wait plus a worst-case re-test span, and names both", () => {
       const error = expectEnvError({
         ...base,
         EXHAUSTED_RECHECK_FIRST_MINUTES: "120",
@@ -869,6 +870,17 @@ describe("parseEnv", () => {
 
       expect(error.variables).toEqual(["EXHAUSTED_RECHECK_MAX_MINUTES"])
       expect(error.message).toContain("EXHAUSTED_RECHECK_FIRST_MINUTES (120)")
+    })
+
+    test("refuses an initial wait that leaves no timer-and-two-runs headroom", () => {
+      const error = expectEnvError({
+        ...base,
+        EXHAUSTED_RECHECK_FIRST_MINUTES: "1440",
+        EXHAUSTED_RECHECK_MAX_MINUTES: "1440",
+      })
+
+      expect(error.variables).toEqual(["EXHAUSTED_RECHECK_MAX_MINUTES"])
+      expect(error.message).toContain("worst-case cooldown recheck span (192 minutes)")
     })
   })
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.63.1] — 2026-11-17
+
+### Fixed
+
+- **An `exhausted` account's re-test ladder leaves room for task execution as well as its timer.** Rule 7's bounded re-test doubles the wait per re-test up to `EXHAUSTED_RECHECK_MAX_MINUTES` (1440, the 24 h contract bound), but a re-test only fires inside the `cooldown_recheck` task. The scheduler jitters its hourly timer to 72 min at the defaults and re-arms only after a task settles; an account can be re-tested early in one bounded 60 min task and late in its successor. The ladder now caps at `max(firstMs, maxMs - tickMs)`, where `tickMs` includes that 72 min timer plus both bounded runs (192 min), so actual re-tests remain within 24 h: waits 60, 120, 240, 480, 960, 1248, 1248 … min at the defaults. Boot rejects a first wait plus this span above the cap. Spec: `docs/idea/05-routing-and-failover.md`. Regression: `apps/api/test/unit/scheduler/exhausted-retest.test.ts`, `apps/api/test/unit/env.test.ts`.
+
 ## [2.63.0] — 2026-11-16
 
 ### Fixed
@@ -2260,3 +2266,4 @@ your tooling config.
 [2.61.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.61.0
 [2.62.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.62.0
 [2.63.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.0
+[2.63.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.1

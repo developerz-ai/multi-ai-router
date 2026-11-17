@@ -20,22 +20,71 @@ import {
 import type { RoutableAccount } from "../../../src/services/dataplane/types"
 import {
   type ExhaustedWatch,
+  retestMaxGapMs,
   retestWait,
+  retestWaitCapMs,
   stepExhaustedWatch,
+  worstCaseTickMs,
 } from "../../../src/services/routing/exhausted-retest"
 import { account, NOW } from "../routing/fixtures"
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
-const SCHEDULE = { firstMs: HOUR, maxMs: DAY }
+// One hourly timer plus bounded work after an early re-test and before a late successor: the wait
+// must stop one complete actual-retest gap below `maxMs`.
+const SCHEDULE = { firstMs: HOUR, maxMs: DAY, tickMs: 3 * HOUR }
 const T0 = NOW.getTime()
 
 describe("the re-test clock", () => {
-  test("doubles from an hour and stops at a day", () => {
+  test("doubles from an hour and stops one actual-retest gap short of a day", () => {
     expect([0, 1, 2, 3, 4, 5, 6].map((n) => retestWait(n, SCHEDULE) / HOUR)).toEqual([
-      1, 2, 4, 8, 16, 24, 24,
+      1, 2, 4, 8, 16, 21, 21,
     ])
+  })
+
+  test("the cap leaves room for the tick that fires the re-test, so no gap passes a day", () => {
+    expect(retestWaitCapMs(SCHEDULE)).toBe(SCHEDULE.maxMs - SCHEDULE.tickMs)
+    expect(retestWait(5, SCHEDULE)).toBe(SCHEDULE.maxMs - SCHEDULE.tickMs)
+    expect(retestMaxGapMs(SCHEDULE)).toBe(SCHEDULE.maxMs)
+    expect(retestMaxGapMs(SCHEDULE)).toBeLessThanOrEqual(SCHEDULE.maxMs)
+  })
+
+  test("a tick's worst case includes its timer and bounded work before and after re-tests", () => {
+    expect(worstCaseTickMs(HOUR, 0)).toBe(HOUR)
+    expect(worstCaseTickMs(3_600_000, 0.2)).toBe(4_320_000)
+    expect(worstCaseTickMs(3_600_000, 0.2)).toBe(72 * MINUTE)
+    expect(worstCaseTickMs(HOUR, 0.2, HOUR)).toBe(192 * MINUTE)
+  })
+
+  test("worst-case scheduler ticks and nonzero task runs keep actual re-tests within the cap", () => {
+    const taskRunMs = HOUR
+    const timerMs = 40 * MINUTE
+    const jitterFraction = 0.2
+    const jitteredTimerMs = worstCaseTickMs(timerMs, jitterFraction)
+    const tickMs = worstCaseTickMs(timerMs, jitterFraction, taskRunMs)
+    const schedule = { firstMs: HOUR, maxMs: DAY, tickMs }
+    let watch: ExhaustedWatch | undefined = { retests: 5, dueAt: T0, lastRetestAt: T0 }
+    const actualRetests = [T0]
+
+    // The first re-test is at its task's start; successors are deliberately at their tasks' ends.
+    // A one-run allowance passes the old idealized end-to-end case but fails this actual scheduler
+    // ordering when the timer is late by its full jittered interval.
+    for (
+      let tickStartedAt = T0;
+      tickStartedAt < T0 + 7 * DAY;
+      tickStartedAt += jitteredTimerMs + taskRunMs
+    ) {
+      const step = stepExhaustedWatch(watch, true, tickStartedAt, schedule)
+      watch = step.watch
+      if (step.retest) {
+        actualRetests.push(actualRetests.length === 1 ? tickStartedAt : tickStartedAt + taskRunMs)
+      }
+    }
+
+    const gaps = actualRetests.slice(1).map((at, index) => at - (actualRetests[index] ?? at))
+    expect(gaps.length).toBeGreaterThan(0)
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(DAY)
   })
 
   test("a newly exhausted account is first re-tested an hour later, not at once", () => {
@@ -118,7 +167,7 @@ describe("the exhausted re-test lane", () => {
   test("no exhausted account goes a day without a re-test, and each one is an alert", async () => {
     const l = lane([routable("drained")])
 
-    // Hourly ticks for three days: re-tests land at +1h, +3h, +7h, +15h, +31h, +55h.
+    // Hourly ticks for three days: re-tests land at +1h, +3h, +7h, +15h, +31h, +54h.
     for (let hour = 0; hour <= 72; hour += 1) await l.tick(T0 + hour * HOUR)
 
     expect(l.rechecked).toEqual(["drained", "drained", "drained", "drained", "drained", "drained"])
@@ -127,7 +176,7 @@ describe("the exhausted re-test lane", () => {
     expect(alerts[0]).toMatchObject({ accountId: "drained", provider: "minimax", retest: 1 })
     expect(alerts[5]).toMatchObject({
       retest: 6,
-      nextRetestAt: new Date(T0 + 79 * HOUR).toISOString(),
+      nextRetestAt: new Date(T0 + 73 * HOUR).toISOString(),
     })
   })
 
