@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The historical local-admin password is recorded as compromised and rotated, and the fate of its history is decided.** A tracked operator-console debug configuration carried the value between 2026-07-31 and 2026-10-02; the file is gone, no tracked file at HEAD carries it, and the audit found exactly that one such value in the whole history. The value stays readable in `main`'s history in that window and in the snapshots the archive tag preserved (developerz-ai/multi-ai-router#398 — the tag was deleted from the remote on 2026-11-12, its objects kept in a bundle off the remote and still served by SHA until the server's purge/garbage collection) until the server-side purge: the decision (developerz-ai/multi-ai-router#404) handles all history material — the pull-request refs plus the objects the deleted archive tag left unreachable — in one purge request to GitHub Support naming the objects, with no rewrite of `main`, because a rewrite that leaves the pull-request refs in place makes nothing unreadable. Until the purge is confirmed (a fresh clone plus a fetch of the pull-request refs), the material is treated as publicly readable and a clean `main` must not be read as the value being gone. The credential itself was treated as compromised and changed at every use site the audit confirmed outside the throwaway seeded development database (developerz-ai/multi-ai-router#405 holds the dated per-site record); replacements were generated at the point of use and never written into a tracked file, task record, comment, log, commit or pull-request body, and no surviving console authenticates with the historical value. The rotation path today is unchanged: `bin/admin set-password` is the local admin password's only write path, stores only an argon2id hash, and changing or removing the password deletes every password-login session in the same run, with running replicas dropping those sessions within `ADMIN_SESSION_REVALIDATE_SECONDS`. Record: `docs/idea/12-public-hygiene.md`. Documentation only: no code, schema or runtime change, no version bump.
 
+## [2.63.1] — 2026-11-17
+
+### Fixed
+
+- **An `exhausted` account's re-test ladder leaves room for task execution as well as its timer.** Rule 7's bounded re-test doubles the wait per re-test up to `EXHAUSTED_RECHECK_MAX_MINUTES` (1440, the 24 h contract bound), but a re-test only fires inside the `cooldown_recheck` task. The scheduler jitters its hourly timer to 72 min at the defaults and re-arms only after a task settles; an account can be re-tested early in one bounded 60 min task and late in its successor. The ladder now caps at `max(firstMs, maxMs - tickMs)`, where `tickMs` includes that 72 min timer plus both bounded runs (192 min), so actual re-tests remain within 24 h: waits 60, 120, 240, 480, 960, 1248, 1248 … min at the defaults. Boot rejects a first wait plus this span above the cap. Spec: `docs/idea/05-routing-and-failover.md`. Regression: `apps/api/test/unit/scheduler/exhausted-retest.test.ts`, `apps/api/test/unit/env.test.ts`.
+
 ## [2.63.0] — 2026-11-16
 
 ### Fixed
@@ -2264,3 +2270,4 @@ your tooling config.
 [2.61.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.61.0
 [2.62.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.62.0
 [2.63.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.0
+[2.63.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.1

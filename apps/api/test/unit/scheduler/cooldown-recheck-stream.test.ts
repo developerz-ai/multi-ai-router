@@ -82,7 +82,7 @@ function harness(
     intervalMs: HOUR,
     batchSize: 5,
     recheckExhausted: async () => "rechecked" as const,
-    exhaustedSchedule: { firstMs: HOUR, maxMs: 24 * HOUR },
+    exhaustedSchedule: { firstMs: HOUR, maxMs: 24 * HOUR, tickMs: HOUR },
   })
   const lines: Record<string, unknown>[] = []
   const logger = createLogger({

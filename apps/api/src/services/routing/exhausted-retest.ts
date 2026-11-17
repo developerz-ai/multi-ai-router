@@ -6,8 +6,9 @@
  * developerz.ai#7868) is that a park with no exit at all is worse than a cheap re-test. A wall is
  * read from words, and words get misread — MiniMax sat out 10-28 to 11-03 behind a verdict nobody
  * re-checked. So an `exhausted` account is re-tested through the operator's own "Re-check now",
- * first after `firstMs` and then on a clock that doubles per re-test up to `maxMs`. A balance that
- * is truly drained costs one failed probe per `maxMs`; a misread one is back within `firstMs`.
+ * first after `firstMs` and then on a clock that doubles per re-test up to one worst-case task tick
+ * below `maxMs`. A balance that is truly drained costs one failed probe per `maxMs`; a misread one
+ * is back within `firstMs`.
  * Only a re-test that ran is counted: one refused at the door or thrown before any probe left
  * leaves the watch as it was, so the next tick tries again instead of waiting a doubled interval
  * (plan 101, 03.7). This module only computes the next watch; the scheduler task commits it after
@@ -19,6 +20,12 @@
  * same window. The task notices an account on its first tick after it went `exhausted`, so the
  * first re-test lands between `firstMs` and `firstMs` plus one task interval later — 1 to 2 h at
  * the defaults.
+ *
+ * The same tick is why the scheduled wait stops short of `maxMs`: a re-test only ever fires on a
+ * tick, so a wait that reached `maxMs` exactly could be carried past it by the tick that fires it.
+ * `tickMs` includes the jittered timer plus the bounded work after an early re-test and before a
+ * late successor re-test. {@link retestWaitCapMs} leaves that full span under the cap, so actual
+ * re-test-to-re-test gaps never exceed `maxMs`, whichever accounts the task processes first or last.
  */
 
 export interface ExhaustedRetestSchedule {
@@ -26,6 +33,12 @@ export interface ExhaustedRetestSchedule {
   readonly firstMs: number
   /** `EXHAUSTED_RECHECK_MAX_MINUTES`: the longest an `exhausted` account goes without a re-test. */
   readonly maxMs: number
+  /**
+   * The worst-case gap between actual re-tests: the runner's jittered interval plus bounded work
+   * after an early re-test and before a late successor re-test ({@link worstCaseTickMs}). The
+   * scheduled wait must leave this much room under `maxMs`, because only a tick fires a re-test.
+   */
+  readonly tickMs: number
 }
 
 export interface ExhaustedWatch {
@@ -42,9 +55,40 @@ export interface ExhaustedStep {
   readonly retest: boolean
 }
 
-/** The wait after `retests` re-tests: `firstMs`, doubled per re-test, never past `maxMs`. */
+/**
+ * The largest gap between actual re-tests: the runner's jittered timer plus two bounded task runs.
+ * The first run may re-test an account before its remaining work; the runner then arms the timer,
+ * and the successor can re-test a different account at the end of its run.
+ */
+export function worstCaseTickMs(
+  intervalMs: number,
+  jitterFraction: number,
+  taskMaxRunMs = 0,
+): number {
+  return Math.round(intervalMs * (1 + jitterFraction)) + 2 * taskMaxRunMs
+}
+
+/**
+ * The longest wait the ladder may schedule: `maxMs` less one worst-case tick, floored at `firstMs`
+ * so a cap narrower than the first wait cannot invert the ladder.
+ */
+export function retestWaitCapMs(schedule: ExhaustedRetestSchedule): number {
+  return Math.max(schedule.firstMs, schedule.maxMs - schedule.tickMs)
+}
+
+/**
+ * The maximum re-test-to-re-test span: the capped wait plus one worst-case timer-and-two-runs span.
+ */
+export function retestMaxGapMs(schedule: ExhaustedRetestSchedule): number {
+  return retestWaitCapMs(schedule) + schedule.tickMs
+}
+
+/**
+ * The wait after `retests` re-tests: `firstMs`, doubled per re-test, never past
+ * {@link retestWaitCapMs}.
+ */
 export function retestWait(retests: number, schedule: ExhaustedRetestSchedule): number {
-  return Math.min(schedule.firstMs * 2 ** retests, schedule.maxMs)
+  return Math.min(schedule.firstMs * 2 ** retests, retestWaitCapMs(schedule))
 }
 
 /**
