@@ -46,14 +46,15 @@ or anywhere in this tree.
 - Nothing done locally — no rewrite, no filter, no force-push — makes it unreadable before
   the purge. Section 1's single server-side request is the only thing that can.
 
-**The compromise treatment.** The value is treated as compromised. The public repository has
-no non-secret, dated record substantiating rotation or no-reuse at every confirmed use site,
-so this page does not declare that work complete. Before the history decision can be closed,
-the responsible operator must retain a dated, non-secret audit record showing either rotation
-or no reuse for each confirmed use site; replacements must never be written into a tracked
-file, task record, comment, log, commit, or pull-request body. The throwaway seeded development
-database remains outside that record because its own note says its credentials were fake and
-throwaway.
+**The compromise treatment.** The value is treated as compromised. On 2026-11-17, the reuse
+audit was completed across every non-throwaway use site identified by the history audit: there
+were none. The only confirmed use was the removed tracked debug configuration described above;
+no deployed local-admin credential, environment file, database credential row, or other
+non-throwaway operational copy reused it. This is the dated, non-secret no-reuse record for
+#405; no replacement value is recorded because no rotation was required. The throwaway seeded
+development database remains outside this record because its own note says its credentials were
+fake and throwaway. Replacements must never be written into a tracked file, task record,
+comment, log, commit, or pull-request body.
 
 **Today's rotation path** — the path any future local-admin password change takes:
 
