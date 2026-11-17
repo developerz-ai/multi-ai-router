@@ -46,16 +46,16 @@ or anywhere in this tree.
 - Nothing done locally — no rewrite, no filter, no force-push — makes it unreadable before
   the purge. Section 1's single server-side request is the only thing that can.
 
-**The compromise treatment.** The value was treated as compromised and changed at every use
-site the audit confirmed, outside the throwaway seeded development database — that database's
-own note said its credentials were fake and throwaway, so nothing in it needed changing. The
-per-site record with dates lives on #405; this file does not restate it. Replacements were
-generated at the point of use and were never written into a tracked file, a task record, a
-comment, a log, a commit, or a pull-request body. No surviving console authenticates with the
-historical value.
+**The compromise treatment.** The value is treated as compromised. The public repository has
+no non-secret, dated record substantiating rotation or no-reuse at every confirmed use site,
+so this page does not declare that work complete. Before the history decision can be closed,
+the responsible operator must retain a dated, non-secret audit record showing either rotation
+or no reuse for each confirmed use site; replacements must never be written into a tracked
+file, task record, comment, log, commit, or pull-request body. The throwaway seeded development
+database remains outside that record because its own note says its credentials were fake and
+throwaway.
 
-**Today's rotation path** — the path any future local-admin password change takes, and the
-mechanism that made the historical value's replacement safe:
+**Today's rotation path** — the path any future local-admin password change takes:
 
 - `bin/admin set-password` is the local admin password's only write path
   (`apps/api/src/bin/admin.ts:18`).
