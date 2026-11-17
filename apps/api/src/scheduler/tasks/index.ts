@@ -276,10 +276,14 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       exhaustedSchedule: {
         firstMs: env.scheduler.exhaustedRecheckFirstMinutes * 60_000,
         maxMs: env.scheduler.exhaustedRecheckMaxMinutes * 60_000,
-        // The ladder stops one worst-case tick below `maxMs`, so a re-test cannot be carried past
-        // the cap by the tick that fires it. Derived from the task's own interval and jitter rather
-        // than written down, so it cannot drift from either.
-        tickMs: worstCaseTickMs(intervals.cooldown_recheck, env.scheduler.jitterFraction),
+        // The ladder stops one worst-case timer-and-two-runs span below `maxMs`, so an early re-test
+        // and
+        // late successor cannot cross the cap. Derived from the runner's bounds, so it cannot drift.
+        tickMs: worstCaseTickMs(
+          intervals.cooldown_recheck,
+          env.scheduler.jitterFraction,
+          env.schedulerLimits.taskMaxRunMinutes * 60_000,
+        ),
       },
     }),
     // Free plain GETs, so a batch of their own rather than the billed sweeps' small one.

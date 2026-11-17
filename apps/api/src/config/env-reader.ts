@@ -2,6 +2,7 @@ import { UNKNOWN_REVISION } from "@multi-ai-router/core"
 import { DATABASE_POOL_DEFAULTS } from "@multi-ai-router/db"
 import { z } from "zod"
 import { CLI_REFRESH_LEAD_MS } from "../providers/claude-sdk/credential-freshness"
+import { worstCaseTickMs } from "../services/routing/exhausted-retest"
 import { readAdminBodiesEnv } from "./admin-bodies"
 import { readBackgroundEnv } from "./background"
 import { readClaudeLoginEnv } from "./claude-login"
@@ -80,19 +81,31 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
 
   // An hour, then doubling to a day: a drained balance costs one failed probe a day, a misread wall
   // is back within the hour (rule 7, amended: developerz.ai#7868). The doubling stops one
-  // `COOLDOWN_RECHECK_INTERVAL_MINUTES` tick (jitter included) short of the cap — a re-test only
-  // fires on a tick, so the scheduled wait must leave room for the tick that carries it. That
-  // headroom is derived in the scheduler wiring, not here; this reader only validates the bound.
+  // `COOLDOWN_RECHECK_INTERVAL_MINUTES` timer-and-two-runs span (jitter included) short of the cap —
+  // a
+  // re-test can be early in one task and late in its successor, so the wait leaves room for the
+  // timer plus both bounded task runs.
   const exhaustedRecheckFirstMinutes = raw.EXHAUSTED_RECHECK_FIRST_MINUTES ?? 60
   const exhaustedRecheckMaxMinutes = raw.EXHAUSTED_RECHECK_MAX_MINUTES ?? 1_440
-  if (exhaustedRecheckMaxMinutes < exhaustedRecheckFirstMinutes) {
+  const cooldownRecheckIntervalMinutes = raw.COOLDOWN_RECHECK_INTERVAL_MINUTES ?? 60
+  const schedulerJitterFraction = raw.SCHEDULER_JITTER_FRACTION ?? DEFAULT_SCHEDULER_JITTER_FRACTION
+  const taskMaxRunMinutes = raw.SCHEDULER_TASK_MAX_RUN_MINUTES ?? 60
+  const exhaustedRetestTickMs = worstCaseTickMs(
+    cooldownRecheckIntervalMinutes * 60_000,
+    schedulerJitterFraction,
+    taskMaxRunMinutes * 60_000,
+  )
+  if (
+    exhaustedRecheckFirstMinutes * 60_000 + exhaustedRetestTickMs >
+    exhaustedRecheckMaxMinutes * 60_000
+  ) {
     ctx.addIssue({
       code: "custom",
       path: ["EXHAUSTED_RECHECK_MAX_MINUTES"],
       message:
-        `must be at least EXHAUSTED_RECHECK_FIRST_MINUTES (${exhaustedRecheckFirstMinutes}): ` +
-        `it caps a wait that starts there and doubles, so a smaller cap would make the first ` +
-        `re-test the latest one`,
+        `must be at least EXHAUSTED_RECHECK_FIRST_MINUTES (${exhaustedRecheckFirstMinutes}) plus ` +
+        `the worst-case cooldown recheck span (${exhaustedRetestTickMs / 60_000} minutes): an ` +
+        `early re-test and late successor need that timer and both bounded task runs`,
     })
     return z.NEVER
   }
@@ -228,7 +241,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       usageReportIntervalMinutes: usageReport.usageReportIntervalMinutes,
       oauthStatePurgeIntervalMinutes: raw.OAUTH_STATE_PURGE_INTERVAL_MINUTES ?? 5,
       quotaFloorIntervalMinutes: raw.QUOTA_FLOOR_INTERVAL_MINUTES ?? 30,
-      cooldownRecheckIntervalMinutes: raw.COOLDOWN_RECHECK_INTERVAL_MINUTES ?? 60,
+      cooldownRecheckIntervalMinutes,
       exhaustedRecheckFirstMinutes,
       exhaustedRecheckMaxMinutes,
       // A quarter hour: a five-hour window moves little in that, and each read is one free GET.
@@ -256,7 +269,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       modelCatalogRefreshIntervalMinutes: raw.MODEL_CATALOG_REFRESH_INTERVAL_MINUTES ?? 60,
       modelCatalogRefreshBatchSize: raw.MODEL_CATALOG_REFRESH_BATCH_SIZE ?? 25,
       sweepBatchSize: raw.SWEEP_BATCH_SIZE ?? 1_000,
-      jitterFraction: raw.SCHEDULER_JITTER_FRACTION ?? DEFAULT_SCHEDULER_JITTER_FRACTION,
+      jitterFraction: schedulerJitterFraction,
     },
     oauthRefresh: {
       lockPoolMaxConnections: raw.OAUTH_REFRESH_LOCK_POOL_MAX_CONNECTIONS ?? 1,
