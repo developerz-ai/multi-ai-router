@@ -42,7 +42,7 @@ leftmost one that applies.
 | `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) | — |
 | `GET /v1/models/:id` | one model; `404` if the presenting key cannot reach it | — |
 | `GET /v1/catalog` | the same models, with context window, price, and pooling depth — this router's own shape | — |
-| `GET /v1/providers` | the upstreams the presenting key can reach, and how many accounts of each can serve now | — |
+| `GET /v1/providers` | the upstreams the presenting key can reach, how many accounts of each can serve now, and each one's live status counts | — |
 
 **`/v1/catalog` is a separate path rather than more fields on `/v1/models`, deliberately.**
 `/v1/models` is a *wire contract*: an OpenAI or Anthropic client parses it with a generated SDK, and
@@ -92,6 +92,16 @@ won, and a prompt sized from a 204,800-token listing failed on the 128,000-token
 provider's own answer rides in **`offers[]`** — `{ provider, accounts, context_length,
 max_output_tokens, context_source, pricing }`, in provider order — an additive field, so a client
 that wants the largest window can see which provider holds it.
+
+**`/v1/providers`** answers `{ object: "list", data: [{ id, accounts, available, active, disabled,
+cooling_down, exhausted, needs_reauth }] }`, one row per provider with an in-scope account, sorted by
+id. `accounts` counts in-scope accounts **whatever their status**, so it is not liveness; `available`
+is those not standing-blocked (`active` + `cooling_down`, because a cooldown is a clock). The five
+status counts split the same accounts by their **live** status — the health-overlaid one routing
+reads, so an account the breaker cooled or a `402` exhausted a moment ago is counted as such, not as
+its stored `active` — and always sum to `accounts`, every status present with `0` when none. A reader
+sizing a key's capacity reads `active`. Added in 2.64.0, additive: a reader of the first three fields
+is unaffected.
 
 Both take the same router key and the same scope intersection as everything else on `/v1`. The model
 set comes from the same implementation `GET /v1/models` uses, because a second opinion about what a

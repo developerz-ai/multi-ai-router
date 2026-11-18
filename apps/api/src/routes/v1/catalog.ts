@@ -101,10 +101,13 @@ export function renderProviders(
 ): Response {
   return c.json({
     object: "list",
+    // The status counts sit flat beside `accounts` and `available`, additive: a reader written
+    // before them keeps parsing, and one sizing capacity reads `active` instead of `accounts`.
     data: providers.map((provider) => ({
       id: provider.id,
       accounts: provider.accounts,
       available: provider.available,
+      ...provider.statuses,
     })),
   })
 }

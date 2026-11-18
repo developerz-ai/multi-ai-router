@@ -70,8 +70,8 @@ export {
   resolveSessionKey,
   type SessionKeySource,
 } from "./body/session"
-export type { CatalogListingDeps, CatalogModel, CatalogProvider } from "./catalog-listing"
-export { catalogListing, providerListing } from "./catalog-listing"
+export type { CatalogListingDeps, CatalogModel } from "./catalog-listing"
+export { catalogListing } from "./catalog-listing"
 export {
   type AnsweredFailureContext,
   answeredFailure,
@@ -151,6 +151,13 @@ export {
   type ServableCandidate,
 } from "./plan"
 export { admitHalfOpenProbe, type HalfOpenProbe } from "./probe"
+export {
+  type CatalogProvider,
+  countProviders,
+  type ProviderAccountStatus,
+  providerListing,
+  type StatusCounts,
+} from "./provider-listing"
 export {
   createQuotaWindowWriter,
   type QuotaWindowWriter,

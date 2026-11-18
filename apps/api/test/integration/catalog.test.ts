@@ -284,14 +284,34 @@ describe("GET /v1/providers", () => {
 
     const body = (await (await app.request("/v1/providers", { headers: bearer() })).json()) as {
       object: string
-      data: { id: string; accounts: number; available: number }[]
+      data: Record<string, unknown>[]
     }
 
     expect(body.object).toBe("list")
+    // `id`, `accounts`, `available` unchanged for existing readers; the status counts sit flat
+    // beside them, every status present, so a reader sizing capacity reads `active`.
     expect(body.data).toEqual([
-      { id: "minimax", accounts: 1, available: 1 },
+      {
+        id: "minimax",
+        accounts: 1,
+        available: 1,
+        active: 1,
+        disabled: 0,
+        cooling_down: 0,
+        exhausted: 0,
+        needs_reauth: 0,
+      },
       // Two z.ai credentials, one usable — the state an operator needs to see.
-      { id: "zai", accounts: 2, available: 1 },
+      {
+        id: "zai",
+        accounts: 2,
+        available: 1,
+        active: 1,
+        disabled: 0,
+        cooling_down: 0,
+        exhausted: 1,
+        needs_reauth: 0,
+      },
     ])
   })
 

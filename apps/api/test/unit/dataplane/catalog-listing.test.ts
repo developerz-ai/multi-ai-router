@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ModelDescriptor } from "@multi-ai-router/core"
 import type { CatalogListingDeps, VerifiedKey } from "../../../src/services/dataplane"
-import { catalogListing, providerListing } from "../../../src/services/dataplane"
+import { catalogListing } from "../../../src/services/dataplane"
 import { account, catalog, health, NOW } from "./fixtures"
 
 /**
@@ -348,46 +348,5 @@ describe("the rich catalog listing", () => {
         NOW,
       ),
     ).toEqual([])
-  })
-})
-
-describe("the provider listing", () => {
-  test("counts in-scope accounts and how many of them could serve right now", () => {
-    const list = providerListing(
-      {
-        catalog: catalog([
-          account("live", { provider: "zai" }),
-          account("spent", { provider: "zai", snapshot: { status: "exhausted" } }),
-          account("other", { provider: "minimax" }),
-        ]),
-        health: health(),
-      },
-      fullScope(),
-      NOW,
-    )
-
-    expect(list).toEqual([
-      { id: "minimax", accounts: 1, available: 1 },
-      // The state worth seeing: two credentials exist, one can be used.
-      { id: "zai", accounts: 2, available: 1 },
-    ])
-  })
-
-  test("a provider with no in-scope account is absent, not present with a zero", () => {
-    const list = providerListing(
-      {
-        catalog: catalog([
-          account("mine", { provider: "zai" }),
-          account("theirs", { provider: "minimax" }),
-        ]),
-        health: health(),
-      },
-      scopedTo(["mine"]),
-      NOW,
-    )
-
-    // Absent means "never configured for this key"; `available: 0` would mean "configured and
-    // unusable", which is a different thing to tell an operator.
-    expect(list.map((entry) => entry.id)).toEqual(["zai"])
   })
 })
