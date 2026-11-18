@@ -19,6 +19,7 @@ import type { Env } from "./env-types"
 import { readMetricInventoryEnv } from "./metric-inventory"
 import { readRecoveryEnv } from "./recovery"
 import { readRelayLifetimesEnv } from "./relay-lifetimes"
+import { readRetentionEnv } from "./retention"
 import { readRoutingEnv } from "./routing-env"
 import { readRuntimeLimitsEnv } from "./runtime-limits"
 import { readUpstreamStreamEnv } from "./upstream-stream"
@@ -213,26 +214,11 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       // is headroom, not a limit anyone meets — it only bounds what one carry holds in memory.
       maxBytes: raw.CLAUDE_SDK_SESSION_CARRY_MAX_BYTES ?? 33_554_432,
     },
-    retention: {
-      sessionsHours: raw.RETENTION_SESSIONS_HOURS ?? 24,
+    retention: readRetentionEnv(raw, {
       usageDays,
       usageDailyDays,
       usageReportsDays: usageReport.usageReportsDays,
-      auditDays: raw.RETENTION_AUDIT_DAYS ?? 365,
-      // A month of run rows: long enough to answer "has this task been failing all week", short
-      // enough that six tasks ticking as often as every five minutes stay a table nobody notices.
-      taskRunsDays: raw.RETENTION_TASK_RUNS_DAYS ?? 30,
-      revokedKeysDays: raw.RETENTION_REVOKED_KEYS_DAYS ?? 30,
-      oauthStateMinutes: raw.RETENTION_OAUTH_STATE_MINUTES ?? 10,
-      // A day, because the failure it covers is a crash between provisioning a directory and
-      // inserting the row that names it, and the operator who notices at all notices the next
-      // morning. Shortening it buys a little disk and risks deleting a live login.
-      orphanConfigDirHours: raw.RETENTION_ORPHAN_CONFIG_DIR_HOURS ?? 24,
-      // The same day the idle-session row gets, so the file and the row that resumes it age out
-      // together. Longer keeps warm resumes for conversations that pause overnight; shorter
-      // trades disk for a cold replay on the next turn.
-      sdkTranscriptHours: raw.RETENTION_SDK_TRANSCRIPT_HOURS ?? 24,
-    },
+    }),
     janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
     scheduler: {
       lockPoolMaxConnections: raw.SCHEDULER_LOCK_POOL_MAX_CONNECTIONS ?? 1,
@@ -253,6 +239,8 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       // Hourly, like the janitor it mirrors: a transcript becomes removable once an hour at the
       // most, and a sweep is a directory walk over a few thousand names, not a subprocess.
       sdkTranscriptSweepIntervalMinutes: raw.SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES ?? 60,
+      // Hourly against a window of days: a reap lands at most an hour past its due instant.
+      poolReapIntervalMinutes: raw.POOL_REAP_INTERVAL_MINUTES ?? 60,
       // Minutes, not hours: an idle console session outlives its own expiry by up to one tick's
       // worth of memory, and a login-heavy operator day should not let that pile up for hours.
       adminSessionPurgeIntervalMinutes: raw.ADMIN_SESSION_PURGE_INTERVAL_MINUTES ?? 30,

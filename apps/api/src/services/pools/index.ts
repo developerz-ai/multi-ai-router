@@ -4,6 +4,15 @@
  */
 
 export type { PoolMutationKind } from "./mutations"
+export type {
+  KeyFates,
+  PoolReaper,
+  PoolReaperDeps,
+  PoolReapOutcome,
+  PoolReapResult,
+  PoolReapSkip,
+} from "./reaper"
+export { createPoolReaper, planKeyFates } from "./reaper"
 export type { CreatePoolBody, PoolMemberInputBody, UpdatePoolBody } from "./schemas"
 export { createPoolBody, poolMemberInput, updatePoolBody } from "./schemas"
 export type { PoolsService, PoolsServiceDeps } from "./service"

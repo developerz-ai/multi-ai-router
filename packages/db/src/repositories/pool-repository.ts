@@ -1,5 +1,5 @@
 import type { RoutingPolicy } from "@multi-ai-router/core"
-import { asc, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray, lte, notExists } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { type PoolMemberRow, type PoolRow, poolMembers, pools } from "../schema/pools"
 
@@ -29,6 +29,12 @@ export interface PoolRepository {
   update(id: string, patch: UpdatePoolInput, now: Date): Promise<PoolRow | undefined>
   /** `true` when a row was removed. Membership and key bindings cascade. */
   delete(id: string): Promise<boolean>
+
+  /**
+   * Pools memberless since at or before `cutoff`, longest-empty first, at most `limit`. The
+   * empty-pool reaper's candidates; it re-checks each one under the pool's row lock before acting.
+   */
+  listEmptySince(cutoff: Date, limit: number): Promise<PoolRow[]>
 
   listMembers(poolId: string): Promise<PoolMemberRow[]>
   /** Membership for several pools in one query — the admin list view. */
@@ -122,6 +128,19 @@ export function createPoolRepository(db: DatabaseExecutor): PoolRepository {
       const rows = await db.delete(pools).where(eq(pools.id, id)).returning({ id: pools.id })
       return rows.length > 0
     },
+
+    listEmptySince: (cutoff, limit) =>
+      db
+        .select()
+        .from(pools)
+        .where(
+          and(
+            lte(pools.emptySince, cutoff),
+            notExists(db.select().from(poolMembers).where(eq(poolMembers.poolId, pools.id))),
+          ),
+        )
+        .orderBy(asc(pools.emptySince), asc(pools.id))
+        .limit(limit),
 
     listMembers: (poolId) =>
       db

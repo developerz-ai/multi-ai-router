@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.65.0] — 2026-11-18
+
+### Added
+
+- **A pool with no member for a week is deleted, with the keys it leaves reaching nothing.** A new `pool_reap` scheduler task (in-process, advisory-locked, bounded by `SWEEP_BATCH_SIZE`, one `scheduled_task_runs` row per run) deletes a pool memberless since `RETENTION_EMPTY_POOL_DAYS` (default 7) ago, every `POOL_REAP_INTERVAL_MINUTES` (default 60); both refuse `0` at boot. The clock is a new `pools.empty_since`, kept by a trigger on `pool_members` so an account deletion that cascades away a pool's last member starts it too; the trigger takes the pool's row lock before it looks, so two concurrent deletions of a pool's last two members cannot both miss the transition (migration 0047; existing empty pools start from the upgrade). Each pool is re-checked under its row lock, then every key naming it is settled in the same transaction: a key scoped to pools whose every pool is gone is revoked (`key.revoked`, `reason: "pool_reaped"`), and any other key just loses the pool. Each deletion is a `warn` line `empty pool reaped` with the pool and key ids, and each revocation a `warn` line `key revoked: every pool it was scoped to was reaped`. Spec: `docs/idea/02-domain-model.md#pool`, `docs/idea/01-architecture.md#the-periodic-tasks`. Regression: `apps/api/test/unit/scheduler/pool-reap.test.ts`, `apps/api/test/integration/pool-reap-postgres.test.ts`, `packages/db/test/integration/pool-empty-since.test.ts`.
+
+### Documentation
+
+- `router_quota_utilization`'s `window` label lists `overage` and `spend_limit`, which it already carried (`docs/idea/08-observability.md`).
+
 ## [2.64.0] — 2026-11-18
 
 ### Added
@@ -2274,3 +2284,4 @@ your tooling config.
 [2.63.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.0
 [2.63.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.1
 [2.64.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.64.0
+[2.65.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.65.0

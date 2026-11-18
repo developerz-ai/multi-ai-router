@@ -30,7 +30,9 @@ export interface AdminMutationScope {
     | "markRevoked"
     | "listPoolTargets"
     | "listAccountTargets"
+    | "listTargetsForKeys"
     | "listKeysScopedToPool"
+    | "lockKeysScopedToPool"
     | "replaceScopeTargets"
   >
   readonly tombstones: Pick<ApiKeyTombstoneRepository, "deleteKey">

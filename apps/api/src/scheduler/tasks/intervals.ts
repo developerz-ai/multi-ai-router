@@ -1,5 +1,5 @@
 import type { ScheduledTaskName } from "@multi-ai-router/db"
-import type { ScheduledTaskDeps } from "./index"
+import type { ScheduledTaskDeps } from "./deps"
 
 const MINUTE_MS = 60_000
 
@@ -30,5 +30,6 @@ export function scheduledTaskIntervals(
     usage_weekly_report: env.scheduler.usageReportIntervalMinutes * MINUTE_MS,
     cooldown_recheck: env.scheduler.cooldownRecheckIntervalMinutes * MINUTE_MS,
     plan_quota_read: env.scheduler.planQuotaReadIntervalMinutes * MINUTE_MS,
+    pool_reap: env.scheduler.poolReapIntervalMinutes * MINUTE_MS,
   }
 }
