@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.64.0] — 2026-11-18
+
+### Added
+
+- **`GET /v1/providers` states each provider's accounts by live status.** Every entry gains `active`, `disabled`, `cooling_down`, `exhausted` and `needs_reauth`: counts of the key's in-scope accounts of that provider, read from the health-overlaid status routing uses (a breaker cooldown or a `402` counts the moment it lands, not the stored `active`). They always sum to `accounts`, and every status is present with `0` when none. `accounts` counts in-scope accounts whatever their status, so a reader sizing capacity from it counted spent and logged-out credentials as capacity; it now reads `active`. `id`, `accounts` and `available` are unchanged. Spec: `docs/idea/06-protocol-translation.md#ingress-surface`. Regression: `apps/api/test/unit/dataplane/provider-listing.test.ts`, `apps/api/test/integration/catalog.test.ts`.
+
 ## [2.63.1] — 2026-11-17
 
 ### Fixed
@@ -2267,3 +2273,4 @@ your tooling config.
 [2.62.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.62.0
 [2.63.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.0
 [2.63.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.1
+[2.64.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.64.0
