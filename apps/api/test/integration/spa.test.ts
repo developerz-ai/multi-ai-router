@@ -420,9 +420,11 @@ describe("the full app, mounted end to end", () => {
         poolReaper: createPoolReaper({
           mutations: store.mutations,
           now,
-          onPoolDeleted: async () => {},
-          onKeyRevoked: () => {},
-          onKeyDetached: () => {},
+          coherence: {
+            refreshCatalog: async () => {},
+            forgetKey: () => {},
+            invalidateKey: () => {},
+          },
         }),
         keys: createKeysService({
           mutations: store.mutations,

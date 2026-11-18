@@ -1,5 +1,6 @@
 import type { AdminMutationRepository, ApiKeyRow } from "@multi-ai-router/db"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "../admin/audit"
+import { type CoherenceHooks, keyMutationCommitted } from "../admin/coherence"
 
 /**
  * Deletes a pool that has had no member for the configured window, and decides what that does to
@@ -68,12 +69,11 @@ export function planKeyFates(
 export interface PoolReaperDeps {
   readonly mutations: AdminMutationRepository
   readonly now: () => Date
-  /** After commit: the routing catalog drops the pool. */
-  readonly onPoolDeleted: (poolId: string) => Promise<void>
-  /** After commit, per revoked key: the verification cache forgets it at once. */
-  readonly onKeyRevoked: (keyId: string) => void
-  /** After commit, per detached key: its cached scope is re-read. */
-  readonly onKeyDetached: (keyId: string) => void
+  /**
+   * The admin plane's own cache debts, paid after commit as its pool and key writes pay them: the
+   * routing catalog drops the pool, a revoked key is forgotten at once, a detached key re-read.
+   */
+  readonly coherence: CoherenceHooks
 }
 
 export interface PoolReaper {
@@ -142,9 +142,9 @@ export function createPoolReaper(deps: PoolReaperDeps): PoolReaper {
       })
 
       if (outcome.kind === "reaped") {
-        for (const keyId of outcome.revokedKeyIds) deps.onKeyRevoked(keyId)
-        for (const keyId of outcome.detachedKeyIds) deps.onKeyDetached(keyId)
-        await deps.onPoolDeleted(poolId)
+        for (const id of outcome.revokedKeyIds) keyMutationCommitted(deps.coherence, id, "revoke")
+        for (const id of outcome.detachedKeyIds) keyMutationCommitted(deps.coherence, id, "update")
+        await deps.coherence.refreshCatalog()
       }
       return outcome
     },

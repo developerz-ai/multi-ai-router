@@ -50,9 +50,7 @@ describe.skipIf(ownDatabaseUrl === "")("empty-pool reap on Postgres", () => {
     const reaper = createPoolReaper({
       mutations: createAdminMutationRepository(db),
       now: () => NOW,
-      onPoolDeleted: async () => {},
-      onKeyRevoked: () => {},
-      onKeyDetached: () => {},
+      coherence: { refreshCatalog: async () => {}, forgetKey: () => {}, invalidateKey: () => {} },
     })
     // Still a member: the reap refuses whatever the cutoff.
     expect((await reaper.reap(doomed.id, FAR_FUTURE)).kind).toBe("skipped")

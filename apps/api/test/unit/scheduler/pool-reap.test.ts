@@ -18,13 +18,17 @@ function harness(batchSize = 100) {
   const store = createMemoryStore()
   const revoked: string[] = []
   const detached: string[] = []
-  const deleted: string[] = []
+  let catalogRefreshes = 0
   const reaper = createPoolReaper({
     mutations: store.mutations,
     now: () => NOW,
-    onPoolDeleted: async (id) => void deleted.push(id),
-    onKeyRevoked: (id) => void revoked.push(id),
-    onKeyDetached: (id) => void detached.push(id),
+    coherence: {
+      refreshCatalog: async () => {
+        catalogRefreshes += 1
+      },
+      forgetKey: (id) => void revoked.push(id),
+      invalidateKey: (id) => void detached.push(id),
+    },
   })
   const task = createPoolReapTask({
     pools: store.pools,
@@ -56,7 +60,18 @@ function harness(batchSize = 100) {
     return row
   }
   const isRevoked = (id: string) => store.rows.keys.find((row) => row.id === id)?.revoked
-  return { store, reaper, tick, lines, pool, key, isRevoked, revoked, detached, deleted }
+  return {
+    store,
+    reaper,
+    tick,
+    lines,
+    pool,
+    key,
+    isRevoked,
+    revoked,
+    detached,
+    refreshes: () => catalogRefreshes,
+  }
 }
 
 describe("planKeyFates", () => {
@@ -94,7 +109,7 @@ describe("pool_reap", () => {
     expect(h.isRevoked(shared.id)).toBe(false)
     expect(h.revoked).toEqual([sole.id])
     expect(h.detached).toEqual([shared.id])
-    expect(h.deleted).toEqual([stale.id])
+    expect(h.refreshes()).toBe(1)
 
     const poolAlert = h.lines.find((line) => line.msg === "empty pool reaped")
     expect(poolAlert).toMatchObject({
@@ -177,10 +192,10 @@ describe("pool_reap", () => {
   test("more due than one batch is partial, longest-empty first", async () => {
     const h = harness(1)
     await h.pool("newer", 8)
-    const older = await h.pool("older", 20)
+    await h.pool("older", 20)
 
     expect(await h.tick()).toEqual({ outcome: "partial", itemsProcessed: 1 })
-    expect(h.deleted).toEqual([older.id])
+    expect(h.store.rows.pools.map((row) => row.name)).toEqual(["newer"])
   })
 
   test("a pool already gone is a skip, so a re-run is idempotent", async () => {

@@ -232,15 +232,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         mutations,
         onCommitted: () => deps.coherence.refreshCatalog(),
       }),
-      // The scheduler's `pool_reap` deletes through the same mutation runner and pays the same
-      // coherence debts: the catalog drops the pool, a revoked key is forgotten at once.
-      poolReaper: createPoolReaper({
-        mutations,
-        now,
-        onPoolDeleted: () => deps.coherence.refreshCatalog(),
-        onKeyRevoked: (id) => keyMutationCommitted(deps.coherence, id, "revoke"),
-        onKeyDetached: (id) => keyMutationCommitted(deps.coherence, id, "update"),
-      }),
+      poolReaper: createPoolReaper({ mutations, now, coherence: deps.coherence }),
       keys: createKeysService({
         keys,
         cipher,
