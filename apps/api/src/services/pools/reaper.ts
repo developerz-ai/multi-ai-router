@@ -93,20 +93,24 @@ export function createPoolReaper(deps: PoolReaperDeps): PoolReaper {
           return skip(poolId, "not_due")
         }
 
+        // Two set-based reads whatever the fan-out: the locked keys, then all their pool targets.
         const keys = await tx.keys.lockKeysScopedToPool(poolId)
-        const otherPoolIds = new Map<string, readonly string[]>()
-        for (const key of keys) {
-          const targets = await tx.keys.listPoolTargets(key.id)
-          otherPoolIds.set(
-            key.id,
-            targets.filter((target) => target.poolId !== poolId).map((target) => target.poolId),
-          )
+        const targets = await tx.keys.listTargetsForKeys(keys.map((key) => key.id))
+        const otherPoolIds = new Map<string, string[]>()
+        for (const target of targets.pools) {
+          if (target.poolId === poolId) continue
+          otherPoolIds.set(target.apiKeyId, [
+            ...(otherPoolIds.get(target.apiKeyId) ?? []),
+            target.poolId,
+          ])
         }
         const fates = planKeyFates(keys, otherPoolIds)
 
         const now = deps.now()
         const audit = createAuditRecorder(tx.audit)
         const names = new Map(keys.map((key) => [key.id, key.name]))
+        // One write and one audit row per *revoked* key, the same pair an operator's revoke makes.
+        // Detached keys write nothing: the pool delete's cascade drops their binding.
         for (const keyId of fates.revoke) {
           await tx.keys.markRevoked(keyId, now)
           await audit.record({

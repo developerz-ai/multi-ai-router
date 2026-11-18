@@ -114,3 +114,36 @@ describe.skipIf(ownDatabaseUrl === "")("lockKeysScopedToPool", () => {
     expect(locked.map((key) => key.id)).toEqual([a.id, b.id].sort())
   })
 })
+
+describe.skipIf(ownDatabaseUrl === "")("pools.empty_since under concurrent deletions", () => {
+  test("two transactions deleting the last two members still mark the pool", async () => {
+    const db = fixture.db()
+    const pools = createPoolRepository(db)
+    const accounts = createAccountRepository(db)
+    const pool = await pools.create({ name: "empty-since-race" })
+    const one = await accounts.create({ label: "es-r1", provider: "zai", authMaterial: "c" })
+    const two = await accounts.create({ label: "es-r2", provider: "zai", authMaterial: "c" })
+    await pools.replaceMembers(pool.id, [{ accountId: one.id }, { accountId: two.id }])
+
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let firstDeleted = () => {}
+    const deleted = new Promise<void>((resolve) => {
+      firstDeleted = resolve
+    })
+    // The first deletion stays open while the second runs, so neither sees the other committed.
+    const first = db.transaction(async (tx) => {
+      await createAccountRepository(tx).delete(one.id)
+      firstDeleted()
+      await held
+    })
+    await deleted
+    const second = db.transaction((tx) => createAccountRepository(tx).delete(two.id))
+    setTimeout(release, 200)
+    await Promise.all([first, second])
+
+    expect((await pools.findById(pool.id))?.emptySince).toBeInstanceOf(Date)
+  })
+})

@@ -5,7 +5,9 @@
 -- drops through `ON DELETE CASCADE` when an account is deleted, a write no service observes. Every
 -- write to `pool_members` passes through it: INSERT clears the new row's pool, DELETE marks the old
 -- row's pool once no member is left, and UPDATE does both (no code updates `pool_id` today; the
--- membership is replaced as delete-then-insert, which ends with the column cleared).
+-- membership is replaced as delete-then-insert, which ends with the column cleared). The delete
+-- branch takes the pool's row lock before it looks, so concurrent deletions serialize per pool and
+-- the last one to commit sees the pool empty (READ COMMITTED: each statement a fresh snapshot).
 --
 -- The column default is the creation instant: a pool created with no members has been empty since
 -- it existed. Existing rows take this migration's instant, then pools holding a member are cleared,
@@ -24,6 +26,11 @@ WHERE EXISTS (SELECT 1 FROM "pool_members" WHERE "pool_members"."pool_id" = "poo
 CREATE OR REPLACE FUNCTION pool_members_track_empty() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP IN ('DELETE', 'UPDATE') THEN
+    -- Lock the pool first, so the membership check below runs in a statement snapshot taken after
+    -- every concurrent membership write to this pool has committed. Without it, two transactions
+    -- deleting a pool's last two members (two account deletions) each still see the other's row
+    -- and both skip the mark, leaving an empty pool that is never reaped.
+    PERFORM 1 FROM pools WHERE id = OLD.pool_id FOR UPDATE;
     UPDATE pools SET empty_since = now()
     WHERE id = OLD.pool_id
       AND empty_since IS NULL

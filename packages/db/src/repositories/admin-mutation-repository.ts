@@ -30,6 +30,7 @@ export interface AdminMutationScope {
     | "markRevoked"
     | "listPoolTargets"
     | "listAccountTargets"
+    | "listTargetsForKeys"
     | "listKeysScopedToPool"
     | "lockKeysScopedToPool"
     | "replaceScopeTargets"
