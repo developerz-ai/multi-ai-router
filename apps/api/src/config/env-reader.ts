@@ -232,6 +232,9 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       // together. Longer keeps warm resumes for conversations that pause overnight; shorter
       // trades disk for a cold replay on the next turn.
       sdkTranscriptHours: raw.RETENTION_SDK_TRANSCRIPT_HOURS ?? 24,
+      // A week: long enough that an operator rebuilding a pool's accounts never races it, short
+      // enough that a pool nobody refilled stops answering keys with an empty-candidate refusal.
+      emptyPoolDays: raw.RETENTION_EMPTY_POOL_DAYS ?? 7,
     },
     janitorIntervalMinutes: raw.JANITOR_INTERVAL_MINUTES ?? 60,
     scheduler: {
@@ -253,6 +256,8 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
       // Hourly, like the janitor it mirrors: a transcript becomes removable once an hour at the
       // most, and a sweep is a directory walk over a few thousand names, not a subprocess.
       sdkTranscriptSweepIntervalMinutes: raw.SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES ?? 60,
+      // Hourly against a window of days: a reap lands at most an hour past its due instant.
+      poolReapIntervalMinutes: raw.POOL_REAP_INTERVAL_MINUTES ?? 60,
       // Minutes, not hours: an idle console session outlives its own expiry by up to one tick's
       // worth of memory, and a login-heavy operator day should not let that pile up for hours.
       adminSessionPurgeIntervalMinutes: raw.ADMIN_SESSION_PURGE_INTERVAL_MINUTES ?? 30,

@@ -20,6 +20,7 @@ const RETENTION: RetentionConfig = {
   revokedKeysDays: 1,
   oauthStateMinutes: 10,
   orphanConfigDirHours: 1,
+  emptyPoolDays: 7,
   sdkTranscriptHours: 1,
   usageReportsDays: 14,
 }

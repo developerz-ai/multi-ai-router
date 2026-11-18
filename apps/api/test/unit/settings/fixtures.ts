@@ -35,6 +35,7 @@ export const RETENTION: RetentionConfig = {
   revokedKeysDays: 15,
   oauthStateMinutes: 7,
   orphanConfigDirHours: 12,
+  emptyPoolDays: 7,
   sdkTranscriptHours: 24,
 }
 
@@ -68,6 +69,7 @@ export const INTERVALS: Readonly<Record<ScheduledTaskName, number>> = {
   usage_weekly_report: 60 * MINUTE_MS,
   cooldown_recheck: 60 * MINUTE_MS,
   plan_quota_read: 15 * MINUTE_MS,
+  pool_reap: 60 * MINUTE_MS,
 }
 
 export interface MemoryPrices {

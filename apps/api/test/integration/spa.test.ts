@@ -24,7 +24,7 @@ import {
   createRouterKeyVerifier,
 } from "../../src/services/dataplane"
 import { createKeysService } from "../../src/services/keys"
-import { createPoolsService } from "../../src/services/pools"
+import { createPoolReaper, createPoolsService } from "../../src/services/pools"
 import { createSettingsService } from "../../src/services/settings"
 import { createUsageService } from "../../src/services/usage-read"
 import { accountDeletionFixture } from "../support/account-deletion"
@@ -416,6 +416,13 @@ describe("the full app, mounted end to end", () => {
           pools: store.pools,
           accounts: store.accounts,
           now,
+        }),
+        poolReaper: createPoolReaper({
+          mutations: store.mutations,
+          now,
+          onPoolDeleted: async () => {},
+          onKeyRevoked: () => {},
+          onKeyDetached: () => {},
         }),
         keys: createKeysService({
           mutations: store.mutations,

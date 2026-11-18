@@ -31,6 +31,7 @@ export interface AdminMutationScope {
     | "listPoolTargets"
     | "listAccountTargets"
     | "listKeysScopedToPool"
+    | "lockKeysScopedToPool"
     | "replaceScopeTargets"
   >
   readonly tombstones: Pick<ApiKeyTombstoneRepository, "deleteKey">

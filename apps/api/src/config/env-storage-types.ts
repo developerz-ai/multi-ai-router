@@ -33,6 +33,12 @@ export interface RetentionConfig {
    * from the client's own history, never a failed request (`scheduler/tasks/sdk-transcript-sweep.ts`).
    */
   readonly sdkTranscriptHours: number
+  /**
+   * How long a pool may stay memberless before the `pool_reap` task deletes it, measured from
+   * `pools.empty_since`. A key scoped only to pools that all get deleted is revoked with them; a
+   * key holding another target just loses the pool (`services/pools/reaper.ts`).
+   */
+  readonly emptyPoolDays: number
 }
 
 /**

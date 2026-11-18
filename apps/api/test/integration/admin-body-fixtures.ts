@@ -31,6 +31,7 @@ export function adminFixture(auth: AdminServices["auth"]): AdminServices {
       update: unexpected,
       remove: unexpected,
     },
+    poolReaper: { reap: unexpected },
     keys: {
       list: unexpected,
       get: unexpected,

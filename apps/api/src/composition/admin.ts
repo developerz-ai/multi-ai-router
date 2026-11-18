@@ -26,7 +26,7 @@ import { createLastLoginLookup } from "../services/accounts/last-login"
 import { loginLifetimePolicy } from "../services/accounts/login-lifetime"
 import { createAuditRecorder, keyMutationCommitted } from "../services/admin"
 import { createKeysService } from "../services/keys"
-import { createPoolsService } from "../services/pools"
+import { createPoolReaper, createPoolsService } from "../services/pools"
 import { createSettingsService } from "../services/settings"
 import { accountProviders, catalogLabels, createUsageService } from "../services/usage-read"
 import { createAdminAuth } from "./admin-auth"
@@ -231,6 +231,15 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         now,
         mutations,
         onCommitted: () => deps.coherence.refreshCatalog(),
+      }),
+      // The scheduler's `pool_reap` deletes through the same mutation runner and pays the same
+      // coherence debts: the catalog drops the pool, a revoked key is forgotten at once.
+      poolReaper: createPoolReaper({
+        mutations,
+        now,
+        onPoolDeleted: () => deps.coherence.refreshCatalog(),
+        onKeyRevoked: (id) => keyMutationCommitted(deps.coherence, id, "revoke"),
+        onKeyDetached: (id) => keyMutationCommitted(deps.coherence, id, "update"),
       }),
       keys: createKeysService({
         keys,

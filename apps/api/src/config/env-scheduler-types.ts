@@ -33,6 +33,8 @@ export interface SchedulerConfig {
   readonly configDirReapIntervalMinutes: number
   /** Agent-SDK transcript sweep interval, in minutes. The window itself is `retention`. */
   readonly sdkTranscriptSweepIntervalMinutes: number
+  /** Empty-pool reap interval, in minutes. The window itself is `retention.emptyPoolDays`. */
+  readonly poolReapIntervalMinutes: number
   /**
    * Admin console session purge interval, in minutes. Sweeps the in-memory `SessionStore`, not a
    * table, so every replica runs it against its own heap — see `scheduler/tasks/admin-session-purge.ts`.

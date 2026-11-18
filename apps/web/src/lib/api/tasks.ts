@@ -43,6 +43,7 @@ const TASK_LABELS: Readonly<Record<string, string>> = {
   quota_floor_refresh: "Quota floor refresh",
   plan_quota_read: "Plan quota read",
   config_dir_reap: "Orphaned config directory reap",
+  pool_reap: "Empty pool reap",
   admin_session_purge: "Admin session purge",
   idle_account_probe: "Idle account probe",
   model_catalog_refresh: "Model catalog refresh",
