@@ -138,7 +138,7 @@ export function createPoolReaper(deps: PoolReaperDeps): PoolReaper {
             // The same fields as the operator's delete (multi-ai-router#454). Members are always
             // none: a pool holding one was skipped above, under this transaction's lock.
             members: [],
-            keys: keys.map((key) => ({ keyId: key.id, name: key.name, fate: fateOf(key, fates) })),
+            keys: keyFates(keys, fates),
           },
         })
         const reaped: PoolReapResult = {
@@ -162,14 +162,22 @@ export function createPoolReaper(deps: PoolReaperDeps): PoolReaper {
   }
 }
 
-/** What the reap did to one key its scope named. An already-revoked key only loses the binding. */
-function fateOf(
-  key: Pick<ApiKeyRow, "id">,
+/**
+ * What the reap did to each key its scope named, with its name. An already-revoked key only loses
+ * the binding. The fate lists become sets once, so this is linear in the keys while the
+ * transaction holds the pool and key locks.
+ */
+function keyFates(
+  keys: readonly Pick<ApiKeyRow, "id" | "name">[],
   fates: KeyFates,
-): "revoked" | "detached" | "already_revoked" {
-  if (fates.revoke.includes(key.id)) return "revoked"
-  if (fates.detach.includes(key.id)) return "detached"
-  return "already_revoked"
+): { keyId: string; name: string; fate: "revoked" | "detached" | "already_revoked" }[] {
+  const revoked = new Set(fates.revoke)
+  const detached = new Set(fates.detach)
+  return keys.map((key) => ({
+    keyId: key.id,
+    name: key.name,
+    fate: revoked.has(key.id) ? "revoked" : detached.has(key.id) ? "detached" : "already_revoked",
+  }))
 }
 
 function skip(poolId: string, reason: PoolReapSkip["reason"]): PoolReapSkip {
