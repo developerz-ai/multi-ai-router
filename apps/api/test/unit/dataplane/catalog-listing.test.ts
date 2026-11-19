@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import type { ModelDescriptor } from "@multi-ai-router/core"
+import {
+  CLAUDE_SUBSCRIPTION_ALIASES,
+  CLAUDE_SUBSCRIPTION_MODELS,
+  type ModelDescriptor,
+} from "@multi-ai-router/core"
 import type { CatalogListingDeps, VerifiedKey } from "../../../src/services/dataplane"
 import { catalogListing } from "../../../src/services/dataplane"
-import { account, catalog, health, NOW } from "./fixtures"
+import { account, catalog, health, NOW, subscriptionAccount } from "./fixtures"
 
 /**
  * `GET /v1/catalog` — the router's own listing, with a size and a price beside each model.
@@ -137,6 +141,103 @@ describe("the rich catalog listing", () => {
     )
 
     expect(list.map((entry) => entry.id)).toEqual(["glm-4.6"])
+  })
+
+  /**
+   * The defect this test file exists to keep shut: `GET /v1/models` unions a subscription's warm rows
+   * with the shipped table (`services/models/listable.ts`), so when the SDK handshake never spelled
+   * a shipped name out — an unreached sweep, or a handshake narrower than this image's table — the
+   * name is listed there and was *missing* here. Two listings of one router must not disagree about
+   * what it serves, and the catalog is the one an operator reads to size a prompt.
+   */
+  test("a subscription publishes the shipped table beside its own rows, exactly as /v1/models does", () => {
+    const list = catalogListing(
+      {
+        catalog: catalog([subscriptionAccount("sub")]),
+        health: health(),
+        // A handshake that named one model and nothing else. The rest of the shipped table is still
+        // requestable, so it must still be published.
+        models: models({ sub: { "claude-opus-5": {} } }),
+        prices: noPrices,
+      },
+      fullScope(),
+      NOW,
+    )
+
+    const ids = list.map((entry) => entry.id)
+    for (const id of CLAUDE_SUBSCRIPTION_MODELS) expect(ids).toContain(id)
+    for (const alias of Object.keys(CLAUDE_SUBSCRIPTION_ALIASES)) expect(ids).toContain(alias)
+    // The five ids a Claude Code client reaches for by name, stated rather than left to the table.
+    for (const id of [
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-4-5",
+      "claude-fable-5-1",
+      "claude-fable-5-2",
+    ])
+      expect(ids).toContain(id)
+    // The row the handshake did state keeps its own word; the shipped fallback adds, never replaces.
+    expect(list.find((entry) => entry.id === "claude-opus-5")).toBeDefined()
+  })
+
+  /**
+   * The union is a *subscription* rule, not a catalog-wide one: an HTTP provider's listing is a
+   * live answer that already says everything it serves, and publishing Claude ids beside a z.ai
+   * account would advertise models that account cannot serve.
+   */
+  test("the shipped table is a subscription's, never an HTTP account's", () => {
+    const list = catalogListing(
+      {
+        catalog: catalog([account("a", { provider: "zai" })]),
+        health: health(),
+        models: models({ a: { "glm-4.6": {} } }),
+        prices: noPrices,
+      },
+      fullScope(),
+      NOW,
+    )
+
+    expect(list.map((entry) => entry.id)).toEqual(["glm-4.6"])
+  })
+
+  /**
+   * An explicit `supportedModels` is the operator's word on what the account may serve, and it
+   * bounds the shipped names too — the same `resolveModel` admission every other discovered id
+   * goes through. Without this the union would have widened an account's reach into a scope bug.
+   */
+  test("an explicit supportedModels list still narrows a subscription's catalog", () => {
+    const list = catalogListing(
+      {
+        catalog: catalog([
+          subscriptionAccount("sub", { snapshot: { supportedModels: ["claude-opus-5-5"] } }),
+        ]),
+        health: health(),
+        models: models({ sub: { "claude-opus-5": {} } }),
+        prices: noPrices,
+      },
+      fullScope(),
+      NOW,
+    )
+
+    expect(list.map((entry) => entry.id)).toEqual(["claude-opus-5-5"])
+  })
+
+  test("the shipped table does not reach an out-of-scope subscription", () => {
+    const deps = {
+      catalog: catalog([subscriptionAccount("mine"), subscriptionAccount("theirs")]),
+      health: health(),
+      models: models({
+        mine: { "claude-opus-5": {} },
+        theirs: { "claude-unreleased-9": {} },
+      }),
+      prices: noPrices,
+    }
+
+    const ids = catalogListing(deps, scopedTo(["mine"]), NOW).map((entry) => entry.id)
+
+    expect(ids).not.toContain("claude-unreleased-9")
+    // The scope still publishes its own account's shipped union.
+    expect(ids).toContain("claude-opus-5-5")
   })
 
   test("an alias is published under the name a client sends, sized by what it maps to", () => {

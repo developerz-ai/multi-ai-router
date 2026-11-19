@@ -106,11 +106,14 @@ export type ContextTable = Readonly<Record<string, ContextWindow>>
  * rather than `data: []`.
  *
  * Provenance: the published model reference on the date `CONTEXT_TABLE_AS_OF` names. Context
- * windows live in the shipped table under `services/models/windows/`, keyed by these same ids.
+ * windows live in the shipped table under `services/models/windows/`, keyed by these same ids —
+ * including `claude-fable-5-2`, whose date-suffixed form an alias lookup cannot strip back to
+ * `claude-fable-5`, so it needs a row of its own rather than borrowing its predecessor's.
  * Blast radius of a stale row: a model listed that the subscription no longer serves, or one
  * missing that it does — until the next live read replaces the set. Nothing routes on it.
  */
 export const CLAUDE_SUBSCRIPTION_MODELS: readonly string[] = Object.freeze([
+  "claude-fable-5-2",
   "claude-fable-5-1",
   "claude-fable-5",
   "claude-opus-5-5",

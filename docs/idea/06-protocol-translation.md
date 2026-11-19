@@ -117,10 +117,23 @@ that is what they mean.
 **The one exception is a Claude subscription (`anthropic-oauth`).** It has no HTTP listing and no
 discover button; the Agent SDK's handshake is its only voice
 ([03-providers.md](03-providers.md#model-catalog--the-handshake-not-a-listing)), and a wire listing
-that ignored it answered `data: []` for a pool of working subscriptions. So a subscription also lists
-its `ModelCatalog` rows on `/v1/models` — the live list where the sweep has one, the shipped Claude
-table until it does — deduplicated across every in-scope account, and still admitted through the same
-`supportedModels` check selection runs, so an operator who narrows a subscription narrows its listing.
+that ignored it answered `data: []` for a pool of working subscriptions. So a subscription lists its
+`ModelCatalog` rows on `/v1/models` too — deduplicated across every in-scope account, and still
+admitted through the same `supportedModels` check selection runs, so an operator who narrows a
+subscription narrows its listing.
+
+**A subscription's `/v1/catalog` entry is the same set `/v1/models` publishes.** Both are its stored
+`ModelCatalog` rows **unioned with the shipped Claude table** (`CLAUDE_SUBSCRIPTION_MODELS` and its
+alias map, `packages/core`), so a shipped id survives a handshake that omits it — the SDK's list is
+what the subscription said today, the shipped table is what this image knows, and either endpoint
+reading only one of them published a catalog that disagreed with the listing the same key had just
+been offered. The union is how a name reaches the set; it never widens what a name may do: every
+admitted name goes through `resolveModel`, the check selection runs (`supportedModels` included, so
+an explicit list still narrows both endpoints), and the account set is the key-scope intersection, so
+a shipped id reaches a subscription **in scope** and never adds an account to the scope. Through
+2.66.0 `/v1/catalog` read the stored rows alone, so a subscription whose warm rows named part of the
+table was listed by one endpoint and missing from the other (the shipped-table union is additive: no
+row changes shape, and no earlier shipped id is removed).
 
 **Alias rows say what they resolve to.** A row whose id is an alias — the CLI's `sonnet`, or an
 operator's `sonnet → glm-4.7` — carries one field neither ecosystem defines, `resolved_model`, with

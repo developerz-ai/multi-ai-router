@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import type { ModelDescriptor } from "@multi-ai-router/core"
+import { CLAUDE_SUBSCRIPTION_MODELS, type ModelDescriptor } from "@multi-ai-router/core"
 import type { DataPlaneRoutesDeps } from "../../src/routes/v1"
-import { account, jsonResponse } from "../unit/dataplane/fixtures"
+import type { PoolSnapshot } from "../../src/services/routing"
+import { account, jsonResponse, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, KEY } from "./harness"
 
 /**
@@ -53,6 +54,14 @@ interface CatalogBody {
 }
 
 const zaiAccount = () => account("acct-zai", { apiKey: "sk-one", cipher: CRYPTOR, provider: "zai" })
+
+/** A pool of nothing but Claude subscriptions — the shape a team's shared Claude subs arrive in. */
+const SUBSCRIPTION_POOL: PoolSnapshot = {
+  id: "subs",
+  name: "subscriptions",
+  policy: "sticky",
+  members: [{ accountId: "sub-a" }, { accountId: "sub-b" }],
+}
 
 describe("GET /v1/catalog", () => {
   test("answers with a size, a price, and the depth of the pool behind each model", async () => {
@@ -254,6 +263,79 @@ describe("GET /v1/catalog", () => {
     ).json()) as CatalogBody
 
     expect(body.data.map((entry) => entry.id)).toEqual(["glm-4.6"])
+  })
+
+  /**
+   * The defect, over real HTTP: a pool of Claude subscriptions whose warm rows name only part of
+   * what they serve. `GET /v1/models` unions the stored rows with the shipped table
+   * (`services/models/listable.ts`); `GET /v1/catalog` published the stored rows alone, so a model a
+   * client had just been told it could use was missing from the page an operator sizes a prompt
+   * from. Both endpoints read one router, so both must name the same set.
+   */
+  test("a subscription pool's catalog names everything /v1/models names", async () => {
+    const options = {
+      accounts: [subscriptionAccount("sub-a"), subscriptionAccount("sub-b")],
+      pools: [SUBSCRIPTION_POOL],
+      scope: "pools" as const,
+      poolIds: [SUBSCRIPTION_POOL.id],
+      responses: [() => jsonResponse(200, {})],
+      // The handshake reached both accounts and named one id each — narrower than this image's
+      // table, which is the ordinary case for a subscription mid-rollout.
+      models: models({
+        "sub-a": { "claude-opus-5": {} },
+        "sub-b": { "claude-sonnet-5": {} },
+      }),
+    }
+
+    const listed = (await (
+      await harness(options).app.request("/v1/models", { headers: bearer() })
+    ).json()) as { data: { id: string }[] }
+    const catalog = (await (
+      await harness(options).app.request("/v1/catalog", { headers: bearer() })
+    ).json()) as CatalogBody
+
+    const listedIds = new Set(listed.data.map((row) => row.id))
+    const catalogIds = new Set(catalog.data.map((row) => row.id))
+    // Nothing the client was offered is missing from the catalog.
+    expect([...listedIds].filter((id) => !catalogIds.has(id))).toEqual([])
+    // And every shipped id is there, the five a Claude Code client asks for by name among them.
+    for (const id of [
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+      "claude-haiku-4-5",
+      "claude-fable-5-1",
+      "claude-fable-5-2",
+    ])
+      expect(catalogIds.has(id)).toBe(true)
+    expect(catalogIds.size).toBeGreaterThanOrEqual(CLAUDE_SUBSCRIPTION_MODELS.length)
+  })
+
+  /** The union adds names to an account in scope; it must never add an account to the scope. */
+  test("an out-of-scope subscription contributes nothing, shipped table included", async () => {
+    const options = {
+      accounts: [subscriptionAccount("sub-a"), subscriptionAccount("sub-b")],
+      scope: "accounts" as const,
+      accountIds: ["sub-a"],
+      responses: [() => jsonResponse(200, {})],
+      models: models({
+        "sub-a": { "claude-opus-5": {} },
+        "sub-b": { "claude-unreleased-9": {} },
+      }),
+    }
+
+    const catalog = (await (
+      await harness(options).app.request("/v1/catalog", { headers: bearer() })
+    ).json()) as CatalogBody
+    const listed = (await (
+      await harness(options).app.request("/v1/models", { headers: bearer() })
+    ).json()) as { data: { id: string }[] }
+
+    expect(catalog.data.map((entry) => entry.id)).not.toContain("claude-unreleased-9")
+    expect(listed.data.map((row) => row.id)).not.toContain("claude-unreleased-9")
+    // The in-scope account's shipped union is intact.
+    expect(catalog.data.map((entry) => entry.id)).toContain("claude-opus-5-5")
+    const listedIds = listed.data.map((row) => row.id)
+    expect(listedIds.filter((id) => !catalog.data.some((entry) => entry.id === id))).toEqual([])
   })
 
   test("a router built without a warm catalog answers an empty list, not a 404", async () => {
