@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`GET /v1/catalog` publishes the same subscriptions' model set as `GET /v1/models`.** A Claude subscription (`anthropic-oauth`) has no HTTP listing, so both endpoints stand on the Agent SDK's handshake plus the shipped Claude table. `apps/api/src/services/models/listable.ts` unioned the two; `apps/api/src/services/dataplane/catalog-listing.ts` published the stored rows alone, so a shipped id the handshake had not spelled out — and every id, when the sweep had not reached the account — was listed by `/v1/models` and missing from the page an operator sizes a prompt from. `requestableNames` now unions the shipped table for an `agent-sdk` account exactly as `/v1/models` does. Nothing widens: every name still goes through `resolveModel` (an explicit `supportedModels` list still narrows both endpoints) and the account set is still the key-scope intersection, so an out-of-scope subscription contributes nothing. `CLAUDE_SUBSCRIPTION_MODELS` also gains `claude-fable-5-2`, which gets its own context-window row (`claude-fable-5-1` and its predecessor stand, nothing removed). Spec: `docs/idea/06-protocol-translation.md#ingress-surface`. Regression: `apps/api/test/integration/catalog.test.ts`, `apps/api/test/unit/dataplane/catalog-listing.test.ts`, `apps/api/test/unit/models/subscription.test.ts`.
+
 ## [2.66.0] — 2026-11-18
 
 ### Changed

@@ -119,13 +119,35 @@ describe("building a subscription's catalog rows", () => {
   })
 
   test("the current lineup is listed beside the generations it replaced, which stay listed", () => {
-    for (const id of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]) {
+    for (const id of [
+      "claude-fable-5-2",
+      "claude-fable-5-1",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
+    ]) {
       expect(CLAUDE_SUBSCRIPTION_MODELS).toContain(id)
     }
     // Still served, so still listed: a client pinned to the previous generation must find it.
     for (const id of ["claude-opus-5", "claude-sonnet-5"]) {
       expect(CLAUDE_SUBSCRIPTION_MODELS).toContain(id)
     }
+  })
+
+  /**
+   * A "-5-2" id has no lookup row of its own only if the table forgot it: `modelLookupKeys` strips a
+   * date snapshot suffix, never a version suffix, so `claude-fable-5-2` cannot borrow
+   * `claude-fable-5`'s window. Asserting the numbers, not just non-null, so a future row edits them.
+   */
+  test("the newest Fable row carries its own shipped window", () => {
+    expect(CLAUDE_SUBSCRIPTION_MODELS).toContain("claude-fable-5-2")
+    expect(shippedSubscriptionCatalog().find((row) => row.modelId === "claude-fable-5-2")).toEqual({
+      modelId: "claude-fable-5-2",
+      contextTokens: 1_000_000,
+      maxOutputTokens: 128_000,
+      contextSource: "shipped",
+      listingSource: "shipped",
+      resolvedModel: null,
+    })
   })
 })
 
