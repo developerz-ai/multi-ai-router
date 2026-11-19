@@ -239,8 +239,13 @@ export type { ApiKeyTombstoneRow } from "./schema/api-key-tombstones"
 export { apiKeyTombstones } from "./schema/api-key-tombstones"
 export type { ApiKeyRow, NewApiKeyRow } from "./schema/api-keys"
 export { apiKeys } from "./schema/api-keys"
-export type { AuditDetail, AuditEventRow, NewAuditEventRow } from "./schema/audit-events"
-export { auditEvents } from "./schema/audit-events"
+export type {
+  AuditActorKind,
+  AuditDetail,
+  AuditEventRow,
+  NewAuditEventRow,
+} from "./schema/audit-events"
+export { AUDIT_ACTOR_KINDS, auditEvents } from "./schema/audit-events"
 export type { CostBasis, UsageOutcome } from "./schema/enums"
 // --- enums ------------------------------------------------------------------
 export {

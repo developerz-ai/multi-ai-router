@@ -7,6 +7,7 @@ import {
 import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import type { TestNowService } from "../services/accounts/test-now"
+import { runWithAuditContext, systemAuditContext } from "../services/admin/audit-context"
 import type { RoutingCatalogStore } from "../services/catalog"
 import type { HealthStore } from "../services/dataplane/health"
 import { createRecoveryAccess } from "../services/dataplane/recovery-access"
@@ -129,6 +130,8 @@ export function createRecoveryComponents(deps: {
   }
 }
 
+const RECOVERY_AUDIT_CONTEXT = systemAuditContext("router-recovery")
+
 /**
  * The recovery probe spends the admin plane's own "Test now", exactly as the idle sweep does: one
  * transport, one audit kind (`trigger: router_recovery`). Not its press cooldown: the permit already
@@ -139,11 +142,15 @@ export function createRecoveryComponents(deps: {
  */
 export function recoveryProbeSender(testNow: Pick<TestNowService, "test">): RecoveryProbeSend {
   return async ({ accountId, model, startGuard, rateLimitSink, trigger }) => {
-    const result = await testNow.test(accountId, {
-      model,
-      confirmed: true,
-      recovery: { startGuard, rateLimitSink, ...(trigger === undefined ? {} : { trigger }) },
-    })
+    // The router's own act: a permit fires on a timer armed by whichever request or re-check
+    // demanded it, and must not be stamped with that caller (multi-ai-router#453).
+    const result = await runWithAuditContext(RECOVERY_AUDIT_CONTEXT, () =>
+      testNow.test(accountId, {
+        model,
+        confirmed: true,
+        recovery: { startGuard, rateLimitSink, ...(trigger === undefined ? {} : { trigger }) },
+      }),
+    )
     if (!result.ok)
       // The permit's own guard refused (a client took it) versus a transport that cannot serve.
       return result.failure.code === "background_admission_refused"

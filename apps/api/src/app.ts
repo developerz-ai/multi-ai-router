@@ -6,6 +6,7 @@ import {
 import { consoleAccountsUrl } from "./errors/reconnect"
 import type { Logger } from "./logging/logger"
 import { adminAuth } from "./middleware/adminAuth"
+import { trustedProxyHops } from "./middleware/clientIp"
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler"
 import { requestLogger } from "./middleware/logger"
 import { requestId } from "./middleware/requestId"
@@ -187,7 +188,12 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
  */
 function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMountOptions): void {
   const { trustProxy, trustProxyHops, sessionCookieInsecure, apiToken, adminBodies } = options
-  const guard = adminAuth(admin.auth, sessionCookieInsecure, apiToken)
+  const guard = adminAuth(
+    admin.auth,
+    sessionCookieInsecure,
+    apiToken,
+    trustedProxyHops(trustProxy, trustProxyHops),
+  )
 
   app.route(
     ADMIN_AUTH_BASE_PATH,

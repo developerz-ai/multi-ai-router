@@ -4,6 +4,7 @@ import {
   type ScheduledTaskRepository,
 } from "@multi-ai-router/db"
 import type { Logger } from "../logging/logger"
+import { runWithAuditContext, systemAuditContext } from "../services/admin/audit-context"
 import { describe, indexTasks, runBounded } from "./runner-support"
 import type { ScheduledTask, TaskLock, TickResult } from "./types"
 
@@ -161,7 +162,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const run = (task: ScheduledTask): Promise<TickResult> => {
     const existing = inFlight.get(task.name)
     if (existing !== undefined) return existing
-    const pending = tick(task)
+    const pending = runWithAuditContext(systemAuditContext(task.name), () => tick(task))
       .then((result) => {
         // A throw here would reject `pending` and the timer would never re-arm.
         try {

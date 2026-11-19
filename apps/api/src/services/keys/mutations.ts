@@ -41,7 +41,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
             expiresAt: body.expiresAt ?? null,
           })
           await tx.keys.replaceScopeTargets(row.id, scope.value)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyCreated,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: row.id,
@@ -105,7 +105,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
           )
           if (row === undefined) return notFound(`no key with id "${id}"`)
           if (scope !== null) await tx.keys.replaceScopeTargets(id, scope)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyUpdated,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: row.id,
@@ -136,7 +136,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
             return conflict(`key "${current.name}" is already revoked`, "already_revoked")
           const now = deps.now()
           await tx.keys.markRevoked(id, now)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyRevoked,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: id,
@@ -160,7 +160,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
           // row for the rollups). The row is already locked FOR UPDATE by `run`.
           if (!(await tx.tombstones.deleteKey(id, deps.now())))
             return notFound(`no key with id "${id}"`)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyDeleted,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: id,

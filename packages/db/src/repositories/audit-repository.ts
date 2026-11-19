@@ -1,6 +1,11 @@
 import { and, desc, eq, inArray, max, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
-import { type AuditDetail, type AuditEventRow, auditEvents } from "../schema/audit-events"
+import {
+  type AuditActorKind,
+  type AuditDetail,
+  type AuditEventRow,
+  auditEvents,
+} from "../schema/audit-events"
 import { deleteOldestBatch } from "./bounded-delete"
 
 /**
@@ -50,6 +55,17 @@ export interface AppendAuditEventInput {
   readonly subjectType?: string | null
   readonly subjectId?: string | null
   readonly detail?: AuditDetail | null
+  /**
+   * The caller, stamped by the service-layer recorder from the audit context — never by an
+   * emitter. Optional here only because the repository is also driven directly by tests and the
+   * janitor's fixtures; the recorder always supplies all six.
+   */
+  readonly actor?: string | null
+  readonly actorKind?: AuditActorKind | null
+  readonly actorSays?: string | null
+  readonly clientIp?: string | null
+  readonly userAgent?: string | null
+  readonly requestId?: string | null
 }
 
 export interface LatestForSubjectsInput {
@@ -73,6 +89,12 @@ export function createAuditRepository(db: DatabaseExecutor): AuditRepository {
           subjectType: input.subjectType ?? null,
           subjectId: input.subjectId ?? null,
           detail: input.detail ?? null,
+          actor: input.actor ?? null,
+          actorKind: input.actorKind ?? null,
+          actorSays: input.actorSays ?? null,
+          clientIp: input.clientIp ?? null,
+          userAgent: input.userAgent ?? null,
+          requestId: input.requestId ?? null,
         })
         .returning()
       const row = rows[0]
