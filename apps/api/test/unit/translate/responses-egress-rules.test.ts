@@ -81,13 +81,24 @@ describe("a Codex-ruled Responses surface", () => {
 
   test("chat ingress gets the same treatment, and a ceiling the caller chose is reported", () => {
     const { body, drops } = sent("openai-chat", CHAT)
-    expect(drops.map((d) => d.field).sort()).toEqual(["max_output_tokens", "temperature", "top_p"])
+    expect(drops.map((d) => d.field).sort()).toEqual([
+      "max_completion_tokens",
+      "temperature",
+      "top_p",
+    ])
     expect(body.max_output_tokens).toBeUndefined()
     expect(body.temperature).toBeUndefined()
     expect(body.top_p).toBeUndefined()
     expect(body.stream).toBe(true)
     expect(body.instructions).toBe("")
     expect(body.store).toBe(false)
+  })
+
+  test("chat ingress: the legacy max_tokens spelling is reported under that name", () => {
+    const { max_completion_tokens: _, ...legacy } = CHAT
+    const { body, drops } = sent("openai-chat", { ...legacy, max_tokens: 64 })
+    expect(body.max_output_tokens).toBeUndefined()
+    expect(drops.map((d) => d.field).sort()).toEqual(["max_tokens", "temperature", "top_p"])
   })
 
   test("an ordinary Responses surface is untouched by any of it", () => {

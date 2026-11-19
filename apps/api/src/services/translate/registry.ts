@@ -155,15 +155,31 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: PairDefinition = {
     }),
 }
 
+/**
+ * openai-chat states its ceiling under two names and the conversion reads `max_completion_tokens`
+ * first; a drop names whichever one this caller's ceiling actually came from.
+ */
+function chatCeilingName(request: {
+  readonly max_completion_tokens?: number | null | undefined
+}): Readonly<Record<string, string>> {
+  return {
+    max_output_tokens:
+      request.max_completion_tokens == null ? "max_tokens" : "max_completion_tokens",
+  }
+}
+
 const OPENAI_CHAT_TO_OPENAI_RESPONSES: PairDefinition = {
   ingress: "openai-chat",
   egress: "openai-responses",
-  requestFromParsed: (parsed, context) =>
-    applyResponsesEgressRules(
-      openAiChatToOpenAiResponsesRequestFromParsed(ingressRequest(parsed, "openai-chat")),
+  requestFromParsed: (parsed, context) => {
+    const request = ingressRequest(parsed, "openai-chat")
+    return applyResponsesEgressRules(
+      openAiChatToOpenAiResponsesRequestFromParsed(request),
       context.responsesEgress,
       context.onDrop,
-    ),
+      chatCeilingName(request),
+    )
+  },
   response: (body, context) =>
     openAiResponsesToOpenAiChatResponse(body, {
       created: context.created,

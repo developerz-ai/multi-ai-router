@@ -270,7 +270,10 @@ describe("chat completions ingress against a Codex account", () => {
     expect(body.object).toBe("chat.completion")
     expect(body.choices[0]?.message.content).toBe("hello there")
 
-    expect(res.headers.get("x-router-dropped-params")).toBe("max_output_tokens, temperature, top_p")
+    // Named as the caller sent it, never as the Responses field it would have become.
+    expect(res.headers.get("x-router-dropped-params")).toBe(
+      "max_completion_tokens, temperature, top_p",
+    )
     const sent = sentBody(upstream)
     expectCodexShape(sent)
     expect(sent.instructions).toBe("")
