@@ -143,6 +143,7 @@ describe("the tasks read", () => {
       "usage_weekly_report",
       "cooldown_recheck",
       "plan_quota_read",
+      "pool_reap",
     ])
 
     const janitor = result.value.tasks[0]

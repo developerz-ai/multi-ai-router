@@ -72,12 +72,14 @@ export function readResponseUsage(
     const cached = (numericCache ?? 0) + (numericWrite ?? 0)
     if (numericInput === undefined || cached > numericInput)
       return { counts: previous, invalid: true }
+    const reasoning = reasoningTokens(dialect, usage)
     return {
       counts: {
         tokensIn: numericInput - cached,
         tokensOut: numericOutput ?? 0,
         cacheReadTokens: numericCache ?? 0,
         cacheWriteTokens: numericWrite ?? 0,
+        ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }),
       },
       invalid: false,
     }
@@ -109,4 +111,20 @@ export function readResponseUsage(
     },
     invalid: false,
   }
+}
+
+/**
+ * The reasoning part of the output, where an OpenAI dialect states it. Like the 1-hour TTL split, a
+ * malformed count loses only itself — the sample it rides in is still a reading — and an absent one
+ * stays absent rather than becoming a zero nobody measured.
+ */
+function reasoningTokens(
+  dialect: Exclude<Dialect, "anthropic">,
+  usage: Record<string, unknown>,
+): number | undefined {
+  const details = responseObject(
+    usage[dialect === "openai-chat" ? "completion_tokens_details" : "output_tokens_details"],
+  )
+  const value = details?.reasoning_tokens
+  return isCount(value) ? (value as number) : undefined
 }

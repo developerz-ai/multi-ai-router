@@ -27,6 +27,7 @@ import {
 import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs, type MemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * Connecting a Claude subscription, with a fake `claude` CLI.
@@ -165,11 +166,12 @@ function harness(
   const configDirs = createMemoryConfigDirs()
   const clock = { now: NOW }
   const login = options.login ?? fakeLogin()
-  const audit = createAuditRecorder(store.audit)
+  const audit = createAuditRecorder(store.audit, silentLogger())
 
   const accounts = createAccountsService({
     accounts: store.accounts,
     keys: store.keys,
+    pools: store.pools,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
     configDirs: configDirs.dirs,
     ...accountDeletionFixture(configDirs.dirs),

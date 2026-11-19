@@ -647,7 +647,11 @@ describe("response_format on translate egress (the structured-output contract)",
     expect(upstream.calls).toHaveLength(0)
     expect(body.error?.message).not.toContain("winner")
     expect(usage.rows).toHaveLength(1)
-    expect(usage.rows[0]).toMatchObject({ outcome: "client_error", tokensIn: 0, tokensOut: 0 })
+    expect(usage.rows[0]).toMatchObject({
+      outcome: "client_error",
+      tokensIn: null,
+      tokensOut: null,
+    })
   })
 
   test("tool_choice required is sent as any with thinking disabled", async () => {

@@ -47,6 +47,7 @@ function record(attempt: number): UsageRecord {
     tokensOut: 20,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    reasoningTokens: null,
     costEstimate: null,
     costBasis: "unknown",
     latencyMs: 120,

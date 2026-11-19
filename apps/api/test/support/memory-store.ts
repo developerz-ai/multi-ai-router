@@ -148,9 +148,13 @@ export function createMemoryStore(): MemoryStore {
           patch: { status: "disabled" },
           now,
         }),
+      // `pool_members.account_id` is `ON DELETE CASCADE`: a deleted account leaves every pool.
       delete: async (id) => {
         const deleted = remove(accounts, id)
-        if (deleted) recoveries.delete(id)
+        if (deleted) {
+          recoveries.delete(id)
+          drop(poolMembers, (row) => row.accountId === id)
+        }
         return deleted
       },
     },
@@ -164,6 +168,8 @@ export function createMemoryStore(): MemoryStore {
           name: input.name,
           policy: input.policy ?? "sticky",
           overflowAccountId: input.overflowAccountId ?? null,
+          // The trigger's rule (migration 0047): empty from creation until a member lands.
+          emptySince: EPOCH,
           createdAt: EPOCH,
           updatedAt: EPOCH,
         }
@@ -175,7 +181,24 @@ export function createMemoryStore(): MemoryStore {
       findByName: async (name) => pools.find((row) => row.name === name),
       findByIds: async (ids) => pools.filter((row) => ids.includes(row.id)),
       update: async (id, patch, now) => replace(pools, id, patch, now),
-      delete: async (id) => remove(pools, id),
+      // The two `ON DELETE CASCADE`s the schema declares on a pool's id.
+      delete: async (id) => {
+        drop(poolMembers, (row) => row.poolId === id)
+        drop(keyPools, (row) => row.poolId === id)
+        return remove(pools, id)
+      },
+      listEmptySince: async (cutoff, limit) =>
+        pools
+          .filter(
+            (row) =>
+              row.emptySince !== null &&
+              row.emptySince.getTime() <= cutoff.getTime() &&
+              !poolMembers.some((member) => member.poolId === row.id),
+          )
+          .sort(
+            (left, right) => (left.emptySince?.getTime() ?? 0) - (right.emptySince?.getTime() ?? 0),
+          )
+          .slice(0, limit),
       listMembers: async (poolId) => poolMembers.filter((row) => row.poolId === poolId),
       listMembersForPools: async (poolIds) =>
         poolMembers.filter((row) => poolIds.includes(row.poolId)),
@@ -192,6 +215,9 @@ export function createMemoryStore(): MemoryStore {
           createdAt: EPOCH,
         }))
         poolMembers.push(...created)
+        const pool = pools.find((row) => row.id === poolId)
+        if (pool !== undefined && created.length > 0) pool.emptySince = null
+        else if (pool !== undefined && pool.emptySince === null) pool.emptySince = EPOCH
         return created
       },
     },
@@ -208,6 +234,7 @@ export function createMemoryStore(): MemoryStore {
           provider: input.provider,
           accountId: input.accountId ?? null,
           redirectUri: input.redirectUri ?? null,
+          initiatedBy: null,
           consumedAt: null,
           authorizationLifecycleVersion: input.authorizationLifecycleVersion ?? null,
           expiresAt: input.expiresAt,
@@ -254,6 +281,12 @@ export function createMemoryStore(): MemoryStore {
           subjectType: input.subjectType ?? null,
           subjectId: input.subjectId ?? null,
           detail: input.detail ?? null,
+          actor: input.actor ?? null,
+          actorKind: input.actorKind ?? null,
+          actorSays: input.actorSays ?? null,
+          clientIp: input.clientIp ?? null,
+          userAgent: input.userAgent ?? null,
+          requestId: input.requestId ?? null,
           createdAt: EPOCH,
         }
         audit.push(row)

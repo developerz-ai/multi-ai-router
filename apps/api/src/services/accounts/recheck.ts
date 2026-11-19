@@ -75,7 +75,7 @@ export interface OperatorRecoveryRepository {
 }
 export interface RecheckServiceDeps {
   readonly accounts: Pick<AccountRepository, "list" | "findById">
-  readonly auth?: AccountAuthProbe
+  readonly auth?: Pick<AccountAuthProbe, "check">
   readonly recovery: OperatorRecoveryRepository
   readonly audit: AuditRecorder
   readonly refreshCatalog: () => Promise<void>

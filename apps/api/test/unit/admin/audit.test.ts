@@ -3,6 +3,7 @@ import { ROUTER_KEY_PREFIX } from "@multi-ai-router/core"
 import { REDACTED } from "../../../src/logging/redact"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "../../../src/services/admin"
 import { createMemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * The recorder is the single place "audit events never contain credential material" is enforced,
@@ -24,7 +25,7 @@ const NEW_KINDS = [
 
 function harness() {
   const store = createMemoryStore()
-  return { recorder: createAuditRecorder(store.audit), rows: store.rows.audit }
+  return { recorder: createAuditRecorder(store.audit, silentLogger()), rows: store.rows.audit }
 }
 
 describe("the kind and subject names", () => {

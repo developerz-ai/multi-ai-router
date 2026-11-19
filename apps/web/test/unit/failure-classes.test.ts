@@ -79,6 +79,57 @@ describe("the class table", () => {
   })
 })
 
+describe("the two hints an operator acts on", () => {
+  // Written against the wording that was there before: "A window is spent. It comes back on its
+  // own" and "A balance is drained or billing is dead. Needs a top-up; no timer will clear this."
+  // The first went to a row that also carries a provider key cap with a reset (openrouter's
+  // `Key limit exceeded (daily limit)` is classified rate-limited), the second asserted a top-up
+  // for every spend limit, reset or not. These assertions fail on that copy.
+
+  test("rate limited says the limit refills on a clock and asks for no payment", () => {
+    const hint = FAILURE_CLASSES.rate_limited.hint
+
+    // The one claim the row may make: no reset instant or source reaches this module, so "on its
+    // own" is the strongest true sentence — never "at 14:00".
+    expect(hint).toMatch(/refills on its own/i)
+    expect(hint).toMatch(/resets on a clock/i)
+    // A resetting cap is a wait. Asking for payment here is the conflation rule 7 forbids.
+    expect(hint).not.toMatch(/top.?up/i)
+    expect(hint).not.toMatch(/\bpay\b/i)
+  })
+
+  test("out of credits is a drained balance or a cap that never resets, and names the hand", () => {
+    const hint = FAILURE_CLASSES.out_of_credits.hint
+
+    // Scoped, not universal: a spend cap that resets is `rate_limited`, not this row.
+    expect(hint).toMatch(/balance is drained/i)
+    expect(hint).toMatch(/never resets/i)
+    // A human action, named. "Needs a top-up" alone was the assertion the old copy made about
+    // every spend limit, including the ones that clear themselves.
+    expect(hint).toMatch(/\bpay\b/i)
+    expect(hint).toMatch(/raise the key's limit/i)
+    // And never a clock, because there is no clock here to be asked to wait for.
+    expect(hint).not.toMatch(/refills on its own/i)
+    expect(hint).not.toMatch(/resets on a clock/i)
+  })
+
+  test("the two rows are two different sentences — a reader can tell wait from act", () => {
+    expect(FAILURE_CLASSES.rate_limited.hint).not.toBe(FAILURE_CLASSES.out_of_credits.hint)
+    expect(FAILURE_CLASSES.rate_limited.status).toBe(429)
+    expect(FAILURE_CLASSES.out_of_credits.status).toBe(402)
+  })
+
+  test("no class both promises a clock and asks for money", () => {
+    for (const [id, klass] of Object.entries(FAILURE_CLASSES)) {
+      const promisesAClock = /resets on a clock|refills on its own/i.test(klass.hint)
+      const asksForMoney = /top.?up|\bpay\b/i.test(klass.hint)
+
+      // The pair, so a failure names the class that broke the rule.
+      expect([id, promisesAClock && asksForMoney]).toEqual([id, false])
+    }
+  })
+})
+
 describe("groupFailures", () => {
   test("shows the three headline classes at zero — an absence is an answer", () => {
     const groups = groupFailures([])

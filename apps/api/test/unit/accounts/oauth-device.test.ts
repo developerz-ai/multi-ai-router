@@ -7,6 +7,7 @@ import { createAuditRecorder } from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createMemoryStore } from "../../support/memory-store"
 import { pasteOnlyFlow } from "../../support/oauth-flows"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * Device-code sign-in against a mocked auth.openai.com. Endpoints and shapes are codex-rs's
@@ -64,7 +65,7 @@ function harness(
     accounts: store.accounts,
     states: store.oauthStates,
     cipher,
-    audit: createAuditRecorder(store.audit),
+    audit: createAuditRecorder(store.audit, silentLogger()),
     stateMinutes: 10,
     fetch,
     exchangeTimeoutMs: 1_000,
@@ -300,7 +301,7 @@ describe("device-code sign-in", () => {
       accounts: h.store.accounts,
       states: h.store.oauthStates,
       cipher: createCredentialCipher({ key: new Uint8Array(32).fill(5) }),
-      audit: createAuditRecorder(h.store.audit),
+      audit: createAuditRecorder(h.store.audit, silentLogger()),
       stateMinutes: 10,
       fetch: async () => json({}, 404),
       exchangeTimeoutMs: 1_000,

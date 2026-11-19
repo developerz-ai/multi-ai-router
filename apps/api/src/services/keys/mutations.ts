@@ -3,7 +3,7 @@ import type { ApiKeyRow } from "@multi-ai-router/db"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "../admin/audit"
 import { mutationResult } from "../admin/mutation-result"
 import { type AdminResult, conflict, invalid, notFound, ok } from "../admin/result"
-import { type ResolvedScope, resolveScopeInput } from "./scope"
+import { type ResolvedScope, resolveScopeInput, scopeChange } from "./scope"
 import type { KeysService, KeysServiceDeps } from "./service"
 import { readKeyTargets } from "./snapshot"
 import { toKeyView } from "./view"
@@ -41,7 +41,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
             expiresAt: body.expiresAt ?? null,
           })
           await tx.keys.replaceScopeTargets(row.id, scope.value)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyCreated,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: row.id,
@@ -104,8 +104,13 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
             deps.now(),
           )
           if (row === undefined) return notFound(`no key with id "${id}"`)
+          // Read before the replace overwrites it: the scope's "before" side for the audit row.
+          const change =
+            scope === null
+              ? {}
+              : await scopeChange(tx, current.scope, await readKeyTargets(tx.keys, id), scope)
           if (scope !== null) await tx.keys.replaceScopeTargets(id, scope)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyUpdated,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: row.id,
@@ -117,6 +122,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
               ownerKind: row.ownerKind,
               tool: row.tool,
               purpose: row.purpose,
+              ...change,
             },
           })
           return ok({ row, targets: await readKeyTargets(tx.keys, id) })
@@ -136,7 +142,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
             return conflict(`key "${current.name}" is already revoked`, "already_revoked")
           const now = deps.now()
           await tx.keys.markRevoked(id, now)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyRevoked,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: id,
@@ -160,7 +166,7 @@ export function createKeyMutations(deps: KeysServiceDeps): Pick<KeysService, Key
           // row for the rollups). The row is already locked FOR UPDATE by `run`.
           if (!(await tx.tombstones.deleteKey(id, deps.now())))
             return notFound(`no key with id "${id}"`)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.keyDeleted,
             subjectType: AUDIT_SUBJECTS.key,
             subjectId: id,

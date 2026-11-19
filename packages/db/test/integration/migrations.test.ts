@@ -3,6 +3,7 @@ import type { Database, DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
+import { createAuditRepository } from "../../src/repositories/audit-repository"
 import { createModelCatalogRepository } from "../../src/repositories/model-catalog-repository"
 import { createOauthStateRepository } from "../../src/repositories/oauth-state-repository"
 import { createPriceOverrideRepository } from "../../src/repositories/price-override-repository"
@@ -401,5 +402,186 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
     })
     await daily.rollupDay(createdAt)
     expect(await daily.totals({ fromDay: "2026-07-24", toDay: "2026-07-25" })).toEqual(before)
+  })
+
+  test("0048 makes usage counts nullable with no default and adds reasoning_tokens", async () => {
+    const columns = await (handle as DatabaseHandle).sql<
+      {
+        column_name: string
+        is_nullable: string
+        column_default: string | null
+        data_type: string
+      }[]
+    >`
+      select column_name, is_nullable, column_default, data_type from information_schema.columns
+      where table_schema = 'public' and table_name = 'usage_records'
+        and column_name in ('tokens_in', 'tokens_out', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens')
+      order by column_name
+    `
+    expect([...columns]).toEqual(
+      [
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "tokens_in",
+        "tokens_out",
+      ].map((name) => ({
+        column_name: name,
+        is_nullable: "YES",
+        column_default: null,
+        data_type: "integer",
+      })),
+    )
+
+    // A row whose usage was never read rolls up beside a measured one without poisoning the sum.
+    db = (handle as DatabaseHandle).db
+    const account = await createAccountRepository(db).create({
+      label: "test-migrations-null-usage-acct",
+      provider: "openai-oauth",
+    })
+    accountIds.push(account.id)
+    const key = await createApiKeyRepository(db).create({
+      name: "test-migrations-null-usage-key",
+      value: crypto.randomUUID(),
+      prefix: "fixture",
+    })
+    apiKeyIds.push(key.id)
+    const createdAt = new Date("2026-07-26T12:00:00Z")
+    const attempt = (counts: {
+      tokensIn: number | null
+      tokensOut: number | null
+      reasoningTokens: number | null
+    }) => ({
+      id: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      apiKeyId: key.id,
+      accountId: account.id,
+      model: "test-migrations-null-model",
+      outcome: "success" as const,
+      createdAt,
+      ...counts,
+      cacheReadTokens: counts.tokensIn === null ? null : 0,
+      cacheWriteTokens: counts.tokensIn === null ? null : 0,
+    })
+    const measured = attempt({ tokensIn: 7, tokensOut: 50, reasoningTokens: 42 })
+    const unread = attempt({ tokensIn: null, tokensOut: null, reasoningTokens: null })
+    const terminal = (row: typeof measured) => ({
+      correlationId: row.correlationId,
+      winnerEventId: row.id,
+      apiKeyId: key.id,
+      accountId: account.id,
+      model: row.model,
+      outcome: "success" as const,
+      responseStatus: 200,
+      startedAt: createdAt,
+      settledAt: createdAt,
+      attributionKind: "winning-attempt" as const,
+    })
+    await createUsageRecordRepository(db).insertBatch({
+      attempts: [measured, unread],
+      terminals: [terminal(measured), terminal(unread)],
+    })
+    const stored = await (handle as DatabaseHandle).sql<
+      { id: string; tokens_in: number | null; reasoning_tokens: number | null }[]
+    >`select id, tokens_in, reasoning_tokens from usage_records where id in (${measured.id}, ${unread.id})`
+    expect(new Map(stored.map((row) => [row.id, row]))).toEqual(
+      new Map([
+        [measured.id, { id: measured.id, tokens_in: 7, reasoning_tokens: 42 }],
+        [unread.id, { id: unread.id, tokens_in: null, reasoning_tokens: null }],
+      ]),
+    )
+    const daily = createUsageDailyRepository(db)
+    await daily.rollupDay(createdAt)
+    const breakdown = await daily.breakdown(
+      { fromDay: "2026-07-26", toDay: "2026-07-27" },
+      "accountId",
+    )
+    expect(breakdown.find((item) => item.id === account.id)).toMatchObject({
+      attempts: 2,
+      tokensIn: 7,
+      tokensOut: 50,
+    })
+  })
+
+  test("0049 adds the nullable caller columns and the actor index to audit_events", async () => {
+    const sql = (handle as DatabaseHandle).sql
+    const columns = await sql<{ column_name: string; is_nullable: string; data_type: string }[]>`
+      select column_name, is_nullable, data_type from information_schema.columns
+      where table_schema = 'public' and table_name = 'audit_events'
+        and column_name in ('actor', 'actor_kind', 'actor_says', 'client_ip', 'user_agent', 'request_id')
+      order by column_name
+    `
+    expect([...columns]).toEqual(
+      ["actor", "actor_kind", "actor_says", "client_ip", "request_id", "user_agent"].map(
+        (name) => ({ column_name: name, is_nullable: "YES", data_type: "text" }),
+      ),
+    )
+    const indexes = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+      where schemaname = 'public' and indexname = 'audit_events_actor_created_idx'
+    `
+    expect(indexes[0]?.indexdef).toContain("(actor, created_at)")
+
+    // A row written the way an older image writes it — no caller at all — still inserts.
+    const audit = createAuditRepository((handle as DatabaseHandle).db)
+    const row = await audit.append({ kind: "test-migrations.0049", subjectId: "0049" })
+    try {
+      expect(row).toMatchObject({ actor: null, actorKind: null, clientIp: null, requestId: null })
+    } finally {
+      await sql`delete from audit_events where id = ${row.id}`
+    }
+  })
+
+  test("0050 adds a nullable initiated_by jsonb to oauth_states that round-trips the starter", async () => {
+    const sql = (handle as DatabaseHandle).sql
+    const columns = await sql<{ is_nullable: string; data_type: string }[]>`
+      select is_nullable, data_type from information_schema.columns
+      where table_schema = 'public' and table_name = 'oauth_states' and column_name = 'initiated_by'
+    `
+    expect([...columns]).toEqual([{ is_nullable: "YES", data_type: "jsonb" }])
+
+    db = (handle as DatabaseHandle).db
+    const states = createOauthStateRepository(db)
+    const now = new Date("2026-11-19T12:00:00.000Z")
+    const expiresAt = new Date("2026-11-19T12:10:00.000Z")
+
+    // A row minted the way an older image mints it names no starter.
+    await states.create({
+      state: "test-migrations-0050-old",
+      codeVerifier: "envelope",
+      provider: "openai-oauth",
+      expiresAt,
+    })
+    expect((await states.consume("test-migrations-0050-old", now))?.initiatedBy).toBeNull()
+
+    const account = await createAccountRepository(db).create({
+      label: "test-migrations-0050",
+      provider: "openai-oauth",
+    })
+    accountIds.push(account.id)
+    const initiatedBy = {
+      actor: "a@example.test",
+      actorKind: "session" as const,
+      says: "x",
+      clientIp: "203.0.113.7",
+      userAgent: "console/1.0",
+      requestId: "req-1",
+    }
+    await createAccountRepository(db).beginAccountAuthorization({
+      id: account.id,
+      expectedProvider: "openai-oauth",
+      attempt: {
+        id: crypto.randomUUID(),
+        state: "test-migrations-0050-new",
+        codeVerifier: "envelope",
+        redirectUri: "http://localhost:1455/auth/callback",
+        expiresAt,
+        initiatedBy,
+      },
+      now,
+    })
+    expect((await states.consume("test-migrations-0050-new", now))?.initiatedBy).toEqual(
+      initiatedBy,
+    )
   })
 })

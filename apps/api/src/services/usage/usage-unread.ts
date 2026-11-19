@@ -5,7 +5,7 @@ import type { ResponseObservationFacts } from "./response-observer-types"
  *
  * Zero token columns can mean two things. Either the upstream measured nothing, or it never stated
  * a count the observer could read. Only the first is a free completion, so the record has to tell
- * them apart: a row whose usage was never read keeps the zeros (nothing was measured), prices as
+ * them apart: a row whose usage was never read records null counts (nothing was measured), prices as
  * `unknown`, and carries one of these names in `errorClass`
  * (docs/idea/06-protocol-translation.md, "Absent, never zero").
  *

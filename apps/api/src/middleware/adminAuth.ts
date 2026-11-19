@@ -15,6 +15,9 @@ import {
 } from "../services/admin-auth"
 import { bearerToken } from "../services/dataplane"
 import type { AppEnv } from "../types"
+import { runAsAdminCaller } from "./auditContext"
+import { requestClientIp } from "./clientIp"
+import { noteAdminClientIp } from "./logger"
 
 /**
  * The guard on every admin route. Four checks, in this order:
@@ -60,20 +63,35 @@ const ROUTER_KEY_REJECTED = "A router API key cannot authenticate the admin plan
 export function adminAuth(
   service: AdminAuthGuardService,
   sessionCookieInsecure: boolean,
-  /** `Env.adminApiToken`. `null` — the default — leaves the plane browser-only. */
-  apiToken: string | null = null,
+  /** `Env.adminApiToken`. `null` leaves the plane browser-only. */
+  apiToken: string | null,
+  /**
+   * `trustedProxyHops(TRUST_PROXY, TRUST_PROXY_HOPS)` — how the audit context resolves the
+   * caller's address. Required, like the guard itself: a mount that guessed would record the
+   * proxy's address, or a client-chosen one, on every row it writes.
+   */
+  trustedHops: number,
 ): MiddlewareHandler<AdminAuthEnv> {
   const prefix = sessionCookiePrefix(sessionCookieInsecure)
 
   return async (c, next) => {
+    // First, so a request refused below still logs where it came from — and no caller, since none
+    // was accepted (multi-ai-router#456).
+    noteAdminClientIp(c.req.raw, requestClientIp(c, trustedHops))
     const authorization = c.req.header("authorization")
     if (presentsRouterKey(authorization, c.req.header("x-api-key"))) {
       throw new AdminAuthError(ROUTER_KEY_REJECTED)
     }
 
     if (adminApiTokenMatches(apiToken, bearerToken(authorization))) {
-      c.set("adminSession", adminApiTokenSession(Date.now()))
-      await next()
+      const session = adminApiTokenSession(Date.now())
+      c.set("adminSession", session)
+      await runAsAdminCaller(
+        c,
+        { actor: session.username, actorKind: "api_token" },
+        trustedHops,
+        next,
+      )
       return
     }
 
@@ -97,7 +115,7 @@ export function adminAuth(
         sessionCookieOptions(remaining, sessionCookieInsecure),
       )
     }
-    await next()
+    await runAsAdminCaller(c, { actor: session.username, actorKind: "session" }, trustedHops, next)
   }
 }
 

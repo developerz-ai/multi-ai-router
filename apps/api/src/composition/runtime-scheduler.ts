@@ -138,6 +138,7 @@ export function createRuntimeScheduler(
       accounts: () => catalog.accounts(),
       read: (account) => readPlanQuota({ ...catalogRefreshDeps, health, now }, account),
     },
+    poolReap: { pools: repositories.pools, reaper: admin.poolReaper },
     env,
     schedulerLock,
     logger,

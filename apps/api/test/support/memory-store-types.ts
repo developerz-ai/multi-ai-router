@@ -61,6 +61,7 @@ export type MemoryKeys = Pick<
   | "listAccountTargets"
   | "listTargetsForKeys"
   | "listKeysScopedToPool"
+  | "lockKeysScopedToPool"
   | "listKeysScopedToAccount"
   | "replaceScopeTargets"
 >

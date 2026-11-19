@@ -137,6 +137,24 @@ describe("anthropic ingress against a Codex account", () => {
     })
   })
 
+  test("the answer names every parameter the Codex surface ignored, in the caller's own words", async () => {
+    // Plan 101 slice 09, R4: Codex refuses an output ceiling, so `max_tokens` cannot travel. It
+    // was removed silently; the answer now says so, so a caller relying on it can tell.
+    const { app } = harness({ accounts: [codexAccount()], responses: [codexStream] })
+    const res = await app.request("/v1/messages", post(JSON.stringify(ANTHROPIC), bearer()))
+    expect(res.status).toBe(200)
+    expect(res.headers.get("x-router-dropped-params")).toBe("max_tokens, temperature")
+    await res.text()
+
+    const streamed = harness({ accounts: [codexAccount()], responses: [codexStream] })
+    const stream = await streamed.app.request(
+      "/v1/messages",
+      post(JSON.stringify({ ...ANTHROPIC, temperature: undefined, stream: true }), bearer()),
+    )
+    expect(stream.headers.get("x-router-dropped-params")).toBe("max_tokens")
+    await stream.text()
+  })
+
   test("stream: the client asked to stream and gets Anthropic SSE, event by event", async () => {
     const { app, upstream, usage } = harness({
       accounts: [codexAccount()],
@@ -252,6 +270,10 @@ describe("chat completions ingress against a Codex account", () => {
     expect(body.object).toBe("chat.completion")
     expect(body.choices[0]?.message.content).toBe("hello there")
 
+    // Named as the caller sent it, never as the Responses field it would have become.
+    expect(res.headers.get("x-router-dropped-params")).toBe(
+      "max_completion_tokens, temperature, top_p",
+    )
     const sent = sentBody(upstream)
     expectCodexShape(sent)
     expect(sent.instructions).toBe("")
@@ -397,6 +419,8 @@ describe("a same-dialect /v1/responses request carrying a lookaround tool schema
     })
     const res = await app.request("/v1/responses", post(sentText, bearer()))
     expect(res.status).toBe(200)
+    // Nothing was dropped from a relayed body, so nothing is named.
+    expect(res.headers.get("x-router-dropped-params")).toBeNull()
     // A same-dialect stream is relayed as it arrives; read it to completion before inspecting.
     expect(await res.text()).toContain("response.completed")
     expect(upstream.calls).toHaveLength(1)

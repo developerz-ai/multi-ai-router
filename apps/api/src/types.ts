@@ -9,7 +9,7 @@ import type {
 import type { AdminAuthService } from "./services/admin-auth"
 import type { AccountAuthProbe } from "./services/health/claudeAuthProbe"
 import type { KeysService } from "./services/keys"
-import type { PoolsService } from "./services/pools"
+import type { PoolReaper, PoolsService } from "./services/pools"
 import type { SettingsService } from "./services/settings"
 import type { UsageService } from "./services/usage-read"
 import type { ReportDeliveryService, UsageReportService } from "./services/usage-report"
@@ -45,6 +45,8 @@ export interface AdminServices {
   readonly auth: AdminAuthService
   readonly accounts: AccountsService
   readonly pools: PoolsService
+  /** The `pool_reap` task's deletion: an empty pool, and the keys it leaves reaching nothing. */
+  readonly poolReaper: PoolReaper
   readonly keys: KeysService
   readonly usage: UsageService
   /**

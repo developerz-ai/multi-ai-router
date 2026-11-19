@@ -10,6 +10,7 @@ import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs, type MemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * The accounts service, with in-memory stores and a real cipher.
@@ -38,10 +39,11 @@ function harness(): Harness {
   const service = createAccountsService({
     accounts: store.accounts,
     keys: store.keys,
+    pools: store.pools,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
     configDirs: configDirs.dirs,
     ...accountDeletionFixture(configDirs.dirs),
-    audit: createAuditRecorder(store.audit),
+    audit: createAuditRecorder(store.audit, silentLogger()),
     now: () => NOW,
   })
   return { service, store, configDirs }

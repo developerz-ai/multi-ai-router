@@ -24,6 +24,7 @@ import {
   type UsageSummary,
 } from "../../src/services/usage-read"
 import { micros, records, sum, sumMicros } from "../support/csv-sums"
+import { silentLogger } from "../support/silent-logger"
 import {
   unreachableReportDelivery,
   unreachableUsageReports,
@@ -124,11 +125,12 @@ describe.skipIf(!historyUrl)("usage CSV export over HTTP and Postgres", () => {
       decrypt: (s: string) => s.replace(/^enc:/, ""),
     }
     const keysService = createKeysService({
+      logger: silentLogger(),
       keys,
       mutations: createAdminMutationRepository(db),
       onCommitted: () => {},
       cipher,
-      audit: createAuditRecorder(createAuditRepository(db)),
+      audit: createAuditRecorder(createAuditRepository(db), silentLogger()),
       now: () => new Date(),
     })
     const make = async (name: string, owner: string, tool: string, slot: KeyName) => {

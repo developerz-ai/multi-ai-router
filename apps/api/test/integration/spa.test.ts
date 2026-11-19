@@ -24,12 +24,13 @@ import {
   createRouterKeyVerifier,
 } from "../../src/services/dataplane"
 import { createKeysService } from "../../src/services/keys"
-import { createPoolsService } from "../../src/services/pools"
+import { createPoolReaper, createPoolsService } from "../../src/services/pools"
 import { createSettingsService } from "../../src/services/settings"
 import { createUsageService } from "../../src/services/usage-read"
 import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
+import { silentLogger } from "../support/silent-logger"
 import {
   unreachableReportDelivery,
   unreachableUsageReports,
@@ -343,7 +344,7 @@ describe("the full app, mounted end to end", () => {
 
     const store = createMemoryStore()
     const adminCipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
-    const audit = createAuditRecorder(store.audit)
+    const audit = createAuditRecorder(store.audit, silentLogger())
     const spaOAuthDeps = {
       accounts: store.accounts,
       states: store.oauthStates,
@@ -404,6 +405,7 @@ describe("the full app, mounted end to end", () => {
         accounts: createAccountsService({
           accounts: store.accounts,
           keys: store.keys,
+          pools: store.pools,
           cipher: adminCipher,
           configDirs: configDirs.dirs,
           ...accountDeletionFixture(configDirs.dirs),
@@ -411,13 +413,25 @@ describe("the full app, mounted end to end", () => {
           now,
         }),
         pools: createPoolsService({
+          logger: silentLogger(),
           mutations: store.mutations,
           onCommitted: () => {},
           pools: store.pools,
           accounts: store.accounts,
           now,
         }),
+        poolReaper: createPoolReaper({
+          logger: silentLogger(),
+          mutations: store.mutations,
+          now,
+          coherence: {
+            refreshCatalog: async () => {},
+            forgetKey: () => {},
+            invalidateKey: () => {},
+          },
+        }),
         keys: createKeysService({
+          logger: silentLogger(),
           mutations: store.mutations,
           onCommitted: () => {},
           keys: store.keys,

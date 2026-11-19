@@ -12,7 +12,6 @@ export {
 export { type BoundedQueue, createBoundedQueue } from "./queue"
 export {
   errorClassOf,
-  NO_TOKENS,
   outcomeOf,
   toUsageRecordRow,
   USAGE_SUCCESS,

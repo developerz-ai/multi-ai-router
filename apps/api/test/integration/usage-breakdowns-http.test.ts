@@ -19,6 +19,7 @@ import { ADMIN_USAGE_BASE_PATH, adminUsageRoutes } from "../../src/routes/admin/
 import { createAuditRecorder } from "../../src/services/admin/audit"
 import { createKeysService } from "../../src/services/keys"
 import { catalogLabels, createUsageService } from "../../src/services/usage-read"
+import { silentLogger } from "../support/silent-logger"
 import {
   unreachableReportDelivery,
   unreachableUsageReports,
@@ -163,11 +164,12 @@ describe.skipIf(!historyUrl)("usage owner and tool breakdowns over HTTP and Post
       const keys = createApiKeyRepository(db)
       const tombstones = createApiKeyTombstoneRepository(db)
       const keysService = createKeysService({
+        logger: silentLogger(),
         keys,
         mutations: createAdminMutationRepository(db),
         onCommitted: () => {},
         cipher: { encrypt: (s) => `enc:${s}`, decrypt: (s) => s.replace(/^enc:/, "") },
-        audit: createAuditRecorder(createAuditRepository(db)),
+        audit: createAuditRecorder(createAuditRepository(db), silentLogger()),
         now: () => new Date(),
       })
       const make = async (name: string, rest: Record<string, string>) => {

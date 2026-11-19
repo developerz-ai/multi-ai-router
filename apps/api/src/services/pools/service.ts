@@ -6,6 +6,7 @@ import type {
   PoolRepository,
   PoolRow,
 } from "@multi-ai-router/db"
+import type { Logger } from "../../logging/logger"
 import { type AdminResult, notFound, ok } from "../admin/result"
 import { createPoolMutations, type PoolMutationKind } from "./mutations"
 import type { CreatePoolBody, UpdatePoolBody } from "./schemas"
@@ -56,6 +57,8 @@ export interface PoolsServiceDeps {
   /** Runs immediately after commit, before rendering a response. */
   readonly onCommitted: (id: string, kind: PoolMutationKind) => void | Promise<void>
   readonly now: () => Date
+  /** Where the in-transaction audit recorder reports a row written with no caller in context. */
+  readonly logger: Pick<Logger, "error">
 }
 
 export function createPoolsService(deps: PoolsServiceDeps): PoolsService {

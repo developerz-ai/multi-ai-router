@@ -330,6 +330,34 @@
       "when": 1794700503418,
       "tag": "0046_account_provider_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1795038931256,
+      "tag": "0047_empty_pool_reap",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1795046679317,
+      "tag": "0048_usage_counts_nullable",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1795095967942,
+      "tag": "0049_audit_actor",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1795099059231,
+      "tag": "0050_oauth_state_initiator",
+      "breakpoints": true
     }
   ]
 }

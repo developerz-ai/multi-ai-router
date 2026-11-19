@@ -60,6 +60,13 @@ export interface ApiKeyRepository {
   listTargetsForKeys(apiKeyIds: readonly string[]): Promise<ScopeTargetRows>
   /** Keys whose scope names this pool — what a pool deletion would silently narrow. */
   listKeysScopedToPool(poolId: string): Promise<ApiKeyRow[]>
+  /**
+   * The same keys, locked `FOR UPDATE` in id order, for a transaction about to decide each one's
+   * fate from its scope (the empty-pool reaper). The row lock is what every key edit takes first,
+   * so a scope edit in flight finishes before the targets are read, never between the read and
+   * the decision.
+   */
+  lockKeysScopedToPool(poolId: string): Promise<ApiKeyRow[]>
   /** Keys whose scope names this account. */
   listKeysScopedToAccount(accountId: string): Promise<ApiKeyRow[]>
   /**

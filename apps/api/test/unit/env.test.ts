@@ -72,6 +72,7 @@ describe("parseEnv", () => {
       oauthStateMinutes: 10,
       orphanConfigDirHours: 24,
       sdkTranscriptHours: 24,
+      emptyPoolDays: 7,
     })
     expect(env.scheduler).toEqual({
       usageRollupIntervalMinutes: 60,
@@ -85,6 +86,7 @@ describe("parseEnv", () => {
       planQuotaReadBatchSize: 25,
       configDirReapIntervalMinutes: 360,
       sdkTranscriptSweepIntervalMinutes: 60,
+      poolReapIntervalMinutes: 60,
       adminSessionPurgeIntervalMinutes: 30,
       // Daily sweep, 7-day threshold — comfortably inside a Claude subscription's ~4-week
       // refresh-token life, which is the window this exists to stay ahead of.
@@ -138,6 +140,7 @@ describe("parseEnv", () => {
       RETENTION_OAUTH_STATE_MINUTES: "5",
       RETENTION_ORPHAN_CONFIG_DIR_HOURS: "3",
       RETENTION_SDK_TRANSCRIPT_HOURS: "12",
+      RETENTION_EMPTY_POOL_DAYS: "14",
       JANITOR_INTERVAL_MINUTES: "15",
       USAGE_ROLLUP_INTERVAL_MINUTES: "120",
       OAUTH_STATE_PURGE_INTERVAL_MINUTES: "10",
@@ -150,6 +153,7 @@ describe("parseEnv", () => {
       PLAN_QUOTA_READ_BATCH_SIZE: "3",
       CONFIG_DIR_REAP_INTERVAL_MINUTES: "90",
       SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES: "30",
+      POOL_REAP_INTERVAL_MINUTES: "15",
       IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: "720",
       IDLE_ACCOUNT_AFTER_DAYS: "3",
       IDLE_ACCOUNT_PROBE_BATCH_SIZE: "2",
@@ -209,6 +213,7 @@ describe("parseEnv", () => {
     expect(env.retention.taskRunsDays).toBe(14)
     expect(env.retention.orphanConfigDirHours).toBe(3)
     expect(env.retention.sdkTranscriptHours).toBe(12)
+    expect(env.retention.emptyPoolDays).toBe(14)
     expect(env.janitorIntervalMinutes).toBe(15)
     expect(env.scheduler).toEqual({
       usageRollupIntervalMinutes: 120,
@@ -222,6 +227,7 @@ describe("parseEnv", () => {
       planQuotaReadBatchSize: 3,
       configDirReapIntervalMinutes: 90,
       sdkTranscriptSweepIntervalMinutes: 30,
+      poolReapIntervalMinutes: 15,
       adminSessionPurgeIntervalMinutes: 20,
       idleAccountProbeIntervalMinutes: 720,
       idleAccountAfterDays: 3,
@@ -747,6 +753,15 @@ describe("parseEnv", () => {
       expect(error.message).toContain(
         `${PG_MAX_BIND_PARAMETERS} / ${USAGE_RECORD_BIND_PARAMETERS_PER_ROW} = ${USAGE_RECORD_MAX_BATCH_ROWS}`,
       )
+    })
+
+    test("refuses an empty-pool window or reap interval of zero", () => {
+      expect(expectEnvError({ ...base, RETENTION_EMPTY_POOL_DAYS: "0" }).variables).toEqual([
+        "RETENTION_EMPTY_POOL_DAYS",
+      ])
+      expect(expectEnvError({ ...base, POOL_REAP_INTERVAL_MINUTES: "0" }).variables).toEqual([
+        "POOL_REAP_INTERVAL_MINUTES",
+      ])
     })
 
     test("refuses a batch of zero: the drain takes nothing and the queue only sheds", () => {

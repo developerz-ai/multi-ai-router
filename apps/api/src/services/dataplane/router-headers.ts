@@ -14,6 +14,7 @@ import { opaqueAccountRef } from "../../errors/account-ref"
  * | `x-router-provider` | that account's provider id | an account answered |
  * | `x-router-account` | that account, opaque (`errors/account-ref.ts`) | an account answered |
  * | `x-router-reconnect-needed` | the labels of in-scope accounts selection dropped as `needs-reauth`, each URI-component-encoded, `, `-joined | at least one was dropped, success or failure |
+ * | `x-router-dropped-params` | the caller's parameters the serving account's surface refuses and the router removed, in the caller's own names, `, `-joined (Codex: `max_tokens`, `temperature`, `top_p`) | a translated answer from such a surface |
  *
  * "Answered" includes an upstream's own error the router relays: the account that said it is named.
  */
@@ -23,6 +24,7 @@ export const ROUTER_SERVED_MODEL_HEADER = "x-router-served-model"
 export const ROUTER_PROVIDER_HEADER = "x-router-provider"
 export const ROUTER_ACCOUNT_HEADER = "x-router-account"
 export const ROUTER_RECONNECT_HEADER = "x-router-reconnect-needed"
+export const ROUTER_DROPPED_PARAMS_HEADER = "x-router-dropped-params"
 
 /** The account that produced the answer, as the headers name it. */
 export interface ServedBy {
@@ -66,4 +68,13 @@ export function reconnectHeaders(
   return {
     [ROUTER_RECONNECT_HEADER]: accounts.map((entry) => encodeURIComponent(entry.label)).join(", "),
   }
+}
+
+/**
+ * `x-router-dropped-params`, or nothing. A parameter the serving surface refuses cannot travel — the
+ * upstream would `400` the whole request — so it is removed, and this is where the caller learns
+ * that its ceiling or sampling setting was not honoured. Field names only, never a value.
+ */
+export function droppedParamsHeaders(fields: readonly string[]): Record<string, string> {
+  return fields.length === 0 ? {} : { [ROUTER_DROPPED_PARAMS_HEADER]: fields.join(", ") }
 }

@@ -5,8 +5,9 @@ import {
   type ModelReasoning,
   type ProviderId,
 } from "@multi-ai-router/core"
+import { PROVIDER_REGISTRY } from "../../providers"
 import type { ModelRates } from "../cost"
-import type { ModelCatalogStore } from "../models"
+import { type ModelCatalogStore, shippedSubscriptionModels } from "../models"
 import { advertisedModels, resolveModel, resolveScope } from "../routing"
 import type { VerifiedKey } from "./auth/verifier"
 import type { HealthStore } from "./health"
@@ -109,54 +110,6 @@ export function catalogListing(
   return [...merged.values()].map(finish).sort((left, right) => left.id.localeCompare(right.id))
 }
 
-/**
- * The providers behind `GET /v1/providers`: which upstreams the presenting key can actually reach,
- * and how deep the pool is behind each.
- *
- * Not the provider *registry* — that is `GET /api/admin/providers`, an admin question about what
- * this build can talk to. This is a data-plane question about what this key can reach right now,
- * so a provider with no in-scope account simply is not here, and one whose accounts are all
- * `exhausted` is here with `available: 0`. The difference is the whole point: the second is a
- * provider to top up, the first is one that was never configured.
- */
-export interface CatalogProvider {
-  readonly id: ProviderId
-  /** In-scope accounts of this provider, whatever their status. */
-  readonly accounts: number
-  /**
-   * How many of them could serve a request now. Zero with a non-zero `accounts` is the state worth
-   * seeing — the credentials exist and none of them can be used.
-   */
-  readonly available: number
-}
-
-export function providerListing(
-  deps: Pick<CatalogListingDeps, "catalog" | "health">,
-  key: VerifiedKey,
-  now: Date,
-): readonly CatalogProvider[] {
-  const snapshot = buildSnapshot(deps.catalog, deps.health, now)
-  const { diagnostics } = resolveScope(snapshot, { sessionKey: "", model: "", keyScope: key.scope })
-  const inScope = new Set(diagnostics.inScopeAccountIds)
-  const liveStatus = new Map(snapshot.accounts.map((account) => [account.id, account.status]))
-
-  const counts = new Map<ProviderId, { accounts: number; available: number }>()
-  for (const account of deps.catalog.accounts()) {
-    if (!inScope.has(account.id)) continue
-    const provider = account.driver.provider
-    const row = counts.get(provider) ?? { accounts: 0, available: 0 }
-    row.accounts += 1
-    // `cooling_down` counts as available for the same reason it stays in the model catalog: a clock
-    // clears it, and a provider that vanished for the length of a cooldown would read as removed.
-    if (!isStandingBlock(liveStatus.get(account.id) ?? account.snapshot.status)) row.available += 1
-    counts.set(provider, row)
-  }
-
-  return [...counts]
-    .map(([id, row]) => ({ id, ...row }))
-    .sort((left, right) => left.id.localeCompare(right.id))
-}
-
 /** The routing catalog's account view, narrowed to what this module reads. */
 type CatalogAccount = ReturnType<RoutingCatalog["accounts"]>[number]
 
@@ -174,6 +127,13 @@ type CatalogAccount = ReturnType<RoutingCatalog["accounts"]>[number]
  * is the same check selection runs. That matters in both directions: an account that *does* declare
  * a model set must not have retired ids resurface through the catalog, and one whose alias map
  * renames an id must not advertise a name that would be renamed to something unserved.
+ *
+ * A **Claude subscription** additionally contributes the shipped table, exactly as
+ * `services/models/listable.ts` does for `GET /v1/models`. Its own discovery voice is the Agent
+ * SDK's handshake, so a subscription whose warm rows do not spell a shipped name out — an
+ * unreached sweep, or a handshake narrower than this image's table — would otherwise be published
+ * by one endpoint and missing from the other, and an operator reading both would have no way to
+ * tell which is true. One union, both listings.
  */
 function requestableNames(
   deps: Pick<CatalogListingDeps, "models">,
@@ -181,7 +141,11 @@ function requestableNames(
   snapshot: CatalogAccount["snapshot"],
 ): readonly string[] {
   const names = new Set(advertisedModels(snapshot))
-  for (const model of deps.models.modelsOf(accountId)) {
+  const discovered =
+    PROVIDER_REGISTRY[snapshot.provider].transport === "agent-sdk"
+      ? [...deps.models.modelsOf(accountId), ...shippedSubscriptionModels()]
+      : deps.models.modelsOf(accountId)
+  for (const model of discovered) {
     if (resolveModel(snapshot, model.id).supported) names.add(model.id)
   }
   return [...names]

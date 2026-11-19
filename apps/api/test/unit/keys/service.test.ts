@@ -4,6 +4,7 @@ import { createAuditRecorder } from "../../../src/services/admin"
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createKeyBody, createKeysService, updateKeyBody } from "../../../src/services/keys"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * Router keys are encrypted, not hashed, and retrievable at any time — so the
@@ -20,11 +21,12 @@ function harness(now: Date = NOW): {
 } {
   const store = createMemoryStore()
   const service = createKeysService({
+    logger: silentLogger(),
     mutations: store.mutations,
     onCommitted: () => {},
     keys: store.keys,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(3) }),
-    audit: createAuditRecorder(store.audit),
+    audit: createAuditRecorder(store.audit, silentLogger()),
     now: () => now,
   })
   return { service, store }
@@ -231,11 +233,12 @@ describe("expired keys", () => {
     const expiresAt = new Date(NOW.getTime() + 60_000)
     const { service, store } = harness(new Date(NOW.getTime() + 120_000))
     const mint = await createKeysService({
+      logger: silentLogger(),
       mutations: store.mutations,
       onCommitted: () => {},
       keys: store.keys,
       cipher: createCredentialCipher({ key: new Uint8Array(32).fill(3) }),
-      audit: createAuditRecorder(store.audit),
+      audit: createAuditRecorder(store.audit, silentLogger()),
       now: () => NOW,
     }).create({ name: "soon-expired", expiresAt })
     if (!mint.ok) throw new Error(mint.failure.message)

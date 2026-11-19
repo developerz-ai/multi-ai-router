@@ -8,7 +8,7 @@ import type {
 import { type CostEstimate, estimateCost, type RateLookup, UNKNOWN_COST } from "../cost"
 import type { FailureKind } from "../routing"
 import type { UsageRecord } from "../usage"
-import { errorClassOf, NO_TOKENS, outcomeOf, type TokenCounts, USAGE_SUCCESS } from "../usage"
+import { errorClassOf, outcomeOf, type TokenCounts, USAGE_SUCCESS, ZERO_TOKENS } from "../usage"
 
 /**
  * Building the per-attempt usage record.
@@ -97,8 +97,9 @@ export interface AttemptRecordInput {
   readonly priced?: boolean
   /**
    * Whether `tokens` is a measurement. Default true. `false` is a completion whose upstream never
-   * stated usage the router could read (`usage/usage-unread.ts`): the zero counts measure nothing,
-   * so the attempt prices as `unknown` rather than as a free completion.
+   * stated usage the router could read (`usage/usage-unread.ts`): the counts measure nothing, so
+   * the row records them as null and the attempt prices as `unknown` rather than as a free
+   * completion. Absent `tokens` records null the same way.
    */
   readonly usageRead?: boolean
   /**
@@ -141,8 +142,32 @@ export function attemptCost(
   })
 }
 
+/** The record's counts: null across the board when nothing was measured, never zeros. */
+function recordedCounts(
+  tokens: TokenCounts | undefined,
+  usageRead: boolean | undefined,
+): Pick<
+  UsageRecord,
+  "tokensIn" | "tokensOut" | "cacheReadTokens" | "cacheWriteTokens" | "reasoningTokens"
+> {
+  if (tokens === undefined || usageRead === false)
+    return {
+      tokensIn: null,
+      tokensOut: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+    }
+  return {
+    tokensIn: tokens.tokensIn,
+    tokensOut: tokens.tokensOut,
+    cacheReadTokens: tokens.cacheReadTokens,
+    cacheWriteTokens: tokens.cacheWriteTokens,
+    reasoningTokens: tokens.reasoningTokens ?? null,
+  }
+}
+
 export function attemptRecord(input: AttemptRecordInput): UsageRecord {
-  const tokens = input.tokens ?? NO_TOKENS
   const ttfbMs = input.timing.ttfbMs
   return {
     eventId: input.eventId ?? crypto.randomUUID(),
@@ -159,11 +184,9 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     upstreamModel: input.upstreamModel,
     ingressDialect: input.ingressDialect ?? null,
     egressMode: input.egressMode ?? null,
-    tokensIn: tokens.tokensIn,
-    tokensOut: tokens.tokensOut,
-    cacheReadTokens: tokens.cacheReadTokens,
-    cacheWriteTokens: tokens.cacheWriteTokens,
-    ...attemptCost({ ...input, tokens }),
+    ...recordedCounts(input.tokens, input.usageRead),
+    // Pricing is unchanged by the null record: an attempt with no response prices zero tokens.
+    ...attemptCost({ ...input, tokens: input.tokens ?? ZERO_TOKENS }),
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(

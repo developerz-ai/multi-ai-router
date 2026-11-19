@@ -90,6 +90,13 @@ export const queryKeys = {
   audit: {
     root: () => ["audit"] as const,
     list: (query: AuditQuery) =>
-      ["audit", "list", query.limit, query.kind ?? null, query.subjectId ?? null] as const,
+      [
+        "audit",
+        "list",
+        query.limit,
+        query.kind ?? null,
+        query.subjectId ?? null,
+        query.actor ?? null,
+      ] as const,
   },
 } as const

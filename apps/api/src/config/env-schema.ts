@@ -147,6 +147,8 @@ export const ENV_FIELDS = {
   RETENTION_OAUTH_STATE_MINUTES: atLeastOne.optional(),
   RETENTION_ORPHAN_CONFIG_DIR_HOURS: atLeastOne.optional(),
   RETENTION_SDK_TRANSCRIPT_HOURS: atLeastOne.optional(),
+  // 0 refused: a pool emptied for a minute while its accounts are re-created would be gone.
+  RETENTION_EMPTY_POOL_DAYS: atLeastOne.optional(),
   JANITOR_INTERVAL_MINUTES: atLeastOne.optional(),
   USAGE_ROLLUP_INTERVAL_MINUTES: atLeastOne.optional(),
   OAUTH_STATE_PURGE_INTERVAL_MINUTES: atLeastOne.optional(),
@@ -158,6 +160,7 @@ export const ENV_FIELDS = {
   PLAN_QUOTA_READ_BATCH_SIZE: atLeastOne.optional(),
   CONFIG_DIR_REAP_INTERVAL_MINUTES: atLeastOne.optional(),
   SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES: atLeastOne.optional(),
+  POOL_REAP_INTERVAL_MINUTES: atLeastOne.optional(),
   // Both refuse 0: an interval of zero re-arms every millisecond, and a threshold of zero makes
   // every account idle, so the sweep would bill a request per account per tick, forever.
   IDLE_ACCOUNT_PROBE_INTERVAL_MINUTES: atLeastOne.optional(),

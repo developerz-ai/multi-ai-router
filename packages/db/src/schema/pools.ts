@@ -35,6 +35,17 @@ export const pools = pgTable(
       onDelete: "set null",
     }),
 
+    /**
+     * When the pool last became memberless; `NULL` while it has a member. The `pool_reap` task
+     * deletes a pool still empty `RETENTION_EMPTY_POOL_DAYS` after this.
+     *
+     * Kept by triggers on `pool_members` (migration 0047), not by `services/pools`, because the
+     * membership also drops through `ON DELETE CASCADE` when an account is deleted — a write no
+     * service sees. The default is the creation instant: a pool created with no members has been
+     * empty since it existed, and the first member insert clears it.
+     */
+    emptySince: timestamp("empty_since", { withTimezone: true, mode: "date" }).defaultNow(),
+
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

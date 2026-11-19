@@ -16,6 +16,7 @@ for (const auditFailure of [false, true]) {
     const service = createAccountsService({
       accounts: store.accounts,
       keys: store.keys,
+      pools: store.pools,
       cipher: { encrypt: (value) => value },
       configDirs: config.dirs,
       revokeDeletedAccount: async ({ id }) => {

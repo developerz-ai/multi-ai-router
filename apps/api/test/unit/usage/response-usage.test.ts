@@ -235,3 +235,48 @@ test("a streamed split from message_start survives a message_delta that restates
     tokensOut: 9,
   })
 })
+test("reasoning tokens an OpenAI dialect states are read; Anthropic states none, so none is invented", () => {
+  // Prod fingerprint (plan 101 slice 09, R3): GPT behind the Anthropic wire. The upstream states
+  // its reasoning count inside the output; the Anthropic answer has no field for it, so the
+  // usage row is the only place it can survive.
+  expect(
+    json(
+      "openai-responses",
+      '{"usage":{"input_tokens":10,"output_tokens":50,"output_tokens_details":{"reasoning_tokens":42}}}',
+    ).counts,
+  ).toEqual({
+    tokensIn: 10,
+    tokensOut: 50,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 42,
+  })
+  expect(
+    json(
+      "openai-chat",
+      '{"usage":{"prompt_tokens":10,"completion_tokens":50,"completion_tokens_details":{"reasoning_tokens":7}}}',
+    ).counts.reasoningTokens,
+  ).toBe(7)
+  // A stated zero is a measurement and is kept.
+  expect(
+    json(
+      "openai-chat",
+      '{"usage":{"prompt_tokens":10,"completion_tokens":50,"completion_tokens_details":{"reasoning_tokens":0}}}',
+    ).counts.reasoningTokens,
+  ).toBe(0)
+  // Unstated is absent, never zero.
+  expect(
+    json("openai-chat", '{"usage":{"prompt_tokens":10,"completion_tokens":50}}').counts,
+  ).not.toHaveProperty("reasoningTokens")
+  expect(
+    json("anthropic", '{"usage":{"input_tokens":10,"output_tokens":50}}').counts,
+  ).not.toHaveProperty("reasoningTokens")
+  // A malformed reasoning count loses the reasoning count only; the reading still stands.
+  const malformed = json(
+    "openai-responses",
+    '{"usage":{"input_tokens":10,"output_tokens":50,"output_tokens_details":{"reasoning_tokens":-1}}}',
+  )
+  expect(malformed.usageInvalid).toBe(false)
+  expect(malformed.counts.tokensOut).toBe(50)
+  expect(malformed.counts).not.toHaveProperty("reasoningTokens")
+})

@@ -70,7 +70,7 @@ describe("A. the Codex model listing", () => {
       },
       codexRow(),
     )
-    expect(seen[0]).toBe("https://chatgpt.com/backend-api/codex/models?client_version=0.160.0")
+    expect(seen[0]).toBe("https://chatgpt.com/backend-api/codex/models?client_version=0.170.0")
     expect(listed).toEqual({
       ok: true,
       entries: [

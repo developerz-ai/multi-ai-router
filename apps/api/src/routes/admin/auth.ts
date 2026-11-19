@@ -1,11 +1,12 @@
 import { AdminAuthError } from "@multi-ai-router/core"
 import { type Context, Hono } from "hono"
-import { getConnInfo } from "hono/bun"
 import { deleteCookie, setCookie } from "hono/cookie"
 import { z } from "zod"
 import { REQUEST_WALL, refusalBody } from "../../errors/render"
 import type { RouterVerdict } from "../../errors/router-object"
 import { type AdminAuthEnv, adminAuth } from "../../middleware/adminAuth"
+import { signInAuditContext } from "../../middleware/auditContext"
+import { requestClientIp, trustedProxyHops } from "../../middleware/clientIp"
 import { readJsonBody } from "../../services/admin"
 import {
   ADMIN_API_TOKEN_ACTOR,
@@ -13,7 +14,6 @@ import {
   type AdminAuthService,
   AdminLoginThrottledError,
   type AdminSession,
-  clientIp as resolveClientIp,
   SESSION_COOKIE_NAME,
   sessionCookieOptions,
   sessionCookieWouldBeDiscarded,
@@ -72,8 +72,16 @@ export interface AdminAuthRoutesDeps {
 
 export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   const routes = new Hono<AdminAuthEnv>()
-  const guard = adminAuth(deps.service, deps.sessionCookieInsecure, deps.apiToken ?? null)
-  const trustedHops = deps.trustProxy ? (deps.trustProxyHops ?? 1) : 0
+  const trustedHops = trustedProxyHops(deps.trustProxy, deps.trustProxyHops ?? 1)
+  const guard = adminAuth(
+    deps.service,
+    deps.sessionCookieInsecure,
+    deps.apiToken ?? null,
+    trustedHops,
+  )
+
+  // Before every route: a sign-in attempt is recorded as `anonymous`, from its resolved address.
+  routes.use("*", signInAuditContext(trustedHops))
 
   routes.get("/methods", async (c) => c.json(await deps.service.methods()))
 
@@ -90,7 +98,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     try {
       const result = await deps.service.completeLocalLogin({
         password: parsed.data.password,
-        ip: clientIp(c, trustedHops),
+        ip: requestClientIp(c, trustedHops),
       })
       setCookie(
         c,
@@ -116,7 +124,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
   routes.get("/oidc/start", async (c) => {
     if (!(await deps.service.methods()).oidc) return oidcNotConfigured(c)
     try {
-      const { authorizeUrl } = await deps.service.startLogin(clientIp(c, trustedHops))
+      const { authorizeUrl } = await deps.service.startLogin(requestClientIp(c, trustedHops))
       return c.redirect(authorizeUrl, 302)
     } catch (error) {
       if (!(error instanceof AdminLoginThrottledError)) throw error
@@ -144,7 +152,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       const result = await deps.service.completeLogin({
         code,
         state,
-        ip: clientIp(c, trustedHops),
+        ip: requestClientIp(c, trustedHops),
       })
       setCookie(
         c,
@@ -194,7 +202,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     // session ending is only useful next to the one that started it.
     // The username, so the row names the operator who ended *this* session rather than the admin
     // allowlist's first entry — `ADMIN_OIDC_ADMIN_EMAIL` may name several.
-    await deps.service.logout(session.id, clientIp(c, trustedHops), session.username)
+    await deps.service.logout(session.id, requestClientIp(c, trustedHops), session.username)
     deleteCookie(c, SESSION_COOKIE_NAME, sessionCookieOptions(0, deps.sessionCookieInsecure))
     return c.json({ status: "logged_out" })
   })
@@ -280,20 +288,4 @@ function refuse(
 /** The per-IP sign-in lockout: a clock clears it, at the `Retry-After` the response carries. */
 function lockout(retryAfterSeconds: number): RouterVerdict {
   return { wall: "clock", scope: "request", retryAfterSeconds }
-}
-
-/**
- * The address the per-IP throttle and the audit row count against — one value, so one IP always
- * lands in one bucket. The rule (`TRUST_PROXY`, `TRUST_PROXY_HOPS`) is `admin-auth/clientIp.ts`.
- */
-function clientIp(c: Context<AdminAuthEnv>, trustedHops: number): string {
-  let socketAddress: string | undefined
-  try {
-    socketAddress = getConnInfo(c).remote.address
-  } catch {
-    // No Bun server behind this request — an `app.request(...)` call in a test. Every such
-    // caller shares one bucket, which is the conservative direction to be wrong in.
-    socketAddress = undefined
-  }
-  return resolveClientIp(c.req.header("x-forwarded-for"), socketAddress, trustedHops)
 }

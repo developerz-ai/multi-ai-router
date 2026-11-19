@@ -39,6 +39,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     tokensOut: 20,
     cacheReadTokens: 5,
     cacheWriteTokens: 1,
+    reasoningTokens: 12,
     costEstimate: null,
     costBasis: "unknown",
     latencyMs: 120,
@@ -458,6 +459,27 @@ describe("persistence shape", () => {
 
   test("an unmeasured ttfb is null, never zero", () => {
     expect(toUsageRecordRow(record({ ttfbMs: null })).ttfbMs).toBeNull()
+  })
+
+  test("reasoning tokens reach their column, and unmeasured counts stay null", () => {
+    expect(toUsageRecordRow(record()).reasoningTokens).toBe(12)
+    expect(
+      toUsageRecordRow(
+        record({
+          tokensIn: null,
+          tokensOut: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          reasoningTokens: null,
+        }),
+      ),
+    ).toMatchObject({
+      tokensIn: null,
+      tokensOut: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+    })
   })
 })
 

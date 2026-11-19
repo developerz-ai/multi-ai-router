@@ -10,10 +10,11 @@ import type { UsageFault, UsageOutcome } from "@multi-ai-router/core"
 // upstream, router — which answers *whose problem is that 3%*. It is the right
 // answer to that question and the wrong one to the question an operator
 // actually arrives with, because `quota_exhausted` and `credits_exhausted` are
-// both `capacity` and their remedies are opposites. One is a window a clock
-// refills; the other is a balance a human refills, and there is no timer that
-// will ever fix the second. That is CLAUDE.md non-negotiable 7, and it is the
-// whole reason this finer axis exists.
+// both `capacity` and their remedies are opposites. One is a window — or a cap
+// with a reset — that a clock refills; the other is a drained balance or a cap
+// that never resets, which only a human clears. No timer will ever fix the
+// second. That is CLAUDE.md non-negotiable 7, and it is the whole reason this
+// finer axis exists.
 //
 // So each class is **a status plus a next action**, and every class states the
 // fault it refines. A unit test asserts the two agree for every outcome — the
@@ -64,14 +65,17 @@ export const FAILURE_CLASSES: Readonly<Record<FailureClassId, FailureClass>> = {
     label: "Rate limited",
     status: 429,
     fault: "capacity",
-    hint: "A window is spent. It comes back on its own — the account is cooling down, not broken.",
+    // A windowed key cap lands here too, so the copy names it and says what fixes it: the clock.
+    hint: "A window or a key cap that resets on a clock is spent, and refills on its own — wait it out, the account is cooling down, not broken.",
   },
   out_of_credits: {
     id: "out_of_credits",
     label: "Out of credits",
     status: 402,
     fault: "capacity",
-    hint: "A balance is drained or billing is dead. Needs a top-up; no timer will clear this.",
+    // Scoped to what a clock genuinely cannot fix. A spend cap *with* a reset is a wait and belongs
+    // on the row above; only a cap that never resets is a human action.
+    hint: "A balance is drained, billing is dead, or a key cap that never resets is reached. No clock clears it — pay, or raise the key's limit.",
   },
   out_of_scope: {
     id: "out_of_scope",

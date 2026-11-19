@@ -1,6 +1,12 @@
-import type { AccountRepository, AccountRow, ApiKeyRepository } from "@multi-ai-router/db"
+import type {
+  AccountRepository,
+  AccountRow,
+  ApiKeyRepository,
+  PoolRepository,
+} from "@multi-ai-router/db"
 import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
+import { namedPools } from "../admin/audit-diff"
 import { type AdminResult, conflict, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
 import { describeProvider } from "./providers"
@@ -47,6 +53,8 @@ export interface AccountsServiceDeps {
   >
   /** Read-only here: a destructive account change must say which keys it breaks. */
   readonly keys: Pick<ApiKeyRepository, "listKeysScopedToAccount">
+  /** Read-only: a disable or delete names the pools the account was a member of (#454). */
+  readonly pools: Pick<PoolRepository, "listMembershipsForAccount" | "findByIds">
   readonly cipher: Pick<CredentialCipher, "encrypt">
   /** Only ever touched for a provider the registry says carries a `CLAUDE_CONFIG_DIR`. */
   readonly configDirs: AccountConfigDirs
@@ -72,6 +80,16 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
   const load = async (id: string): Promise<AdminResult<AccountRow>> => {
     const row = await deps.accounts.findById(id)
     return row === undefined ? notFound(`no account with id "${id}"`) : ok(row)
+  }
+
+  /**
+   * The pools `accountId` is a member of now, as `{ poolId, name }`. Not in the write's
+   * transaction (this service has none), so a membership edit racing the disable can be missed.
+   */
+  const poolsOf = async (accountId: string) => {
+    const ids = (await deps.pools.listMembershipsForAccount(accountId)).map((row) => row.poolId)
+    const names = new Map((await deps.pools.findByIds(ids)).map((row) => [row.id, row.name]))
+    return namedPools(ids, names)
   }
 
   return {
@@ -221,7 +239,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         kind: AUDIT_KINDS.accountDisabled,
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: row.id,
-        detail: { label: row.label, provider: row.provider },
+        detail: { label: row.label, provider: row.provider, pools: await poolsOf(row.id) },
       })
 
       return ok(toAccountView(row))
@@ -244,6 +262,8 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         )
       }
 
+      // Read before the delete: `pool_members` cascades on the account's id.
+      const pools = await poolsOf(id)
       const deleted = await deps.accounts.delete(id)
       if (!deleted) return notFound(`no account with id "${id}"`)
 
@@ -260,7 +280,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         kind: AUDIT_KINDS.accountDeleted,
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: id,
-        detail: { label: found.value.label, provider: found.value.provider },
+        detail: { label: found.value.label, provider: found.value.provider, pools },
       })
 
       return ok({ id, deleted: true, cleanup })

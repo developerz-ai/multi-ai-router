@@ -13,6 +13,7 @@ import {
   type OAuthConnectCompleted,
   type OAuthExchangeDeps,
 } from "./oauth-exchange"
+import { asConnectInitiator, connectInitiator } from "./oauth-initiator"
 
 /**
  * Device-code sign-in: the router asks the issuer for a user code, the operator enters it at the
@@ -161,6 +162,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
         nonce: deps.cipher.encrypt(JSON.stringify(handle)),
         redirectUri: device.redirectUri,
         expiresAt,
+        initiatedBy: connectInitiator(),
       },
       now,
     })
@@ -251,9 +253,10 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
     const bound = await bindConsumed(deps.accounts, consumed, accountId)
     if (!bound.ok) return ok({ status: "expired", accountId })
     const { row, flow, pending, lifecycleVersion } = bound.value
-    const completed =
+    // Whoever polls it home, the row names who started it (`./oauth-initiator.ts`).
+    const completed = await asConnectInitiator(pending.initiatedBy, () =>
       read.kind === "tokens"
-        ? await commitOAuthTokens(
+        ? commitOAuthTokens(
             deps,
             {
               row,
@@ -263,7 +266,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
             },
             read.tokens,
           )
-        : await completeAuthorization(deps, {
+        : completeAuthorization(deps, {
             row,
             flow,
             attemptId: pending.id,
@@ -272,7 +275,8 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
             redirectUri: device.redirectUri,
             codeVerifier: read.codeVerifier,
             capture: "device",
-          })
+          }),
+    )
     if (!completed.ok) return completed
     deps.log?.info("device login completed", {
       component: "connect",

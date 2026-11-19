@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import {
   createAccountRepository,
   createDatabase,
+  createPoolRepository,
   type DatabaseHandle,
   defaultMigrationsFolder,
   runMigrations,
@@ -22,6 +23,7 @@ import {
 import { createAuditRecorder } from "../../src/services/admin"
 import type { HealthStore, RoutingCatalog } from "../../src/services/dataplane"
 import { createMemoryConfigDirs } from "../support/config-dirs"
+import { silentLogger } from "../support/silent-logger"
 import { account, NOW, type TestClock } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness } from "./harness"
 
@@ -185,7 +187,7 @@ function resetMs(resetsAt: string | null): number | null {
 
 /** A no-op audit sink: GET /api/admin/accounts is a read; the admin plane never audits a read.
  *  The recorder is wired so the service signature is satisfied, nothing more. */
-const noopAudit = createAuditRecorder({ append: async () => undefined })
+const noopAudit = createAuditRecorder({ append: async () => undefined }, silentLogger())
 
 /** A `Pick`-style stub for the keys repository: only `listKeysScopedToAccount` is read here. */
 const noopKeys = {
@@ -268,6 +270,7 @@ async function adminAppFor(catalog: RoutingCatalog, health: HealthStore, clock: 
   const accountsService = createAccountsService({
     accounts: accountsRepo,
     keys: noopKeys,
+    pools: createPoolRepository(db.db),
     cipher: CRYPTOR,
     configDirs: configDirs.dirs,
     revokeDeletedAccount: async () => undefined,

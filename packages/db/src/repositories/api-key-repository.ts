@@ -188,6 +188,17 @@ export function createApiKeyRepository(db: DatabaseExecutor): ApiKeyRepository {
       return rows.map((row) => row.key)
     },
 
+    lockKeysScopedToPool: async (poolId) => {
+      const rows = await db
+        .select({ key: apiKeys })
+        .from(apiKeyPools)
+        .innerJoin(apiKeys, eq(apiKeys.id, apiKeyPools.apiKeyId))
+        .where(eq(apiKeyPools.poolId, poolId))
+        .orderBy(asc(apiKeys.id))
+        .for("update", { of: apiKeys })
+      return rows.map((row) => row.key)
+    },
+
     listKeysScopedToAccount: async (accountId) => {
       const rows = await db
         .select({ key: apiKeys })

@@ -137,8 +137,9 @@ export interface RecentAttemptView {
   readonly ttfbMs: number | null
   readonly routerOverheadMs: number
   readonly streamed: boolean
-  readonly tokensIn: number
-  readonly tokensOut: number
+  /** Null when nothing was measured; zero is a measurement. */
+  readonly tokensIn: number | null
+  readonly tokensOut: number | null
   readonly at: string
 }
 

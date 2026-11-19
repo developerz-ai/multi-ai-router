@@ -84,6 +84,7 @@ export type { ApiKeyTombstoneRepository } from "./repositories/api-key-tombstone
 export { createApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
 export type {
   AppendAuditEventInput,
+  AuditListFilter,
   AuditRepository,
   LatestForSubjectsInput,
   SubjectEventInstant,
@@ -239,8 +240,13 @@ export type { ApiKeyTombstoneRow } from "./schema/api-key-tombstones"
 export { apiKeyTombstones } from "./schema/api-key-tombstones"
 export type { ApiKeyRow, NewApiKeyRow } from "./schema/api-keys"
 export { apiKeys } from "./schema/api-keys"
-export type { AuditDetail, AuditEventRow, NewAuditEventRow } from "./schema/audit-events"
-export { auditEvents } from "./schema/audit-events"
+export type {
+  AuditActorKind,
+  AuditDetail,
+  AuditEventRow,
+  NewAuditEventRow,
+} from "./schema/audit-events"
+export { AUDIT_ACTOR_KINDS, auditEvents } from "./schema/audit-events"
 export type { CostBasis, UsageOutcome } from "./schema/enums"
 // --- enums ------------------------------------------------------------------
 export {
@@ -260,7 +266,11 @@ export {
 export * as schema from "./schema/index"
 export type { ModelCatalogRow, NewModelCatalogRow } from "./schema/model-catalog"
 export { modelCatalog } from "./schema/model-catalog"
-export type { NewOauthStateRow, OauthStateRow } from "./schema/oauth-states"
+export type {
+  NewOauthStateRow,
+  OauthStateInitiator,
+  OauthStateRow,
+} from "./schema/oauth-states"
 export { oauthStates } from "./schema/oauth-states"
 export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"
 export { poolMembers, pools } from "./schema/pools"

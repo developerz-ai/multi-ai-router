@@ -238,6 +238,18 @@ degrade the Pool to "no overflow", not destroy the Pool and every key bound to i
 the opposite case and cascades: a `pool_members` row has no meaning without both ends. Deleting
 the Account therefore clears both, which keeps the two consistent.
 
+**A Pool with no member for `RETENTION_EMPTY_POOL_DAYS` (7) is deleted.** `empty_since` records when
+it last became memberless — `NULL` while it holds a member, the creation instant for a Pool made
+empty — and is kept by a trigger on `pool_members` (migration 0047), because an Account deletion
+empties a Pool through the cascade above with no Pool write a service could observe. The
+`pool_reap` task ([01-architecture.md](01-architecture.md#the-periodic-tasks)) re-checks each
+candidate under the Pool's row lock, then settles every key naming it in the same transaction: a
+key scoped to Pools whose every Pool is now gone is **revoked** (`key.revoked`, `reason:
+"pool_reaped"`), and any other key just loses the binding through the `api_key_pools` cascade.
+The admin delete refuses a Pool any key still names; the reap is the one deletion that cannot ask
+a human first, so it settles the keys itself. Each deletion and revocation is an alert line
+([08-observability.md](08-observability.md#scheduled-task-visibility)).
+
 ## ApiKey
 
 Router-issued credential, `mar_live_…`. **Deliberately not a one-time-shown, hash-only key.** The
@@ -340,7 +352,8 @@ numbers look wrong. Rows are enqueued in memory and batch-written off the reques
 | `accountId` | id | Which account actually served it |
 | `sessionKey` | string | |
 | `model` | string | The model the client asked for |
-| `tokensIn` / `tokensOut` | number | As reported by the upstream |
+| `tokensIn` / `tokensOut` | number? | As reported by the upstream; null when nothing was measured, never zero |
+| `reasoningTokens` | number? | The reasoning part of `tokensOut`, where the upstream states it |
 | `costEstimate` | number | From the static, user-overridable price table |
 | `latencyMs` | number | |
 | `outcome` | enum | Success, or the `RouterError` subclass that ended it |

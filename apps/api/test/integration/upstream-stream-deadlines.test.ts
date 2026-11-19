@@ -230,7 +230,8 @@ describe("a stalled Codex stream ends on the idle clock", () => {
         outcome: "upstream_timeout",
         responseStatus: 504,
         streamed: false,
-        tokensOut: 0,
+        // Nothing was measured, so nothing is recorded (missing = null).
+        tokensOut: null,
       })
       expect(res.status).toBe(504)
     })

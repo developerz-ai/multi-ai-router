@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { RoutingPolicy } from "@multi-ai-router/core"
 import { createPoolBody, createPoolsService, updatePoolBody } from "../../../src/services/pools"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * Pools own the routing policy and the membership routing reads. The rule under
@@ -16,6 +17,7 @@ const MISSING = "11111111-1111-4111-8111-111111111111"
 function harness(): { service: ReturnType<typeof createPoolsService>; store: MemoryStore } {
   const store = createMemoryStore()
   const service = createPoolsService({
+    logger: silentLogger(),
     mutations: store.mutations,
     onCommitted: () => {},
     pools: store.pools,

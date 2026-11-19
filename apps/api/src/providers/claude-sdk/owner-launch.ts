@@ -5,6 +5,7 @@ import { join } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sdk"
 import { WORKSPACE_DIR } from "./config-dir"
+import { diagnoseOwnerLaunchFailure } from "./owner-helper"
 
 export interface OwnerLaunchConfig {
   readonly helperPath: string
@@ -157,7 +158,7 @@ export function createOwnerLaunch(
       // before the workspace existed. Provisioning creates it anchored; a file or symlink in its
       // place fails the spawn loudly instead of running somewhere unexamined.
       if (input.cwd === workspace) mkdirSync(workspace, { recursive: true, mode: 0o700 })
-      child = spawn(
+      const guardian = spawn(
         config.helperPath,
         [
           metadata ? "hold" : "run",
@@ -174,7 +175,16 @@ export function createOwnerLaunch(
         ],
         { cwd: input.cwd, env: input.env, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"] },
       )
-      const guardian = child
+      if (guardian.pid === undefined) {
+        // No process came to exist. The runtime still emits `error` on a later tick — with no
+        // listener that is an uncaught exception, which shuts the whole router down (#447) — and
+        // the protocol pipes below are null. Nothing was spawned, so nothing owns the directory:
+        // the exit is certain (`cancel` settles it) and the failure is this Account's alone.
+        guardian.once("error", () => {})
+        cancel()
+        throw diagnoseOwnerLaunchFailure(config.helperPath, input.cwd)
+      }
+      child = guardian
       const admissionTimer = setTimeout(() => {
         rejectReady(new Error("credential owner readiness timed out"))
         cancel()

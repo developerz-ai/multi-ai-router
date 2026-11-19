@@ -18,6 +18,7 @@ import { createJanitorTask } from "../../src/scheduler"
 import { createAuditRecorder } from "../../src/services/admin/audit"
 import { createKeysService } from "../../src/services/keys"
 import { catalogLabels, createUsageService } from "../../src/services/usage-read"
+import { silentLogger } from "../support/silent-logger"
 
 /**
  * Attribution outlives the key row (issue #224). Real Postgres, real rollup path, real janitor and
@@ -36,6 +37,7 @@ const RETENTION: RetentionConfig = {
   revokedKeysDays: 30,
   oauthStateMinutes: 10,
   orphanConfigDirHours: 24,
+  emptyPoolDays: 7,
   usageReportsDays: 730,
   sdkTranscriptHours: 24,
 }
@@ -71,11 +73,12 @@ function services(nowMs: () => Date) {
   const keys = createApiKeyRepository(db)
   const tombstones = createApiKeyTombstoneRepository(db)
   const keysService = createKeysService({
+    logger: silentLogger(),
     keys,
     mutations: createAdminMutationRepository(db),
     onCommitted: () => {},
     cipher: { encrypt: (s) => `enc:${s}`, decrypt: (s) => s.replace(/^enc:/, "") },
-    audit: createAuditRecorder(createAuditRepository(db)),
+    audit: createAuditRecorder(createAuditRepository(db), silentLogger()),
     now: nowMs,
   })
   const usage = createUsageService({

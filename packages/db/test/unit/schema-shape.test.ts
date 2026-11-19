@@ -58,7 +58,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
   },
   {
     table: schema.pools,
-    columns: ["id", "name", "policy", "overflowAccountId", "createdAt", "updatedAt"],
+    columns: ["id", "name", "policy", "overflowAccountId", "emptySince", "createdAt", "updatedAt"],
   },
   {
     table: schema.poolMembers,
@@ -122,6 +122,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "tokensOut",
       "cacheReadTokens",
       "cacheWriteTokens",
+      "reasoningTokens",
       "costEstimate",
       "costBasis",
       "latencyMs",
@@ -159,7 +160,21 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
   },
   {
     table: schema.auditEvents,
-    columns: ["id", "kind", "subjectType", "subjectId", "detail", "createdAt"],
+    columns: [
+      "id",
+      "kind",
+      "subjectType",
+      "subjectId",
+      "detail",
+      // Who made the change (migration 0049, multi-ai-router#453).
+      "actor",
+      "actorKind",
+      "actorSays",
+      "clientIp",
+      "userAgent",
+      "requestId",
+      "createdAt",
+    ],
   },
   {
     table: schema.scheduledTaskRuns,
@@ -176,6 +191,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "accountId",
       "authorizationLifecycleVersion",
       "redirectUri",
+      "initiatedBy",
       "consumedAt",
       "expiresAt",
       "createdAt",
@@ -239,10 +255,24 @@ describe("usage records are one row per upstream attempt", () => {
   })
 
   test("cache tokens are broken out and router overhead is recorded", () => {
-    expect(schema.usageRecords.cacheReadTokens.notNull).toBe(true)
-    expect(schema.usageRecords.cacheWriteTokens.notNull).toBe(true)
+    expect(schema.usageRecords.cacheReadTokens).toBeDefined()
+    expect(schema.usageRecords.cacheWriteTokens).toBeDefined()
     expect(schema.usageRecords.routerOverheadMs.notNull).toBe(true)
     expect(schema.usageRecords.outcome.notNull).toBe(true)
+  })
+
+  test("token counts are nullable with no default — a count nobody measured is never zero", () => {
+    for (const column of [
+      schema.usageRecords.tokensIn,
+      schema.usageRecords.tokensOut,
+      schema.usageRecords.cacheReadTokens,
+      schema.usageRecords.cacheWriteTokens,
+      schema.usageRecords.reasoningTokens,
+    ]) {
+      expect(column.notNull).toBe(false)
+      expect(column.hasDefault).toBe(false)
+      expect(column.getSQLType()).toBe("integer")
+    }
   })
 
   test("cost is nullable — an unknown model is never silently zero", () => {

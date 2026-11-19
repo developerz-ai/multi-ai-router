@@ -105,6 +105,12 @@ export function memoryKeys(
       keyPools
         .filter((row) => row.poolId === poolId)
         .flatMap((row) => keys.filter((key) => key.id === row.apiKeyId)),
+    // One serial store, so the lock is the ordering alone.
+    lockKeysScopedToPool: async (poolId) =>
+      keyPools
+        .filter((row) => row.poolId === poolId)
+        .flatMap((row) => keys.filter((key) => key.id === row.apiKeyId))
+        .sort((left, right) => left.id.localeCompare(right.id)),
     listKeysScopedToAccount: async (accountId) =>
       keyAccounts
         .filter((row) => row.accountId === accountId)

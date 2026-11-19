@@ -8,7 +8,7 @@ import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { createKeysService } from "../../src/services/keys/service"
 import type { AppEnv } from "../../src/types"
 import { createMemoryStore } from "../support/memory-store"
-
+import { silentLogger } from "../support/silent-logger"
 import {
   adminFixture,
   authService,
@@ -68,11 +68,12 @@ describe("actual Hono bounded admin preparation", () => {
     const store = createMemoryStore(),
       cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
     const keys = createKeysService({
+      logger: silentLogger(),
       keys: store.keys,
       mutations: store.mutations,
       onCommitted: () => {},
       cipher,
-      audit: createAuditRecorder(store.audit),
+      audit: createAuditRecorder(store.audit, silentLogger()),
       now: () => new Date(),
     })
     const app = new Hono<AppEnv>().onError(errorHandler(logger))

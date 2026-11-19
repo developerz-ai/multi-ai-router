@@ -13,8 +13,9 @@ import { bearer, CRYPTOR, harness, post, settle } from "./harness"
  * reaches chatgpt.com.
  *
  * The rule (06-protocol-translation.md, "Absent, never zero"): usage that was never stated is
- * unknown. Token columns stay 0 because no number was measured. Cost is NULL with basis `unknown`,
- * and `errorClass` names why, so a `GROUP BY` finds these rows.
+ * unknown. Token columns are NULL because no number was measured (they were 0 until plan 101
+ * slice 09, R3). Cost is NULL with basis `unknown`, and `errorClass` names why, so a `GROUP BY`
+ * finds these rows.
  */
 
 const ACCESS_TOKEN = `eyJhbGciOiJub25lIn0.${Buffer.from(
@@ -46,7 +47,7 @@ const USAGE = {
   input_tokens: 21,
   input_tokens_details: { cached_tokens: 3 },
   output_tokens: 9,
-  output_tokens_details: { reasoning_tokens: 0 },
+  output_tokens_details: { reasoning_tokens: 4 },
   total_tokens: 30,
 }
 
@@ -72,7 +73,31 @@ const completed = (usage: unknown) =>
     response: { ...RESPONSE, status: "completed", output: [MESSAGE], usage },
   })
 
-async function drive(last: () => string) {
+const CHAT_REQUEST = {
+  path: "/v1/chat/completions",
+  body: {
+    model: "gpt-5.6-terra",
+    stream: true,
+    stream_options: { include_usage: true },
+    messages: [{ role: "user", content: "hi" }],
+  },
+}
+
+/** GPT behind the Anthropic wire: the Anthropic answer has no reasoning field to carry. */
+const MESSAGES_REQUEST = {
+  path: "/v1/messages",
+  body: {
+    model: "gpt-5.6-terra",
+    max_tokens: 128_000,
+    stream: true,
+    messages: [{ role: "user", content: "hi" }],
+  },
+}
+
+async function drive(
+  last: () => string,
+  request: { readonly path: string; readonly body: object } = CHAT_REQUEST,
+) {
   const lines: Record<string, unknown>[] = []
   const logger = createLogger({
     level: "warn",
@@ -83,18 +108,7 @@ async function drive(last: () => string) {
     responses: [() => stream(last())],
     logger,
   })
-  const res = await app.request(
-    "/v1/chat/completions",
-    post(
-      JSON.stringify({
-        model: "gpt-5.6-terra",
-        stream: true,
-        stream_options: { include_usage: true },
-        messages: [{ role: "user", content: "hi" }],
-      }),
-      bearer(),
-    ),
-  )
+  const res = await app.request(request.path, post(JSON.stringify(request.body), bearer()))
   expect(res.status).toBe(200)
   expect(await res.text()).toContain("hello")
   await settle()
@@ -107,10 +121,11 @@ const UNKNOWN_USAGE = {
   streamed: true,
   httpStatus: 200,
   responseStatus: 200,
-  tokensIn: 0,
-  tokensOut: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
+  tokensIn: null,
+  tokensOut: null,
+  cacheReadTokens: null,
+  cacheWriteTokens: null,
+  reasoningTokens: null,
   costEstimate: null,
   costBasis: "unknown",
 }
@@ -147,9 +162,23 @@ describe("a translated Codex success whose usage was never read", () => {
       tokensIn: 18,
       tokensOut: 9,
       cacheReadTokens: 3,
+      reasoningTokens: 4,
       costBasis: "notional",
       errorClass: null,
     })
     expect(lines.some((entry) => entry.msg === "upstream usage unread")).toBe(false)
+  })
+
+  test("reasoning a GPT upstream states survives the Anthropic wire into the row", async () => {
+    const { row } = await drive(() => completed(USAGE), MESSAGES_REQUEST)
+    expect(row).toMatchObject({
+      outcome: "success",
+      ingressDialect: "anthropic",
+      tokensIn: 18,
+      tokensOut: 9,
+      cacheReadTokens: 3,
+      reasoningTokens: 4,
+      errorClass: null,
+    })
   })
 })

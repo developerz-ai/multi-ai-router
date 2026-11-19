@@ -56,9 +56,14 @@ describe("UsageFailures", () => {
         expect(rateLimited).toContain("7")
         expect(outOfCredits).toContain("402")
         expect(outOfCredits).toContain("3")
-        // The distinction non-negotiable 7 exists for, in the words an operator acts on.
-        expect(rateLimited).toContain("comes back on its own")
-        expect(outOfCredits).toContain("top-up")
+        // The distinction non-negotiable 7 exists for, in the words an operator acts on: a row
+        // that says the clock clears it must never ask for money, and a row that asks for a human
+        // must not claim a reset.
+        expect(rateLimited).toContain("refills on its own")
+        expect(rateLimited).not.toContain("top-up")
+        expect(rateLimited).not.toContain(" pay")
+        expect(outOfCredits).toContain("never resets")
+        expect(outOfCredits).toContain("pay")
       },
     )
   })
