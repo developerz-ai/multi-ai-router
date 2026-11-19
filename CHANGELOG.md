@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Corrected: the 2.68.0 Codex pin fix needs a re-discover to take effect.** 2.68.0's notes, the pin's comment and `docs/idea/03-providers.md` said the hourly sweep writes the Codex listing into `supportedModels`. It does not: `model_catalog_refresh` writes only `model_catalog`, which routing never reads, and `supportedModels` changes only through "Discover models" (by design — a timer must not change routing). An Account discovered before 2.68.0 keeps refusing `gpt-6.1-terra` / `gpt-6.2-*` until an operator re-runs "Discover models" on it. Comment and spec now say so. No code change.
 
+## [2.68.1] — 2026-11-19
+
+### Added
+
+- **Persistence contract for a future pool roster check.** Forward migration 0051 appends `pool_roster_check` to the scheduled-task enum with `IF NOT EXISTS`; prior values, their order and existing runs are preserved. The schema snapshot and derived task-name/run-row types expose the name through the existing run repository. Compatibility coverage targets fresh installs, upgrades from 0050 with existing runs, repeated migration and direct SQL replay, plus success, failed and partial run outcomes. This adds no constructed roster task, interval, roster configuration, checks, metrics or alerts; those remain subsequent work. Spec: `docs/idea/01-architecture.md#the-periodic-tasks`.
+
+### Changed
+
+- **Task health requires a supplied cadence.** Settings omits persisted task names without a cadence rather than inventing a schedule; a supplied cadence allows normal rendering. Existing runtime tasks keep their cadences.
+
 ## [2.68.0] — 2026-11-19
 
 ### Fixed
@@ -2330,3 +2340,4 @@ your tooling config.
 [2.66.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.66.0
 [2.67.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.67.0
 [2.68.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.0
+[2.68.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.1

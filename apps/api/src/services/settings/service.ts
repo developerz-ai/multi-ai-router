@@ -71,7 +71,7 @@ export interface SettingsServiceDeps {
    * `createScheduledTasks` builds the running tasks from. Injected rather than re-derived from
    * `Env` here, so the screen cannot judge health against a schedule nobody is running.
    */
-  readonly intervals: Readonly<Record<ScheduledTaskName, number>>
+  readonly intervals: Readonly<Partial<Record<ScheduledTaskName, number>>>
   readonly now: () => Date
   /**
    * Bound to the warm price book's `refresh()`. Awaited before `update` resolves, so a saved
@@ -156,17 +156,20 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
       const now = deps.now()
       // Two statements for the whole screen, not two per task (01.11).
       const latest = await deps.scheduledTasks.latestPerTask()
-      // Driven off the Postgres enum, so a task that has never run still appears — a task missing
-      // from this list is indistinguishable from one that is merely quiet.
-      const statuses = scheduledTask.enumValues.map((task) =>
-        toTaskStatusView({
-          task,
-          lastRun: latest.lastRun.get(task),
-          lastSuccess: latest.lastSuccess.get(task),
-          intervalMs: deps.intervals[task],
-          now,
-        }),
-      )
+      // Configured tasks appear even before their first run; persistence-only names have no cadence.
+      const statuses = scheduledTask.enumValues.flatMap((task) => {
+        const intervalMs = deps.intervals[task]
+        if (intervalMs === undefined) return []
+        return [
+          toTaskStatusView({
+            task,
+            lastRun: latest.lastRun.get(task),
+            lastSuccess: latest.lastSuccess.get(task),
+            intervalMs,
+            now,
+          }),
+        ]
+      })
       return ok({ tasks: statuses })
     },
 

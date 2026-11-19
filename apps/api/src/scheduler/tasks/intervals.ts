@@ -4,7 +4,8 @@ import type { ScheduledTaskDeps } from "./deps"
 const MINUTE_MS = 60_000
 
 /**
- * Every task's cadence, in milliseconds, keyed by its `scheduled_task` name.
+ * Every runtime task's cadence, in milliseconds, keyed by its `scheduled_task` name.
+ * `pool_roster_check` is persistence-only until optional roster scheduling lands.
  *
  * Exported because the admin plane's task-health screen has to judge "is this
  * task overdue?" against the schedule *this process is actually running*
@@ -14,7 +15,7 @@ const MINUTE_MS = 60_000
  */
 export function scheduledTaskIntervals(
   env: ScheduledTaskDeps["env"],
-): Readonly<Record<ScheduledTaskName, number>> {
+): Readonly<Record<Exclude<ScheduledTaskName, "pool_roster_check">, number>> {
   return {
     janitor_sweep: env.janitorIntervalMinutes * MINUTE_MS,
     usage_rollup: env.scheduler.usageRollupIntervalMinutes * MINUTE_MS,

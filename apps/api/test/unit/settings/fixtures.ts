@@ -59,23 +59,24 @@ export const USAGE_REPORT_CONFIG: UsageReportConfig = {
 }
 
 /** What `scheduledTaskIntervals(env)` returns — the same map the running tasks are built from. */
-export const INTERVALS: Readonly<Record<ScheduledTaskName, number>> = {
-  janitor_sweep: 60 * MINUTE_MS,
-  usage_rollup: 60 * MINUTE_MS,
-  oauth_state_purge: 5 * MINUTE_MS,
-  quota_floor_refresh: 30 * MINUTE_MS,
-  config_dir_reap: 360 * MINUTE_MS,
-  sdk_transcript_sweep: 60 * MINUTE_MS,
-  admin_session_purge: 30 * MINUTE_MS,
-  idle_account_probe: 360 * MINUTE_MS,
-  model_catalog_refresh: 60 * MINUTE_MS,
-  credential_keepalive: 180 * 1_000,
-  login_lifetime_watch: 1440 * MINUTE_MS,
-  usage_weekly_report: 60 * MINUTE_MS,
-  cooldown_recheck: 60 * MINUTE_MS,
-  plan_quota_read: 15 * MINUTE_MS,
-  pool_reap: 60 * MINUTE_MS,
-}
+export const INTERVALS: Readonly<Record<Exclude<ScheduledTaskName, "pool_roster_check">, number>> =
+  {
+    janitor_sweep: 60 * MINUTE_MS,
+    usage_rollup: 60 * MINUTE_MS,
+    oauth_state_purge: 5 * MINUTE_MS,
+    quota_floor_refresh: 30 * MINUTE_MS,
+    config_dir_reap: 360 * MINUTE_MS,
+    sdk_transcript_sweep: 60 * MINUTE_MS,
+    admin_session_purge: 30 * MINUTE_MS,
+    idle_account_probe: 360 * MINUTE_MS,
+    model_catalog_refresh: 60 * MINUTE_MS,
+    credential_keepalive: 180 * 1_000,
+    login_lifetime_watch: 1440 * MINUTE_MS,
+    usage_weekly_report: 60 * MINUTE_MS,
+    cooldown_recheck: 60 * MINUTE_MS,
+    plan_quota_read: 15 * MINUTE_MS,
+    pool_reap: 60 * MINUTE_MS,
+  }
 
 export interface MemoryPrices {
   readonly rows: PriceOverrideRow[]
@@ -225,6 +226,7 @@ export function recordingAudit(onRecord: () => void = () => undefined) {
 }
 
 export interface HarnessOptions {
+  readonly intervals?: SettingsServiceDeps["intervals"]
   readonly priceAccounts?: () => readonly PriceAccount[]
   readonly prices?: readonly PriceOverrideInput[]
   readonly runs?: TaskRuns
@@ -270,7 +272,7 @@ export function harness(options: HarnessOptions = {}): Harness {
         discordWebhookUrl: options.discordWebhookUrl ?? null,
       },
     },
-    intervals: INTERVALS,
+    intervals: options.intervals ?? INTERVALS,
     now: () => options.now ?? NOW,
     ...(options.onPricesChanged === undefined ? {} : { onPricesChanged: options.onPricesChanged }),
   })
