@@ -70,10 +70,13 @@
   white-space: nowrap;
 }
 
+// `break-word`, not `anywhere`: only the dots `kindWithBreaks` marks set the
+// column's narrowest width, so a kind wraps between words and the table still
+// fits a 1024px screen. A kind with no dot that is still too wide breaks anyway.
 .kind {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .id {
@@ -113,4 +116,19 @@
 .chipValue {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
+}
+
+// The Who cell: at most two lines, cut inside its column with an ellipsis. A
+// 200-character `X-Admin-Actor` would otherwise set the width of the whole
+// table, and a single unbreakable line would push it past a 1024px screen; the
+// tooltip holds the name whole.
+.who {
+  display: -webkit-box;
+  max-width: 14rem;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }

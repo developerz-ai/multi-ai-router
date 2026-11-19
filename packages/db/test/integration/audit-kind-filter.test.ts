@@ -16,17 +16,19 @@ describe.skipIf(ownDatabaseUrl === "")("audit kind filter", () => {
     await audit.append({ kind: "key.revoke", subjectId: "k1" })
 
     // The two key events sit behind three newer-or-interleaved others; a limit of 2 still finds both.
-    expect((await audit.list(2, "key.create")).map((row) => row.kind)).toEqual(["key.create"])
-    expect((await audit.list(2, "account.recheck")).map((row) => row.kind)).toEqual([
+    expect((await audit.list(2, { kind: "key.create" })).map((row) => row.kind)).toEqual([
+      "key.create",
+    ])
+    expect((await audit.list(2, { kind: "account.recheck" })).map((row) => row.kind)).toEqual([
       "account.recheck",
       "account.recheck",
     ])
     expect(await audit.list(10)).toHaveLength(5)
-    expect((await audit.listForSubject("k1", 1, "key.create")).map((row) => row.kind)).toEqual([
-      "key.create",
-    ])
+    expect(
+      (await audit.listForSubject("k1", 1, { kind: "key.create" })).map((row) => row.kind),
+    ).toEqual(["key.create"])
     expect(await audit.listForSubject("k1", 10)).toHaveLength(2)
-    expect(await audit.listForSubject("a1", 10, "key.create")).toEqual([])
+    expect(await audit.listForSubject("a1", 10, { kind: "key.create" })).toEqual([])
   })
 
   test("the kind-filtered feed can ride the (kind, created_at) index", async () => {

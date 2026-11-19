@@ -17,6 +17,7 @@ import { createNow } from "../../lib/clock"
 import { formatRelative, formatTimestamp } from "../../lib/format"
 import { useAuditLog } from "../../lib/queries/settings"
 import styles from "./AuditLogSection.module.scss"
+import { AuditWhoCell } from "./AuditWhoCell"
 
 /**
  * Admin-plane mutations, newest first.
@@ -37,7 +38,12 @@ export function AuditLogSection() {
   const [seenKinds, setSeenKinds] = createSignal<readonly string[]>([])
   const now = createNow(30_000)
 
-  const events = useAuditLog(() => ({ limit: limit(), kind: kind(), subjectId: null }))
+  const events = useAuditLog(() => ({
+    limit: limit(),
+    kind: kind(),
+    subjectId: null,
+    actor: null,
+  }))
 
   // `isSuccess` is read before `data` for the reason `QueryBoundary` documents:
   // the data is resource-backed, and reading it while pending suspends.
@@ -63,9 +69,14 @@ export function AuditLogSection() {
       ),
     },
     {
+      id: "who",
+      header: "Who",
+      cell: (event) => <AuditWhoCell event={event} />,
+    },
+    {
       id: "kind",
       header: "Kind",
-      cell: (event) => <span class={styles.kind}>{event.kind}</span>,
+      cell: (event) => <span class={styles.kind}>{kindWithBreaks(event.kind)}</span>,
     },
     {
       id: "subject",
@@ -176,3 +187,11 @@ export function AuditLogSection() {
 }
 
 const detail = (event: AuditEvent) => auditDetailEntries(event.detail)
+
+/**
+ * A kind may wrap only after a dot — `pool.` / `updated`, never `pool.upda` / `ted` — so it gives
+ * up width to the Who column without breaking a word. `<wbr>` rather than a zero-width space, so a
+ * copied kind is the kind.
+ */
+const kindWithBreaks = (kind: string) =>
+  kind.split(".").flatMap((part, index) => (index === 0 ? [part] : [".", <wbr />, part]))

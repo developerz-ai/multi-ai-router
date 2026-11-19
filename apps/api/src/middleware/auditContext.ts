@@ -8,6 +8,7 @@ import {
 } from "../services/admin/audit-context"
 import type { AppEnv } from "../types"
 import { requestClientIp } from "./clientIp"
+import { noteAdminCaller } from "./logger"
 
 /**
  * The transport half of the audit context (multi-ai-router#453): reads who and where off one admin
@@ -30,6 +31,8 @@ export function runAsAdminCaller<E extends AppEnv>(
     userAgent: c.req.header("user-agent"),
     requestId: c.get("requestId"),
   })
+  // The request's transport line names the same caller, refused or not (`logger.ts`).
+  noteAdminCaller(c.req.raw, context)
   return runWithAuditContext(context, next)
 }
 

@@ -37,6 +37,12 @@ const event = (kind: string, detail: Readonly<Record<string, unknown>> | null = 
   subjectType: null,
   subjectId: null,
   detail,
+  actor: null,
+  actorKind: null,
+  actorSays: null,
+  clientIp: null,
+  userAgent: null,
+  requestId: null,
   createdAt: "2026-07-25T11:00:00.000Z",
 })
 

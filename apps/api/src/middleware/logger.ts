@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from "hono"
 import type { LogFields, Logger } from "../logging/logger"
+import type { AuditContext } from "../services/admin/audit-context"
 import type { AppEnv } from "../types"
 
 /**
@@ -94,6 +95,49 @@ export function deferFailureLine(request: Request, failure: RequestFailure): boo
   return true
 }
 
+/**
+ * Who an admin-plane request came from, for its one line (multi-ai-router#456). On 2026-11-18 two
+ * `DELETE /api/admin/pools/…` calls answered 409, wrote no audit row, and logged no caller, so a
+ * refused change was attributable nowhere. Keyed by the request, like `tracked`, and written only by
+ * the admin plane's middleware — so a `/v1/**` line can never carry these fields.
+ *
+ * Two writers. The guard notes the address before it checks anything, so a request it refuses still
+ * logs where it came from (and no caller: none was accepted). The audit context replaces that note
+ * with the whole caller once one is resolved — the same strings the audit row stores.
+ */
+const adminCallers = new WeakMap<Request, AdminCallerLine>()
+
+interface AdminCallerLine {
+  readonly clientIp: string | null
+  readonly context?: AuditContext
+}
+
+/** The address of an admin request no caller has been resolved for yet. Never overwrites one. */
+export function noteAdminClientIp(request: Request, clientIp: string): void {
+  if (!adminCallers.has(request)) adminCallers.set(request, { clientIp })
+}
+
+/** The caller an admin request runs under. A nested context (a guarded sign-in route) wins. */
+export function noteAdminCaller(request: Request, context: AuditContext): void {
+  adminCallers.set(request, { clientIp: context.clientIp, context })
+}
+
+/** Absent fields are absent, never null — the rule every other field on the line follows. */
+function adminCallerFields(caller: AdminCallerLine | undefined): LogFields {
+  if (caller === undefined) return {}
+  const context = caller.context
+  return {
+    ...(context === undefined
+      ? {}
+      : {
+          actor: context.actor,
+          actorKind: context.actorKind,
+          ...(context.says === null ? {} : { says: context.says }),
+        }),
+    ...(caller.clientIp === null ? {} : { clientIp: caller.clientIp }),
+  }
+}
+
 export interface RequestLoggerOptions {
   /**
    * `LOG_QUIET_PATHS`: exact paths whose *successful* completions log at `debug`. A liveness probe
@@ -132,6 +176,8 @@ export function requestLogger(
 
     const failure = tracked.get(request) ?? null
     tracked.delete(request)
+    const caller = adminCallerFields(adminCallers.get(request))
+    adminCallers.delete(request)
     const headersMs = Math.round(performance.now() - startedAt)
     const response = c.res
     const status = response.status
@@ -157,6 +203,7 @@ export function requestLogger(
         log[level]("request completed", {
           ...common,
           ...headerContext(request.headers, LOGGED_HEADERS),
+          ...caller,
         })
         return
       }
@@ -164,6 +211,7 @@ export function requestLogger(
         ...common,
         ...failureContext(request.headers),
         ...failure.fields,
+        ...caller,
       })
     }
 

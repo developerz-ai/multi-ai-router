@@ -56,6 +56,32 @@ alike.
 | **Never expires; `POST /logout` refuses it** | It is a variable, not a session. Answering `logged_out` would report a revocation that did not happen and leave the caller holding a credential it believes it surrendered. Rotation is: change the value, restart. |
 | **Audited as `admin-api-token`** | Not as the OIDC principal. An operator reading the audit feed has to be able to tell a console login from a script, because revoking the two is a different action. |
 
+### Naming the caller: `X-Admin-Actor`
+
+One `ADMIN_API_TOKEN` is shared by every script and agent that drives the plane, so `admin-api-token`
+alone cannot say which of them made a change. On 2026-11-18 a batch through the token emptied a pool,
+revoked five keys and deleted two pools, and nothing could name its caller. Every caller declares
+itself in one header:
+
+```bash
+curl -s -X DELETE $MAR/api/admin/pools/$POOL -H "Authorization: Bearer $TOK" \
+  -H 'X-Admin-Actor: infra router client for ivann'
+```
+
+| Rule | Why |
+|---|---|
+| **Suggested format: `<agent or script> for <person>`** | `agent ops-seat-slice02 for sebyx07`, `bin/router-sync for ivann`. The first half names the program, so a runaway loop is findable; the second names the human it acts for, who is the one to ask. Free text, not parsed: any string is accepted. |
+| **Self-reported, never authentication** | The header is never read to decide anything. It cannot widen, narrow or replace the credential, and a wrong name is not refused. What verifies it is recorded beside it: the credential (`actor`, `actor_kind`), the client address (`client_ip`, resolved under `TRUST_PROXY` / `TRUST_PROXY_HOPS`) and the user agent. A name that disagrees with its address is the finding. |
+| **Optional** | A call without it is let in and recorded with no declared name (`actor_says` null). Callers opt in; nothing breaks for one that has not yet. |
+| **Trimmed, redacted, capped at 200 characters** | It goes through the log redactor before it is stored, and an auth scheme (`Bearer …`, `Basic …`) is redacted whatever follows it, so a credential pasted into it is written as `[REDACTED]`. |
+| **Sent by a browser session too, if it likes** | A console session is already named by its SSO email; the header adds nothing the session does not, and is recorded the same way when present. |
+
+Where it is read back: every audit row (`actor_says`), `GET /api/admin/audit` (`actorSays`, and
+`?actor=` for everything one credential did), the console's audit log ("Who"), and the `says` field
+of the request's one log line — including a change the route refused (a `409`) that wrote no audit
+row; a request the guard itself refused logs only its address
+([08 § Structured logging](08-observability.md#structured-logging)).
+
 ## Admin authentication
 
 A single admin principal. It is asserted either by an OpenID Connect provider or by the optional local admin password — an argon2id hash in Postgres set by `bin/admin set-password`, off by default, and fail-closed on a non-loopback `PUBLIC_URL`. No router user table either way. The full relying-party contract, the password door, and provider setup live in [13-admin-oidc.md](13-admin-oidc.md).
@@ -371,7 +397,7 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | `GET /api/admin/usage` | totals, series and breakdowns by key, account, pool, model, over a window; optional repeated `owner`, `tool`, `model`, `keyId`, `poolId`, `accountId` filters (`400` on invalid filters or unknown query keys; see [08-observability](08-observability.md#filters)) | yes |
 | `GET`/`PATCH` `/api/admin/settings` | the running build's `version`; retention knobs, log level, janitor cadence and the configured `PUBLIC_URL` (or null) read from the environment; the shipped price table with the date it was verified (`prices.shippedAsOf`) so an override is edited against the rows it replaces, and the overrides themselves read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
 | `GET /api/admin/tasks` | the latest run of every scheduled task, and whether it is overdue | yes |
-| `GET /api/admin/audit` | the append-only admin-plane audit feed, newest first | yes |
+| `GET /api/admin/audit` | the append-only admin-plane audit feed, newest first, each event naming its caller; optional `limit`, `kind`, `subjectId` and `actor` (exact) filters (see [08-observability](08-observability.md#reading-it-back)) | yes |
 
 Every group above accepts either admin credential — the console's session cookie, or the
 `ADMIN_API_TOKEN` bearer described in [Driving the admin API without a

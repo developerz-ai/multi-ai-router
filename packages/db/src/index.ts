@@ -84,6 +84,7 @@ export type { ApiKeyTombstoneRepository } from "./repositories/api-key-tombstone
 export { createApiKeyTombstoneRepository } from "./repositories/api-key-tombstone-repository"
 export type {
   AppendAuditEventInput,
+  AuditListFilter,
   AuditRepository,
   LatestForSubjectsInput,
   SubjectEventInstant,

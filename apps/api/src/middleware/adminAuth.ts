@@ -16,6 +16,8 @@ import {
 import { bearerToken } from "../services/dataplane"
 import type { AppEnv } from "../types"
 import { runAsAdminCaller } from "./auditContext"
+import { requestClientIp } from "./clientIp"
+import { noteAdminClientIp } from "./logger"
 
 /**
  * The guard on every admin route. Four checks, in this order:
@@ -73,6 +75,9 @@ export function adminAuth(
   const prefix = sessionCookiePrefix(sessionCookieInsecure)
 
   return async (c, next) => {
+    // First, so a request refused below still logs where it came from — and no caller, since none
+    // was accepted (multi-ai-router#456).
+    noteAdminClientIp(c.req.raw, requestClientIp(c, trustedHops))
     const authorization = c.req.header("authorization")
     if (presentsRouterKey(authorization, c.req.header("x-api-key"))) {
       throw new AdminAuthError(ROUTER_KEY_REJECTED)

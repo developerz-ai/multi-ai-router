@@ -1230,6 +1230,7 @@ JSON lines to stdout, one object per event. The container logs; shipping them is
 | `requestId` | yes on any request-scoped log — the same id joins client request, every upstream attempt, and every `UsageRecord` row |
 | `component` | yes (`transport`, `routing`, `provider`, `translate`, `scheduler`, `admin`) |
 | `accountId`, `keyId`, `model`, `attempt`, `durationMs`, `status` | when in scope |
+| `actor`, `actorKind`, `says`, `clientIp` | on the transport line of an `/api/admin/**` request only — see below |
 
 Every candidate the request chain drops without an upstream attempt logs one `info` line, `candidate dropped without an upstream attempt`, with `accountId`, `attempt`, `reason` (`half-open-probe-in-flight` | `recovery-admission-refused` | `preparation-failed`) and, for a preparation failure, `errorClass` (the error class name or failure kind — never a message). Through v2.22.0 these drops were silent or debug-only, so a request that answered `429` while an account sat in scope could not be explained from the log.
 
@@ -1250,6 +1251,30 @@ of production told an operator nothing:
 | `upstream attempt failed` (`transport`) | `accountId`, `attempt`, `status`, `failureKind`, plus **`signal`** (which classifier rule decided — `http-status:429`, `claude-sdk:unclassified`), **`reason`** (the router-authored sentence), and **`upstreamMessage`** (the provider's or the SDK's own words, scrubbed first and then bounded to `LOG_REASON_MAX_CHARS`, as on `upstream stream failure`: the Agent-SDK path hands this line an unredacted message, and a credential cut before scrubbing could leave a fragment. Up to 64 KiB the whole message is scrubbed; past it, the scan ends at the last whitespace before 64 KiB, so no credential's secret part straddles the cut (a message with no whitespace in its first 64 KiB logs only `…`). A cut never splits `[REDACTED]`, and the quote fits the bound after the logger's own pass). |
 | `upstream stream failure` (`relay`) | `accountId`, `errorClass` (the attempt's closed `errorClass`: a driver hook's signal such as `codex:stream-error:invalid_prompt` or `minimax:base_resp-1008`, else `upstream_protocol_error`, `upstream_incomplete`, `upstream_error` or `upstream_timeout`), and `upstreamMessage` (the driver hook's reading of the upstream's words, redacted by `logging/redact.ts` and then cut to `LOG_REASON_MAX_CHARS`; absent when no hook read one, e.g. a mid-stream transport failure). One line per failed relay, written after the breaker update and the usage row. The verdict is the first one the relay captured, so a Codex refusal followed by a client cancel logs the refusal, not `client_cancelled`. |
 | `translation dropped fields` (`translate`) | `ingress`, `egress`, `dropped` (the full count), and `fields` — up to twenty `<path> <reason>` entries, structural only (field paths, tool names, block types, media types; never a value from the body). One line per conversion, not per field. Rationale: [06 § Known lossy edges](06-protocol-translation.md#known-lossy-edges). |
+
+**An admin request's line names its caller** (multi-ai-router#456). The `request completed` /
+`request failed` line of every `/api/admin/**` request that reaches the guard or the sign-in routes
+(`/api/admin/auth/**`) adds the fields below. A path no admin route group claims (a `404`) reaches
+neither, and its line carries none of them:
+
+| Field | Value |
+|---|---|
+| `actor` | the audit row's `actor`: the session's username, `admin-api-token`, or `anonymous` on a sign-in route |
+| `actorKind` | `session` \| `api_token` \| `anonymous` |
+| `says` | the `X-Admin-Actor` header as the audit row stores it (trimmed, redacted, capped at 200); absent when none was sent |
+| `clientIp` | the client address, resolved under `TRUST_PROXY` / `TRUST_PROXY_HOPS` as the audit row resolves it |
+
+They are the same strings the audit row stores, taken from the request's audit context, so a log
+line and a row join on `requestId` and agree. A request is logged with its caller whatever its
+answer — a `409` the route refused writes no audit row, and this line is then the only record of who
+tried. A request the guard refused (`401`, a router key presented to the admin plane included) was
+never accepted as anyone, so its line carries `clientIp` and no `actor`, `actorKind` or `says`: a
+name it declared is not repeated as if it had been. The one exception is a guarded route under
+`/api/admin/auth` (`/session`, `/logout`): it runs inside the sign-in context, so a refusal there
+logs `actor: anonymous` / `actorKind: anonymous`, with `says` if the header was sent — the same
+caller a sign-in attempt's audit row records. Absent fields are absent, never `null`. The
+data plane (`/v1/**`) mounts none of this, and its lines are unchanged. The OAuth callback
+(`/admin/accounts/oauth/callback`) is not under `/api/admin/` and carries none of them either.
 
 **Never logged, at any level:** prompts, completions, request or response bodies, router key values,
 upstream credentials or tokens, OAuth `code` / `state` / `code_verifier`, cookies, `Authorization`,
@@ -1449,7 +1474,101 @@ login is reporting and never part of the decision: the append is fired, not awai
 write cannot turn a correct password into a `500`, and both branches make exactly one non-blocking
 call so the log can never become an oracle for which half of the credential was wrong.
 
-`GET /api/admin/audit` serves the console's feed, newest first, paged by `limit`.
+`GET /api/admin/audit` serves the console's feed, newest first, paged by `limit` — see
+[Reading it back](#reading-it-back).
+
+### Who made the change
+
+Every row names its caller (multi-ai-router#453, migration 0049). The caller is captured once — per
+admin request by the guard, per scheduled task by the runner — and held in an `AsyncLocalStorage`
+(`apps/api/src/services/admin/audit-context.ts`). The recorder stamps it on every append, so no
+emitter has to remember to.
+
+| Column | Value |
+|---|---|
+| `actor` | the session's username (the SSO email, or `local-admin`), `admin-api-token`, `system`, `anonymous`, or `unknown` |
+| `actor_kind` | `session` \| `api_token` \| `system` \| `anonymous` \| `unattributed` |
+| `actor_says` | the `X-Admin-Actor` request header (trimmed, redacted, capped at 200 characters), or the scheduled task's name |
+| `client_ip` | resolved under `TRUST_PROXY` / `TRUST_PROXY_HOPS` exactly as the login throttle resolves it; `unknown` with no peer |
+| `user_agent` | capped at 200 characters |
+| `request_id` | the request's `x-request-id`, joining the row to its log lines |
+
+- **`X-Admin-Actor` is self-reported.** One `ADMIN_API_TOKEN` is shared by every script and agent,
+  so the caller names itself; the header is never read for authentication, a call without it is let
+  in, and the IP and the token are what verify the claim. It goes through the log redactor before it
+  is stored, so a credential pasted into it is written as `[REDACTED]`; an auth scheme (`Bearer …`,
+  `Basic …`) is redacted whatever follows it, since a name never carries one.
+- **Background work is `system`.** A scheduled task runs under `{ actor: "system", actor_says:
+  <task name> }`, including a tick an operator started with "run now". The credential refresher arms
+  its own timers outside the scheduler and runs every refresh flight as `system` /
+  `credential-refresher`: a timer inherits the context it was armed in, and without this a refresh
+  armed during an operator's request would fire days later stamped with that operator. The router's
+  recovery probe, which spends "Test now" when a permit's timer fires, runs as `system` /
+  `router-recovery` for the same reason.
+- **A sign-in attempt is `anonymous`.** The login routes run before any credential is accepted;
+  their rows (`admin.login`, `admin.login_failed`) record the resolved address and user agent, and
+  the detail names whom the login was for.
+- **`unattributed` is a bug report, not a state.** A write that reaches the recorder with no caller
+  is still written — bookkeeping never blocks an operator's change — as `actor_kind: unattributed`,
+  `actor: unknown`, and the router logs one `error` line, `audit event without a caller`, naming the
+  kind. `apps/api/test/integration/audit-emitters-attributed.test.ts` lists every emitter with the
+  entry point that attributes it and fails on a new one nobody classified.
+- **An account connect names who started it** (multi-ai-router#455, migration 0050). A connect
+  completes on a request that is not its start: the provider's redirect lands on the unguarded OAuth
+  callback, which carries no session, and a device-code attempt is finished by whichever console tab
+  or script polls it next. The guarded start stores its caller — all six fields above — in
+  `oauth_states.initiated_by`, and the completing `account.connected` / `account.reauthorized` write
+  runs under that caller (`apps/api/src/services/accounts/connect/oauth-initiator.ts`), in every
+  capture mode. The stored starter wins over a live caller on the completing request: the row answers
+  "who connected this account", and that is whoever began it, so a paste or a device poll by someone
+  else still names the starter (its `request_id` is the start's). A state with no starter — minted
+  before 0050, or one whose stored value does not parse — completes as before: under the completing
+  request's own caller, or, on the redirect callback, `unattributed`.
+- **Old rows stay null.** Nothing is backfilled; a row from before migration 0049 names no caller.
+- The data plane (`/v1/**`) sets no context and writes no audit row.
+
+### Reading it back
+
+"Who removed Din from the reviewer pool" is one read (multi-ai-router#456), in three places.
+
+**The audit API.** Every event `GET /api/admin/audit` returns carries `actor`, `actorKind`,
+`actorSays`, `clientIp`, `userAgent` and `requestId` — always present, `null` on a row from before
+migration 0049. The query takes `limit` (1–200, default 50; out of range is a `400`, never a clamp),
+`kind`, `subjectId` (a uuid) and `actor`: the stored `actor`, matched exactly (no prefix, no case
+folding), at most 254 characters — the longest email address, since an SSO username is one; empty or
+longer is a `400`. Every filter is a predicate in SQL before the limit, so an actor's older rows are
+never hidden behind newer rows of anyone else; `actor` alone rides `audit_events_actor_created_idx`,
+`kind` alone `audit_events_kind_created_idx`, and with `subjectId` the read rides
+`audit_events_subject_idx` and narrows by the rest.
+
+**The console.** The audit log's **Who** column shows what the caller called itself (`actorSays`),
+else the credential's name (`actor`), else "not recorded" for an old row. A long name is cut inside
+its cell; the tooltip holds it whole, with the actor, its kind, the address and the user agent — the
+fields that verify a self-reported name.
+
+**The request log.** An `/api/admin/**` request's one transport line names its caller — see
+[Structured logging](#structured-logging). That is the only record of a request that wrote no audit
+row: a refused or failed change (the two 409 `DELETE /api/admin/pools/…` calls of 2026-11-18), a
+`401`, or a read.
+
+### What changed
+
+Membership and key scope are written as whole sets, so a row that recorded only a count could not
+say what moved (on 2026-11-18 `pool.updated` said `memberCount: 0` and nothing about whom it
+removed). These rows name it, as ids with their names, never a key or credential value
+(multi-ai-router#454):
+
+| Event | Detail fields |
+|---|---|
+| `pool.created` | `members: [{ accountId, name }]`, the initial membership |
+| `pool.updated` (body sent `members`) | `membersAdded` and `membersRemoved`, each `[{ accountId, name }]`, diffed by `accountId` between the membership held before the write and the set after it; `memberCount` stays |
+| `pool.deleted` | `members: [{ accountId, name }]` the pool had, read before the delete's cascade; `keys: [{ keyId, name }]` whose scope named it — always none on the operator's delete, which refuses a scoped pool. The reaper's delete adds `fate` to each key (`revoked`, `detached`, `already_revoked`) and keeps `revokedKeyIds` / `detachedKeyIds` |
+| `key.updated` (body sent `scope`) | `scopeBefore` (beside `scope`, so a `pools` → `all` widen does not read as a narrowing), `poolsAdded` / `poolsRemoved` as `[{ poolId, name }]`, `accountsAdded` / `accountsRemoved` as `[{ accountId, name }]` |
+| `account.disabled` / `account.deleted` | `pools: [{ poolId, name }]`, the pools the account was a member of at that moment (read before a delete's cascade) |
+
+An account `name` is its label. A name that no longer resolves is written as `null`, keeping the id.
+The account rows are read outside any transaction (the accounts service has none), so a membership
+edit racing a disable can be missed by that row.
 
 ### Who made the change
 

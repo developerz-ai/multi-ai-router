@@ -373,7 +373,7 @@ describe("audited mutations invalidate the audit log", () => {
     const client = newClient()
     let save: ReturnType<typeof useSavePriceOverrides> | undefined
     function Harness() {
-      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null }))
+      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null, actor: null }))
       save = useSavePriceOverrides()
       return null
     }
@@ -419,7 +419,7 @@ describe("audited mutations invalidate the audit log", () => {
     let revoke: ReturnType<typeof useRevokeKey> | undefined
     function Harness() {
       useKeys()
-      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null }))
+      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null, actor: null }))
       revoke = useRevokeKey()
       return null
     }
@@ -457,7 +457,7 @@ describe("audited mutations invalidate the audit log", () => {
     const client = newClient()
     let reveal: ReturnType<typeof useRevealKey> | undefined
     function Harness() {
-      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null }))
+      useAuditLog(() => ({ limit: 50, kind: null, subjectId: null, actor: null }))
       reveal = useRevealKey()
       return null
     }

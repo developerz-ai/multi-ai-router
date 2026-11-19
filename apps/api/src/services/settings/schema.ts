@@ -1,5 +1,6 @@
 import { ProviderId } from "@multi-ai-router/core"
 import type {
+  AuditActorKind,
   AuditEventRow,
   PriceOverrideRow,
   ScheduledTaskName,
@@ -88,6 +89,8 @@ export type UpdatePriceOverridesInput = z.infer<typeof updatePriceOverridesBody>
 export const AUDIT_LIMIT_DEFAULT = 50
 export const AUDIT_LIMIT_MIN = 1
 export const AUDIT_LIMIT_MAX = 200
+/** RFC 5321's longest address. */
+export const AUDIT_ACTOR_FILTER_MAX = 254
 
 /**
  * Query params arrive as strings, so `limit` is coerced; everything else is validated exactly as
@@ -105,6 +108,12 @@ export const auditQuery = z.object({
   /** Every audit subject is a database uuid; anything else cannot name one. */
   subjectId: z.uuid().optional(),
   kind: z.string().trim().min(1).max(120).optional(),
+  /**
+   * The stored `actor`, matched exactly. Bounded like `kind`, at the longest valid email address
+   * (an SSO username is one) rather than at `kind`'s 120, which would make a real operator
+   * unfilterable.
+   */
+  actor: z.string().trim().min(1).max(AUDIT_ACTOR_FILTER_MAX).optional(),
 })
 
 export type AuditQuery = z.infer<typeof auditQuery>
@@ -214,6 +223,17 @@ export interface AuditEventView {
   readonly subjectType: string | null
   readonly subjectId: string | null
   readonly detail: Record<string, unknown> | null
+  /**
+   * Who made the change (docs/idea/08-observability.md#who-made-the-change). Always present; null
+   * on a row written before migration 0049, which names no caller.
+   */
+  readonly actor: string | null
+  readonly actorKind: AuditActorKind | null
+  /** Self-declared (`X-Admin-Actor`) or a scheduled task's name. Never authentication. */
+  readonly actorSays: string | null
+  readonly clientIp: string | null
+  readonly userAgent: string | null
+  readonly requestId: string | null
   readonly createdAt: string
 }
 
@@ -255,6 +275,12 @@ export function toAuditEventView(row: AuditEventRow): AuditEventView {
     subjectId: row.subjectId,
     // Written through the tested redactor, so it is already free of credential material.
     detail: row.detail,
+    actor: row.actor,
+    actorKind: row.actorKind,
+    actorSays: row.actorSays,
+    clientIp: row.clientIp,
+    userAgent: row.userAgent,
+    requestId: row.requestId,
     createdAt: row.createdAt.toISOString(),
   }
 }
