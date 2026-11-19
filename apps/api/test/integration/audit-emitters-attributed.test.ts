@@ -43,7 +43,10 @@ import { silentLogger } from "../support/silent-logger"
  *      (refresh-audit-actor.test.ts);
  *    - `recovery`: the router's recovery probe, which spends "Test now" on a permit's timer, run as
  *      `system` / `router-recovery` (audit-actor.test.ts);
- *    - `deferred`: known to land `unattributed` today, with the issue that fixes it;
+ *    - `initiator`: an account connect completed off its start request — the unguarded OAuth
+ *      redirect callback, or a device poll by anyone — run as the caller who started it, stored on
+ *      its `oauth_states` row (audit-connect-initiator-http.test.ts,
+ *      oauth-callback-attributed.test.ts);
  *    - `reader`: names a kind in a query and writes nothing.
  * 2. **The drive.** The guarded emitters a request can reach without an upstream or a subprocess
  *    are driven through their real routes and the real guard here, and every row is checked.
@@ -55,7 +58,7 @@ type Entry =
   | { readonly via: "task"; readonly task: string }
   | { readonly via: "refresher" }
   | { readonly via: "recovery" }
-  | { readonly via: "deferred"; readonly issue: string; readonly why: string }
+  | { readonly via: "initiator" }
   | { readonly via: "reader" }
 
 const ACCOUNTS = "routes/admin/accounts.ts"
@@ -101,22 +104,15 @@ const EMITTERS: Record<string, readonly Entry[]> = {
   ],
   "services/accounts/connect/claude.ts:accountConnected": [{ via: "guarded", group: ACCOUNTS }],
   "services/accounts/connect/claude.ts:accountReauthorized": [{ via: "guarded", group: ACCOUNTS }],
+  // Paste capture and the device poll arrive on guarded routes; the redirect on the unguarded
+  // callback. Each runs as the connect's starter where its state row names one.
   "services/accounts/connect/oauth-exchange.ts:accountConnected": [
-    // The device flow is polled by the console through a guarded route.
     { via: "guarded", group: ACCOUNTS },
-    {
-      via: "deferred",
-      issue: "multi-ai-router#455",
-      why: "the provider's redirect lands on the unguarded OAuth callback, which has no caller until the connect's initiator is stored on its oauth_states row",
-    },
+    { via: "initiator" },
   ],
   "services/accounts/connect/oauth-exchange.ts:accountReauthorized": [
     { via: "guarded", group: ACCOUNTS },
-    {
-      via: "deferred",
-      issue: "multi-ai-router#455",
-      why: "same redirect callback as account.connected",
-    },
+    { via: "initiator" },
   ],
   "services/accounts/refresh/status.ts:accountUpdated": [{ via: "refresher" }],
   "services/accounts/refresh/status.ts:accountReauthorized": [{ via: "refresher" }],
@@ -237,13 +233,6 @@ describe("the emitter inventory", () => {
       .flatMap((entry) => (entry.via === "task" ? [entry.task] : []))
     expect(named.length).toBeGreaterThan(0)
     expect(named.filter((task) => !registered.has(task))).toEqual([])
-  })
-
-  test("deferred entries name the issue that closes them", () => {
-    const deferred = Object.values(EMITTERS)
-      .flat()
-      .flatMap((entry) => (entry.via === "deferred" ? [entry.issue] : []))
-    expect(new Set(deferred)).toEqual(new Set(["multi-ai-router#455"]))
   })
 })
 

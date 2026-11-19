@@ -234,6 +234,7 @@ export function createMemoryStore(): MemoryStore {
           provider: input.provider,
           accountId: input.accountId ?? null,
           redirectUri: input.redirectUri ?? null,
+          initiatedBy: null,
           consumedAt: null,
           authorizationLifecycleVersion: input.authorizationLifecycleVersion ?? null,
           expiresAt: input.expiresAt,
