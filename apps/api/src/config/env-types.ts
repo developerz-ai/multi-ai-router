@@ -9,6 +9,7 @@ import type { DataPlaneConfig, FailoverConfig, TranslationConfig } from "./env-r
 import type { OAuthRefreshConfig, SchedulerConfig } from "./env-scheduler-types"
 import type { DatabasePoolConfig, RetentionConfig } from "./env-storage-types"
 import type { readMetricInventoryEnv } from "./metric-inventory"
+import type { PoolRoster } from "./pool-roster"
 import type { readRecoveryEnv } from "./recovery"
 import type { readRelayLifetimesEnv } from "./relay-lifetimes"
 import type { RuntimeLimitsConfig } from "./runtime-limits"
@@ -17,6 +18,10 @@ import type { readUsageReadEnv } from "./usage-read"
 import type { UsageReportConfig } from "./usage-report"
 
 export interface Env {
+  readonly poolRosterPath: string | null
+  readonly poolRosterCheckIntervalMinutes: number
+  /** parseEnv leaves this null; production readEnv loads it before runtime creation. */
+  readonly poolRoster: PoolRoster | null
   /** SDK stream pacing, deny hold and login deadlines — `config/claude-sdk-pacing.ts`. */
   readonly claudeSdkPacing: ClaudeSdkPacingConfig
   /** Negative-cache bound, miss-load ceiling and stale-on-error window — `config/runtime-limits.ts`. */

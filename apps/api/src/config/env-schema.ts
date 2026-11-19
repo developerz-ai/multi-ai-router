@@ -110,6 +110,8 @@ export const ENV_FIELDS = {
   PUBLIC_URL: absoluteUrl.optional(),
   ROUTER_REVISION: nonEmpty.optional(),
   WEB_ROOT: nonEmpty.optional(),
+  POOL_ROSTER_PATH: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
+  POOL_ROSTER_CHECK_INTERVAL_MINUTES: atLeastOne.optional(),
   CLAUDE_CONFIG_ROOT: nonEmpty.refine(isAbsolute, "must be an absolute path").optional(),
   CLAUDE_CLI_PATH: nonEmpty.optional(),
   CLAUDE_FAST_MODE: flag.optional(),

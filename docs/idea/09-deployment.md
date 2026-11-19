@@ -6,6 +6,36 @@ purge, quota floor) are also shipped — in-process jittered timers, one `pg_try
 task, last run and outcome recorded to `ScheduledTaskRun` — and the retention windows below are what
 they sweep against.
 
+## Optional deployment pool roster
+
+`POOL_ROSTER_PATH` is optional: unset or blank disables loading without filesystem access.
+When configured, it must be an absolute path to deployment-owned JSON mounted read-only into
+the router. The file belongs to the deployment, not this repository's membership authority;
+no authoritative roster is shipped in the image. Restart the router to load changes.
+
+Synthetic version-1 example:
+
+```json
+{"version":1,"pools":[{"name":"example-pool","members":["example-primary","example-overflow"],"overflow":"example-overflow"}]}
+```
+
+The root accepts only `version` (the number `1`) and `pools` (an array, possibly empty).
+Each pool accepts only `name`, `members`, and `overflow`. Names and account labels must be
+nonblank strings; identity is exact and case-sensitive, with no trimming or normalization.
+Pool names are unique. Members form a nonempty array with no duplicate labels within a pool;
+the same account label may appear in different pools. Overflow must be a member and cannot
+be the sole member. Unknown fields, unsupported versions and wrong types are refused.
+
+Production `readEnv` synchronously loads and validates the snapshot before runtime creation,
+database migrations or listener startup. Missing/unreadable files, invalid JSON or invalid
+schemas exit 1 on stderr naming `POOL_ROSTER_PATH`, its configured path and only the first
+sanitized issue, never file contents, unknown key names or parser excerpts.
+
+`POOL_ROSTER_CHECK_INTERVAL_MINUTES` defaults to `15` and accepts positive whole minutes only.
+Its timer bound is `floor(2147483647 / (60000 * (1 + SCHEDULER_JITTER_FRACTION)))` minutes,
+including positive jitter. This release only validates configuration: no drift-check runner,
+scheduler task, monitoring, database comparison or membership writes are enabled by either variable.
+
 ## The promise
 
 **`docker compose up -d` after one sign-in method and one secret file edit.** No database to provision — and no IdP required either, if a local admin password suits the machine.
