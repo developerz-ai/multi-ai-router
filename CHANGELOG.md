@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.67.0] — 2026-11-19
+
 ### Added
 
 - **Every audit row names who made the change, from where and through what.** On 2026-11-18 a batch through the shared `ADMIN_API_TOKEN` emptied a pool, revoked five keys and deleted two pools, and no row it left said who: the recorder wrote the kind, the subject and the detail, and the caller the guard had resolved never reached it. `audit_events` gains nullable `actor`, `actor_kind`, `actor_says`, `client_ip`, `user_agent` and `request_id` (migration 0049, plus `audit_events_actor_created_idx (actor, created_at)`), and the recorder stamps them on every append from an `AsyncLocalStorage` context: the guard sets it per admin request (the session's email or `admin-api-token`; the self-declared `X-Admin-Actor` header, trimmed, redacted and capped at 200; the client address under `TRUST_PROXY_HOPS`; the user agent; the request id), the scheduler runs every task as `system` saying the task's name, the credential refresher runs every flight as `system` / `credential-refresher` and the recovery probe as `system` / `router-recovery` (both fire on timers, which would otherwise carry the context of whichever request armed them), and the sign-in routes record `anonymous` with the attempt's address. A write with no caller is still written, as `unattributed` / `unknown`, with one `error` line `audit event without a caller` naming the kind — a missing caller never blocks an operator. `X-Admin-Actor` is optional and never authenticates. Old rows stay null. The data plane is untouched. Rollback is pinning the previous image: the columns are nullable and an older image never reads them. Spec: `docs/idea/08-observability.md#who-made-the-change`. Regression: `apps/api/test/integration/audit-actor-http.test.ts`, `apps/api/test/integration/audit-actor-postgres.test.ts`, `apps/api/test/integration/audit-emitters-attributed.test.ts`, `apps/api/test/unit/admin/audit-actor.test.ts`, `apps/api/test/unit/accounts/refresh-audit-actor.test.ts`, `packages/db/test/integration/migrations.test.ts`.
@@ -2316,3 +2318,4 @@ your tooling config.
 [2.65.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.65.0
 [2.65.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.65.1
 [2.66.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.66.0
+[2.67.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.67.0
