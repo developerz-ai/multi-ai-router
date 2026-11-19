@@ -15,6 +15,13 @@ import { deleteOldestBatch } from "./bounded-delete"
  *
  * Claude subscription accounts never appear here: their login is handed to the
  * `claude` CLI and lands in the account's `CLAUDE_CONFIG_DIR`.
+ *
+ * **Who started it rides along.** An account-connect row is minted by
+ * `beginAccountAuthorization` (`account-authorization.ts`), which stores the
+ * start's caller in `initiated_by`; `consume` and `findLive` return it with the
+ * row, unparsed — it is untrusted on the way out, and the service validates it
+ * before running the completing write under it (multi-ai-router#455). `create`
+ * serves the admin-OIDC sign-in, which has no caller yet, so it never sets one.
  */
 export interface OauthStateRepository {
   /** `input.codeVerifier` must already be an encryption envelope, never the raw verifier. */

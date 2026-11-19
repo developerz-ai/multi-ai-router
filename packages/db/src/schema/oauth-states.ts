@@ -1,5 +1,30 @@
-import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
+import type { AuditActorKind } from "./audit-events"
+
+/**
+ * Who started a connect, as the guarded start request's audit context held it
+ * (`apps/api/src/services/admin/audit-context.ts`, the same six fields). Stored so the unguarded
+ * redirect callback, and a device poll by anyone, record the starter (multi-ai-router#455).
+ * Untrusted on the way back out: the service parses it before running under it.
+ */
+export interface OauthStateInitiator {
+  readonly actor: string
+  readonly actorKind: AuditActorKind
+  readonly says: string | null
+  readonly clientIp: string | null
+  readonly userAgent: string | null
+  readonly requestId: string | null
+}
 
 /**
  * One-shot OAuth `state` + PKCE verifier, bound to a pending account row and
@@ -47,6 +72,13 @@ export const oauthStates = pgTable(
 
     authorizationLifecycleVersion: integer("authorization_lifecycle_version"),
     redirectUri: text("redirect_uri"),
+
+    /**
+     * The caller who started this connect ({@link OauthStateInitiator}). Null on a row minted
+     * before migration 0050, on the admin-OIDC sign-in flow, and wherever a start ran with no
+     * caller: the completing write then falls back to its own caller, or to `unattributed`.
+     */
+    initiatedBy: jsonb("initiated_by").$type<OauthStateInitiator>(),
 
     /** Set on first use. A second presentation of a consumed state is rejected. */
     consumedAt: timestamp("consumed_at", { withTimezone: true, mode: "date" }),

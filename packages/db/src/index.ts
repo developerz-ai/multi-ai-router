@@ -265,7 +265,11 @@ export {
 export * as schema from "./schema/index"
 export type { ModelCatalogRow, NewModelCatalogRow } from "./schema/model-catalog"
 export { modelCatalog } from "./schema/model-catalog"
-export type { NewOauthStateRow, OauthStateRow } from "./schema/oauth-states"
+export type {
+  NewOauthStateRow,
+  OauthStateInitiator,
+  OauthStateRow,
+} from "./schema/oauth-states"
 export { oauthStates } from "./schema/oauth-states"
 export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"
 export { poolMembers, pools } from "./schema/pools"

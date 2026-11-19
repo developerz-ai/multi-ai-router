@@ -67,7 +67,7 @@ test/integration/     needs a live Postgres, skips cleanly without one
 | `audit_events` | Append-only admin-plane mutations. Never credential material |
 | `scheduled_task_runs` | One row per periodic-task run — how anyone knows a sweep happened |
 | `api_key_tombstones` | What a purged or deleted key leaves behind: id, name, display prefix, owner, owner kind, tool, purge time. Never the value. Read only by the usage label loader; swept on `RETENTION_USAGE_DAILY_DAYS` + 1 day |
-| `oauth_states` | One-shot OAuth `state` + PKCE verifier, short TTL |
+| `oauth_states` | One-shot OAuth `state` + PKCE verifier, short TTL; `initiated_by` names who started an account connect |
 | `account_recoveries` / `account_operator_checks` | Recovery generations and probe permits per account; the operator "Re-check now" claim |
 | `account_exhausted_watches` | Rule 7's persisted re-test ladder for `exhausted` accounts (`0044`) |
 | `admin_sessions` / `admin_credentials` | Durable admin console sessions (hashed id) and the local admin credential |
