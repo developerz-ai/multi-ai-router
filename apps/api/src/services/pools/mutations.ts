@@ -1,4 +1,5 @@
 import { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "../admin/audit"
+import { diffIds, namedAccounts } from "../admin/audit-diff"
 import { mutationResult } from "../admin/mutation-result"
 import { conflict, notFound, ok } from "../admin/result"
 import type { PoolsService, PoolsServiceDeps } from "./service"
@@ -40,6 +41,7 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
               name: pool.name,
               policy: pool.policy,
               memberCount: members.length,
+              members: namedAccounts([...idsOf(members)], labelsOf(accounts.values())),
               hasOverflow: pool.overflowAccountId !== null,
             },
           })
@@ -105,7 +107,13 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
                 fields: Object.keys(body).sort(),
                 policyBefore: current.policy,
                 policyAfter: pool.policy,
-                ...(body.members === undefined ? {} : { memberCount: body.members.length }),
+                ...(body.members === undefined
+                  ? {}
+                  : membershipChange(
+                      [...idsOf(held)],
+                      [...idsOf(members)],
+                      labelsOf(accounts.values()),
+                    )),
               },
             })
             if (pool.policy !== current.policy) {
@@ -139,12 +147,22 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
               "pool_in_use",
             )
           }
+          // Read before the delete: its cascade takes the membership with it.
+          const held = [...idsOf(await tx.pools.listMembers(id))]
+          const labels = labelsOf(await tx.accounts.findByIds(held))
           if (!(await tx.pools.delete(id))) return notFound(`no pool with id "${id}"`)
           await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.poolDeleted,
             subjectType: AUDIT_SUBJECTS.pool,
             subjectId: id,
-            detail: { name: pool.name, policy: pool.policy },
+            detail: {
+              name: pool.name,
+              policy: pool.policy,
+              members: namedAccounts(held, labels),
+              // Always none here (a scoped pool is refused above), written so the operator's
+              // delete and the reaper's carry the same fields.
+              keys: scoped.map((key) => ({ keyId: key.id, name: key.name })),
+            },
           })
           return ok({ id, deleted: true as const })
         }),
@@ -152,5 +170,25 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
       if (result.ok) await deps.onCommitted(id, "remove")
       return result
     },
+  }
+}
+
+function labelsOf(accounts: Iterable<{ readonly id: string; readonly label: string }>) {
+  const labels = new Map<string, string>()
+  for (const account of accounts) labels.set(account.id, account.label)
+  return labels
+}
+
+/** `pool.updated`'s member fields for a write that sent `members` (multi-ai-router#454). */
+function membershipChange(
+  before: readonly string[],
+  after: readonly string[],
+  labels: ReadonlyMap<string, string>,
+) {
+  const diff = diffIds(before, after)
+  return {
+    memberCount: after.length,
+    membersAdded: namedAccounts(diff.added, labels),
+    membersRemoved: namedAccounts(diff.removed, labels),
   }
 }

@@ -135,6 +135,10 @@ export function createPoolReaper(deps: PoolReaperDeps): PoolReaper {
             emptySince: emptySince.toISOString(),
             revokedKeyIds: fates.revoke,
             detachedKeyIds: fates.detach,
+            // The same fields as the operator's delete (multi-ai-router#454). Members are always
+            // none: a pool holding one was skipped above, under this transaction's lock.
+            members: [],
+            keys: keys.map((key) => ({ keyId: key.id, name: key.name, fate: fateOf(key, fates) })),
           },
         })
         const reaped: PoolReapResult = {
@@ -156,6 +160,16 @@ export function createPoolReaper(deps: PoolReaperDeps): PoolReaper {
       return outcome
     },
   }
+}
+
+/** What the reap did to one key its scope named. An already-revoked key only loses the binding. */
+function fateOf(
+  key: Pick<ApiKeyRow, "id">,
+  fates: KeyFates,
+): "revoked" | "detached" | "already_revoked" {
+  if (fates.revoke.includes(key.id)) return "revoked"
+  if (fates.detach.includes(key.id)) return "detached"
+  return "already_revoked"
 }
 
 function skip(poolId: string, reason: PoolReapSkip["reason"]): PoolReapSkip {
