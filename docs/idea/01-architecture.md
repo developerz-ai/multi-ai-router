@@ -379,6 +379,15 @@ decision in [10-roadmap.md](10-roadmap.md).
 
 ### The periodic tasks
 
+Persisted task names and constructed periodic tasks are separate contracts. Migration **0051**
+appends `pool_roster_check` to the scheduled-task enum with `IF NOT EXISTS`, preserving every
+existing value and run. The derived task-name and run-row types and the generic run repository
+can record it, but no `pool_roster_check` task is constructed and no interval is assigned.
+Settings task-health entries require a supplied cadence: names without one are omitted, while
+all existing runtime tasks retain their cadences. Supplying a cadence makes the persisted name
+eligible for task-health rendering; it does not itself construct or schedule a task.
+Roster configuration, roster checks, metrics and alerts are deferred to subsequent work.
+
 | Task | Cadence | Notes |
 |---|---|---|
 | Janitor / retention sweeps | every `JANITOR_INTERVAL_MINUTES`, jittered | Bounded batches; windows in [09-deployment.md](09-deployment.md) |

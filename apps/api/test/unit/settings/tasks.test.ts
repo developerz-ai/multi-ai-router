@@ -118,7 +118,7 @@ describe("the task view", () => {
 })
 
 describe("the tasks read", () => {
-  test("lists every scheduled_task enum value, including one that has never run", async () => {
+  test("lists every configured cadence, including a task that has never run", async () => {
     const { service, tasks } = harness({
       runs: { janitor_sweep: [run({ startedAt: at(5), finishedAt: at(4), outcome: "success" })] },
     })
@@ -156,7 +156,31 @@ describe("the tasks read", () => {
     expect(neverRan?.lastSuccessAt).toBeNull()
   })
 
-  test("the view is driven off the task enum; an extra run entry is never read (a pin, not the rollback guard)", async () => {
+  test("a persisted roster run is omitted without a cadence and rendered with one", async () => {
+    const roster = {
+      ...run({ startedAt: at(5), finishedAt: at(4), outcome: "success" }),
+      task: "pool_roster_check" as const,
+    }
+    const runs = { pool_roster_check: [roster] }
+    const omitted = await harness({ runs }).service.tasks()
+    expect(omitted.ok).toBe(true)
+    if (!omitted.ok) return
+    expect(omitted.value.tasks.map((task) => task.task)).not.toContain("pool_roster_check")
+
+    const included = await harness({
+      runs,
+      intervals: { ...INTERVALS, pool_roster_check: 7 * MINUTE_MS },
+    }).service.tasks()
+    expect(included.ok).toBe(true)
+    if (!included.ok) return
+    const view = included.value.tasks.find((task) => task.task === "pool_roster_check")
+    expect(view?.intervalMinutes).toBe(7)
+    expect(Number.isFinite(view?.intervalMinutes)).toBe(true)
+    expect(view?.health).toBe("ok")
+    expect(view?.lastSuccessAt).toBe(at(4).toISOString())
+  })
+
+  test("configured enum tasks exclude foreign run entries (a pin, not the rollback guard)", async () => {
     // A pin, NOT the rollback guard: the service iterates the enum's values and the
     // memory fixture never returns a foreign row, so this cannot fail on a real
     // leftover row. The scheduler boot reads only current task names; the real
