@@ -1491,6 +1491,25 @@ emitter has to remember to.
 - **Old rows stay null.** Nothing is backfilled; a row from before migration 0049 names no caller.
 - The data plane (`/v1/**`) sets no context and writes no audit row.
 
+### What changed
+
+Membership and key scope are written as whole sets, so a row that recorded only a count could not
+say what moved (on 2026-11-18 `pool.updated` said `memberCount: 0` and nothing about whom it
+removed). These rows name it, as ids with their names, never a key or credential value
+(multi-ai-router#454):
+
+| Event | Detail fields |
+|---|---|
+| `pool.created` | `members: [{ accountId, name }]`, the initial membership |
+| `pool.updated` (body sent `members`) | `membersAdded` and `membersRemoved`, each `[{ accountId, name }]`, diffed by `accountId` between the membership held before the write and the set after it; `memberCount` stays |
+| `pool.deleted` | `members: [{ accountId, name }]` the pool had, read before the delete's cascade; `keys: [{ keyId, name }]` whose scope named it — always none on the operator's delete, which refuses a scoped pool. The reaper's delete adds `fate` to each key (`revoked`, `detached`, `already_revoked`) and keeps `revokedKeyIds` / `detachedKeyIds` |
+| `key.updated` (body sent `scope`) | `scopeBefore` (beside `scope`, so a `pools` → `all` widen does not read as a narrowing), `poolsAdded` / `poolsRemoved` as `[{ poolId, name }]`, `accountsAdded` / `accountsRemoved` as `[{ accountId, name }]` |
+| `account.disabled` / `account.deleted` | `pools: [{ poolId, name }]`, the pools the account was a member of at that moment (read before a delete's cascade) |
+
+An account `name` is its label. A name that no longer resolves is written as `null`, keeping the id.
+The account rows are read outside any transaction (the accounts service has none), so a membership
+edit racing a disable can be missed by that row.
+
 ## Scheduled task visibility
 
 Background work runs as **in-process jittered interval timers coordinated by Postgres advisory

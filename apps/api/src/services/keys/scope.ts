@@ -1,5 +1,6 @@
 import type { KeyScope } from "@multi-ai-router/core"
 import type { AccountRepository, PoolRepository } from "@multi-ai-router/db"
+import { diffIds, namedAccounts, namedPools } from "../admin/audit-diff"
 import { type AdminResult, invalid, ok } from "../admin/result"
 import type { KeyScopeInput } from "./schemas"
 
@@ -54,6 +55,40 @@ export async function resolveScopeInput(
     )
   }
   return ok({ kind: "accounts", poolIds: [], accountIds })
+}
+
+/**
+ * `key.updated`'s scope fields for a write that sent a scope (multi-ai-router#454): the targets the
+ * scope gained and lost, with their names. `scopeBefore` sits beside the row's `scope` because a
+ * `pools` → `all` widen empties the target list, and would otherwise read as a narrowing.
+ */
+export async function scopeChange(
+  deps: ScopeResolverDeps,
+  before: KeyScope,
+  held: { readonly poolIds: readonly string[]; readonly accountIds: readonly string[] },
+  after: ResolvedScope,
+) {
+  const pools = diffIds(held.poolIds, after.poolIds)
+  const accounts = diffIds(held.accountIds, after.accountIds)
+  const poolNames = new Map(
+    (await deps.pools.findByIds([...pools.added, ...pools.removed])).map((row) => [
+      row.id,
+      row.name,
+    ]),
+  )
+  const accountNames = new Map(
+    (await deps.accounts.findByIds([...accounts.added, ...accounts.removed])).map((row) => [
+      row.id,
+      row.label,
+    ]),
+  )
+  return {
+    scopeBefore: before,
+    poolsAdded: namedPools(pools.added, poolNames),
+    poolsRemoved: namedPools(pools.removed, poolNames),
+    accountsAdded: namedAccounts(accounts.added, accountNames),
+    accountsRemoved: namedAccounts(accounts.removed, accountNames),
+  }
 }
 
 /** A repeated id is a duplicate row against a unique index, not a second grant. */

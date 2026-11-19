@@ -166,6 +166,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     cleanupDeletedAccount: deps.ownership.manager.cleanupDeletedAccount,
     accounts,
     keys,
+    pools: deps.pools,
     cipher,
     configDirs,
     audit,

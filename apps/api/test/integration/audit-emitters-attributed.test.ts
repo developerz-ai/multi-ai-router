@@ -278,6 +278,7 @@ function harness() {
       service: createAccountsService({
         accounts: store.accounts,
         keys: store.keys,
+        pools: store.pools,
         cipher,
         configDirs: configDirs.dirs,
         ...accountDeletionFixture(configDirs.dirs),

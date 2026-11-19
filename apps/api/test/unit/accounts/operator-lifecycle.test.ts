@@ -13,6 +13,7 @@ function harness(options: { auditFails?: boolean; barrierFails?: boolean } = {})
   const service = createAccountsService({
     accounts: store.accounts,
     keys: store.keys,
+    pools: store.pools,
     configDirs: dirs.dirs,
     ...accountDeletionFixture(dirs.dirs),
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),

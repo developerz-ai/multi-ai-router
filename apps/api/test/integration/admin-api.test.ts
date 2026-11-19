@@ -134,6 +134,7 @@ function harness(
   const accountsService = createAccountsService({
     accounts: store.accounts,
     keys: store.keys,
+    pools: store.pools,
     cipher,
     configDirs: configDirs.dirs,
     ...accountDeletionFixture(configDirs.dirs),

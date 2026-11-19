@@ -405,6 +405,7 @@ describe("the full app, mounted end to end", () => {
         accounts: createAccountsService({
           accounts: store.accounts,
           keys: store.keys,
+          pools: store.pools,
           cipher: adminCipher,
           configDirs: configDirs.dirs,
           ...accountDeletionFixture(configDirs.dirs),
