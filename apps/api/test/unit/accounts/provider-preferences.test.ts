@@ -10,6 +10,7 @@ import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * `providerPreferences` at the admin write: invalid is a `400` there, never a value stored and
@@ -28,7 +29,7 @@ function harness() {
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
     configDirs: configDirs.dirs,
     ...accountDeletionFixture(configDirs.dirs),
-    audit: createAuditRecorder(store.audit),
+    audit: createAuditRecorder(store.audit, silentLogger()),
     now: () => NOW,
   })
   return { service, store }

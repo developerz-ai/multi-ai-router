@@ -2,6 +2,7 @@ import type { AccountRepository, AccountRow, CredentialRefreshLock } from "@mult
 import type { Logger } from "../../../logging/logger"
 import { httpDriver } from "../../../providers"
 import type { AuditRecorder } from "../../admin/audit"
+import { runWithAuditContext, systemAuditContext } from "../../admin/audit-context"
 import { createRefreshCoherence } from "./coherence"
 import { defaultSchedule, drainRefreshWork } from "./drain"
 import { type RefreshExchangeDeps, type RefreshOutcome, refreshCredential } from "./exchange"
@@ -39,6 +40,9 @@ export interface CredentialRefresherDeps extends Omit<RefreshExchangeDeps, "time
   readonly config: CredentialRefreshConfig
   readonly schedule?: (run: () => void, delayMs: number) => () => void
 }
+
+/** The caller every refresh flight's audit rows name. */
+const REFRESHER_AUDIT_CONTEXT = systemAuditContext("credential-refresher")
 
 export function createCredentialRefresher(deps: CredentialRefresherDeps): CredentialRefresher {
   const timings = new Map<string, Timing>()
@@ -179,31 +183,36 @@ export function createCredentialRefresher(deps: CredentialRefresherDeps): Creden
     const signal = shutdown.signal
     const observation: RefreshFlightObservation = { exchangeStarted: false }
     let requested = expected
-    const flight: Promise<RefreshOutcome> = (async (): Promise<RefreshOutcome> => {
-      const row = expected === undefined ? await deps.accounts.findById(id) : undefined
-      if (signal.aborted) return { kind: "skipped", reason: "aborted" }
-      if (expected === undefined && row === undefined)
-        return { kind: "skipped", reason: "unknown-account" }
-      if (row !== undefined) {
-        armFor(row)
-        requested = expectation(row)
-      }
-      return attempt(id, requested ?? expectation(row as AccountRow), signal, observation)
-    })()
-      .catch(async (error) => {
-        await safety.failed(id, requested, observation, signal.aborted, error)
-        throw error
-      })
-      .finally(async () => {
-        try {
-          if (!signal.aborted) await sync(id, true)
-        } finally {
-          if (flights.get(id) === flight) {
-            flights.delete(id)
-            if (!stopped && !timers.has(id)) safety.retryHeld(id)
-          }
+    // The system's work, whoever started it: a flight is shared by every caller that joins it and
+    // re-arms timers that fire long after any request is gone, so it must never carry the context of
+    // the request that happened to start it (multi-ai-router#453).
+    const flight: Promise<RefreshOutcome> = runWithAuditContext(REFRESHER_AUDIT_CONTEXT, () =>
+      (async (): Promise<RefreshOutcome> => {
+        const row = expected === undefined ? await deps.accounts.findById(id) : undefined
+        if (signal.aborted) return { kind: "skipped", reason: "aborted" }
+        if (expected === undefined && row === undefined)
+          return { kind: "skipped", reason: "unknown-account" }
+        if (row !== undefined) {
+          armFor(row)
+          requested = expectation(row)
         }
-      })
+        return attempt(id, requested ?? expectation(row as AccountRow), signal, observation)
+      })()
+        .catch(async (error) => {
+          await safety.failed(id, requested, observation, signal.aborted, error)
+          throw error
+        })
+        .finally(async () => {
+          try {
+            if (!signal.aborted) await sync(id, true)
+          } finally {
+            if (flights.get(id) === flight) {
+              flights.delete(id)
+              if (!stopped && !timers.has(id)) safety.retryHeld(id)
+            }
+          }
+        }),
+    )
     flights.set(id, flight)
     return flight
   }

@@ -5,6 +5,7 @@ import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createKeysService } from "../../../src/services/keys"
 import { createPoolsService } from "../../../src/services/pools"
 import { createMemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 const now = () => new Date("2026-10-03T00:00:00Z")
 
@@ -34,14 +35,16 @@ function harness() {
     committed.push(`${kind}:${id}`)
   }
   const keys = createKeysService({
+    logger: silentLogger(),
     keys: store.keys,
     mutations,
     onCommitted,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(3) }),
-    audit: createAuditRecorder(store.audit),
+    audit: createAuditRecorder(store.audit, silentLogger()),
     now,
   })
   const pools = createPoolsService({
+    logger: silentLogger(),
     pools: store.pools,
     accounts: store.accounts,
     mutations,

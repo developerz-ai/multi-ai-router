@@ -10,6 +10,7 @@ import {
 import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 import { pasteOnlyFlow } from "../../support/oauth-flows"
+import { silentLogger } from "../../support/silent-logger"
 
 const NOW = new Date("2026-07-25T09:00:00.000Z")
 const TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token"
@@ -63,7 +64,7 @@ function harness(options: { stateMinutes?: number; upstream?: FakeFetch } = {}):
   const store = createMemoryStore()
   const clock = { now: NOW }
   const upstream = options.upstream ?? fakeFetch()
-  const audit = createAuditRecorder(store.audit)
+  const audit = createAuditRecorder(store.audit, silentLogger())
   const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(9) })
   const connect = createOAuthConnectService({
     accounts: store.accounts,
@@ -337,7 +338,7 @@ describe("a provider whose flow declares a device sign-in", () => {
       accounts: store.accounts,
       states: store.oauthStates,
       cipher: createCredentialCipher({ key: new Uint8Array(32).fill(9) }),
-      audit: createAuditRecorder(store.audit),
+      audit: createAuditRecorder(store.audit, silentLogger()),
       fetch: async () => {
         throw new Error("no upstream may be reached")
       },

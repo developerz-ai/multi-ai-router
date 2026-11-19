@@ -19,6 +19,7 @@ import { createAuditRecorder } from "../../src/services/admin"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { createKeysService } from "../../src/services/keys"
 import { createPoolsService } from "../../src/services/pools"
+import { silentLogger } from "./silent-logger"
 
 /**
  * The scope rows the key repository returns. Named here through the repository's own signature,
@@ -94,14 +95,22 @@ export function adminMutationDatabase(url: string, maxConnections = 2) {
       transform = next
     },
     keyService: createKeysService({
+      logger: silentLogger(),
       keys,
       mutations,
       onCommitted,
       now,
       cipher: createCredentialCipher({ key: new Uint8Array(32).fill(3) }),
-      audit: createAuditRecorder(audit),
+      audit: createAuditRecorder(audit, silentLogger()),
     }),
-    poolService: createPoolsService({ pools, accounts, mutations, onCommitted, now }),
+    poolService: createPoolsService({
+      logger: silentLogger(),
+      pools,
+      accounts,
+      mutations,
+      onCommitted,
+      now,
+    }),
     seedAccount: async () => {
       const row = await accounts.create({ label: prefix, provider: "zai" })
       accountIds.add(row.id)

@@ -1,4 +1,5 @@
 import type { AdminMutationRepository, ApiKeyRow } from "@multi-ai-router/db"
+import type { Logger } from "../../logging/logger"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "../admin/audit"
 import { type CoherenceHooks, keyMutationCommitted } from "../admin/coherence"
 
@@ -69,6 +70,8 @@ export function planKeyFates(
 export interface PoolReaperDeps {
   readonly mutations: AdminMutationRepository
   readonly now: () => Date
+  /** Where the in-transaction audit recorder reports a row written with no caller in context. */
+  readonly logger: Pick<Logger, "error">
   /**
    * The admin plane's own cache debts, paid after commit as its pool and key writes pay them: the
    * routing catalog drops the pool, a revoked key is forgotten at once, a detached key re-read.
@@ -107,7 +110,7 @@ export function createPoolReaper(deps: PoolReaperDeps): PoolReaper {
         const fates = planKeyFates(keys, otherPoolIds)
 
         const now = deps.now()
-        const audit = createAuditRecorder(tx.audit)
+        const audit = createAuditRecorder(tx.audit, deps.logger)
         const names = new Map(keys.map((key) => [key.id, key.name]))
         // One write and one audit row per *revoked* key, the same pair an operator's revoke makes.
         // Detached keys write nothing: the pool delete's cascade drops their binding.

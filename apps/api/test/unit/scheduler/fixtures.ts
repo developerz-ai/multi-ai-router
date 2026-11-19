@@ -5,7 +5,6 @@ import type {
   ScheduledTaskRepository,
   ScheduledTaskRunRow,
 } from "@multi-ai-router/db"
-import { createLogger, type Logger } from "../../../src/logging/logger"
 import type { TaskLock } from "../../../src/scheduler"
 
 /**
@@ -33,9 +32,7 @@ export function clock(start: Date = NOW): { now: () => Date; advance: (ms: numbe
   }
 }
 
-export function silentLogger(): Logger {
-  return createLogger({ level: "error", write: () => undefined })
-}
+export { silentLogger } from "../../support/silent-logger"
 
 /** The losing replica: never runs the work, never acquires. */
 export function alwaysContended(): TaskLock {

@@ -160,7 +160,21 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
   },
   {
     table: schema.auditEvents,
-    columns: ["id", "kind", "subjectType", "subjectId", "detail", "createdAt"],
+    columns: [
+      "id",
+      "kind",
+      "subjectType",
+      "subjectId",
+      "detail",
+      // Who made the change (migration 0049, multi-ai-router#453).
+      "actor",
+      "actorKind",
+      "actorSays",
+      "clientIp",
+      "userAgent",
+      "requestId",
+      "createdAt",
+    ],
   },
   {
     table: schema.scheduledTaskRuns,

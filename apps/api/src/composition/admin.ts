@@ -25,7 +25,7 @@ import {
 import { createLastLoginLookup } from "../services/accounts/last-login"
 import { loginLifetimePolicy } from "../services/accounts/login-lifetime"
 import { createAuditRecorder, keyMutationCommitted } from "../services/admin"
-import { createKeysService } from "../services/keys"
+import { createKeysService, type KeysServiceDeps } from "../services/keys"
 import { createPoolReaper, createPoolsService } from "../services/pools"
 import { createSettingsService } from "../services/settings"
 import { accountProviders, catalogLabels, createUsageService } from "../services/usage-read"
@@ -55,7 +55,7 @@ export type { AdminPlane, AdminPlaneDeps } from "./admin-types"
 export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   const { env, logger, now, accounts, keys, keyTombstones, cipher, catalog, health, configDirs } =
     deps
-  const audit = createAuditRecorder(deps.auditEvents)
+  const audit = createAuditRecorder(deps.auditEvents, logger)
   const mutations = createAdminMutationRepository(deps.database)
 
   // Both halves of running the `claude` binary against an account's directory, and every login flow
@@ -216,6 +216,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     log: logger,
     reasonMaxChars: env.logReasonMaxChars,
   })
+  const onCommitted: KeysServiceDeps["onCommitted"] = (id, kind) =>
+    keyMutationCommitted(deps.coherence, id, kind)
 
   return {
     refresher,
@@ -231,16 +233,10 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         now,
         mutations,
         onCommitted: () => deps.coherence.refreshCatalog(),
+        logger,
       }),
-      poolReaper: createPoolReaper({ mutations, now, coherence: deps.coherence }),
-      keys: createKeysService({
-        keys,
-        cipher,
-        audit,
-        now,
-        mutations,
-        onCommitted: (id, kind) => keyMutationCommitted(deps.coherence, id, kind),
-      }),
+      poolReaper: createPoolReaper({ mutations, now, coherence: deps.coherence, logger }),
+      keys: createKeysService({ keys, cipher, audit, now, mutations, logger, onCommitted }),
       usage: createUsageService({
         history: createUsageHistoryRepository(deps.database, {
           snapshotStatementTimeoutMs: usageSnapshotStatementTimeoutMs(env),

@@ -3,6 +3,7 @@ import type { Database, DatabaseHandle } from "../../src/client"
 import { defaultMigrationsFolder, runMigrations } from "../../src/migrate"
 import { createAccountRepository } from "../../src/repositories/account-repository"
 import { createApiKeyRepository } from "../../src/repositories/api-key-repository"
+import { createAuditRepository } from "../../src/repositories/audit-repository"
 import { createModelCatalogRepository } from "../../src/repositories/model-catalog-repository"
 import { createOauthStateRepository } from "../../src/repositories/oauth-state-repository"
 import { createPriceOverrideRepository } from "../../src/repositories/price-override-repository"
@@ -500,5 +501,34 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
       tokensIn: 7,
       tokensOut: 50,
     })
+  })
+
+  test("0049 adds the nullable caller columns and the actor index to audit_events", async () => {
+    const sql = (handle as DatabaseHandle).sql
+    const columns = await sql<{ column_name: string; is_nullable: string; data_type: string }[]>`
+      select column_name, is_nullable, data_type from information_schema.columns
+      where table_schema = 'public' and table_name = 'audit_events'
+        and column_name in ('actor', 'actor_kind', 'actor_says', 'client_ip', 'user_agent', 'request_id')
+      order by column_name
+    `
+    expect([...columns]).toEqual(
+      ["actor", "actor_kind", "actor_says", "client_ip", "request_id", "user_agent"].map(
+        (name) => ({ column_name: name, is_nullable: "YES", data_type: "text" }),
+      ),
+    )
+    const indexes = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+      where schemaname = 'public' and indexname = 'audit_events_actor_created_idx'
+    `
+    expect(indexes[0]?.indexdef).toContain("(actor, created_at)")
+
+    // A row written the way an older image writes it — no caller at all — still inserts.
+    const audit = createAuditRepository((handle as DatabaseHandle).db)
+    const row = await audit.append({ kind: "test-migrations.0049", subjectId: "0049" })
+    try {
+      expect(row).toMatchObject({ actor: null, actorKind: null, clientIp: null, requestId: null })
+    } finally {
+      await sql`delete from audit_events where id = ${row.id}`
+    }
   })
 })

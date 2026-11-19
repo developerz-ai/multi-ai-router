@@ -1,4 +1,5 @@
 import type { AdminMutationRepository, ApiKeyRepository, ApiKeyRow } from "@multi-ai-router/db"
+import type { Logger } from "../../logging/logger"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
 import { type AdminResult, notFound, ok } from "../admin/result"
 import { createKeyMutations, type KeyMutationKind } from "./mutations"
@@ -42,6 +43,8 @@ export interface KeysServiceDeps {
   readonly cipher: { encrypt(plaintext: string): string; decrypt(envelope: string): string }
   readonly audit: AuditRecorder
   readonly now: () => Date
+  /** Where the in-transaction audit recorder reports a row written with no caller in context. */
+  readonly logger: Pick<Logger, "error">
   /** Defaults to `generateRouterKey`. Injected only so a test can pin a value. */
   readonly generate?: () => string
 }

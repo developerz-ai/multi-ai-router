@@ -39,6 +39,7 @@ import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 import { pasteOnlyFlow } from "../support/oauth-flows"
+import { silentLogger } from "../support/silent-logger"
 
 /**
  * The admin CRUD plane driven through a real Hono app with `app.request(...)`.
@@ -75,7 +76,7 @@ function harness(
 ) {
   const store = createMemoryStore()
   const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
-  const audit = createAuditRecorder(store.audit)
+  const audit = createAuditRecorder(store.audit, silentLogger())
   const clock = options.clock ?? { now: NOW }
   const now = () => clock.now
   const configDirs = createMemoryConfigDirs()
@@ -182,6 +183,7 @@ function harness(
     adminPoolRoutes({
       guard,
       service: createPoolsService({
+        logger: silentLogger(),
         mutations: store.mutations,
         onCommitted: () => {},
         pools: store.pools,
@@ -195,6 +197,7 @@ function harness(
     adminKeyRoutes({
       guard,
       service: createKeysService({
+        logger: silentLogger(),
         mutations: store.mutations,
         onCommitted: () => {},
         keys: store.keys,
@@ -330,7 +333,7 @@ describe("the guard", () => {
         complete: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
       } satisfies OIDCFlow,
     })
-    const { app } = harness(adminAuth(service, false))
+    const { app } = harness(adminAuth(service, false, null, 0))
 
     for (const path of [
       ADMIN_ACCOUNTS_BASE_PATH,
@@ -962,7 +965,7 @@ describe("the OAuth callback route", () => {
         complete: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
       } satisfies OIDCFlow,
     })
-    const { app, store, connect } = harness(adminAuth(service, false), {
+    const { app, store, connect } = harness(adminAuth(service, false, null, 0), {
       oauthFetch: fakeOAuthFetch(),
     })
     const created = await store.accounts.create({ label: "openai-1", provider: "openai-oauth" })

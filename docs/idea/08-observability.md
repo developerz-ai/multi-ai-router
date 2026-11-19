@@ -1451,6 +1451,46 @@ call so the log can never become an oracle for which half of the credential was 
 
 `GET /api/admin/audit` serves the console's feed, newest first, paged by `limit`.
 
+### Who made the change
+
+Every row names its caller (multi-ai-router#453, migration 0049). The caller is captured once — per
+admin request by the guard, per scheduled task by the runner — and held in an `AsyncLocalStorage`
+(`apps/api/src/services/admin/audit-context.ts`). The recorder stamps it on every append, so no
+emitter has to remember to.
+
+| Column | Value |
+|---|---|
+| `actor` | the session's username (the SSO email, or `local-admin`), `admin-api-token`, `system`, `anonymous`, or `unknown` |
+| `actor_kind` | `session` \| `api_token` \| `system` \| `anonymous` \| `unattributed` |
+| `actor_says` | the `X-Admin-Actor` request header (trimmed, redacted, capped at 200 characters), or the scheduled task's name |
+| `client_ip` | resolved under `TRUST_PROXY` / `TRUST_PROXY_HOPS` exactly as the login throttle resolves it; `unknown` with no peer |
+| `user_agent` | capped at 200 characters |
+| `request_id` | the request's `x-request-id`, joining the row to its log lines |
+
+- **`X-Admin-Actor` is self-reported.** One `ADMIN_API_TOKEN` is shared by every script and agent,
+  so the caller names itself; the header is never read for authentication, a call without it is let
+  in, and the IP and the token are what verify the claim. It goes through the log redactor before it
+  is stored, so a credential pasted into it is written as `[REDACTED]`; an auth scheme (`Bearer …`,
+  `Basic …`) is redacted whatever follows it, since a name never carries one.
+- **Background work is `system`.** A scheduled task runs under `{ actor: "system", actor_says:
+  <task name> }`, including a tick an operator started with "run now". The credential refresher arms
+  its own timers outside the scheduler and runs every refresh flight as `system` /
+  `credential-refresher`: a timer inherits the context it was armed in, and without this a refresh
+  armed during an operator's request would fire days later stamped with that operator. The router's
+  recovery probe, which spends "Test now" when a permit's timer fires, runs as `system` /
+  `router-recovery` for the same reason.
+- **A sign-in attempt is `anonymous`.** The login routes run before any credential is accepted;
+  their rows (`admin.login`, `admin.login_failed`) record the resolved address and user agent, and
+  the detail names whom the login was for.
+- **`unattributed` is a bug report, not a state.** A write that reaches the recorder with no caller
+  is still written — bookkeeping never blocks an operator's change — as `actor_kind: unattributed`,
+  `actor: unknown`, and the router logs one `error` line, `audit event without a caller`, naming the
+  kind. The provider's OAuth redirect callback is the known case until its connect stores who started
+  it (multi-ai-router#455). `apps/api/test/integration/audit-emitters-attributed.test.ts` lists every
+  emitter with the entry point that attributes it and fails on a new one nobody classified.
+- **Old rows stay null.** Nothing is backfilled; a row from before migration 0049 names no caller.
+- The data plane (`/v1/**`) sets no context and writes no audit row.
+
 ## Scheduled task visibility
 
 Background work runs as **in-process jittered interval timers coordinated by Postgres advisory

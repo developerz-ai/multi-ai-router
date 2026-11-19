@@ -5,7 +5,18 @@
  */
 
 export type { AuditEventInput, AuditRecorder, AuditSink } from "./audit"
-export { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder } from "./audit"
+export { AUDIT_KINDS, AUDIT_SUBJECTS, createAuditRecorder, UNKNOWN_ACTOR } from "./audit"
+export type { AdminRequestCaller, AuditContext } from "./audit-context"
+export {
+  ADMIN_ACTOR_HEADER,
+  ANONYMOUS_ACTOR,
+  AUDIT_CALLER_TEXT_MAX_CHARS,
+  adminRequestAuditContext,
+  currentAuditContext,
+  runWithAuditContext,
+  SYSTEM_ACTOR,
+  systemAuditContext,
+} from "./audit-context"
 export type { CoherenceHooks } from "./coherence"
 export { keyMutationCommitted, withCatalogRefresh } from "./coherence"
 export { readJsonBody, validate, validateId } from "./parse"

@@ -1,4 +1,7 @@
+import type { AuditActorKind } from "@multi-ai-router/db"
+import type { Logger } from "../../logging/logger"
 import { redact } from "../../logging/redact"
+import { currentAuditContext } from "./audit-context"
 
 /**
  * Every admin-plane mutation writes one `AuditEvent`. Append-only, and it never
@@ -21,6 +24,12 @@ export interface AuditSink {
     readonly subjectType?: string | null
     readonly subjectId?: string | null
     readonly detail?: Record<string, unknown> | null
+    readonly actor?: string | null
+    readonly actorKind?: AuditActorKind | null
+    readonly actorSays?: string | null
+    readonly clientIp?: string | null
+    readonly userAgent?: string | null
+    readonly requestId?: string | null
   }): Promise<unknown>
 }
 
@@ -147,14 +156,43 @@ export const AUDIT_SUBJECTS = {
   admin: "admin",
 } as const
 
-export function createAuditRecorder(sink: AuditSink): AuditRecorder {
+/** The `actor` a row records when it reached the recorder with no caller in context. */
+export const UNKNOWN_ACTOR = "unknown"
+
+/**
+ * Stamps the caller from `currentAuditContext()` onto every append (`./audit-context.ts`).
+ *
+ * A write with no caller in context is a bug in whatever path reached here — but the change it
+ * records has already happened, and refusing the row would only lose the evidence (D4: bookkeeping
+ * never blocks an operator). So it is written as `unattributed` / `unknown` and the bug is reported
+ * once, as an error line naming the kind. Only that path is guaranteed not to throw: a failing
+ * `sink.append` still rejects, because callers inside a transaction rely on it to roll back.
+ */
+export function createAuditRecorder(sink: AuditSink, logger: Pick<Logger, "error">): AuditRecorder {
   return {
     record: async (event) => {
+      const caller = currentAuditContext()
+      if (caller === undefined) {
+        logger.error("audit event without a caller", {
+          component: "audit",
+          kind: event.kind,
+          subjectType: event.subjectType,
+          subjectId: event.subjectId,
+          remedy:
+            "run this path under runWithAuditContext (services/admin/audit-context.ts); the row was written as unattributed",
+        })
+      }
       await sink.append({
         kind: event.kind,
         subjectType: event.subjectType,
         subjectId: event.subjectId,
         detail: event.detail === undefined ? null : redact(event.detail),
+        actor: caller?.actor ?? UNKNOWN_ACTOR,
+        actorKind: caller?.actorKind ?? "unattributed",
+        actorSays: caller?.says ?? null,
+        clientIp: caller?.clientIp ?? null,
+        userAgent: caller?.userAgent ?? null,
+        requestId: caller?.requestId ?? null,
       })
     },
   }

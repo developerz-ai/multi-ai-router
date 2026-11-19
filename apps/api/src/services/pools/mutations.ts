@@ -32,7 +32,7 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
             pool.id,
             (body.members ?? []).map(resolveTuning(accounts, [])),
           )
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.poolCreated,
             subjectType: AUDIT_SUBJECTS.pool,
             subjectId: pool.id,
@@ -95,7 +95,7 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
               body.members === undefined
                 ? held
                 : await tx.pools.replaceMembers(id, body.members.map(resolveTuning(accounts, held)))
-            const audit = createAuditRecorder(tx.audit)
+            const audit = createAuditRecorder(tx.audit, deps.logger)
             await audit.record({
               kind: AUDIT_KINDS.poolUpdated,
               subjectType: AUDIT_SUBJECTS.pool,
@@ -140,7 +140,7 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
             )
           }
           if (!(await tx.pools.delete(id))) return notFound(`no pool with id "${id}"`)
-          await createAuditRecorder(tx.audit).record({
+          await createAuditRecorder(tx.audit, deps.logger).record({
             kind: AUDIT_KINDS.poolDeleted,
             subjectType: AUDIT_SUBJECTS.pool,
             subjectId: id,

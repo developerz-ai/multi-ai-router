@@ -8,6 +8,7 @@ import {
   updateKeyBody,
 } from "../../../src/services/keys"
 import { createMemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * Attribution labels on router keys: `owner`, `ownerKind`, `tool`, `purpose`.
@@ -23,11 +24,12 @@ const NOW = new Date("2026-07-24T12:00:00.000Z")
 function harness() {
   const store = createMemoryStore()
   const service = createKeysService({
+    logger: silentLogger(),
     mutations: store.mutations,
     onCommitted: () => {},
     keys: store.keys,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(3) }),
-    audit: createAuditRecorder(store.audit),
+    audit: createAuditRecorder(store.audit, silentLogger()),
     now: () => NOW,
   })
   return { service, store }

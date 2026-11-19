@@ -3,6 +3,7 @@ import { createDeviceConnectService } from "../../src/services/accounts"
 import { createAuditRecorder } from "../../src/services/admin"
 import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { createMemoryStore } from "../support/memory-store"
+import { silentLogger } from "../support/silent-logger"
 
 function harness() {
   const store = createMemoryStore()
@@ -15,7 +16,7 @@ function harness() {
     accounts: store.accounts,
     states: store.oauthStates,
     cipher,
-    audit: createAuditRecorder(store.audit),
+    audit: createAuditRecorder(store.audit, silentLogger()),
     stateMinutes: 20,
     exchangeTimeoutMs: 1000,
     now: () => clock.now,
