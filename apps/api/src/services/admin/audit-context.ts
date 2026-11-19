@@ -15,8 +15,9 @@ import { REDACTED, redactValue } from "../../logging/redact"
  * **Work outlives the request that started it.** Node and Bun carry the store into every timer and
  * promise created inside `run`, so a timer armed during an admin request fires — hours later —
  * still holding that operator. Background machinery that arms its own timers re-enters a system
- * context at the fire site (`services/accounts/refresh/timers.ts`), or its rows would name whoever
- * happened to trigger the arming.
+ * context where its work starts — the credential refresher's `run()` (`services/accounts/refresh/
+ * refresher.ts`) and the recovery probe's sender (`composition/recovery.ts`) — or its rows would
+ * name whoever happened to trigger the arming.
  */
 export interface AuditContext {
   /** The session username (SSO email), `admin-api-token`, or `system`. */
