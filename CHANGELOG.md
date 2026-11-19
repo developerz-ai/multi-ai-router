@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.66.0] — 2026-11-18
+
+### Changed
+
+- **A usage count nobody measured is NULL, never zero, and the reasoning count has a column.** `usage_records.tokens_in`, `tokens_out`, `cache_read_tokens` and `cache_write_tokens` were `NOT NULL DEFAULT 0` while the spec said missing is null: a Codex stream that stated no usage, a failed attempt, a count and a comment-only response were all stored as measured zeros. They are now nullable with no default, and a row records them only when the upstream stated a usage sample the observer read; zero stays a measurement. A new nullable `reasoning_tokens` keeps the part of `tokens_out` an OpenAI-dialect upstream states it spent reasoning (`completion_tokens_details` / `output_tokens_details`) — the one place a GPT reasoning count survives the Anthropic wire, which has no field for it. Pricing is unchanged, sums and rollups already coalesce, and the recent-attempts feed reports `tokensIn` / `tokensOut` as `number | null`. Migration 0048 is catalog-only and backward-safe (no rewrite, nothing dropped, nothing backfilled: a pre-0048 zero cannot be told from a measured one). Spec: `docs/idea/08-observability.md#usagerecord`. Regression: `apps/api/test/integration/codex-usage-unread.test.ts`, `apps/api/test/unit/dataplane/records.test.ts`, `apps/api/test/unit/usage/response-usage.test.ts`, `packages/db/test/integration/migrations.test.ts`.
+- **A parameter the Codex surface refuses is named on the answer, never removed silently.** Codex takes no output ceiling, `temperature` or `top_p`, so a translated body still goes without them, but Anthropic's mandatory `max_tokens` used to vanish without a word. Every removal is now reported (as `max_tokens`, the caller's own name, on Anthropic ingress) and the answer carries `x-router-dropped-params` listing them, e.g. `max_tokens, temperature`. Refusing instead would fail every Anthropic-ingress turn and every small agent ceiling on a request an account can serve; honouring it is impossible, since the stream states no per-delta token count. Spec: `docs/idea/06-protocol-translation.md#surface-rules`. Regression: `apps/api/test/integration/codex-translate.test.ts`, `apps/api/test/unit/translate/responses-egress-rules.test.ts`.
+
 ## [2.65.1] — 2026-11-18
 
 ### Fixed
@@ -2293,3 +2300,4 @@ your tooling config.
 [2.64.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.64.0
 [2.65.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.65.0
 [2.65.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.65.1
+[2.66.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.66.0

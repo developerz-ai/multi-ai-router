@@ -46,6 +46,7 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
     tokensOut: 200,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    reasoningTokens: null,
     costEstimate: "0.006500",
     costBasis: "metered",
     latencyMs: 120,

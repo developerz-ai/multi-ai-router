@@ -352,7 +352,8 @@ numbers look wrong. Rows are enqueued in memory and batch-written off the reques
 | `accountId` | id | Which account actually served it |
 | `sessionKey` | string | |
 | `model` | string | The model the client asked for |
-| `tokensIn` / `tokensOut` | number | As reported by the upstream |
+| `tokensIn` / `tokensOut` | number? | As reported by the upstream; null when nothing was measured, never zero |
+| `reasoningTokens` | number? | The reasoning part of `tokensOut`, where the upstream states it |
 | `costEstimate` | number | From the static, user-overridable price table |
 | `latencyMs` | number | |
 | `outcome` | enum | Success, or the `RouterError` subclass that ended it |

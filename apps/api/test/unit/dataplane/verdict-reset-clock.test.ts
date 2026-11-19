@@ -58,6 +58,7 @@ function fixture(status: number, headers: Record<string, string>, unknownRetry =
       includeUsage: () => false,
       clientStreams: () => false,
       promptCacheKey: () => undefined,
+      surfaceDropped: () => [],
       bodyFor: () => body,
     },
     failover: undefined,

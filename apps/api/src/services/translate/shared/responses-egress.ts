@@ -19,7 +19,10 @@ export interface ResponsesEgressRules {
   readonly requireStream: boolean
   /** The upstream rejects a body with no `instructions`; an absent prompt is sent as `""`. */
   readonly requireInstructions: boolean
-  /** Top-level Responses fields the upstream refuses. Removed, and reported by name. */
+  /**
+   * Top-level Responses fields the upstream refuses. Removed, reported by name, and named to the
+   * caller on the answer — never removed silently.
+   */
   readonly unsupportedFields: readonly string[]
   /**
    * The upstream compiles each tool schema's JSON-Schema `pattern`s and refuses a regex lookaround
@@ -44,22 +47,26 @@ export const DEFAULT_RESPONSES_EGRESS: ResponsesEgressRules = {
   stripLookaroundPatterns: false,
 }
 
-const REFUSED_BY_SURFACE = "the target account's Responses surface refuses this field"
+/** The reason every `unsupportedFields` removal is reported under; the answer's header reads it. */
+export const REFUSED_BY_SURFACE = "the target account's Responses surface refuses this field"
 
-const NONE: ReadonlySet<string> = new Set()
+const SAME_NAMES: Readonly<Record<string, string>> = {}
 
 /**
- * @param everyRequest Responses fields the ingress dialect puts on *every* body — Anthropic's
- * mandatory `max_tokens` lands as `max_output_tokens`. Removing one is still done, but not
- * reported: a drop every request carries is a documented hint, and a warn line per request says
- * nothing (`shared/drops.ts`). Prod, 2026-10-16: 174 such lines an hour, one per Claude Code turn
- * routed to a ChatGPT account.
+ * Every removal is reported — the mandatory Anthropic ceiling included. It used to be removed
+ * silently (a warn line per Claude Code turn said nothing: 174 an hour, prod 2026-10-16), so a
+ * caller whose `max_tokens` the upstream never saw had no way to know. The drop log now warns once
+ * per key, pair and signature per window (`dataplane/translation-drop-log.ts`), and the answer names
+ * the dropped parameters in `x-router-dropped-params` (`dataplane/router-headers.ts`).
+ *
+ * @param clientNames a Responses field's name in the caller's own dialect, where it differs —
+ * Anthropic's `max_tokens` lands as `max_output_tokens` — so a drop names what the caller sent.
  */
 export function applyResponsesEgressRules(
   body: unknown,
   rules: ResponsesEgressRules | undefined,
   onDrop: DropSink | undefined,
-  everyRequest: ReadonlySet<string> = NONE,
+  clientNames: Readonly<Record<string, string>> = SAME_NAMES,
 ): unknown {
   if (rules === undefined || typeof body !== "object" || body === null || Array.isArray(body)) {
     return body
@@ -68,7 +75,7 @@ export function applyResponsesEgressRules(
   for (const field of rules.unsupportedFields) {
     if (out[field] === undefined) continue
     delete out[field]
-    if (!everyRequest.has(field)) onDrop?.({ field, reason: REFUSED_BY_SURFACE })
+    onDrop?.({ field: clientNames[field] ?? field, reason: REFUSED_BY_SURFACE })
   }
   if (rules.requireStream) out.stream = true
   if (rules.requireInstructions && typeof out.instructions !== "string") out.instructions = ""

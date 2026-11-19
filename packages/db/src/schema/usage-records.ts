@@ -98,12 +98,24 @@ export const usageRecords = pgTable(
      */
     egressMode: text("egress_mode").$type<EgressMode>(),
 
-    tokensIn: integer("tokens_in").notNull().default(0),
-    tokensOut: integer("tokens_out").notNull().default(0),
+    /**
+     * The four counts are NULL when nothing was measured: an attempt that never reached a
+     * token-bearing response, or one whose upstream stated no usage the router could read
+     * (`errorClass` names which). Zero is a measurement. They were `NOT NULL DEFAULT 0` until
+     * migration 0048, so a row written before it holds 0 for both cases.
+     */
+    tokensIn: integer("tokens_in"),
+    tokensOut: integer("tokens_out"),
     /** Total prompt size is tokensIn + cacheWriteTokens + cacheReadTokens — always the sum. */
-    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens"),
     /** Cache creation tokens. */
-    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens"),
+    /**
+     * The part of `tokensOut` spent reasoning, as the upstream stated it. NULL when it stated
+     * none — every Anthropic upstream, and every row before migration 0048. The one place a GPT
+     * reasoning count survives the Anthropic wire, which has no field for it.
+     */
+    reasoningTokens: integer("reasoning_tokens"),
 
     /** NULL for an unknown model — never silently zero, never guessed. */
     costEstimate: numeric("cost_estimate", { precision: 14, scale: 6 }),

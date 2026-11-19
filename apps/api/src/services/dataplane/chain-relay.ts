@@ -123,7 +123,9 @@ export function relaySuccess(
       ;(ctx.runtime.recordTerminal ?? ctx.runtime.record)(
         attemptRecord({
           ...ctx.runtime.attribution(attempt, servable),
-          tokens: counts,
+          // Counts are recorded only when the upstream stated a sample: on any outcome, an
+          // unread response measured nothing, and its row says null rather than zero.
+          tokens: facts.usageStated ? counts : undefined,
           priced: ctx.runtime.operation !== "count-tokens",
           usageRead: unread === null,
           timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),

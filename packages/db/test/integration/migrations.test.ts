@@ -402,4 +402,103 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
     await daily.rollupDay(createdAt)
     expect(await daily.totals({ fromDay: "2026-07-24", toDay: "2026-07-25" })).toEqual(before)
   })
+
+  test("0048 makes usage counts nullable with no default and adds reasoning_tokens", async () => {
+    const columns = await (handle as DatabaseHandle).sql<
+      {
+        column_name: string
+        is_nullable: string
+        column_default: string | null
+        data_type: string
+      }[]
+    >`
+      select column_name, is_nullable, column_default, data_type from information_schema.columns
+      where table_schema = 'public' and table_name = 'usage_records'
+        and column_name in ('tokens_in', 'tokens_out', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens')
+      order by column_name
+    `
+    expect([...columns]).toEqual(
+      [
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "tokens_in",
+        "tokens_out",
+      ].map((name) => ({
+        column_name: name,
+        is_nullable: "YES",
+        column_default: null,
+        data_type: "integer",
+      })),
+    )
+
+    // A row whose usage was never read rolls up beside a measured one without poisoning the sum.
+    db = (handle as DatabaseHandle).db
+    const account = await createAccountRepository(db).create({
+      label: "test-migrations-null-usage-acct",
+      provider: "openai-oauth",
+    })
+    accountIds.push(account.id)
+    const key = await createApiKeyRepository(db).create({
+      name: "test-migrations-null-usage-key",
+      value: crypto.randomUUID(),
+      prefix: "fixture",
+    })
+    apiKeyIds.push(key.id)
+    const createdAt = new Date("2026-07-26T12:00:00Z")
+    const attempt = (counts: {
+      tokensIn: number | null
+      tokensOut: number | null
+      reasoningTokens: number | null
+    }) => ({
+      id: crypto.randomUUID(),
+      correlationId: crypto.randomUUID(),
+      apiKeyId: key.id,
+      accountId: account.id,
+      model: "test-migrations-null-model",
+      outcome: "success" as const,
+      createdAt,
+      ...counts,
+      cacheReadTokens: counts.tokensIn === null ? null : 0,
+      cacheWriteTokens: counts.tokensIn === null ? null : 0,
+    })
+    const measured = attempt({ tokensIn: 7, tokensOut: 50, reasoningTokens: 42 })
+    const unread = attempt({ tokensIn: null, tokensOut: null, reasoningTokens: null })
+    const terminal = (row: typeof measured) => ({
+      correlationId: row.correlationId,
+      winnerEventId: row.id,
+      apiKeyId: key.id,
+      accountId: account.id,
+      model: row.model,
+      outcome: "success" as const,
+      responseStatus: 200,
+      startedAt: createdAt,
+      settledAt: createdAt,
+      attributionKind: "winning-attempt" as const,
+    })
+    await createUsageRecordRepository(db).insertBatch({
+      attempts: [measured, unread],
+      terminals: [terminal(measured), terminal(unread)],
+    })
+    const stored = await (handle as DatabaseHandle).sql<
+      { id: string; tokens_in: number | null; reasoning_tokens: number | null }[]
+    >`select id, tokens_in, reasoning_tokens from usage_records where id in (${measured.id}, ${unread.id})`
+    expect(new Map(stored.map((row) => [row.id, row]))).toEqual(
+      new Map([
+        [measured.id, { id: measured.id, tokens_in: 7, reasoning_tokens: 42 }],
+        [unread.id, { id: unread.id, tokens_in: null, reasoning_tokens: null }],
+      ]),
+    )
+    const daily = createUsageDailyRepository(db)
+    await daily.rollupDay(createdAt)
+    const breakdown = await daily.breakdown(
+      { fromDay: "2026-07-26", toDay: "2026-07-27" },
+      "accountId",
+    )
+    expect(breakdown.find((item) => item.id === account.id)).toMatchObject({
+      attempts: 2,
+      tokensIn: 7,
+      tokensOut: 50,
+    })
+  })
 })

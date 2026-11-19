@@ -27,8 +27,9 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `ingressDialect` | enum? | The API surface the client called |
 | `egressMode` | enum? | `passthrough` \| `translate` \| `agent-sdk` — the per-row twin of the `path` label on `router_overhead_seconds`. Carried instead of an egress *dialect*: the fact worth storing is the relationship between the two, and the SDK path has no egress dialect at all |
 | `streamed` | bool | Whether bytes reached the client. A streamed attempt is never retried, so this column is the audit of that rule |
-| `tokensIn` / `tokensOut` | int | Upstream's own numbers, never the translated ones |
-| `cacheReadTokens` / `cacheWriteTokens` | int | Where the provider reports them. Anthropic always does |
+| `tokensIn` / `tokensOut` | int? | Upstream's own numbers, never the translated ones. NULL when nothing was measured: no response that stated usage (a failed attempt, a count, an unread completion). Zero is a measurement. `NOT NULL DEFAULT 0` until migration 0048, so earlier rows hold 0 for both cases |
+| `cacheReadTokens` / `cacheWriteTokens` | int? | Where the provider reports them. Anthropic always does. NULL on the same rule |
+| `reasoningTokens` | int? | The part of `tokensOut` an OpenAI-dialect upstream states it spent reasoning (`completion_tokens_details` / `output_tokens_details`). NULL when unstated: every Anthropic upstream, every row before migration 0048. The one place a GPT reasoning count survives the Anthropic wire, which has no field for it. Not priced separately: the upstream bills it inside `tokensOut` |
 | `costEstimate` | decimal? | See below. Null for an unknown model — never silently zero |
 | `costBasis` | enum | `metered` \| `notional` \| `unknown`. Which of the first two a priced attempt takes comes from the **Account's** `billing`, not from its provider — see below |
 | `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for the attempt; time to the first relayed byte. **TTFB is what makes "zero added time-to-first-token" a measurement** — `latencyMs` is dominated by generation time and hides a buffering regression completely |
@@ -196,8 +197,8 @@ Three bases, and the third is a feature.
 
 **Usage nobody stated is unknown, not free.** Zero token columns mean one of two things: a measured
 zero, or no measurement at all. Only the first is a free completion. A successful completion whose
-response observation read **no usage sample** (`usage/usage-unread.ts`) keeps its token columns at
-0, because nothing was measured, but it prices as `unknown`. Its `errorClass` names why, from a
+response observation read **no usage sample** (`usage/usage-unread.ts`) records its token columns as
+NULL, because nothing was measured, and prices as `unknown`. Its `errorClass` names why, from a
 closed set:
 
 - `usage_unreported`: the stream was readable and stated no usage. It ended without its final event,
