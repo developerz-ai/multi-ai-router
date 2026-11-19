@@ -4,8 +4,10 @@ import { CLI_REFRESH_LEAD_MS } from "../../providers/claude-sdk/credential-fresh
 import type { CredentialMetadata } from "../../providers/claude-sdk/credential-metadata"
 import type { LastLoginLookup } from "../../services/accounts/last-login"
 import { loginLifetimePolicy } from "../../services/accounts/login-lifetime"
+import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { ScheduledTask } from "../types"
 import { createCredentialKeepaliveTask } from "./credential-keepalive"
+import { createUnownablePark } from "./credential-unownable"
 import type { IdleAccountProbeDeps } from "./idle-account-probe"
 import { createLoginLifetimeWatchTask } from "./login-lifetime-watch"
 
@@ -24,6 +26,8 @@ export interface CredentialTaskDeps {
   /** Last interactive login per account, from the audit log. */
   readonly lastLogins?: LastLoginLookup
   readonly testAccount?: IdleAccountProbeDeps["test"]
+  /** Parks an Account whose owner could never be launched. Absent where no CLI is wired. */
+  readonly authProbe?: Pick<AccountAuthProbe, "park">
   readonly probeModels?: Readonly<Record<string, string>>
   readonly env: Pick<Env, "claudeLogin" | "claudeSdkCredentialKeepalive" | "scheduler">
 }
@@ -34,6 +38,7 @@ export function createCredentialTasks(
 ): readonly ScheduledTask[] {
   const { env, credentialMetadata } = deps
   if (credentialMetadata === undefined) return []
+  const onUnreadable = createUnownablePark(deps)
   const tasks: ScheduledTask[] = []
 
   // Off with `CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false`, like the sweep's own warming: that flag is
@@ -43,6 +48,7 @@ export function createCredentialTasks(
       createCredentialKeepaliveTask({
         accounts: deps.accounts,
         readMetadata: credentialMetadata,
+        onUnreadable,
         test: deps.testAccount,
         models: deps.probeModels ?? {},
         policy: {
@@ -60,6 +66,7 @@ export function createCredentialTasks(
       createLoginLifetimeWatchTask({
         accounts: deps.accounts,
         readMetadata: credentialMetadata,
+        onUnreadable,
         lastLogins: deps.lastLogins,
         policy: loginLifetimePolicy(env.claudeLogin),
         intervalMs: intervals.login_lifetime_watch,

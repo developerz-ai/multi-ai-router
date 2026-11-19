@@ -10,7 +10,7 @@ import { operatorCheckRepository } from "../../support/operator-check-repository
 
 function harness(
   initial: AccountRow,
-  auth: AccountAuthProbe,
+  auth: Pick<AccountAuthProbe, "check">,
   begin: OperatorRecoveryRepository["beginOperatorRecovery"],
   read: OperatorRecoveryRepository["readOperatorCooldown"] = async () => undefined,
 ) {

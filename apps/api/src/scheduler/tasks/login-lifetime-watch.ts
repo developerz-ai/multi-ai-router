@@ -8,6 +8,7 @@ import {
 } from "../../services/accounts/login-lifetime"
 import { describeProvider } from "../../services/accounts/providers"
 import type { ScheduledTask, TaskOutcome } from "../types"
+import type { UnreadableMetadataHandler } from "./credential-unownable"
 
 /**
  * One structured `warn` line per subscription per day while its **login** is inside the renewal
@@ -26,6 +27,8 @@ export interface LoginLifetimeWatchDeps {
   /** The ciphertext-free projection: the watch reads timestamps, never a credential column. */
   readonly accounts: Pick<AccountRepository, "listSummaries">
   readonly readMetadata: (account: AccountSummaryRow) => Promise<CredentialMetadata>
+  /** Told of each read that failed — parks an Account whose owner cannot be launched. */
+  readonly onUnreadable?: UnreadableMetadataHandler
   readonly lastLogins: LastLoginLookup
   readonly policy: LoginLifetimePolicy
   readonly intervalMs: number
@@ -59,6 +62,7 @@ export function createLoginLifetimeWatchTask(deps: LoginLifetimeWatchDeps): Sche
               accountId: account.id,
               reason: describeError(error, 200),
             })
+            await deps.onUnreadable?.(account, error, logger)
             continue
           }
           const lifetime = computeLoginLifetime({

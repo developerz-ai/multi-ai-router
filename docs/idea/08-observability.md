@@ -1350,6 +1350,12 @@ access token` (`warn`, then backed off for `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_RETR
 with `accessExpiresAtBefore/After`, `loginExpiresAtBefore/After` and `loginExpiryMoved` —
 timestamps only. The field names avoid `token`, which the redactor masks by name.
 
+Both metadata tasks write `credential owner cannot be launched for this account` (`error`) when an
+account's owner process could not be spawned because its directory or the helper is missing, with
+`accountId`, `provider`, `reason` (which names the path) and `statusChangedTo` (`needs_reauth`, or
+`null` when the row was already parked or disabled). The audit row is an `account.updated` with
+`source: "credential_owner"`.
+
 One logger runs before this one exists: the boot-time migration logger in `packages/db` writes
 JSON to stderr directly, and it scrubs its own lines (connection-string userinfo, obvious key
 material — `scrubCredentials` in `packages/core`) because a connect failure at that moment echoes

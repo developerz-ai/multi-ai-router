@@ -4,6 +4,7 @@ import { UpstreamAdmissionRefused } from "../upstream-admission"
 import { WORKSPACE_DIR } from "./config-dir"
 import { makeAnchoredDirectory, makeAnchoredRoot } from "./config-dir-fs"
 import type { OwnerLaunchFactory } from "./owned-query"
+import { CredentialOwnerLaunchFailed } from "./owner-helper"
 import { createOwnerLaunch, type OwnerLaunch, type OwnerLaunchConfig } from "./owner-launch"
 
 import { type OwnershipOperationDependencies, ownershipOperation } from "./ownership-operation"
@@ -147,9 +148,13 @@ export function createAccountCliOwnership(
           env: { CLAUDE_CONFIG_DIR: join(config.root, id) },
           signal: new AbortController().signal,
         }) as ChildProcess
-      } catch {
+      } catch (error) {
         owner.cancel()
-        throw new UpstreamAdmissionRefused("credential metadata owner unavailable")
+        // A guardian that never launched keeps its cause: the caller may act on the Account.
+        throw new UpstreamAdmissionRefused(
+          "credential metadata owner unavailable",
+          error instanceof CredentialOwnerLaunchFailed ? { cause: error } : undefined,
+        )
       }
       const tracked = [...(live.get(id) ?? [])].find((scope) => scope.exited === owner.exited)
       if (tracked) metadata.add(tracked)
