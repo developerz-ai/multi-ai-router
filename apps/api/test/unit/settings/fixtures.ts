@@ -1,5 +1,6 @@
 import type {
   AuditEventRow,
+  AuditListFilter,
   PriceOverrideInput,
   PriceOverrideRow,
   ScheduledTaskName,
@@ -9,7 +10,11 @@ import type {
 import type { RetentionConfig } from "../../../src/config/env"
 import type { UsageReportConfig } from "../../../src/config/usage-report"
 import type { PriceAccount } from "../../../src/services/cost/coverage"
-import { createSettingsService, type SettingsService } from "../../../src/services/settings"
+import {
+  createSettingsService,
+  type SettingsService,
+  type SettingsServiceDeps,
+} from "../../../src/services/settings"
 
 /**
  * Doubles for the settings service's four dependencies, none of which is a mock: each one
@@ -181,15 +186,22 @@ export function event(options: {
   }
 }
 
+function matches(row: AuditEventRow, filter: AuditListFilter): boolean {
+  return (
+    (filter.kind === undefined || row.kind === filter.kind) &&
+    (filter.actor === undefined || row.actor === filter.actor)
+  )
+}
+
 export function memoryAuditLog(rows: readonly AuditEventRow[]) {
   const newestFirst = [...rows].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
   return {
-    // `kind` filters before `limit`, as the repository's SQL predicate does (01.10).
-    list: async (limit: number, kind?: string) =>
-      newestFirst.filter((row) => kind === undefined || row.kind === kind).slice(0, limit),
-    listForSubject: async (subjectId: string, limit: number, kind?: string) =>
+    // The filter applies before `limit`, as the repository's SQL predicates do (01.10).
+    list: async (limit: number, filter: AuditListFilter = {}) =>
+      newestFirst.filter((row) => matches(row, filter)).slice(0, limit),
+    listForSubject: async (subjectId: string, limit: number, filter: AuditListFilter = {}) =>
       newestFirst
-        .filter((row) => row.subjectId === subjectId && (kind === undefined || row.kind === kind))
+        .filter((row) => row.subjectId === subjectId && matches(row, filter))
         .slice(0, limit),
   }
 }
@@ -217,6 +229,8 @@ export interface HarnessOptions {
   readonly prices?: readonly PriceOverrideInput[]
   readonly runs?: TaskRuns
   readonly auditLog?: readonly AuditEventRow[]
+  /** A real repository in place of `memoryAuditLog(auditLog)` — the Postgres-backed feed tests. */
+  readonly auditEvents?: SettingsServiceDeps["auditEvents"]
   readonly onPricesChanged?: () => Promise<void>
   readonly onAudit?: () => void
   readonly now?: Date
@@ -243,7 +257,7 @@ export function harness(options: HarnessOptions = {}): Harness {
     prices,
     priceAccounts: options.priceAccounts,
     scheduledTasks: tasks,
-    auditEvents: memoryAuditLog(options.auditLog ?? []),
+    auditEvents: options.auditEvents ?? memoryAuditLog(options.auditLog ?? []),
     audit,
     usageReports: { lastDeliveredAt: async () => options.lastDeliveredAt ?? null },
     env: {
