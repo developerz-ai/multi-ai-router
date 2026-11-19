@@ -18,9 +18,14 @@ request to GitHub Support naming the objects** — never by a rewrite of `main`:
 - The objects the archive tag left behind when it was deleted from the remote (#398) are kept
   in a bundle off the remote — not reachable by fetch, but still served by SHA until the
   server's purge and garbage collection complete.
-- **Until the purge is confirmed** — a fresh clone plus a fetch of the pull-request refs —
-  the material is treated as publicly readable. **A clean `main` is not the material being
-  gone.**
+- **The confirmation gate has three required records.** GitHub Support must confirm that its
+  server-side purge and garbage collection completed for every object named in the request;
+  after that confirmation, direct-SHA accessibility checks for each named object must show the
+  object is no longer served; and a fresh clone must fetch the pull-request refs named in the
+  request. The clone/ref check verifies the refs, but cannot prove that formerly unreachable
+  objects have been purged.
+- **Until every confirmation record exists**, the material is treated as publicly readable.
+  **A clean `main` is not the material being gone.**
 
 Applied to the credential below: one purge request covers both halves, the commits the
 pull-request refs hold and the objects the deleted archive tag left unreachable. No local
