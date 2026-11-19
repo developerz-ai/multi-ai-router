@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Corrected: the 2.68.0 Codex pin fix needs a re-discover to take effect.** 2.68.0's notes, the pin's comment and `docs/idea/03-providers.md` said the hourly sweep writes the Codex listing into `supportedModels`. It does not: `model_catalog_refresh` writes only `model_catalog`, which routing never reads, and `supportedModels` changes only through "Discover models" (by design — a timer must not change routing). An Account discovered before 2.68.0 keeps refusing `gpt-6.1-terra` / `gpt-6.2-*` until an operator re-runs "Discover models" on it. Comment and spec now say so. No code change.
+
 ## [2.68.0] — 2026-11-19
 
 ### Fixed
