@@ -17,12 +17,14 @@ import type { ListedModel, ProviderModelListing } from "../model-listing"
 
 // `client_version_to_whole()` is the running Codex CLI's `MAJOR.MINOR.PATCH`; the backend gates
 // newer models on it, so it names a released CLI: `rust-v0.170.0`, the newest stable tag of
-// openai/codex on 2026-11-19. A stale value lists fewer models, never an error — and a model the
-// listing omits is refused `model_not_found` before any request leaves (the hourly sweep writes the
-// listing into `supportedModels`). Measured 2026-11-19: at `0.160.0` the listing held exactly the
-// four gpt-6 slugs of that CLI's bundled models.json, so `gpt-6.1-terra` (bundled from `0.165.0`)
-// and `gpt-6.2-*` (from `0.170.0`) were unreachable on every ChatGPT account. Bump it when a model
-// ships; `docs/idea/03-providers.md` names the check.
+// openai/codex on 2026-11-19. A stale value lists fewer models, never an error. "Discover models"
+// writes the listing into `supportedModels` (the hourly sweep writes only `model_catalog`, which
+// routing never reads), so a model the listing omitted at the last discover is refused
+// `model_not_found` before any request leaves. Measured 2026-11-19: the account discovered at
+// `0.160.0` held exactly the four gpt-6 slugs of that CLI's bundled models.json, so `gpt-6.1-terra`
+// (bundled from `0.165.0`) and `gpt-6.2-*` (from `0.170.0`) were unreachable. When a model ships:
+// bump this pin, release, then re-run "Discover models" on each ChatGPT account that declares
+// `supportedModels`; `docs/idea/03-providers.md` names the check.
 export const CODEX_CLIENT_VERSION = "0.170.0"
 
 const size = z
