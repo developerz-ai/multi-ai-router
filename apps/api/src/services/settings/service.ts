@@ -171,12 +171,16 @@ export function createSettingsService(deps: SettingsServiceDeps): SettingsServic
     },
 
     audit: async (query) => {
-      // `kind` is a repository predicate (01.10): filtered in SQL, so an older event of that kind
-      // is never hidden behind `limit` newer rows of another.
+      // `kind` and `actor` are repository predicates (01.10): filtered in SQL, so an older event
+      // that matches is never hidden behind `limit` newer rows that do not.
+      const filter = {
+        ...(query.kind === undefined ? {} : { kind: query.kind }),
+        ...(query.actor === undefined ? {} : { actor: query.actor }),
+      }
       const rows =
         query.subjectId === undefined
-          ? await deps.auditEvents.list(query.limit, query.kind)
-          : await deps.auditEvents.listForSubject(query.subjectId, query.limit, query.kind)
+          ? await deps.auditEvents.list(query.limit, filter)
+          : await deps.auditEvents.listForSubject(query.subjectId, query.limit, filter)
       return ok({ events: rows.map(toAuditEventView), limit: query.limit })
     },
   }

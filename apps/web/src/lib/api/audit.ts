@@ -22,8 +22,22 @@ export interface AuditEvent {
    */
   readonly subjectId: string | null
   readonly detail: Readonly<Record<string, unknown>> | null
+  /**
+   * Who made the change (multi-ai-router#453). Always present, and null on a row
+   * written before the router recorded callers. `actor` is the credential's own
+   * name — the SSO email, `admin-api-token`, `system`, `anonymous` or `unknown`.
+   */
+  readonly actor: string | null
+  readonly actorKind: AuditActorKind | null
+  /** What the caller called itself (`X-Admin-Actor`), or a task's name. Self-reported. */
+  readonly actorSays: string | null
+  readonly clientIp: string | null
+  readonly userAgent: string | null
+  readonly requestId: string | null
   readonly createdAt: string
 }
+
+export type AuditActorKind = "session" | "api_token" | "system" | "anonymous" | "unattributed"
 
 export interface AuditPage {
   readonly events: readonly AuditEvent[]
@@ -35,6 +49,8 @@ export interface AuditQuery {
   readonly limit: number
   readonly kind: string | null
   readonly subjectId: string | null
+  /** The stored `actor`, matched exactly by the server. */
+  readonly actor: string | null
 }
 
 export const AUDIT_LIMITS = [50, 100, 200] as const
@@ -66,6 +82,33 @@ const SUBJECT_MAX = 32
 export function auditSubjectText(subjectId: string): string {
   if (UUID.test(subjectId)) return shortId(subjectId)
   return subjectId.length > SUBJECT_MAX ? `${subjectId.slice(0, SUBJECT_MAX - 1)}…` : subjectId
+}
+
+export interface AuditWho {
+  /** `actorSays`, else `actor`, else null: a row from before callers were recorded. */
+  readonly label: string | null
+  /** Actor, kind, address and user agent, one per line, for the cell's tooltip. */
+  readonly tooltip: string
+}
+
+/**
+ * The name an operator reads first is the one the caller gave itself — "agent
+ * ops-seat-slice02 for sebyx07" says more than the `admin-api-token` every script
+ * shares. The tooltip carries what verifies it: the credential, how it was
+ * established, and where the call came from.
+ */
+export function auditWho(event: AuditEvent): AuditWho {
+  const label = event.actorSays ?? event.actor
+  if (label === null) {
+    return { label: null, tooltip: "Written before the router recorded who made each change." }
+  }
+  const lines = [
+    ["actor", event.actor],
+    ["kind", event.actorKind],
+    ["IP", event.clientIp],
+    ["user agent", event.userAgent],
+  ].map(([name, value]) => `${name}: ${value ?? "—"}`)
+  return { label, tooltip: [label, ...lines].join("\n") }
 }
 
 export function mergeKinds(a: readonly string[], b: readonly string[]): readonly string[] {
@@ -122,6 +165,7 @@ export function fetchAuditLog(query: AuditQuery): Promise<AuditPage> {
       limit: String(safeAuditLimit(query.limit)),
       kind: query.kind ?? undefined,
       subjectId: query.subjectId ?? undefined,
+      actor: query.actor ?? undefined,
     },
   })
 }

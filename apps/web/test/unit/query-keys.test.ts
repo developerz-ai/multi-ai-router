@@ -9,7 +9,7 @@ import { queryKeys } from "../../src/lib/queries/query-keys"
 const startsWith = (key: readonly unknown[], prefix: readonly unknown[]): boolean =>
   prefix.every((segment, index) => key[index] === segment)
 
-const auditQuery = { limit: 50, kind: null, subjectId: null }
+const auditQuery = { limit: 50, kind: null, subjectId: null, actor: null }
 
 describe("queryKeys", () => {
   test("every accounts key is prefixed by the accounts root", () => {
@@ -91,6 +91,12 @@ describe("queryKeys", () => {
     )
     expect(queryKeys.audit.list(auditQuery)).not.toEqual(
       queryKeys.audit.list({ ...auditQuery, kind: "key.viewed" }),
+    )
+  })
+
+  test("an audit page filtered by actor is a different read from the unfiltered one", () => {
+    expect(queryKeys.audit.list(auditQuery)).not.toEqual(
+      queryKeys.audit.list({ ...auditQuery, actor: "admin-api-token" }),
     )
   })
 })

@@ -24,12 +24,17 @@ import { deleteOldestBatch } from "./bounded-delete"
 export interface AuditRepository {
   append(input: AppendAuditEventInput): Promise<AuditEventRow>
   /**
-   * Newest first. The admin activity feed. `kind` narrows to one event kind in SQL, riding
-   * `audit_events_kind_created_idx` — a filter applied after the limit would return short pages.
+   * Newest first. The admin activity feed. The filter is applied in SQL, before the limit — a
+   * filter applied to a page afterwards would return short pages. `kind` alone rides
+   * `audit_events_kind_created_idx`, `actor` alone `audit_events_actor_created_idx`.
    */
-  list(limit: number, kind?: string): Promise<AuditEventRow[]>
-  /** One subject's events, newest first, optionally of one `kind`. Rides `audit_events_subject_idx`. */
-  listForSubject(subjectId: string, limit: number, kind?: string): Promise<AuditEventRow[]>
+  list(limit: number, filter?: AuditListFilter): Promise<AuditEventRow[]>
+  /** One subject's events, newest first, narrowed by `filter`. Rides `audit_events_subject_idx`. */
+  listForSubject(
+    subjectId: string,
+    limit: number,
+    filter?: AuditListFilter,
+  ): Promise<AuditEventRow[]>
   /**
    * The newest event of any of `kinds` per subject, for every subject in `subjectIds` that has one.
    * `excludeDetailKey` drops events whose `detail` carries that key — how a caller tells an
@@ -47,6 +52,13 @@ export interface AuditRepository {
    * is the thing the log exists to prevent.
    */
   deleteOlderThan(cutoff: Date, limit: number): Promise<number>
+}
+
+/** Exact-match predicates; an absent field does not narrow. */
+export interface AuditListFilter {
+  readonly kind?: string
+  /** The stored `actor`, matched exactly — "everything this caller changed". */
+  readonly actor?: string
 }
 
 export interface AppendAuditEventInput {
@@ -104,24 +116,19 @@ export function createAuditRepository(db: DatabaseExecutor): AuditRepository {
       return row
     },
 
-    list: (limit, kind) =>
+    list: (limit, filter = {}) =>
       db
         .select()
         .from(auditEvents)
-        .where(kind === undefined ? undefined : eq(auditEvents.kind, kind))
+        .where(and(...filterPredicates(filter)))
         .orderBy(desc(auditEvents.createdAt))
         .limit(limit),
 
-    listForSubject: (subjectId, limit, kind) =>
+    listForSubject: (subjectId, limit, filter = {}) =>
       db
         .select()
         .from(auditEvents)
-        .where(
-          and(
-            eq(auditEvents.subjectId, subjectId),
-            kind === undefined ? undefined : eq(auditEvents.kind, kind),
-          ),
-        )
+        .where(and(eq(auditEvents.subjectId, subjectId), ...filterPredicates(filter)))
         .orderBy(desc(auditEvents.createdAt))
         .limit(limit),
 
@@ -158,4 +165,11 @@ export function createAuditRepository(db: DatabaseExecutor): AuditRepository {
         limit,
       }),
   }
+}
+
+function filterPredicates(filter: AuditListFilter) {
+  return [
+    filter.kind === undefined ? undefined : eq(auditEvents.kind, filter.kind),
+    filter.actor === undefined ? undefined : eq(auditEvents.actor, filter.actor),
+  ]
 }
