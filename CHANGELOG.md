@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.65.1] — 2026-11-18
+
+### Fixed
+
+- **One account whose credential owner cannot be launched no longer shuts the router down.** Every subprocess against a Claude subscription's directory is launched through the credential-owner helper. When that launch failed before a process existed, the runtime returned a child with no pid and null protocol pipes, then emitted `error` on a later tick with no listener attached: an uncaught exception, so the scheduled `credential_keepalive` took every account and pool down (`uncaught exception — shutting down … ENOENT … posix_spawn '<helper path>'`), and the failed scope's exit never settled, so the `cli-owners` shutdown step timed out. The launch now fails as a named per-account error (`CredentialOwnerLaunchFailed`: `helper_unavailable`, `directory_missing` or `spawn_failed`) at the one seam every caller shares, and a launch that failed leaves no owner for shutdown to wait on. The reason is read from the filesystem because the runtime reports a missing working directory as `ENOENT` on the helper's path, which is what the shipped image hit: the helper was present and an account's directory was not. `credential_keepalive` and `login_lifetime_watch` park the account `needs_reauth` on a missing directory or helper (an `error` line `credential owner cannot be launched for this account`, an `account.updated` audit row with `source: "credential_owner"`) and carry on with every other account; an undiagnosed spawn failure is logged and never parks. Spec: `docs/idea/11-anthropic-agent-sdk.md`, `docs/idea/08-observability.md`. Regression: `apps/api/test/unit/claude-sdk/owner-launch-failure.test.ts`, `apps/api/test/unit/scheduler/credential-unownable.test.ts`.
+- **A missing credential-owner helper is refused at boot.** When `CLAUDE_OWNERSHIP_HELPER_PATH` does not resolve to an executable file and any non-disabled Claude subscription account exists, the router exits before the listener opens with the resolved path on stderr, instead of finding out from the first scheduled task or request to spawn it. A deployment with no such account boots without the helper. Spec: `docs/idea/09-deployment.md`. Regression: `apps/api/test/unit/claude-sdk/owner-helper.test.ts`.
+
 ## [2.65.0] — 2026-11-18
 
 ### Added
@@ -2285,3 +2292,4 @@ your tooling config.
 [2.63.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.63.1
 [2.64.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.64.0
 [2.65.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.65.0
+[2.65.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.65.1

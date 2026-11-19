@@ -1,6 +1,7 @@
 import { basename, join } from "node:path"
 import type { AccountCliOwnership } from "../providers/claude-sdk/account-ownership"
 import type { CredentialMetadataReader } from "../providers/claude-sdk/credential-metadata"
+import { CredentialOwnerLaunchFailed } from "../providers/claude-sdk/owner-helper"
 import { CredentialMetadataOwnershipUnavailable } from "../providers/claude-sdk/ownership-errors"
 import { UpstreamAdmissionRefused } from "../providers/upstream-admission"
 
@@ -19,7 +20,9 @@ export function ownedCredentialMetadataReader(
       } catch (error) {
         // Filesystem admission failure is preparation failure, not account quota refusal.
         if (error instanceof UpstreamAdmissionRefused)
-          throw new CredentialMetadataOwnershipUnavailable()
+          throw new CredentialMetadataOwnershipUnavailable(
+            error.cause instanceof CredentialOwnerLaunchFailed ? error.cause : undefined,
+          )
         throw error
       }
     },

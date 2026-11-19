@@ -6,6 +6,7 @@ import { createDatabase } from "@multi-ai-router/db"
 import { createApp } from "./app"
 import {
   assertAdminSignInConfigured,
+  assertCliOwnerHelperUsable,
   buildRuntime,
   exitAfterFlush,
   migrate,
@@ -72,6 +73,10 @@ async function main(): Promise<void> {
   // row, and the row does not exist until migrations have run. Same fail-fast
   // UX as a malformed variable: the process exits before the listener opens.
   await assertAdminSignInConfigured(env, database, logger)
+
+  // Same shape: which Accounts need the credential-owner helper is a set of rows, and a helper
+  // that is not there is a configuration error now, not a crash from a scheduled task later.
+  await assertCliOwnerHelperUsable(env, database, logger)
 
   const runtime = buildRuntime({
     env,

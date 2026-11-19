@@ -54,7 +54,7 @@ export interface IdleAccountProbeDeps {
    * every account and only the subscriptions cost a subprocess. Absent means no CLI is available:
    * the auth question cannot be asked, and idle accounts go straight to the paid test.
    */
-  readonly auth?: AccountAuthProbe
+  readonly auth?: Pick<AccountAuthProbe, "check">
   /**
    * The turn-free usage read for one subscription account, run after its credential checks out
    * **and is warm**. Absent means the sweep leaves the gauge to the request path.
@@ -196,7 +196,7 @@ export function createIdleAccountProbeTask(deps: IdleAccountProbeDeps): Schedule
  * `login/contract.ts` warns about. Only an explicit `loggedIn: false` counts.
  */
 async function checkCredential(
-  auth: AccountAuthProbe,
+  auth: Pick<AccountAuthProbe, "check">,
   account: AccountRow,
   logger: Logger,
   tally: Tally,

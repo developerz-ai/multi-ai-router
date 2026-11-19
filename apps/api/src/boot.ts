@@ -1,5 +1,7 @@
+import { resolve } from "node:path"
 import { describeError } from "@multi-ai-router/core"
 import {
+  createAccountRepository,
   createAdminCredentialRepository,
   type DatabaseHandle,
   runMigrations,
@@ -9,6 +11,8 @@ import { type Env, EnvValidationError, parseEnv } from "./config/env"
 import type { Logger } from "./logging/logger"
 import { captureException, flushSentry } from "./observability"
 import { ConfigDirError } from "./providers/claude-sdk/config-dir"
+import { ownerHelperBootProblem, ownerHelperUsable } from "./providers/claude-sdk/owner-helper"
+import { describeProvider } from "./services/accounts/providers"
 import { adminAuthBootProblem } from "./services/admin-auth"
 
 /**
@@ -37,6 +41,38 @@ export function warnOnInsecureSessionCookie(env: Env, logger: Logger): void {
     component: "admin-auth",
     risk: "the session rides plaintext and any host sharing this domain can set it; unset this once the console is served over HTTPS",
   })
+}
+
+/**
+ * A deployment holding Claude subscription Accounts does not start without the credential-owner
+ * helper every one of their subprocesses is launched through. Without this the missing file is
+ * found by the first scheduled task or request to spawn it, long after boot (#447). After
+ * migrations for the same reason as the sign-in rule: which Accounts exist is a set of rows.
+ */
+export async function assertCliOwnerHelperUsable(
+  env: Env,
+  database: DatabaseHandle,
+  logger: Logger,
+): Promise<void> {
+  const helperPath = resolve(env.cliOwnership.helperPath)
+  const summaries = await createAccountRepository(database.db).listSummaries()
+  const accountsNeedingHelper = summaries.filter(
+    (account) =>
+      account.status !== "disabled" && describeProvider(account.provider).requiresConfigDir,
+  ).length
+  const problem = ownerHelperBootProblem({
+    helperPath,
+    usable: ownerHelperUsable(helperPath),
+    accountsNeedingHelper,
+  })
+  if (problem === null) return
+  logger.error("credential-owner helper is missing or not executable — refusing to start", {
+    component: "claude-sdk",
+    helperPath,
+    accountsNeedingHelper,
+  })
+  process.stderr.write(`${problem}\n`)
+  process.exit(1)
 }
 
 /**
