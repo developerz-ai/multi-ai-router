@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import {
   createAccountRepository,
   createDatabase,
+  createPoolRepository,
   type DatabaseHandle,
   defaultMigrationsFolder,
   runMigrations,
@@ -269,6 +270,7 @@ async function adminAppFor(catalog: RoutingCatalog, health: HealthStore, clock: 
   const accountsService = createAccountsService({
     accounts: accountsRepo,
     keys: noopKeys,
+    pools: createPoolRepository(db.db),
     cipher: CRYPTOR,
     configDirs: configDirs.dirs,
     revokeDeletedAccount: async () => undefined,

@@ -148,9 +148,13 @@ export function createMemoryStore(): MemoryStore {
           patch: { status: "disabled" },
           now,
         }),
+      // `pool_members.account_id` is `ON DELETE CASCADE`: a deleted account leaves every pool.
       delete: async (id) => {
         const deleted = remove(accounts, id)
-        if (deleted) recoveries.delete(id)
+        if (deleted) {
+          recoveries.delete(id)
+          drop(poolMembers, (row) => row.accountId === id)
+        }
         return deleted
       },
     },

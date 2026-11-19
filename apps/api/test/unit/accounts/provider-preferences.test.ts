@@ -26,6 +26,7 @@ function harness() {
   const service = createAccountsService({
     accounts: store.accounts,
     keys: store.keys,
+    pools: store.pools,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),
     configDirs: configDirs.dirs,
     ...accountDeletionFixture(configDirs.dirs),
