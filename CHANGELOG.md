@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Corrected: the 2.68.0 Codex pin fix needs a re-discover to take effect.** 2.68.0's notes, the pin's comment and `docs/idea/03-providers.md` said the hourly sweep writes the Codex listing into `supportedModels`. It does not: `model_catalog_refresh` writes only `model_catalog`, which routing never reads, and `supportedModels` changes only through "Discover models" (by design — a timer must not change routing). An Account discovered before 2.68.0 keeps refusing `gpt-6.1-terra` / `gpt-6.2-*` until an operator re-runs "Discover models" on it. Comment and spec now say so. No code change.
 
+## [2.69.0] — 2026-11-19
+
+### Added
+
+- **Optional boot-validated deployment pool roster.** `POOL_ROSTER_PATH` loads an absolute, deployment-mounted version-1 JSON roster before runtime startup; absent/blank disables loading. Invalid files refuse boot with a sanitized first issue. Pool/member uniqueness and overflow membership are validated. `POOL_ROSTER_CHECK_INTERVAL_MINUTES` defaults to 15 positive whole minutes with the scheduler timer bound. This is configuration only, not the future drift-check runner: no monitoring or membership mutations. Spec: `docs/idea/09-deployment.md#optional-deployment-pool-roster`.
+
 ## [2.68.1] — 2026-11-19
 
 ### Added
@@ -2341,3 +2347,4 @@ your tooling config.
 [2.67.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.67.0
 [2.68.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.0
 [2.68.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.1
+[2.69.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.69.0

@@ -46,6 +46,12 @@
   cursor: pointer;
 }
 
+.heading {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-tight);
+}
+
 .toggle:hover .heading {
   color: var(--accent);
 }
@@ -62,12 +68,6 @@
 
 .chevron[data-open="false"] {
   transform: rotate(-90deg);
-}
-
-.heading {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
-  line-height: var(--line-tight);
 }
 
 .providerId {
