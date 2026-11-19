@@ -200,6 +200,7 @@ export function memoryAccountLifecycle(
         accountId: id,
         authorizationLifecycleVersion: row.lifecycleVersion,
         nonce: attempt.nonce ?? null,
+        initiatedBy: attempt.initiatedBy ?? null,
         consumedAt: null,
         createdAt: now,
       }

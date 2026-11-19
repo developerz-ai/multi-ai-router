@@ -1485,9 +1485,19 @@ emitter has to remember to.
 - **`unattributed` is a bug report, not a state.** A write that reaches the recorder with no caller
   is still written — bookkeeping never blocks an operator's change — as `actor_kind: unattributed`,
   `actor: unknown`, and the router logs one `error` line, `audit event without a caller`, naming the
-  kind. The provider's OAuth redirect callback is the known case until its connect stores who started
-  it (multi-ai-router#455). `apps/api/test/integration/audit-emitters-attributed.test.ts` lists every
-  emitter with the entry point that attributes it and fails on a new one nobody classified.
+  kind. `apps/api/test/integration/audit-emitters-attributed.test.ts` lists every emitter with the
+  entry point that attributes it and fails on a new one nobody classified.
+- **An account connect names who started it** (multi-ai-router#455, migration 0050). A connect
+  completes on a request that is not its start: the provider's redirect lands on the unguarded OAuth
+  callback, which carries no session, and a device-code attempt is finished by whichever console tab
+  or script polls it next. The guarded start stores its caller — all six fields above — in
+  `oauth_states.initiated_by`, and the completing `account.connected` / `account.reauthorized` write
+  runs under that caller (`apps/api/src/services/accounts/connect/oauth-initiator.ts`), in every
+  capture mode. The stored starter wins over a live caller on the completing request: the row answers
+  "who connected this account", and that is whoever began it, so a paste or a device poll by someone
+  else still names the starter (its `request_id` is the start's). A state with no starter — minted
+  before 0050, or one whose stored value does not parse — completes as before: under the completing
+  request's own caller, or, on the redirect callback, `unattributed`.
 - **Old rows stay null.** Nothing is backfilled; a row from before migration 0049 names no caller.
 - The data plane (`/v1/**`) sets no context and writes no audit row.
 

@@ -15,6 +15,7 @@ import {
   type OAuthConnectCompleted,
   type OAuthExchangeDeps,
 } from "./oauth-exchange"
+import { asConnectInitiator, connectInitiator } from "./oauth-initiator"
 import { parseAuthorizationPaste } from "./oauth-paste"
 
 /**
@@ -162,16 +163,19 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
       )
     }
 
-    return completeAuthorization(deps, {
-      row,
-      flow,
-      attemptId: pending.id,
-      expectedLifecycleVersion: lifecycleVersion,
-      code: presented.code,
-      redirectUri: pending.redirectUri ?? flow.loopbackRedirectUri,
-      codeVerifier,
-      capture: presented.capture,
-    })
+    // The redirect arrives with no session; the row says who started it (`./oauth-initiator.ts`).
+    return asConnectInitiator(pending.initiatedBy, () =>
+      completeAuthorization(deps, {
+        row,
+        flow,
+        attemptId: pending.id,
+        expectedLifecycleVersion: lifecycleVersion,
+        code: presented.code,
+        redirectUri: pending.redirectUri ?? flow.loopbackRedirectUri,
+        codeVerifier,
+        capture: presented.capture,
+      }),
+    )
   }
 
   return {
@@ -196,6 +200,7 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
           codeVerifier: deps.cipher.encrypt(verifier),
           redirectUri,
           expiresAt,
+          initiatedBy: connectInitiator(),
         },
         now: deps.now(),
       })

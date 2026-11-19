@@ -191,6 +191,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "accountId",
       "authorizationLifecycleVersion",
       "redirectUri",
+      "initiatedBy",
       "consumedAt",
       "expiresAt",
       "createdAt",

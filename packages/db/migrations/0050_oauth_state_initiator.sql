@@ -1,0 +1,15 @@
+-- Who started an account connect, stored on its one-shot state (multi-ai-router#455).
+--
+-- The connect's last step can arrive on the unguarded OAuth redirect callback, a cross-site
+-- navigation carrying no admin session, or on a device-code poll made by anyone. `initiated_by`
+-- holds the guarded start request's audit context (actor, actor_kind, says, client_ip, user_agent,
+-- request_id), and the completing write runs under it, so `account.connected` names the operator
+-- who started the connect rather than `unattributed`.
+--
+-- Nullable, no default, nothing backfilled: a state minted before this migration names no starter
+-- and completes `unattributed`, as before. States live minutes (RETENTION_OAUTH_STATE_MINUTES), so
+-- that window closes on its own.
+--
+-- Backward-safe: the ADD COLUMN is catalog-only (no rewrite). Rollback is pinning the previous
+-- image: it never selects this column and its inserts leave it NULL. Guarded, so a replay is a no-op.
+ALTER TABLE "oauth_states" ADD COLUMN IF NOT EXISTS "initiated_by" jsonb;

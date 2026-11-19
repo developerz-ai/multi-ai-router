@@ -531,4 +531,57 @@ describe.skipIf(!runnable)("migrations against a live database", () => {
       await sql`delete from audit_events where id = ${row.id}`
     }
   })
+
+  test("0050 adds a nullable initiated_by jsonb to oauth_states that round-trips the starter", async () => {
+    const sql = (handle as DatabaseHandle).sql
+    const columns = await sql<{ is_nullable: string; data_type: string }[]>`
+      select is_nullable, data_type from information_schema.columns
+      where table_schema = 'public' and table_name = 'oauth_states' and column_name = 'initiated_by'
+    `
+    expect([...columns]).toEqual([{ is_nullable: "YES", data_type: "jsonb" }])
+
+    db = (handle as DatabaseHandle).db
+    const states = createOauthStateRepository(db)
+    const now = new Date("2026-11-19T12:00:00.000Z")
+    const expiresAt = new Date("2026-11-19T12:10:00.000Z")
+
+    // A row minted the way an older image mints it names no starter.
+    await states.create({
+      state: "test-migrations-0050-old",
+      codeVerifier: "envelope",
+      provider: "openai-oauth",
+      expiresAt,
+    })
+    expect((await states.consume("test-migrations-0050-old", now))?.initiatedBy).toBeNull()
+
+    const account = await createAccountRepository(db).create({
+      label: "test-migrations-0050",
+      provider: "openai-oauth",
+    })
+    accountIds.push(account.id)
+    const initiatedBy = {
+      actor: "a@example.test",
+      actorKind: "session" as const,
+      says: "x",
+      clientIp: "203.0.113.7",
+      userAgent: "console/1.0",
+      requestId: "req-1",
+    }
+    await createAccountRepository(db).beginAccountAuthorization({
+      id: account.id,
+      expectedProvider: "openai-oauth",
+      attempt: {
+        id: crypto.randomUUID(),
+        state: "test-migrations-0050-new",
+        codeVerifier: "envelope",
+        redirectUri: "http://localhost:1455/auth/callback",
+        expiresAt,
+        initiatedBy,
+      },
+      now,
+    })
+    expect((await states.consume("test-migrations-0050-new", now))?.initiatedBy).toEqual(
+      initiatedBy,
+    )
+  })
 })

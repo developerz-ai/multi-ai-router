@@ -1,6 +1,6 @@
 import type { AccountStatus, ProviderId, QuotaWindowState } from "@multi-ai-router/core"
 import type { AccountRow } from "../schema/accounts"
-import type { OauthStateRow } from "../schema/oauth-states"
+import type { OauthStateInitiator, OauthStateRow } from "../schema/oauth-states"
 import type { UpdateAccountInput } from "./account-types"
 
 export interface AccountObservation {
@@ -92,6 +92,8 @@ export interface AccountAuthorizationMethods {
       nonce?: string | null
       redirectUri: string
       expiresAt: Date
+      /** Who started it — the start request's audit context, or null where there was none. */
+      initiatedBy?: OauthStateInitiator | null
     }
     now: Date
   }): Promise<{ account: AccountRow; pending: OauthStateRow } | undefined>
