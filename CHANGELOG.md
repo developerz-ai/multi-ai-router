@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **ChatGPT accounts route `gpt-6.1-terra`, `gpt-6.2-sol` and `gpt-6.2-astra`.** The Codex model listing is requested with `client_version`, and the backend lists only the models that CLI release knows. The pin was `0.160.0` (2026-10-04), so the hourly catalog sweep wrote a `supportedModels` list without any model shipped since, and a request for one was refused `404 model_not_found` (`no account serves model "gpt-6.1-terra"`) before reaching the upstream — measured in production on 2026-11-19, where the listing held exactly the four gpt-6 slugs of the 0.160.0 CLI. `CODEX_CLIENT_VERSION` is now `0.170.0`, the newest stable openai/codex release. No schema change; the next sweep (or "Discover models") re-lists each ChatGPT account. Spec: `docs/idea/03-providers.md`. Regression: `apps/api/test/unit/accounts/codex-followups.test.ts`.
+
 ## [2.67.0] — 2026-11-19
 
 ### Added
