@@ -4,6 +4,7 @@ import { createClaudeConnectService } from "../../../src/services/accounts"
 import { createAuditRecorder } from "../../../src/services/admin"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 const NOW = new Date("2026-10-03T16:00:00Z")
 const STATE = "synthetic-login-state"
@@ -18,7 +19,7 @@ async function completeAfter(
   })
   const configDirs = createMemoryConfigDirs()
   row.configDir = configDirs.dirs.pathFor(row.id)
-  const audit = createAuditRecorder(store.audit)
+  const audit = createAuditRecorder(store.audit, silentLogger())
   const events: string[] = []
   const connect = createClaudeConnectService({
     accounts: store.accounts,

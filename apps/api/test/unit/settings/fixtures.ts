@@ -171,6 +171,12 @@ export function event(options: {
     subjectType: options.subjectId === undefined ? null : "account",
     subjectId: options.subjectId ?? null,
     detail: options.detail ?? null,
+    actor: null,
+    actorKind: null,
+    actorSays: null,
+    clientIp: null,
+    userAgent: null,
+    requestId: null,
     createdAt: options.createdAt,
   }
 }

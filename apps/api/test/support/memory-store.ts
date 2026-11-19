@@ -276,6 +276,12 @@ export function createMemoryStore(): MemoryStore {
           subjectType: input.subjectType ?? null,
           subjectId: input.subjectId ?? null,
           detail: input.detail ?? null,
+          actor: input.actor ?? null,
+          actorKind: input.actorKind ?? null,
+          actorSays: input.actorSays ?? null,
+          clientIp: input.clientIp ?? null,
+          userAgent: input.userAgent ?? null,
+          requestId: input.requestId ?? null,
           createdAt: EPOCH,
         }
         audit.push(row)

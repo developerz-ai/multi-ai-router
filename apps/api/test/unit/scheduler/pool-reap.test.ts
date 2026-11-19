@@ -3,6 +3,7 @@ import { createLogger } from "../../../src/logging/logger"
 import { createPoolReapTask } from "../../../src/scheduler/tasks/pool-reap"
 import { createPoolReaper, planKeyFates } from "../../../src/services/pools"
 import { createMemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 /**
  * The empty-pool reap. A pool memberless for the window is deleted; a key scoped only to pools that
@@ -20,6 +21,7 @@ function harness(batchSize = 100) {
   const detached: string[] = []
   let catalogRefreshes = 0
   const reaper = createPoolReaper({
+    logger: silentLogger(),
     mutations: store.mutations,
     now: () => NOW,
     coherence: {

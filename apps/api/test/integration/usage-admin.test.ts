@@ -169,7 +169,7 @@ describe("GET /api/admin/usage/recent", () => {
   })
 
   test("is unreachable without an admin session", async () => {
-    const app = harness([attemptRow()], adminAuth(refusingAuth(), true))
+    const app = harness([attemptRow()], adminAuth(refusingAuth(), true, null, 0))
 
     const response = await app.request("/api/admin/usage/recent")
 
@@ -216,7 +216,7 @@ describe("GET /api/admin/usage — the failure split", () => {
   })
 
   test("is unreachable without an admin session", async () => {
-    const app = summaryHarness([], adminAuth(refusingAuth(), true))
+    const app = summaryHarness([], adminAuth(refusingAuth(), true, null, 0))
 
     expect((await app.request("/api/admin/usage?window=today")).status).toBe(401)
   })

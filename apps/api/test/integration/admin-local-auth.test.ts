@@ -140,7 +140,7 @@ async function harness(options: HarnessOptions = {}): Promise<Harness> {
     adminAuthRoutes({ service, trustProxy: false, sessionCookieInsecure: false }),
   )
   const keys = new Hono<AdminAuthEnv>()
-  keys.use("*", adminAuth(service, false, null))
+  keys.use("*", adminAuth(service, false, null, 0))
   keys.get("/", (c) => c.json({ username: c.get("adminSession").username }))
   keys.post("/", (c) => c.json({ minted: true }, 201))
   app.route(KEYS, keys)

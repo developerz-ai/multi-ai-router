@@ -81,6 +81,8 @@ const csrfGuard = adminAuth(
     },
   },
   true,
+  null,
+  0,
 )
 
 describe.skipIf(!historyUrl)("weekly usage reports over HTTP and Postgres", () => {

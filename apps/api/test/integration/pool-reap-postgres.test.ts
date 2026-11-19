@@ -10,6 +10,7 @@ import {
   ownDatabaseUrl,
 } from "../../../../packages/db/test/integration/own-database-fixture"
 import { createPoolReaper } from "../../src/services/pools"
+import { silentLogger } from "../support/silent-logger"
 
 /**
  * The empty-pool reap end to end against Postgres: the trigger starts the clock when an account
@@ -48,6 +49,7 @@ describe.skipIf(ownDatabaseUrl === "")("empty-pool reap on Postgres", () => {
     await keys.replaceScopeTargets(shared.id, { poolIds: [doomed.id, kept.id] })
 
     const reaper = createPoolReaper({
+      logger: silentLogger(),
       mutations: createAdminMutationRepository(db),
       now: () => NOW,
       coherence: { refreshCatalog: async () => {}, forgetKey: () => {}, invalidateKey: () => {} },
