@@ -54,6 +54,14 @@ export interface AccountAuthProbe {
    * could not answer. Neither is reported as a logged-out Account.
    */
   check(account: AuthProbeSubject, operatorCheckToken?: string): Promise<ClaudeAuthReport | null>
+  /**
+   * Parks an Account whose credential directory cannot be owned at all — it is gone, or the
+   * owner helper is — so no CLI could be asked and `check` would answer `null` forever. Same
+   * fence, same audit kind and same exits as a logged-out answer: a login re-provisions the
+   * directory, and the next `check` that finds a login recovers the row. `reason` is the audit
+   * row's. Returns the status written, or null when the row was not `active`/`cooling_down`.
+   */
+  park(account: AuthProbeSubject, reason: string): Promise<AccountStatus | null>
 }
 
 export interface ClaudeAuthProbeDeps {
@@ -87,6 +95,10 @@ export function createClaudeAuthProbe(deps: ClaudeAuthProbeDeps): AccountAuthPro
         operatorCheckToken,
       )
       return { ...status, statusChangedTo, checkedAt: now.toISOString() }
+    },
+    park: async (account, reason) => {
+      if (!describeProvider(account.provider).requiresConfigDir) return null
+      return parkNeedsReauth(deps, account, deps.now(), reason, undefined, "credential_owner")
     },
   }
 }
@@ -123,30 +135,46 @@ async function transition(
     return "active"
   }
 
-  // `disabled` is the operator's; `needs_reauth` is already where this would put it.
-  if (!loggedIn && (account.status === "active" || account.status === "cooling_down")) {
-    const changed = await deps.accounts.transitionObservedStatus({
-      id: account.id,
-      expected: {
-        lifecycleVersion: account.lifecycleVersion,
-        authMaterial: account.authMaterial,
-        status: account.status,
-        ...(operatorCheckToken === undefined ? {} : { operatorCheckToken }),
-      },
-      status: "needs_reauth",
-      now,
-    })
-    if (changed === undefined) return null
-    await deps.mutationCommitted?.(account.id)
-    await record(deps, account, AUDIT_KINDS.accountUpdated, {
-      status: "needs_reauth",
-      previousStatus: account.status,
-      reason: "claude auth status reports this account logged out",
-    })
-    return "needs_reauth"
-  }
+  if (loggedIn) return null
+  return parkNeedsReauth(
+    deps,
+    account,
+    now,
+    "claude auth status reports this account logged out",
+    operatorCheckToken,
+  )
+}
 
-  return null
+async function parkNeedsReauth(
+  deps: ClaudeAuthProbeDeps,
+  account: AuthProbeSubject,
+  now: Date,
+  reason: string,
+  operatorCheckToken?: string,
+  source?: string,
+): Promise<AccountStatus | null> {
+  // `disabled` is the operator's; `needs_reauth` is already where this would put it.
+  if (account.status !== "active" && account.status !== "cooling_down") return null
+  const changed = await deps.accounts.transitionObservedStatus({
+    id: account.id,
+    expected: {
+      lifecycleVersion: account.lifecycleVersion,
+      authMaterial: account.authMaterial,
+      status: account.status,
+      ...(operatorCheckToken === undefined ? {} : { operatorCheckToken }),
+    },
+    status: "needs_reauth",
+    now,
+  })
+  if (changed === undefined) return null
+  await deps.mutationCommitted?.(account.id)
+  await record(deps, account, AUDIT_KINDS.accountUpdated, {
+    status: "needs_reauth",
+    previousStatus: account.status,
+    reason,
+    ...(source === undefined ? {} : { source }),
+  })
+  return "needs_reauth"
 }
 
 function record(

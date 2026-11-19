@@ -282,6 +282,22 @@ still until a client's turn refreshes it, which is strictly better than the alte
 `CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false` no probe ever spends a refresh token; the cost is
 staleness, never a login.
 
+**An account whose owner cannot be launched (2026-11-18, #447).** Every subprocess against an
+account directory is launched through the credential-owner helper, with that directory (or the
+neutral workspace) as its working directory. When no guardian process comes to exist the launch
+fails as a named, per-account error (`CredentialOwnerLaunchFailed`) with one of three reasons:
+`helper_unavailable` (the helper is not an executable file), `directory_missing` (the account's
+directory is gone, e.g. after a volume move; the runtime reports this as `ENOENT` on the *helper's*
+path, so it is diagnosed from the filesystem rather than from the error), or `spawn_failed`
+(anything else, such as a spent process table). It never reaches the process as an uncaught
+exception, and a launch that failed leaves no owner for shutdown to wait on. The two metadata tasks
+(`credential_keepalive`, `login_lifetime_watch`) park an account `needs_reauth` on the first two
+reasons, because they stay true until someone acts and routing to the account could only fail;
+`spawn_failed` is logged and never parks, because it clears by itself. The exits are the ordinary
+ones: a login re-provisions the directory, and `claude auth status` finding a login recovers the
+row once the helper is back. A missing helper is refused at boot first
+([09-deployment.md](09-deployment.md)).
+
 **The keepalive, on the token's own cadence (`credential_keepalive`, 2026-10-04).** The six-hourly
 sweep above could only ever find an idle token *already expired*: the access token lives ~8 h, the
 CLI refreshes only in the last five minutes, and a six-hour tick lands in that window ~1 % of the

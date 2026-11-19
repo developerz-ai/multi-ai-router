@@ -11,6 +11,7 @@ import {
   type KeepalivePolicy,
   selectKeepaliveTargets,
 } from "./credential-keepalive-selection"
+import type { UnreadableMetadataHandler } from "./credential-unownable"
 import type { IdleAccountProbeDeps } from "./idle-account-probe"
 import { type KeepAliveResult, keepAlive, type Tally } from "./idle-account-warmth"
 
@@ -47,6 +48,8 @@ export interface CredentialKeepaliveDeps {
   >
   /** Credential metadata under this account's config directory. Never a token. */
   readonly readMetadata: (account: AccountSummaryRow) => Promise<CredentialMetadata>
+  /** Told of each read that failed — parks an Account whose owner cannot be launched. */
+  readonly onUnreadable?: UnreadableMetadataHandler
   readonly test: IdleAccountProbeDeps["test"]
   readonly models: Readonly<Record<string, string>>
   readonly policy: KeepalivePolicy
@@ -153,7 +156,7 @@ async function keepOne(
 
 /** Unreadable is unknown — logged, never cold. The message names a path or errno at most. */
 async function readQuietly(
-  deps: Pick<CredentialKeepaliveDeps, "readMetadata">,
+  deps: Pick<CredentialKeepaliveDeps, "readMetadata" | "onUnreadable">,
   account: AccountSummaryRow,
   logger: Logger,
 ): Promise<CredentialMetadata | null> {
@@ -164,6 +167,7 @@ async function readQuietly(
       accountId: account.id,
       reason: describeError(error, 200),
     })
+    await deps.onUnreadable?.(account, error, logger)
     return null
   }
 }

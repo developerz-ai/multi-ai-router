@@ -26,7 +26,7 @@ function harness(
     beforeCommit?: () => Promise<void>
     barrier?: () => Promise<void>
     auditFails?: boolean
-    auth?: AccountAuthProbe
+    auth?: Pick<AccountAuthProbe, "check">
   } = {},
 ) {
   const commits: string[] = []
