@@ -26,6 +26,7 @@ function abandonedEvent(): UsageRecord {
     tokensOut: 2,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    reasoningTokens: null,
     costEstimate: null,
     costBasis: "unknown",
     latencyMs: 1,

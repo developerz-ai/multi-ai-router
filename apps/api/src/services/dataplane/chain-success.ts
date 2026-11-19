@@ -3,7 +3,7 @@ import type { ChainContext } from "./chain"
 import { relaySuccess, type SuccessClock } from "./chain-relay"
 import type { ServableCandidate } from "./plan"
 import { decidedTranslation } from "./relay-translate-held"
-import { servedByHeaders, withHeaders } from "./router-headers"
+import { droppedParamsHeaders, servedByHeaders, withHeaders } from "./router-headers"
 import { withSessionRestart } from "./session-restart"
 
 /** Header evidence, the served-by headers and session restart framing precede body settlement. */
@@ -40,14 +40,18 @@ function stamp(
   restart: string | undefined,
 ): Response {
   // The attempt count is the dispatcher's, the one source for success and failure alike.
-  const relayed = withHeaders(
-    answer,
-    servedByHeaders({
+  const relayed = withHeaders(answer, {
+    ...servedByHeaders({
       accountId: servable.account.id,
       provider: servable.account.driver.provider,
       upstreamModel: servable.upstreamModel,
     }),
-  )
+    ...(servable.translation === null
+      ? {}
+      : droppedParamsHeaders(
+          ctx.translated.surfaceDropped(servable.translation, servable.responsesEgress),
+        )),
+  })
   if (restart === undefined) return relayed
   // The transcript followed the turn to this account (`claude-sdk/session-carry.ts`): the upstream
   // conversation is intact, so there is no restart to surface.

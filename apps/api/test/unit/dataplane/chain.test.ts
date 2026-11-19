@@ -69,6 +69,7 @@ function costlyTranslation(testClock: TestClock, ms: number): TranslatedRequestB
     includeUsage: () => false,
     clientStreams: () => false,
     promptCacheKey: () => undefined,
+    surfaceDropped: () => [],
     bodyFor: () => {
       testClock.advance(ms)
       return new TextEncoder().encode(JSON.stringify({ model: "gpt-4o", messages: [] }))
@@ -227,6 +228,7 @@ describe("the upstream span opens when the transport is called, not when the att
         includeUsage: () => false,
         clientStreams: () => false,
         promptCacheKey: () => undefined,
+        surfaceDropped: () => [],
         bodyFor: () => {
           testClock.advance(TRANSLATE_MS)
           throw new TranslationError("no representation")
@@ -372,6 +374,7 @@ describe("leaving a bound account mid-chain is surfaced", () => {
           includeUsage: () => false,
           clientStreams: () => false,
           promptCacheKey: () => undefined,
+          surfaceDropped: () => [],
           bodyFor: () => new TextEncoder().encode(BODY),
         },
         failover:

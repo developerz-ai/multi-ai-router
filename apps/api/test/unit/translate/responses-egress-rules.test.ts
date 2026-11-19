@@ -55,20 +55,22 @@ describe("a Codex-ruled Responses surface", () => {
     expect(body.stream).toBe(true)
     expect(body.instructions).toBe("")
     expect(body.store).toBe(false)
-    // `max_output_tokens` is removed but not reported: anthropic requires `max_tokens`, so every
-    // request carries it and the warn line said nothing (prod 2026-10-16: 174 lines an hour).
-    expect(drops.map((d) => d.field).sort()).toEqual(["temperature", "top_p"])
+    // The ceiling is reported under the name the caller sent (plan 101 slice 09, R4): it was
+    // removed silently, so a caller whose `max_tokens` was not honoured had no way to know.
+    expect(drops.map((d) => d.field).sort()).toEqual(["max_tokens", "temperature", "top_p"])
     expect(JSON.stringify(drops)).not.toContain("1024")
   })
 
-  test("a Claude Code turn (only the mandatory ceiling refused) reports no drop at all", () => {
+  test("a Claude Code turn (only the mandatory ceiling refused) reports that ceiling, never silently", () => {
     const { body, drops } = sent("anthropic", {
       model: "gpt-5.5",
       max_tokens: 32_000,
       messages: [{ role: "user", content: "hi" }],
     })
     expect(body.max_output_tokens).toBeUndefined()
-    expect(drops).toHaveLength(0)
+    expect(drops).toEqual([
+      { field: "max_tokens", reason: "the target account's Responses surface refuses this field" },
+    ])
   })
 
   test("a system prompt still becomes the instructions", () => {

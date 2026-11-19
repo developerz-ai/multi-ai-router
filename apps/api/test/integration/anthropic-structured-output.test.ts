@@ -83,7 +83,11 @@ describe("an Anthropic request carrying a structured-output constraint", () => {
     expect(rendered.error?.message).not.toContain("secret_marker")
     expect(upstream.calls).toHaveLength(0)
     expect(usage.rows).toHaveLength(1)
-    expect(usage.rows[0]).toMatchObject({ outcome: "client_error", tokensIn: 0, tokensOut: 0 })
+    expect(usage.rows[0]).toMatchObject({
+      outcome: "client_error",
+      tokensIn: null,
+      tokensOut: null,
+    })
   })
 
   test("the SDK spelling is refused the same way, under its own name", async () => {

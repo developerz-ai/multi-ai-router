@@ -102,6 +102,47 @@ describe("attempt record", () => {
     expect(attemptRecord(input({ timing: { ...input().timing, ttfbMs: 37.4 } })).ttfbMs).toBe(37)
   })
 
+  test("counts a response never stated are null, never zero (missing = null)", () => {
+    // usage_records said NOT NULL DEFAULT 0 while the spec said missing is null: a Codex stream
+    // that stated no usage landed as four measured zeros (plan 101 slice 09, R3).
+    const unread = attemptRecord(
+      input({
+        usageRead: false,
+        tokens: { tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      }),
+    )
+    expect(unread).toMatchObject({
+      tokensIn: null,
+      tokensOut: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+    })
+    // An attempt that never reached a token-bearing response measured nothing either.
+    expect(attemptRecord(input({ outcome: "upstream_error", httpStatus: 503 }))).toMatchObject({
+      tokensIn: null,
+      tokensOut: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      reasoningTokens: null,
+    })
+  })
+
+  test("stated reasoning is recorded as a subset of output; unstated reasoning is null", () => {
+    const counts = { tokensIn: 10, tokensOut: 50, cacheReadTokens: 0, cacheWriteTokens: 0 }
+    expect(attemptRecord(input({ tokens: { ...counts, reasoningTokens: 42 } }))).toMatchObject({
+      tokensOut: 50,
+      reasoningTokens: 42,
+    })
+    expect(attemptRecord(input({ tokens: counts }))).toMatchObject({
+      tokensIn: 10,
+      tokensOut: 50,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      reasoningTokens: null,
+    })
+  })
+
   test("attribution a preflight failure does not have is null, not invented", () => {
     const record = attemptRecord(input({ accountId: null, provider: null }))
     expect(record.poolId).toBeNull()

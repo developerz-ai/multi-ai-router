@@ -97,6 +97,7 @@ for (const designated of [false, true]) {
           includeUsage: () => false,
           clientStreams: () => false,
           promptCacheKey: () => undefined,
+          surfaceDropped: () => [],
           bodyFor: () => body,
         },
         failover: undefined,

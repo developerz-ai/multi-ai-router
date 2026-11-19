@@ -13,6 +13,13 @@ export interface TokenCounts {
    * persisted: the row keeps one write counter, its cost already carries the split.
    */
   readonly cacheWrite1hTokens?: number
+  /**
+   * The part of `tokensOut` the model spent reasoning, where the upstream states it (openai-chat
+   * `completion_tokens_details.reasoning_tokens`, Responses `output_tokens_details.reasoning_tokens`).
+   * Absent when unstated — Anthropic states none — never a zero nobody measured. Not priced
+   * separately: the upstream bills it inside the output count it is a subset of.
+   */
+  readonly reasoningTokens?: number
 }
 export const ZERO_TOKENS: TokenCounts = Object.freeze({
   tokensIn: 0,

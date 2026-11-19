@@ -41,11 +41,19 @@ export interface UsageRecord {
   readonly ingressDialect: Dialect | null
   /** Passthrough, translate, or agent-sdk. Null when no upstream was ever addressed. */
   readonly egressMode: EgressMode | null
-  /** The uncached remainder. Prompt size is this plus both cache fields — always the sum. */
-  readonly tokensIn: number
-  readonly tokensOut: number
-  readonly cacheReadTokens: number
-  readonly cacheWriteTokens: number
+  /**
+   * The uncached remainder. Prompt size is this plus both cache fields — always the sum.
+   *
+   * Every count is null when nothing was measured — an attempt that never reached a token-bearing
+   * response, or a response whose usage the observer could not read (`usage-unread.ts`). A zero
+   * is a measurement the upstream made, never a stand-in for a missing one.
+   */
+  readonly tokensIn: number | null
+  readonly tokensOut: number | null
+  readonly cacheReadTokens: number | null
+  readonly cacheWriteTokens: number | null
+  /** The reasoning part of {@link tokensOut}. Null unless the upstream stated it (Anthropic never does). */
+  readonly reasoningTokens: number | null
   /**
    * Estimated dollars for this attempt, as a decimal string, or null when this image ships no price
    * for the model. Null is the honest value: a zero here would read as a free request.
@@ -72,14 +80,6 @@ export interface UsageRecord {
 }
 
 export const USAGE_SUCCESS: UsageOutcome = USAGE_OUTCOME_SUCCESS
-
-/** Zeroed counters, for an attempt that never reached a token-bearing response. */
-export const NO_TOKENS = {
-  tokensIn: 0,
-  tokensOut: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-} as const
 
 /**
  * The outcome an error ended an attempt with.
@@ -124,6 +124,7 @@ export function toUsageRecordRow(record: UsageRecord): UsageRecordInsert {
     tokensOut: record.tokensOut,
     cacheReadTokens: record.cacheReadTokens,
     cacheWriteTokens: record.cacheWriteTokens,
+    reasoningTokens: record.reasoningTokens,
     costEstimate: record.costEstimate,
     costBasis: record.costBasis,
     latencyMs: record.latencyMs,

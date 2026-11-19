@@ -74,10 +74,11 @@ for (const shutdown of [false, true]) {
       responseStatus: 200,
       streamed: true,
       ttfbMs: null,
-      tokensIn: 0,
-      tokensOut: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
+      // Only a keepalive comment crossed: no usage was stated, so no count is recorded.
+      tokensIn: null,
+      tokensOut: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
       outcome: shutdown ? "router_error" : "client_error",
       errorClass: shutdown ? "router_shutdown" : "client_cancelled",
     })

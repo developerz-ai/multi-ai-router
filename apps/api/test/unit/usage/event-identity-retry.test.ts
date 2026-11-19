@@ -22,6 +22,7 @@ function event(): UsageRecord {
     tokensOut: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    reasoningTokens: null,
     costEstimate: null,
     costBasis: "unknown",
     latencyMs: 1,

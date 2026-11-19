@@ -88,6 +88,7 @@ function chain(
       includeUsage: () => false,
       clientStreams: () => false,
       promptCacheKey: () => undefined,
+      surfaceDropped: () => [],
       bodyFor: () => body,
     },
     failover: undefined,

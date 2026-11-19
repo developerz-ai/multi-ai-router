@@ -113,7 +113,8 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
       ["cache_creation", record.cacheWriteTokens],
     ] as const
     for (const [direction, count] of directions) {
-      if (count <= 0) continue
+      // Null is no measurement; a counter only ever adds what was measured.
+      if (count === null || count <= 0) continue
       s.tokens.inc({ provider, account_id: accountId, model, direction }, count)
     }
   }

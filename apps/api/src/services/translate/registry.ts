@@ -102,8 +102,8 @@ const OPENAI_CHAT_TO_ANTHROPIC: PairDefinition = {
     }),
 }
 
-/** Anthropic requires `max_tokens`, so every body this pair writes carries `max_output_tokens`. */
-const ANTHROPIC_CEILING: ReadonlySet<string> = new Set(["max_output_tokens"])
+/** Anthropic's `max_tokens` is written as `max_output_tokens`; a drop names it as the caller did. */
+const ANTHROPIC_NAMES: Readonly<Record<string, string>> = { max_output_tokens: "max_tokens" }
 
 const ANTHROPIC_TO_OPENAI_RESPONSES: PairDefinition = {
   ingress: "anthropic",
@@ -114,7 +114,7 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: PairDefinition = {
       anthropicToOpenAiResponsesRequestFromParsed(ingressRequest(parsed, "anthropic"), context),
       context.responsesEgress,
       context.onDrop,
-      ANTHROPIC_CEILING,
+      ANTHROPIC_NAMES,
     ),
   response: (body, context) =>
     openAiResponsesToAnthropicResponse(body, {

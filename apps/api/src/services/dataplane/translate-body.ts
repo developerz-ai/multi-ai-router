@@ -4,7 +4,7 @@ import { disableThinkingDefaultForForcedTool } from "../translate"
 import { type ParsedIngressRequest, parseIngressRequest } from "../translate/parse-ingress"
 import type { TranslationContext, TranslationPair } from "../translate/registry"
 import type { TranslationDrop } from "../translate/shared/drops"
-import type { ResponsesEgressRules } from "../translate/shared/responses-egress"
+import { REFUSED_BY_SURFACE, type ResponsesEgressRules } from "../translate/shared/responses-egress"
 import { effectiveCacheKey } from "./egress/cache-key-header"
 import { type AccountReasoningSeal, withReasoningSeal } from "./reasoning-seal-context"
 
@@ -58,6 +58,15 @@ export interface TranslatedRequestBody {
     /** The target reads `cache_control` on a written body. Keyed into the conversion like the ceiling. */
     cacheControl?: boolean,
   ): Uint8Array
+  /**
+   * The caller's parameters a conversion for this pair and surface removed because the surface
+   * refuses them, in the caller's own names — what `x-router-dropped-params` states on the answer.
+   * Empty before that conversion ran, and for every surface that refuses nothing.
+   */
+  surfaceDropped(
+    pair: TranslationPair,
+    responsesEgress: ResponsesEgressRules | undefined,
+  ): readonly string[]
   /** Whether the client asked for a stream — read from the cached parse; false before one. */
   clientStreams(): boolean
   /**
@@ -94,6 +103,11 @@ export function createTranslatedRequestBody(
   const encoder = new TextEncoder()
   // Keyed by target *shape*, not target dialect: see the ceiling note above.
   const converted = new Map<string, Record<string, unknown>>()
+  // What the surface refused depends on the body, the pair and the surface rules alone, so every
+  // shape sharing those three agrees about it.
+  const refused = new Map<string, readonly string[]>()
+  const refusalKey = (pair: TranslationPair, rules: ResponsesEgressRules | undefined): string =>
+    `${pair.ingress}|${pair.egress}|${egressKey(rules)}`
   let source: unknown
   let parsed = false
   // The schema parse of the body, once per request: it depends on the body alone, and it is most of
@@ -147,6 +161,7 @@ export function createTranslatedRequestBody(
       )
     },
     promptCacheKey: callerCacheKey,
+    surfaceDropped: (pair, responsesEgress) => refused.get(refusalKey(pair, responsesEgress)) ?? [],
     bodyFor(
       pair,
       upstreamModel,
@@ -188,6 +203,10 @@ export function createTranslatedRequestBody(
         translated = result as Record<string, unknown>
         converted.set(shape, translated)
         if (drops.length > 0) report?.(pair, drops)
+        refused.set(
+          refusalKey(pair, responsesEgress),
+          drops.filter((drop) => drop.reason === REFUSED_BY_SURFACE).map((drop) => drop.field),
+        )
       }
       // Last, and unconditionally: the account's alias map is the operator saying which name this
       // upstream bills, and it must survive whatever the conversion put there.

@@ -61,6 +61,7 @@ test("oversized Codex response.completed still yields usage and completion, boun
     tokensOut: 34,
     cacheReadTokens: 200,
     cacheWriteTokens: 0,
+    reasoningTokens: 4,
   })
   expect(facts).toMatchObject({ terminal: "completed", evidenceUnavailable: false, failure: null })
   expect(observer.retainedBytes).toBe(0)

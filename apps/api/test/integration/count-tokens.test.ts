@@ -603,8 +603,8 @@ describe("accounting", () => {
       egressMode: "passthrough",
       accountId: "acct-1",
       model: "claude-opus-5",
-      tokensIn: 0,
-      tokensOut: 0,
+      tokensIn: null,
+      tokensOut: null,
       costEstimate: null,
     })
   })
@@ -691,11 +691,11 @@ describe("accounting", () => {
       provider: null,
       model: "claude-opus-5",
       ingressDialect: "anthropic",
-      // The estimate measures a prompt nobody ran, exactly like the passthrough count.
-      tokensIn: 0,
-      tokensOut: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
+      // The estimate measures a prompt nobody ran: no count was measured, so none is recorded.
+      tokensIn: null,
+      tokensOut: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
       costEstimate: null,
       costBasis: "unknown",
     })
