@@ -134,4 +134,36 @@ describe.skipIf(!process.env.DATABASE_URL)("shared login budget", () => {
       }
     })
   }
+
+  test("a successful OIDC callback clears both budgets across instances", async () => {
+    const other = createDatabase({ url: fixture.url(), maxConnections: 2 })
+    const policy = { ...config, maxFailedAttempts: 1 }
+    const replica = (db: typeof other.db) =>
+      createAdminAuthService({
+        env,
+        config: policy,
+        throttle: createSharedThrottle(createAdminLoginThrottleRepository(db), policy),
+        oidc: {
+          start: async () => ({ authorizeUrl: "https://idp.test", state: "test" }),
+          complete: async () => ({ email: "admin@test", subject: "subject-1" }),
+        },
+      })
+    const ip = "2001:db8:1:2::1"
+    try {
+      await fixture.db().execute(sql`delete from admin_login_throttle_buckets`)
+      const a = replica(fixture.db())
+      const b = replica(other.db)
+
+      await a.startLogin(ip)
+      await b.completeLogin({ code: "test", state: "test", ip })
+
+      // Both are independent Postgres-backed instances. Each admission below fails if the successful
+      // callback did not clear the start or callback bucket that either instance will read next.
+      await a.startLogin(ip)
+      await b.completeLogin({ code: "test", state: "test", ip })
+    } finally {
+      await fixture.db().execute(sql`delete from admin_login_throttle_buckets`)
+      await other.close()
+    }
+  })
 })
