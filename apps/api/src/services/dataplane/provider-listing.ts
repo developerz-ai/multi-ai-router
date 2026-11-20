@@ -107,12 +107,17 @@ export function coolingOf(account: AccountSnapshot, now: Date): CoolingAccount |
       resetSource: spent.resetSource ?? null,
     }
   const { cooldownUntil, cooldownReason, cooldownSource } = account.health
-  const running = cooldownUntil !== undefined && cooldownUntil.getTime() > now.getTime()
-  if (!running && account.status !== "cooling_down") return undefined
+  // A passed instant is a half-open probe routing admits (`routing/filter.ts`), not a hold. Only a
+  // `cooling_down` row with no instant at all is held with no stated end.
+  if (cooldownUntil === undefined) {
+    if (account.status !== "cooling_down") return undefined
+    return { until: null, reason: cooldownReason ?? "cooling-down", resetSource: null }
+  }
+  if (cooldownUntil.getTime() <= now.getTime()) return undefined
   return {
-    until: running ? cooldownUntil : null,
+    until: cooldownUntil,
     reason: cooldownReason ?? "cooling-down",
-    resetSource: running ? (cooldownSource ?? null) : null,
+    resetSource: cooldownSource ?? null,
   }
 }
 

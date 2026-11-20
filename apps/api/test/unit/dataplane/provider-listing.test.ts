@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { VerifiedKey } from "../../../src/services/dataplane"
 import { countProviders, providerListing } from "../../../src/services/dataplane"
+import { coolingOf } from "../../../src/services/dataplane/provider-listing"
 import { account, catalog, health, NOW } from "./fixtures"
 
 /**
@@ -221,6 +222,29 @@ describe("the provider listing names what the router holds and until when", () =
         resetSource: "provider-reported",
       },
     ])
+  })
+
+  test("an expired cooldown is a half-open probe, not a hold, so it is not listed", () => {
+    const passed = new Date(NOW.getTime() - 1_000)
+    const snapshot = {
+      ...account("half-open", { provider: "openai-oauth" }).snapshot,
+      status: "cooling_down" as const,
+      health: { consecutiveFailures: 1, inFlight: 0, recentTokens: 0, cooldownUntil: passed },
+    }
+    expect(coolingOf(snapshot, NOW)).toBeUndefined()
+  })
+
+  test("a cooling account with no stated instant is held with until null", () => {
+    const snapshot = {
+      ...account("no-instant", { provider: "openai-oauth" }).snapshot,
+      status: "cooling_down" as const,
+      health: { consecutiveFailures: 1, inFlight: 0, recentTokens: 0 },
+    }
+    expect(coolingOf(snapshot, NOW)).toEqual({
+      until: null,
+      reason: "cooling-down",
+      resetSource: null,
+    })
   })
 
   test("an account outside the key's scope is never listed", () => {
