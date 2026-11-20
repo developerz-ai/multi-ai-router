@@ -12,8 +12,7 @@ import type { AdminAuthConfig } from "./config"
  * grow it unboundedly either.
  *
  * Pure over an injected clock and its own map — no timers, no I/O, no Hono.
- * In-memory like the session store, with the same caveat: a restart forgives
- * every attacker mid-attack.
+ * Isolated-test implementation only. Production injects the durable Postgres budget.
  */
 
 export type ThrottleDecision =

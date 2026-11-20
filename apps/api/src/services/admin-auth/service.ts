@@ -24,7 +24,8 @@ import {
   parseSignedSessionId,
   signSessionId,
 } from "./sessionToken"
-import { createLoginThrottle, ipThrottleKey } from "./throttle"
+import { createMemorySharedThrottle } from "./shared-throttle"
+import { ipThrottleKey } from "./throttle"
 
 export type {
   AdminAuthDeps,
@@ -49,14 +50,10 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     deps.localCredentialTtlMs ?? DEFAULT_LOCAL_CREDENTIAL_TTL_MS,
     now,
   )
-  const throttleOptions = { evictionIntervalMs: deps.throttleEvictionIntervalMs }
+  const throttle =
+    deps.throttle ?? createMemorySharedThrottle(config, now, deps.throttleEvictionIntervalMs)
 
   const fireAudit = createAuditFire(deps.audit)
-
-  const oidcThrottle = createLoginThrottle(config, throttleOptions)
-  // Its own buckets: one sign-in is a start and a callback, and charging both to one bucket would
-  // halve the attempts an operator gets.
-  const callbackThrottle = createLoginThrottle(config, throttleOptions)
 
   async function startLogin(ip = UNKNOWN_IP): Promise<LoginStartResult> {
     if (deps.oidc == null) {
@@ -64,11 +61,8 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       // it means a caller skipped that check, and the answer is still not a hint.
       throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
     }
-    const keys = [ipThrottleKey(ip)]
-    const at = now()
-    const decision = oidcThrottle.check(keys, at)
+    const decision = await throttle.consume("oidc-start", ipThrottleKey(ip))
     if (!decision.allowed) throw new AdminLoginThrottledError(decision.retryAfterSeconds)
-    oidcThrottle.recordFailure(keys, at)
     return deps.oidc.start()
   }
 
@@ -102,9 +96,8 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     if (deps.oidc == null) throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
     // Before the state is consumed: an unthrottled callback was one `oauth_states` query and one
     // audit row per unauthenticated hit.
-    const keys = [ipThrottleKey(input.ip)]
-    const at = now()
-    const decision = callbackThrottle.check(keys, at)
+    const key = ipThrottleKey(input.ip)
+    const decision = await throttle.consume("oidc-callback", key)
     if (!decision.allowed) {
       if (decision.firstDenial) {
         fireAudit(
@@ -119,7 +112,6 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     try {
       principal = await deps.oidc.complete({ code: input.code, state: input.state })
     } catch (err) {
-      callbackThrottle.recordFailure(keys, at)
       // Symmetry with `completeLocalLogin`, which has always audited its rejections. Without this
       // the audit feed showed OIDC logins that succeeded and nothing at all for the ones that did
       // not — so a console reporting "sign-in failed" left no row behind to explain it, and the
@@ -139,8 +131,8 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       throw err
     }
     // A completed sign-in is not an attack: the starts and callbacks it took stop counting.
-    oidcThrottle.reset(keys)
-    callbackThrottle.reset(keys)
+    await throttle.reset("oidc-start", key)
+    await throttle.reset("oidc-callback", key)
     return issueSession({
       // The session's `username` is the IdP-asserted email, lowercased like the allowlist it was
       // admitted by, so `authenticate` re-checks it against that list and `bin/admin
@@ -152,7 +144,6 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     })
   }
 
-  const localLoginThrottle = createLoginThrottle(config, throttleOptions)
   let activePasswordChecks = 0
   // One audit row per saturation episode, not per refused request; an episode ends when the
   // last running check does.
@@ -164,14 +155,12 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
   }): Promise<LoginCompleteResult> {
     // IP alone: there is no username to count against — the plane is one
     // principal, and a second key would only give a sprayer a second bucket.
-    const keys = [ipThrottleKey(input.ip)]
-    const nowMs = now()
-    const decision = localLoginThrottle.check(keys, nowMs)
-    if (!decision.allowed || activePasswordChecks >= config.maxConcurrentLogins) {
+    const key = ipThrottleKey(input.ip)
+    if (activePasswordChecks >= config.maxConcurrentLogins) {
       // The lockout transition is audited, not every refusal after it: a refused request is
       // unauthenticated, and a row per refusal is a write an attacker can repeat forever.
-      const firstDenial = decision.allowed ? !saturationReported : decision.firstDenial
-      if (decision.allowed) saturationReported = true
+      const firstDenial = !saturationReported
+      saturationReported = true
       if (firstDenial) {
         fireAudit(
           AUDIT_KINDS.adminLoginFailed,
@@ -179,17 +168,27 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
           LOCAL_ADMIN_USERNAME,
         )
       }
-      throw new AdminLoginThrottledError(decision.allowed ? 1 : decision.retryAfterSeconds)
+      throw new AdminLoginThrottledError(1)
     }
 
     // `deps.local` absent and a wrong password take the exact same path — the
     // wire answer cannot say which one it was, and the argon2 pass inside
     // `verify` cannot either (it runs against a dummy hash when no row exists).
-    localLoginThrottle.recordFailure(keys, nowMs)
     activePasswordChecks += 1
     let verified: boolean
     try {
+      const decision = await throttle.consume("local", key)
+      if (!decision.allowed) {
+        if (decision.firstDenial)
+          fireAudit(
+            AUDIT_KINDS.adminLoginFailed,
+            { ip: input.ip, method: "local", reason: "throttled" },
+            LOCAL_ADMIN_USERNAME,
+          )
+        throw new AdminLoginThrottledError(decision.retryAfterSeconds)
+      }
       verified = (await deps.local?.verify(input.password)) ?? false
+      if (verified) await throttle.reset("local", key)
     } finally {
       activePasswordChecks -= 1
       if (activePasswordChecks === 0) saturationReported = false
@@ -203,7 +202,6 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
     }
 
-    localLoginThrottle.reset(keys)
     localConfigured.remember(true)
     return issueSession({
       username: LOCAL_ADMIN_USERNAME,

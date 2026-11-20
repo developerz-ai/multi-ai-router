@@ -50,11 +50,15 @@ export type ModelListingSource = z.infer<typeof ModelListingSource>
  * - `toggle` — thinking can be switched off, not just tuned. Absent is not stated, never false.
  * - `effort` — the levels the upstream names, in its own words and order. Open strings, because the
  *   set differs per vendor (`low`/`high`/`max`) and a closed enum would need a release to learn one.
+ * - `default` — the level the upstream's own client uses when none is asked for (the ChatGPT/Codex
+ *   listing's `default_reasoning_level`). Absent is not stated. Read leniently: a listing that spells
+ *   it some other way costs this one fact, never the rest of the block.
  */
 export const ModelReasoning = z.object({
   supported: z.boolean(),
   toggle: z.boolean().optional(),
   effort: z.array(z.string().min(1)).optional(),
+  default: z.string().min(1).optional().catch(undefined),
 })
 export type ModelReasoning = z.infer<typeof ModelReasoning>
 

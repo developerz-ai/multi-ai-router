@@ -210,6 +210,12 @@ inline with a copy button — retrieval is the recovery path, not the normal one
 
 ## Admin plane
 
+Login attempt budgets live in Postgres, shared across replicas and restarts, separately for local
+passwords, OIDC starts and OIDC callbacks. Atomic admission charges before work; storage failure
+refuses authentication without a memory fallback. Keys are hashed IPs (IPv6 /64). Tracking capacity
+is shared per namespace; live failures are never evicted to admit new sources. Password hashing
+concurrency remains a per-process CPU guard, reserved before awaiting shared admission.
+
 | Element | Rule |
 |---|---|
 | Identity | One principal. OIDC pins it to a configured email; the local password runs as `local-admin`. No user table |

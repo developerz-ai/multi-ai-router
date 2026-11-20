@@ -76,8 +76,14 @@ request's total prompt (input + cache read + cache write) reaches that size; abs
 whatever the prompt. These are the numbers the router's own usage records are priced by, so a client
 pricing its own usage from them gets the router's answer.
 
-**`reasoning`** is the upstream listing's own `{ supported, toggle?, effort? }` for the model, read
-into `model_catalog` by the hourly sweep and absent where no serving account's listing stated one.
+**`reasoning`** is the upstream listing's own `{ supported, toggle?, effort?, default? }` for the
+model, read into `model_catalog` by the hourly sweep and absent where no serving account's listing
+stated one. `default` is the level the upstream's own client uses when none is asked for; additive
+in 2.72.0, so a reader that ignores it parses as before. The ChatGPT/Codex listing states both
+(`supported_reasoning_levels`, `default_reasoning_level`): `gpt-6.2-sol` reads
+`{ supported: true, effort: ["low", "medium", "high", "xhigh", "max"], default: "low" }`. Codex's
+`ultra` and `persistent` are UI selections its client rewrites before sending, so they are never
+stated as levels.
 A driver may read its listing off another of its surfaces (`ProviderModelListing.dialect`):
 OpenCode Go's anthropic `/v1/models` names ids only, so a Go seat serving on that surface still
 reads `/openai/v1/models`, which carries `limit.context`, `limit.output` and
@@ -1056,7 +1062,9 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `temperature` in (1, 2] | OpenAI → `anthropic` | carried verbatim; Anthropic's range ends at 1, so the `400` is the upstream's |
 | `max_tokens` below 16 | `anthropic` → `openai-responses` | carried verbatim as `max_output_tokens`; an upstream minimum is the upstream's `400` (minimum unverified). Not toward Codex, which takes no ceiling at all ([Surface rules](#surface-rules)) |
 | More than 4 `stop_sequences` | `anthropic` → `openai-chat` | carried verbatim as `stop`; OpenAI's limit of 4 is the upstream's `400` |
-| `verbosity` / `text.verbosity`, OpenRouter's `reasoning` object on openai-chat | OpenAI → any other dialect | dropped silently: not in the parsed schema. Only `reasoning_effort` / `reasoning.effort` is read as the reasoning dial |
+| `verbosity` (openai-chat), `output_config.verbosity` (anthropic, a router extension) | → `openai-responses` | **carried** verbatim as `text.verbosity` (beside any `text.format`). Unstated, toward a GPT-5/6 upstream model (opencode's `supportsVerbosity`, `shared/responses-model-dials.ts`) the router sends `text.verbosity: "low"`, what Codex and opencode send that family; toward any other model none. Decided on the post-alias model, after the conversion |
+| `verbosity` / `text.verbosity` toward any other dialect, OpenRouter's `reasoning` object on openai-chat | OpenAI → any other dialect | dropped silently: not in the parsed schema. Only `reasoning_effort` / `reasoning.effort` is read as the reasoning dial |
+| Top-level `system` / `instructions` toward GPT-6.2 or later | → `openai-responses` | **moved** to a leading `developer` input item (`input_text`). From GPT-6.2 top-level `instructions` are appended after `input` and billed uncached on every request (developers.openai.com prompt-caching guide, read 2026-11-20), so a system prompt there is never a cache read. `instructions` stays `""` where the surface requires the field (Codex), absent elsewhere. Decided on the post-alias model by a version threshold (`gpt-6.2` onward, `cachesTopLevelInstructions`), applied per attempt so one conversion serves a `gpt-6.1` and a `gpt-6.2` account alike; older models keep `instructions` unchanged |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
 | `max_tokens` / `max_completion_tokens` | → `openai-chat` | not lossy, but **not one name either** — emitted under whichever of the two the selected Account accepts. See [The output ceiling](#the-output-ceiling-one-field-two-names) |
 | Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |
@@ -1131,7 +1139,7 @@ tested anywhere under `services/translate/`.
 | Rule | Effect on a body the router wrote |
 |---|---|
 | `requireStream` | `stream: true`, whatever the client asked |
-| `requireInstructions` | `instructions: ""` when the client sent no system prompt |
+| `requireInstructions` | `instructions: ""` when the client sent no system prompt, or when the prompt moved to a leading `developer` item for a GPT-6.2+ model ([Known lossy edges](#known-lossy-edges)) |
 | `unsupportedFields` | each removed, reported as a drop by name (never by value), and named to the caller on the answer in `x-router-dropped-params`, in the caller's own words — Anthropic's `max_tokens` as `max_tokens`. Never removed silently: Anthropic's mandatory ceiling was, until plan 101 slice 09 (R4), so a caller whose ceiling Codex never saw had no way to know. The warn line it used to cost per Claude Code turn (174 an hour, prod 2026-10-16) is now one per key, pair and drop signature per window (`dataplane/translation-drop-log.ts`) |
 | `stripLookaroundPatterns` | a `pattern` containing a regex lookaround is removed from every walked tool-schema position and reported by tool name and schema path; non-lookaround patterns and data keywords are kept (`shared/schema-lookarounds.ts`) |
 | `cacheKeyHeader` | the header the upstream derives prompt-cache affinity from (Codex: `session-id`). The one rule that also applies to a **byte relay**, because it touches no body byte: a translated request sends the `prompt_cache_key` its body carries under it (the caller's, else the session-derived one), a relay forwards the client's own header of that name (otherwise stripped at the trust boundary, `dataplane/egress/headers.ts`). An unbound session and no caller key, or a key no header can carry, sends none; a driver header is never overridden (`dataplane/egress/cache-key-header.ts`) |

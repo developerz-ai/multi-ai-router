@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.72.1]
+
+### Fixed
+
+- Admin login budgets are shared in Postgres across replicas and restarts. Local passwords, OIDC starts and callbacks reserve attempts atomically before expensive work. Storage failures refuse login without a memory fallback. Migration 0053 adds bounded throttle buckets and namespace locks; successful login clears its budgets. Password concurrency remains per-process. Deployment still requires one replica for the other process-local state.
+
+## [2.72.0] — 2026-11-20
+
+### Added
+
+- **`/v1/catalog` states each ChatGPT/Codex model's reasoning levels and default.** The Codex listing's `supported_reasoning_levels` and `default_reasoning_level` are read into the row's `reasoning` (`providers/drivers/openai-oauth-models.ts`); before this the router read only the slug and the windows, so no ChatGPT model stated levels and a client fell back to its own id table, which stopped at `xhigh`. `gpt-6.2-sol` now reads `{ supported: true, effort: ["low", "medium", "high", "xhigh", "max"], default: "low" }`. `ModelReasoning` gains an optional `default` (lenient, `jsonb`, no migration); additive on `/v1/catalog` and `/v1/models`, so a reader that ignores it parses as before. Codex's `ultra` and `persistent` are left out: its client rewrites both before sending (codex-rs `resolve_reasoning_effort`). A model stating no levels has no `reasoning`, never `supported: false`. Information only: a requested effort is still never validated against it. Spec: `docs/idea/06-protocol-translation.md`, `docs/idea/03-providers.md`. Regression: `apps/api/test/unit/providers/codex-model-listing.test.ts`.
+- **Translated Responses egress sends `text.verbosity: "low"` to the GPT-5/6 family unless the caller stated one.** Codex (`default_verbosity: "low"` on every bundled model) and opencode send it; the router sent none, so every Anthropic-wire GPT run took the `medium` default. The caller's own value always wins and is now carried: openai-chat `verbosity`, and `output_config.verbosity` on the Anthropic wire (a router extension, verbatim, toward openai-responses only). Never sent to a model outside opencode's `supportsVerbosity` set, where it can be a `400`. Decided on the post-alias model, after the conversion (`translate/shared/responses-model-dials.ts`, `dataplane/translate-body.ts`). Spec: `docs/idea/06-protocol-translation.md#known-lossy-edges`. Regression: `apps/api/test/unit/translate/responses-model-dials.test.ts`, `apps/api/test/unit/dataplane/translate-body.test.ts`.
+
+### Changed
+
+- **The Codex client version pin is `0.171.0`** (was `0.170.0`), the newest stable openai/codex release on 2026-11-20 and the first defaulting to `gpt-6.2-sol`; GPT-6.2 needs `0.166.0`. It feeds the listing's `client_version` only. As before, a ChatGPT account declaring `supportedModels` picks up newly listed models when an operator re-runs "Discover models" on it.
+
+### Fixed
+
+- **The system prompt is cacheable on GPT-6.2 and later.** From GPT-6.2, Responses appends top-level `instructions` after `input` and bills them uncached on every request (OpenAI prompt-caching guide, read 2026-11-20); the Anthropic and openai-chat translators put the whole system prompt there, so it was never a cache read on a `gpt-6.2-*` tool loop (opencode 2.3.2 measured ~14,000 uncached tokens per step falling to 3 after the same move). Toward a `gpt-6.2`-or-later upstream model the prompt now leads `input` as a `developer` message; `instructions` stays `""` where the surface requires it (Codex) and is absent elsewhere. A version threshold (`cachesTopLevelInstructions`), not an id list, decided on the post-alias model per attempt, so one cached conversion serves a `gpt-6.1` and a `gpt-6.2` account alike. Every older model is unchanged. Spec: `docs/idea/06-protocol-translation.md#known-lossy-edges`. Regression: `apps/api/test/unit/translate/responses-model-dials.test.ts`, `apps/api/test/unit/dataplane/translate-body.test.ts`.
+
 ## [2.71.0] — 2026-11-20
 
 ### Added
@@ -2376,3 +2397,5 @@ your tooling config.
 [2.70.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.0
 [2.70.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.1
 [2.71.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.71.0
+[2.72.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.0
+[2.72.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.1

@@ -263,8 +263,18 @@ export interface OpenAiResponsesRequest {
    * minted here: a key the router invented would merge or split conversations the caller drew.
    */
   readonly prompt_cache_key?: string | undefined
-  /** A structured-output constraint, carried from openai-chat's `response_format` only. */
-  readonly text?: { readonly format: OpenAiResponsesTextFormat } | undefined
+  /**
+   * `format`: a structured-output constraint, carried from openai-chat's `response_format` only.
+   * `verbosity`: the caller's own word, verbatim (anthropic `output_config.verbosity`, openai-chat
+   * `verbosity`); absent, the per-model default is applied after the alias
+   * (`responses-model-dials.ts`).
+   */
+  readonly text?:
+    | {
+        readonly format?: OpenAiResponsesTextFormat | undefined
+        readonly verbosity?: string | undefined
+      }
+    | undefined
   /**
    * Always `false` on a translated request, never the caller's value.
    *
