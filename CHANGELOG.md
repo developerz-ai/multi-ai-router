@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.70.0] — 2026-11-20
+
 ### Added
 
 - **A configured pool roster is checked against live state, and drifts are reported instead of reconciled.** With `POOL_ROSTER_PATH` set, `pool_roster_check` runs on `POOL_ROSTER_CHECK_INTERVAL_MINUTES` through the ordinary scheduler (advisory lock, `ScheduledTaskRun` outcome) — one task, no task at all when no roster is configured. Its whole output is the pure `diffRoster(roster, live)` over five kinds: `pool_missing` (a roster Pool no live Pool carries, reported under the roster's name because that Pool has no id), `missing_member` (a member label that resolves to no Account, or to one the Pool does not hold — resolution is by label to the live Account id), `unexpected_member` (a held Account the roster does not name), `no_overflow` (the roster names an overflow the live Pool engages none of) and `overflow_mismatch` (the engaged overflow is not the member the roster names, or is not a member at all). The check is **read-only**: no Pool, membership or Account is created, edited or deleted by it, so a drifted run leaves `accounts` / `pools` / `pool_members` unchanged. Each item emits one `warn` line `pool roster drift` with `pool`, `poolId`, `kind` and `account` (label, or the id when no Account answers it) and never a credential, and the count per (pool, kind) lands on the new gauge `router_pool_roster_drift{pool_id,kind}`, rebuilt every run so a repaired drift drops its series on the next run and a clean roster exports none; a failed run leaves the previous values rather than claiming clean. Alert on `router_pool_roster_drift > 0`. Spec: `docs/idea/05-routing-and-failover.md#the-deployment-roster-and-the-check-that-reports-drift`, `docs/idea/08-observability.md#pool-roster-drift`. Regression: `apps/api/test/unit/scheduler/pool-roster-diff.test.ts`, `apps/api/test/unit/scheduler/pool-roster-check.test.ts`.
@@ -16,13 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The "awaiting a recovery permit" `429` names itself and reports the probe hold, not a one-second park.** A chain refused only because a recovering account's permit or half-open probe belonged to another request answered `QuotaExhaustedError("recovering accounts are awaiting a recovery permit")` with `error.router.signal: null`, `reset_source: null` and `Retry-After` / `reset_at` from `RECOVERY_RETRY_AFTER_MS` (1 s), after the request had already waited out `RECOVERY_REQUEST_WAIT_MS`. A client could tell it from a provider wall only by matching the sentence, and one that parked until `reset_at` walled again at once: measured by developerz.ai on 2026-11-20, 57 of 212 run errors on one key. Now `signal` is `awaiting-recovery-permit`, `reset_source` is `estimated`, and `reset_at` / `Retry-After` are the soonest refused account's probe hold ending (`ROUTING_HALF_OPEN_HOLD_MS`, default 30 s): a held half-open probe's own expiry, or a whole hold from the refusal when only a permit was missing, since the router does not know when another request's permit settles (`HealthStore.probeHoldUntil`). Additive: the sentence, status, `wall: clock` and `retryable: true` are unchanged, and a client that ignores unknown signals sees only a longer `Retry-After`. `RECOVERY_RETRY_AFTER_MS` no longer shapes this refusal; it still sets the re-check instant selection reports for a recovering account. Spec: `docs/idea/05-routing-and-failover.md`, `docs/idea/06-protocol-translation.md#the-router-error-object`. Regression: `apps/api/test/unit/dataplane/recovery-wait.test.ts`, `apps/api/test/unit/dataplane/health.test.ts`.
 - **Corrected: the 2.68.0 Codex pin fix needs a re-discover to take effect.** 2.68.0's notes, the pin's comment and `docs/idea/03-providers.md` said the hourly sweep writes the Codex listing into `supportedModels`. It does not: `model_catalog_refresh` writes only `model_catalog`, which routing never reads, and `supportedModels` changes only through "Discover models" (by design — a timer must not change routing). An Account discovered before 2.68.0 keeps refusing `gpt-6.1-terra` / `gpt-6.2-*` until an operator re-runs "Discover models" on it. Comment and spec now say so. No code change.
 
-## [2.69.0] — 2026-11-19
+## 2.69.0 — 2026-11-19 (never tagged; first released in [v2.70.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.0))
 
 ### Added
 
 - **Optional boot-validated deployment pool roster.** `POOL_ROSTER_PATH` loads an absolute, deployment-mounted version-1 JSON roster before runtime startup; absent/blank disables loading. Invalid files refuse boot with a sanitized first issue. Pool/member uniqueness and overflow membership are validated. `POOL_ROSTER_CHECK_INTERVAL_MINUTES` defaults to 15 positive whole minutes with the scheduler timer bound. This is configuration only, not the future drift-check runner: no monitoring or membership mutations. Spec: `docs/idea/09-deployment.md#optional-deployment-pool-roster`.
 
-## [2.68.1] — 2026-11-19
+## 2.68.1 — 2026-11-19 (never tagged; first released in [v2.70.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.0))
 
 ### Added
 
@@ -2351,5 +2353,4 @@ your tooling config.
 [2.66.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.66.0
 [2.67.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.67.0
 [2.68.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.0
-[2.68.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.1
-[2.69.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.69.0
+[2.70.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.0
