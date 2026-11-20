@@ -406,7 +406,7 @@ Two operational consequences:
 
 | | |
 |---|---|
-| **Running multiple router replicas is safe** | Before doing work, each task takes a Postgres advisory lock named for that task. Exactly one replica runs a given sweep; the others fail the try and skip. Scale the router horizontally without a leader-election component and without duplicate sweeps. |
+| **One replica, not a horizontal fleet** | **Background tasks only:** before doing work, each task takes a Postgres advisory lock named for that task; exactly one replica runs a given sweep and the others fail the try and skip, with no leader-election component and no duplicate sweeps. That is sweep-scoped, **not** a claim that a multi-replica router is safe. The router is run as **one replica**: warm caches, breaker/health clocks, key/session bindings, per-key rate-limit windows, the admin login throttle, and pending login/OAuth device-flow state are per-process, and each account's CLI state lives on a node-local per-Account `CLAUDE_CONFIG_DIR` volume. A second replica is safe only once per-account replica ownership uses a Postgres lease with a fencing token, breaker/cooldown clocks are durable, per-key rate limits and the admin login throttle are shared, pending login/device flows are durable, and the SDK's in-flight session bindings are shared (so a stream stays on the owning replica). |
 | **Every run is recorded** | Task, start, finish, outcome, and items processed land in a `ScheduledTaskRun` row, surfaced in the admin UI. That record is how you tell a task that is idle from one that is wedged — see Troubleshooting. |
 
 ## Reverse proxy
@@ -820,8 +820,9 @@ rather than discovering the ceiling under load: an unbounded subprocess count is
 The ceiling covers **every** path that spawns, dispatch and the console's **Test now** probe alike —
 a bound one caller can step around bounds nothing. `router_sdk_subprocesses` and
 `router_sdk_subprocess_queue_depth` are how you check the formula against your own traffic:
-saturation with an empty queue means the ceiling fits, sustained queue depth means raise it (if RAM
-allows) or add a replica. A
+saturation with an empty queue means the ceiling fits; sustained queue depth means raise it if RAM
+allows. The router runs as one replica, so adding one is not a capacity remedy — see the
+invariant and prerequisites in [the scheduler section](#the-scheduler-is-in-process). A
 same-dialect passthrough (the common case) does no body parsing at all; see
 [06-protocol-translation.md](06-protocol-translation.md).
 
