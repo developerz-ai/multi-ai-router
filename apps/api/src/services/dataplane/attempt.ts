@@ -59,6 +59,8 @@ export type AttemptOutcome =
        * operator Anthropic's sentence (`sdk-attempt-response.ts`). Never rendered to a client.
        */
       readonly upstreamMessage?: string
+      /** The signal of that same private classification, for the attempt log beside it. */
+      readonly upstreamSignal?: string
       /**
        * A router-authored verdict the transport decided itself, preferred over `upstream` when the
        * chain folds this attempt (`chain-error.ts`). The fast transport's own request refusal.
