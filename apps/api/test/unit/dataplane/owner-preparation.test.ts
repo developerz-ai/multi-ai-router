@@ -117,7 +117,6 @@ for (const designated of [false, true]) {
         quota,
         recovery: {
           catalog: routing,
-          retryAfterMs: 1000,
           quotaStaleAfterMs: 1000,
           currentSnapshot: () => upstream.snapshot,
           hint: () => {},

@@ -40,7 +40,6 @@ async function translated(frame: unknown, health = createHealthStore({ jitter: (
     catalog: routing,
     recovery: {
       catalog: routing,
-      retryAfterMs: 1000,
       quotaStaleAfterMs: 1000,
       currentSnapshot: () => routing.accounts()[0]?.snapshot,
       hint: () => {},

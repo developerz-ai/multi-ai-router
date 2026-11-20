@@ -343,6 +343,23 @@ describe("the half-open probe gate", () => {
     expect(store.admitProbe("a", new Date(recovered.getTime() + 15_000)).admitted).toBe(true)
   })
 
+  test("probeHoldUntil names the held probe's own expiry, never a moment from now", () => {
+    const store = cooling(15_000)
+    store.admitProbe("a", recovered)
+    const later = new Date(recovered.getTime() + 5_000)
+
+    expect(store.probeHoldUntil("a", later)).toEqual(new Date(recovered.getTime() + 15_000))
+  })
+
+  test("with no live hold, probeHoldUntil is a whole fresh hold from now", () => {
+    const store = cooling(15_000)
+
+    expect(store.probeHoldUntil("a", recovered)).toEqual(new Date(recovered.getTime() + 15_000))
+    store.admitProbe("a", recovered)
+    const lapsed = new Date(recovered.getTime() + 20_000)
+    expect(store.probeHoldUntil("a", lapsed)).toEqual(new Date(lapsed.getTime() + 15_000))
+  })
+
   test("an account still cooling is refused: no probe is due yet", () => {
     expect(cooling().admitProbe("a", NOW)).toEqual({ admitted: false, held: false })
   })
