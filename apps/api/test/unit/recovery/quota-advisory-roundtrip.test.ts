@@ -39,6 +39,7 @@ function accountRow(): AccountRow {
     dialect: null,
     modelAliases: null,
     supportedModels: null,
+    supportedModelsRemoved: null,
     windowTokenLimits: null,
     providerPreferences: null,
     weight: 1,

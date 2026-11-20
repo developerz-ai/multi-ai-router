@@ -87,6 +87,13 @@ export const AUDIT_KINDS = {
    * field", and only one of them is answerable by a timer-free deployment.
    */
   accountModelsDiscovered: "account.models_discovered",
+  /**
+   * An account's `supportedModels` list changed — by "Discover models", the add/remove operation,
+   * the full replace or the account `PATCH`. `detail.added` / `detail.removed` carry the ids and
+   * `detail.source` what made the change; the caller is the row's actor. An edit that changed
+   * nothing writes none (`services/accounts/supported-models-writer.ts`).
+   */
+  accountSupportedModelsChanged: "account.supported_models_changed",
   keyCreated: "key.created",
   keyUpdated: "key.updated",
   keyRevealed: "key.revealed",

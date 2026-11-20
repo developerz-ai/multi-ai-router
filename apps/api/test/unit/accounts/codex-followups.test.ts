@@ -84,7 +84,7 @@ describe("A. the Codex model listing", () => {
     const warnings: { msg: string; fields?: Record<string, unknown> }[] = []
     const service = createDiscoverModelsService({
       accounts: { findById: async () => codexRow() },
-      write: { update: async () => ({ ok: true, value: {} }) as never },
+      models: { write: async () => ({ ok: true, value: {} }) as never },
       cipher: { decrypt: (value) => value },
       audit: { record: async () => {} },
       timeoutMs: 5_000,

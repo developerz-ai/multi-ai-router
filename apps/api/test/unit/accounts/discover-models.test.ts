@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import type { AccountRow } from "@multi-ai-router/db"
-import type { UpdateAccountBody } from "../../../src/services/accounts"
-import { createDiscoverModelsService } from "../../../src/services/accounts"
+import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
+import {
+  createDiscoverModelsService,
+  type SupportedModelsEdit,
+} from "../../../src/services/accounts"
 import type { AuditEventInput } from "../../../src/services/admin"
-import { ok } from "../../../src/services/admin/result"
 import { accountRow as durableAccountRow } from "../../support/account-row"
+import { testSupportedModelsWriter } from "../../support/supported-models-writer"
 
 /**
- * "Discover models" — ask the upstream what it serves and write the answer into `supportedModels`.
+ * "Discover models" — ask the upstream what it serves and merge the answer into `supportedModels`.
  *
  * The properties worth pinning: it addresses the account's own dialect's listing path, it reads
  * both wire shapes out of the one field they share, it never turns an unreadable or empty answer
@@ -38,30 +40,56 @@ function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
   })
 }
 
+/** A one-row repository with the real lock semantics `editSupportedModels` promises. */
+function oneRowRepository(initial: AccountRow) {
+  let row = initial
+  return {
+    current: () => row,
+    findById: async (id: string) => (id === row.id ? row : undefined),
+    editSupportedModels: async (
+      input: Parameters<AccountRepository["editSupportedModels"]>[0],
+    ): ReturnType<AccountRepository["editSupportedModels"]> => {
+      if (input.id !== row.id) return { kind: "not_found" }
+      const decision = input.decide(row)
+      if (decision.kind === "skip") return { kind: "skipped", row }
+      row = {
+        ...row,
+        supportedModels: decision.supportedModels,
+        supportedModelsRemoved: decision.supportedModelsRemoved,
+        updatedAt: input.now,
+      }
+      return { kind: "written", row }
+    },
+  }
+}
+
 function harness(options: {
   readonly row?: AccountRow
   readonly fetch?: (request: Request) => Promise<Response>
+  readonly log?: { warn: (message: string, fields?: Record<string, unknown>) => void }
 }) {
-  const row = options.row ?? accountRow()
+  const repository = oneRowRepository(options.row ?? accountRow())
   const audited: AuditEventInput[] = []
-  const writes: { id: string; patch: UpdateAccountBody }[] = []
+  const audit = { record: async (event: AuditEventInput) => void audited.push(event) }
+  const edits: SupportedModelsEdit[] = []
+  const writer = testSupportedModelsWriter(repository, { audit })
 
   const service = createDiscoverModelsService({
-    accounts: { findById: async (id) => (id === row.id ? row : undefined) },
-    write: {
-      update: async (id, patch) => {
-        writes.push({ id, patch })
-        // Only the outcome matters here; the accounts service has its own tests.
-        return ok({ id }) as never
+    accounts: repository,
+    models: {
+      write: (id, edit, source) => {
+        edits.push(edit)
+        return writer.write(id, edit, source)
       },
     },
     cipher: { decrypt: (envelope) => envelope },
-    audit: { record: async (event) => void audited.push(event) },
+    audit,
     timeoutMs: 5_000,
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+    ...(options.log === undefined ? {} : { log: options.log }),
   })
 
-  return { service, audited, writes }
+  return { service, audited, edits, stored: () => repository.current().supportedModels }
 }
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -74,7 +102,7 @@ function jsonResponse(status: number, body: unknown): Response {
 describe("createDiscoverModelsService", () => {
   test("reads the Anthropic listing and writes the ids, deduplicated and sorted", async () => {
     const seen: { url: string | null; method: string | null } = { url: null, method: null }
-    const { service, writes } = harness({
+    const { service, stored } = harness({
       fetch: async (request) => {
         seen.url = request.url
         seen.method = request.method
@@ -97,12 +125,12 @@ describe("createDiscoverModelsService", () => {
     // z.ai's default surface is Anthropic, whose listing lives at `/v1/models`.
     expect(seen.url).toContain("/v1/models")
     expect(seen.method).toBe("GET")
-    expect(writes).toEqual([{ id: "acc-1", patch: { supportedModels: ["glm-4.6", "glm-4.7"] } }])
+    expect(stored()).toEqual(["glm-4.6", "glm-4.7"])
   })
 
   test("reads the OpenAI listing off the same field, at that dialect's own path", async () => {
     const seen: { url: string | null } = { url: null }
-    const { service, writes } = harness({
+    const { service, stored } = harness({
       row: accountRow({ dialect: "openai-chat" }),
       fetch: async (request) => {
         seen.url = request.url
@@ -117,7 +145,7 @@ describe("createDiscoverModelsService", () => {
     expect(result.ok).toBe(true)
     expect(seen.url).toContain("/models")
     expect(seen.url).not.toContain("/v1/models")
-    expect(writes[0]?.patch).toEqual({ supportedModels: ["glm-4.7"] })
+    expect(stored()).toEqual(["glm-4.7"])
   })
 
   test("asks for the whole catalog rather than the provider's default page", async () => {
@@ -136,7 +164,7 @@ describe("createDiscoverModelsService", () => {
   })
 
   test("an empty listing writes nothing — it is not a claim that the account serves nothing", async () => {
-    const { service, writes } = harness({
+    const { service, edits: writes } = harness({
       fetch: async () => jsonResponse(200, { data: [] }),
     })
 
@@ -149,7 +177,7 @@ describe("createDiscoverModelsService", () => {
   })
 
   test("an unreadable listing is a refusal, never a silent empty declaration", async () => {
-    const { service, writes } = harness({
+    const { service, edits: writes } = harness({
       fetch: async () => jsonResponse(200, { models: ["glm-4.7"] }),
     })
 
@@ -161,18 +189,18 @@ describe("createDiscoverModelsService", () => {
   })
 
   test("an entry with no usable id is dropped without failing the whole listing", async () => {
-    const { service, writes } = harness({
+    const { service, stored } = harness({
       fetch: async () =>
         jsonResponse(200, { data: [{ id: "glm-4.7" }, { id: 42 }, { id: "  " }, {}] }),
     })
 
     const result = await service.discover("acc-1")
     expect(result.ok).toBe(true)
-    expect(writes[0]?.patch).toEqual({ supportedModels: ["glm-4.7"] })
+    expect(stored()).toEqual(["glm-4.7"])
   })
 
   test("an upstream rejection is reported with its classification and writes nothing", async () => {
-    const { service, writes } = harness({
+    const { service, edits: writes } = harness({
       fetch: async () =>
         jsonResponse(401, { error: { type: "authentication_error", message: "bad key" } }),
     })
@@ -187,7 +215,7 @@ describe("createDiscoverModelsService", () => {
 
   test("a Claude subscription is refused by name — the Agent SDK owns that catalog", async () => {
     let called = false
-    const { service, writes } = harness({
+    const { service, edits: writes } = harness({
       row: accountRow({
         provider: "anthropic-oauth",
         authMaterial: null,
@@ -230,8 +258,10 @@ describe("createDiscoverModelsService", () => {
     })
 
     await service.discover("acc-1")
-    expect(audited).toHaveLength(1)
-    expect(audited[0]?.kind).toBe("account.models_discovered")
+    expect(audited.map((event) => event.kind)).toEqual([
+      "account.models_discovered",
+      "account.supported_models_changed",
+    ])
     expect(audited[0]?.subjectId).toBe("acc-1")
     expect(audited[0]?.detail).toEqual({ provider: "zai", count: 1, saved: true })
     expect(JSON.stringify(audited)).not.toContain("plaintext-key")
@@ -254,54 +284,68 @@ describe("createDiscoverModelsService", () => {
   })
 })
 
-describe("a discovery that drops declared ids", () => {
-  test("audits and logs every id the operator had that the listing no longer carries", async () => {
-    const warned: { message: string; fields: unknown }[] = []
-    const row = accountRow({
+describe("a discovery never removes an id (prod 2026-11-15)", () => {
+  // The fingerprint: an OpenRouter account whose list carries a hand-added id the catalogue does
+  // not list. The old discovery replaced the list, the id vanished, and every request for it was
+  // refused `model-unsupported` for 19 h.
+  const HAND_ADDED = "deepseek/deepseek-v4.1-flash-0925"
+  const row = () =>
+    accountRow({
       provider: "openrouter",
-      supportedModels: ["deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash:floor"],
+      supportedModels: ["deepseek/deepseek-v4.1-flash", HAND_ADDED],
     })
-    const audited: AuditEventInput[] = []
-    const service = createDiscoverModelsService({
-      accounts: { findById: async (id) => (id === row.id ? row : undefined) },
-      write: { update: async (id) => ok({ id }) as never },
-      cipher: { decrypt: (envelope) => envelope },
-      audit: { record: async (event) => void audited.push(event) },
-      timeoutMs: 5_000,
-      log: { warn: (message, fields) => void warned.push({ message, fields }) },
-      fetch: async () =>
-        jsonResponse(200, {
-          data: [{ id: "deepseek/deepseek-v4.1-flash" }, { id: "z-ai/glm-5.3" }],
-        }),
-    })
+  const listing = async () =>
+    jsonResponse(200, { data: [{ id: "deepseek/deepseek-v4.1-flash" }, { id: "z-ai/glm-5.3" }] })
+
+  test("a discovery over a list with a hand-added id keeps it, and adds what is new", async () => {
+    const { service, stored } = harness({ row: row(), fetch: listing })
 
     const result = await service.discover("acc-1")
     expect(result.ok).toBe(true)
-    expect(audited[0]?.detail).toEqual({
-      provider: "openrouter",
-      count: 2,
-      saved: true,
-      removed: ["deepseek/deepseek-v4.1-flash:floor"],
-    })
-    expect(warned).toHaveLength(1)
-    expect(warned[0]?.fields).toMatchObject({
-      accountId: "acc-1",
-      removed: ["deepseek/deepseek-v4.1-flash:floor"],
+    expect(stored()).toEqual(["deepseek/deepseek-v4.1-flash", HAND_ADDED, "z-ai/glm-5.3"])
+  })
+
+  test("the diff lists the hand-added id under notInCatalogue, and the new one under added", async () => {
+    const { service } = harness({ row: row(), fetch: listing })
+
+    const result = await service.discover("acc-1")
+    if (!result.ok) throw new Error(result.failure.message)
+    expect(result.value.added).toEqual(["z-ai/glm-5.3"])
+    expect(result.value.notInCatalogue).toEqual([HAND_ADDED])
+    expect(result.value.supportedModels).toEqual([
+      "deepseek/deepseek-v4.1-flash",
+      HAND_ADDED,
+      "z-ai/glm-5.3",
+    ])
+    expect(result.value.message).toContain("not in the catalogue and were kept")
+  })
+
+  test("it asks the writer only to add — never to remove", async () => {
+    const { service, edits } = harness({ row: row(), fetch: listing })
+    await service.discover("acc-1")
+    expect(edits).toEqual([
+      { kind: "edit", add: ["deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3"], remove: [] },
+    ])
+  })
+
+  test("the change is audited with the ids added and none removed", async () => {
+    const { service, audited } = harness({ row: row(), fetch: listing })
+    await service.discover("acc-1")
+    const changed = audited.find((event) => event.kind === "account.supported_models_changed")
+    expect(changed?.detail).toMatchObject({
+      source: "discover",
+      added: ["z-ai/glm-5.3"],
+      removed: [],
     })
   })
 
-  test("an empty listing removes nothing, so it reports nothing removed", async () => {
-    const row = accountRow({ supportedModels: ["glm-4.7"] })
-    const audited: AuditEventInput[] = []
-    const service = createDiscoverModelsService({
-      accounts: { findById: async () => row },
-      write: { update: async (id) => ok({ id }) as never },
-      cipher: { decrypt: (envelope) => envelope },
-      audit: { record: async (event) => void audited.push(event) },
-      timeoutMs: 5_000,
+  test("an empty listing removes nothing and writes nothing", async () => {
+    const { service, stored, audited } = harness({
+      row: accountRow({ supportedModels: ["glm-4.7"] }),
       fetch: async () => jsonResponse(200, { data: [] }),
     })
     await service.discover("acc-1")
-    expect(audited[0]?.detail).toEqual({ provider: "zai", count: 0, saved: false })
+    expect(stored()).toEqual(["glm-4.7"])
+    expect(audited.map((event) => event.kind)).toEqual(["account.models_discovered"])
   })
 })

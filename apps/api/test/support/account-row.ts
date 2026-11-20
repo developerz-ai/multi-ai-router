@@ -20,6 +20,7 @@ export function accountRow(overrides: Partial<AccountRow> = {}): AccountRow {
     dialect: null,
     modelAliases: null,
     supportedModels: null,
+    supportedModelsRemoved: null,
     windowTokenLimits: null,
     providerPreferences: null,
     weight: 100,

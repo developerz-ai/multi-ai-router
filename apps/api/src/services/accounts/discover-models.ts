@@ -7,10 +7,10 @@ import type { FetchLike } from "../dataplane"
 import { bounded } from "../dataplane/attempt-log"
 import { listUpstreamModels } from "../models"
 import { describeProvider } from "./providers"
-import type { AccountsService } from "./service"
+import type { SupportedModelsWriter } from "./supported-models-writer"
 
 /**
- * **Ask the upstream what it serves**, and write the answer into `supported_models`.
+ * **Ask the upstream what it serves**, and merge the answer into `supported_models`.
  *
  * Until this existed the column had no way to be filled except by hand, and before the column
  * existed `supportedModels` was declared by routing and populated by nothing at all — so every
@@ -27,9 +27,14 @@ import type { AccountsService } from "./service"
  * without an operator ever asking — an upstream retiring a model would silently take an account out
  * of selection mid-deployment. Discovery happens when a human presses the button.
  *
- * **The write goes through {@link AccountsService.update}**, not the repository: that is what keeps
- * the warm routing catalog coherent (the `withCatalogRefresh` decorator wraps it) and what audits
- * the field change. This service owns the question; it does not own the row.
+ * **It merges; it never removes.** The list is partly hand-maintained — pinned variants and ids no
+ * catalogue lists — and on 2026-11-15 a discovery that *replaced* it dropped one such id, and every
+ * request for it was refused `model-unsupported` for 19 hours. Now every listed id missing from the
+ * list is added, every id already there is kept, and the ids the catalogue no longer lists come
+ * back as `notInCatalogue`: the operator removes them, if at all, with one deliberate
+ * `PATCH /:id/models`. The write goes through the one writer
+ * (`./supported-models-writer.ts`), which holds the row lock, refreshes the warm catalog and audits
+ * the ids that moved. This service owns the question; it does not own the row.
  *
  * **An empty listing is never saved.** A provider that answers `data: []` — or one whose listing
  * this router cannot read — must not be allowed to turn "I know of no models" into "this account
@@ -44,8 +49,17 @@ export interface DiscoverModelsResult {
   readonly accountId: string
   /** Upstream-side ids, deduplicated and sorted. Empty when the upstream listed nothing. */
   readonly models: readonly string[]
-  /** False when there was nothing to write — an empty listing is not a declaration. */
+  /** False when there was nothing to merge — an empty listing is not a declaration. */
   readonly saved: boolean
+  /** Listed ids this discovery added to the account's list. */
+  readonly added: readonly string[]
+  /**
+   * Ids on the account's list that the listing did not carry. **Kept**: a catalogue that omits an
+   * id is not an instruction to stop serving it. Shown so the operator can remove them on purpose.
+   */
+  readonly notInCatalogue: readonly string[]
+  /** The account's list after the merge; `null` when it declares none (passthrough). */
+  readonly supportedModels: readonly string[] | null
   /** Always safe to render: router-authored, or a `FailureClassification.signal`. */
   readonly message: string
   readonly latencyMs: number
@@ -57,11 +71,8 @@ export interface DiscoverModelsService {
 
 export interface DiscoverModelsServiceDeps {
   readonly accounts: Pick<AccountRepository, "findById">
-  /**
-   * The decorated service, so the write refreshes the warm catalog and writes its own audit row.
-   * Deliberately not the repository — see the note above.
-   */
-  readonly write: Pick<AccountsService, "update">
+  /** The one `supportedModels` writer: row lock, catalog refresh, audit. Never the repository. */
+  readonly models: Pick<SupportedModelsWriter, "write">
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly audit: AuditRecorder
   /** Bounds the one outbound call — the same ceiling a normal attempt gets. */
@@ -103,64 +114,60 @@ export function createDiscoverModelsService(
       if (!listed.ok) return listed
 
       const models = listed.value
-      const removed = droppedIds(account, models)
+      const declared = account.supportedModels ?? []
       await deps.audit.record({
         kind: AUDIT_KINDS.accountModelsDiscovered,
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: account.id,
-        // A count and a flag, plus the ids this write takes away. Model ids are not credentials;
-        // the listing itself is not copied here — the row holds it — but what the overwrite
-        // removed exists nowhere else once it lands (prod 2026-11-15: a hand-added `:floor` id
-        // vanished silently and its traffic was refused for 19 h).
-        detail: {
-          provider: account.provider,
-          count: models.length,
-          saved: models.length > 0,
-          ...(removed.length === 0 ? {} : { removed }),
-        },
+        // A count and a flag. The ids that moved are on the `account.supported_models_changed` row
+        // the merge writes; the listing itself is not copied here.
+        detail: { provider: account.provider, count: models.length, saved: models.length > 0 },
       })
-      if (removed.length > 0) {
-        deps.log?.warn("model discovery removed declared models", {
-          component: "discover-models",
-          accountId: account.id,
-          provider: account.provider,
-          removed,
-        })
-      }
 
       if (models.length === 0) {
         return ok({
           accountId,
           models,
           saved: false,
+          added: [],
+          notInCatalogue: [],
+          supportedModels: account.supportedModels,
           message:
-            "the upstream listed no models — nothing was written, so this account still accepts any model name",
+            declared.length === 0
+              ? "the upstream listed no models — nothing was written, so this account still accepts any model name"
+              : "the upstream listed no models — nothing was written, and the account keeps its list",
           latencyMs,
         })
       }
 
-      const written = await deps.write.update(accountId, { supportedModels: [...models] })
-      if (!written.ok) return written
+      const merged = await deps.models.write(
+        accountId,
+        { kind: "edit", add: models, remove: [] },
+        "discover",
+      )
+      if (!merged.ok) return merged
+      const listedIds = new Set(models)
+      const { change } = merged.value
+      const notInCatalogue = change.before.filter((id) => !listedIds.has(id))
 
       return ok({
         accountId,
         models,
         saved: true,
-        message: `the upstream listed ${models.length} model(s); this account now accepts only those`,
+        added: change.added,
+        notInCatalogue,
+        supportedModels: change.after,
+        message: mergedMessage(models.length, change.added.length, notInCatalogue.length),
         latencyMs,
       })
     },
   }
 }
 
-/**
- * The declared ids the write is about to replace away. Empty when nothing will be written — an
- * empty listing is never saved, so it removes nothing.
- */
-function droppedIds(account: AccountRow, listed: readonly string[]): readonly string[] {
-  if (listed.length === 0) return []
-  const kept = new Set(listed)
-  return (account.supportedModels ?? []).filter((id) => !kept.has(id))
+function mergedMessage(listed: number, added: number, unlisted: number): string {
+  const head = `the upstream listed ${listed} model(s); ${added} added to this account's list`
+  if (unlisted === 0) return head
+  return `${head}; ${unlisted} id(s) on the list are not in the catalogue and were kept — remove them explicitly if they are no longer served`
 }
 
 /**

@@ -6,6 +6,7 @@ import { quotaWindows } from "../schema/quota-windows"
 import { sessions } from "../schema/sessions"
 import { createAccountAuthorization } from "./account-authorization"
 import { createAccountLifecycle } from "./account-lifecycle"
+import { createSupportedModelsMethods } from "./account-supported-models"
 import type { AccountListFilter, AccountRepository } from "./account-types"
 import { withAdminMutationRetry } from "./admin-mutation-conflict"
 import { createBackgroundAccountEligibility } from "./background-account-eligibility"
@@ -73,6 +74,7 @@ export function createAccountRepository(
   return {
     ...lifecycle,
     ...createAccountAuthorization(db, recoveryCooldownMs),
+    ...createSupportedModelsMethods(db),
     create: async (input) => {
       const rows = await db
         .insert(accounts)
@@ -147,9 +149,6 @@ export function createAccountRepository(
           ...(patch.baseUrl === undefined ? {} : { baseUrl: patch.baseUrl }),
           ...(patch.dialect === undefined ? {} : { dialect: patch.dialect }),
           ...(patch.modelAliases === undefined ? {} : { modelAliases: patch.modelAliases }),
-          ...(patch.supportedModels === undefined
-            ? {}
-            : { supportedModels: patch.supportedModels }),
           ...(patch.windowTokenLimits === undefined
             ? {}
             : { windowTokenLimits: patch.windowTokenLimits }),

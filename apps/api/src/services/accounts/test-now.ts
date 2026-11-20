@@ -243,9 +243,16 @@ export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
         kind: AUDIT_KINDS.accountTested,
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: account.id,
+        // The model and the failure kind make a failed probe readable after the pod's log is gone:
+        // a `cooldown_recheck` row saying only `failed` cannot tell "still walled" from "the probe
+        // was refused" (prod 2026-11-20). Model ids and the routing vocabulary carry no secret.
         detail: {
           provider: account.provider,
           outcome: outcome.ok ? "ok" : "failed",
+          model: input.model,
+          ...(outcome.ok || outcome.failureKind === undefined
+            ? {}
+            : { failureKind: outcome.failureKind }),
           trigger:
             input.recovery !== undefined
               ? (input.recovery.trigger ?? "router_recovery")

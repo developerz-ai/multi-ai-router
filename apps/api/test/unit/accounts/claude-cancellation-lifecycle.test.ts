@@ -3,6 +3,7 @@ import { createClaudeConnectService } from "../../../src/services/accounts/conne
 import { createAccountsService } from "../../../src/services/accounts/service"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
+import { testSupportedModelsWriter } from "../../support/supported-models-writer"
 
 function deferred() {
   let release!: () => void
@@ -62,6 +63,7 @@ test("deletion cancels a login before its URL and preserves the directory until 
   const events: string[] = []
   const service = createAccountsService({
     accounts: store.accounts,
+    supportedModels: testSupportedModelsWriter(store.accounts),
     keys: store.keys,
     pools: store.pools,
     cipher: { encrypt: (value) => value },

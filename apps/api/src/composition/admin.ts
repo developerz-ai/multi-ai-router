@@ -12,7 +12,6 @@ import {
   connectFromEnv,
   createAccountsService,
   createCredentialPark,
-  createDiscoverModelsService,
   createRecheckService,
   createTestNowService,
   liveHealthCheck,
@@ -28,6 +27,7 @@ import { createKeysService, type KeysServiceDeps } from "../services/keys"
 import { createPoolReaper, createPoolsService } from "../services/pools"
 import { createSettingsService } from "../services/settings"
 import { accountProviders, catalogLabels, createUsageService } from "../services/usage-read"
+import { createAccountModelPlane } from "./account-models"
 import { createAdminAuth } from "./admin-auth"
 import type { AdminPlane, AdminPlaneDeps } from "./admin-types"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
@@ -157,6 +157,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     reasonMaxChars: env.logReasonMaxChars,
   })
 
+  // Discovery, the add/remove and replace operations and the account `PATCH`: one list writer.
+  const modelPlane = createAccountModelPlane(deps, audit)
   const accountsService = createAccountsService({
     revokeDeletedAccount: async (account) => {
       connect.revoke(account.id)
@@ -168,6 +170,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     keys,
     pools: deps.pools,
     cipher,
+    supportedModels: modelPlane.writer,
     configDirs,
     audit,
     now,
@@ -205,18 +208,6 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     },
   })
 
-  // "Discover models": one GET at the provider's own listing, written into `supportedModels`. No
-  // cooldown and no confirmation — it bills nothing (`services/accounts/discover-models.ts`).
-  const discoverModels = createDiscoverModelsService({
-    accounts,
-    write: decoratedAccounts,
-    cipher,
-    audit,
-    timeoutMs: env.failover.upstreamTimeoutMs,
-    maxResponseBytes: env.modelListingMaxBytes,
-    log: logger,
-    reasonMaxChars: env.logReasonMaxChars,
-  })
   const onCommitted: KeysServiceDeps["onCommitted"] = (id, kind) =>
     keyMutationCommitted(deps.coherence, id, kind)
 
@@ -290,7 +281,8 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       testNow,
       // Same instance the re-check button uses — one probe, one `needs_reauth` transition.
       ...(cli.authProbe === undefined ? {} : { authProbe: cli.authProbe }),
-      discoverModels,
+      discoverModels: modelPlane.discoverModels,
+      models: modelPlane.models,
       connect,
     },
   }

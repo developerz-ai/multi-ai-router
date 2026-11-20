@@ -10,11 +10,12 @@ import type {
 import type { AccountRow, ModelAliasMap, SupportedModelList } from "../schema/accounts"
 import type { QuotaWindowRow } from "../schema/quota-windows"
 import type { AddedAccountRepositoryMethods } from "./account-lifecycle-types"
+import type { SupportedModelsMethods } from "./account-supported-models"
 import type { BackgroundAccountSubject } from "./background-account-eligibility"
 import type { AccountQuotaObservation, ObservedQuotaWindowWrite } from "./observed-quota-window"
 import type { QuotaWindowWrite } from "./quota-window-mutations"
 
-export interface AccountRepository extends AddedAccountRepositoryMethods {
+export interface AccountRepository extends AddedAccountRepositoryMethods, SupportedModelsMethods {
   /** Durable identity/state check at a background upstream admission boundary. */
   readEligibleBackgroundAccount(
     id: string,
@@ -209,7 +210,8 @@ export interface UpdateAccountInput {
   readonly baseUrl?: string | null
   readonly dialect?: Dialect | null
   readonly modelAliases?: ModelAliasMap | null
-  readonly supportedModels?: SupportedModelList | null
+  // No `supportedModels`: after the insert that list moves only through `editSupportedModels`,
+  // under a row lock, so no field-wise patch can drop an id its caller never named.
   readonly windowTokenLimits?: WindowTokenLimits | null
   readonly providerPreferences?: ProviderPreferences | null
   readonly weight?: number

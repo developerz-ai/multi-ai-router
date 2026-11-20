@@ -86,6 +86,7 @@ export function createMemoryStore(): MemoryStore {
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,
           supportedModels: input.supportedModels ?? null,
+          supportedModelsRemoved: null,
           weight: input.weight ?? 100,
           priority: input.priority ?? 0,
           createdAt: EPOCH,
@@ -133,6 +134,25 @@ export function createMemoryStore(): MemoryStore {
       findById: async (id) => accounts.find((row) => row.id === id),
       findByIds: async (ids) => accounts.filter((row) => ids.includes(row.id)),
       update: async (id, patch, now) => replace(accounts, id, patch, now),
+      // The SQL holds a row lock across read and write; here nothing awaits between them, so the
+      // read-decide-write is just as atomic.
+      editSupportedModels: async ({ id, now, decide }) => {
+        const row = accounts.find((candidate) => candidate.id === id)
+        if (row === undefined) return { kind: "not_found" }
+        const decision = decide(row)
+        if (decision.kind === "skip") return { kind: "skipped", row }
+        const written = replace(
+          accounts,
+          id,
+          {
+            supportedModels: decision.supportedModels,
+            supportedModelsRemoved: decision.supportedModelsRemoved,
+          },
+          now,
+        )
+        if (written === undefined) throw new Error("editSupportedModels: row disappeared")
+        return { kind: "written", row: written }
+      },
       updateStatus: async (id, status, now) => replace(accounts, id, { status }, now),
       // The guard, honestly: the point of this method is that it does *not* apply when the row
       // holds something outside `from`, and a stand-in that always wrote would let a test pass on

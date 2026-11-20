@@ -13,6 +13,7 @@ import type { RequestProgress } from "./observe"
 import { planCandidates } from "./plan"
 import { createRequestRecovery } from "./recovery-wait"
 import { costRequested } from "./relay-cost-optin"
+import { logRemovedModelRefusal } from "./removed-model-log"
 import { createRequestAccounting, type RequestAccounting } from "./request-accounting"
 import { requestLifetime } from "./request-lifetime"
 import { requestSelector } from "./request-select"
@@ -184,7 +185,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       progress.pools = poolNames(selection.decision.groups)
       progress.reconnect = reconnectDetail(selection.decision.rejected).reconnect
       // A `blocked` binding is kept: its account returns on a clock (`invalidated`: see below).
-      if (!selection.ok) return fail(selection.error)
+      if (!selection.ok) return fail(logRemovedModelRefusal(log, selection, model))
 
       const plan = planCandidates(selection.candidates, deps.catalog, input.ingress, operation)
       if (plan.servable.length === 0) {

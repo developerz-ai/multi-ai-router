@@ -208,8 +208,8 @@ listed ids of their own and are never stripped; `x:free:nitro` is served where `
 An unknown base stays `model-unsupported`. Why: a hand-added `deepseek/deepseek-v4.1-flash:floor`
 dropped out of `openrouter-dz-coding-30d`'s `supportedModels` when the account was re-listed from
 `/models` (2026-11-15 ~05:38Z), and ~2,000 requests over 19 h were refused while the base id sat in
-the list. Discovery now audits (`account.models_discovered.detail.removed`) and logs every declared
-id an overwrite drops.
+the list. Discovery no longer overwrites: it merges and never removes an id
+([below](#every-write-to-supportedmodels-goes-through-one-function)).
 
 ### A recovery permit ranks first
 
@@ -1214,12 +1214,44 @@ failover, and sends the smallest real completion the account's dialect can make.
 
 | Property | Behavior |
 |---|---|
-| What it does | One `GET` at the provider's own model listing, on this account's own dialect and credential, through the same attempt path — then writes the ids into `supportedModels` so selection and `GET /v1/models` both see them. |
+| What it does | One `GET` at the provider's own model listing, on this account's own dialect and credential, through the same attempt path — then **merges** the ids into `supportedModels` so selection and `GET /v1/models` both see them. It adds every listed id the account lacks and keeps every id it already has. |
+| Never removes | An id on the list the catalogue does not carry — a pinned variant, a hand-added id — is kept and answered as `notInCatalogue`, beside `added`. Removing one is a separate, deliberate `PATCH /:id/models {"remove": [...]}` (the console's "Remove these from the account"). Prod 2026-11-15: a discovery that replaced the list dropped a hand-added id, and ~320 tasks over 19 h were refused `model-unsupported`. |
 | Cost | None. A listing bills no tokens and spends no quota window, which is why it carries neither a cooldown nor a confirmation — the opposite of Test now on both counts. |
 | Not a poll | Nothing schedules it. A catalog that refreshed itself would change routing without an operator asking, and an upstream retiring one name would quietly take an account out of selection mid-deployment. |
 | Empty answer | Written as *nothing*, never as `[]`. An upstream that listed no models has told the router nothing; declaring "serves no model" would turn a config gap into a `503` per request. |
 | Refused for | Claude subscriptions — the Agent SDK owns that catalog and there is no listing endpoint to ask — and any provider with no implementation. Refused by name, before a socket is opened. |
-| Where the write goes | Through the accounts service, so it audits the field change and refreshes the warm routing catalog exactly like an operator's edit would. A second audit row, `account.models_discovered`, records that the question was asked at all. |
+| Where the write goes | Through the one `supportedModels` writer (below), so it holds the row lock, audits the ids that moved and refreshes the warm routing catalog exactly like an operator's edit would. A second audit row, `account.models_discovered`, records that the question was asked at all. |
+
+### Every write to `supportedModels` goes through one function
+
+`services/accounts/supported-models.ts` is the rule; `supported-models-writer.ts` runs it inside the
+repository's row lock (`editSupportedModels`: `SELECT … FOR UPDATE`, decide, write, one
+transaction). The field-wise account `update` cannot write the column at all. Its writers:
+
+| Writer | Shape | Removes an id when |
+|---|---|---|
+| "Discover models" | add | never |
+| `PATCH /api/admin/accounts/:id/models` `{ add?, remove? }` | add / remove single ids | the caller named it in `remove` |
+| `PUT /api/admin/accounts/:id/models` `{ models, removing }` | full replace | the caller named it in `removing`; an id the replacement drops that `removing` does not name refuses the write `409 supported_models_removal_unacknowledged`, naming it |
+| `PATCH /api/admin/accounts/:id` `{ supportedModels, supportedModelsRemoving? }` | full replace | same rule as `PUT`; refused before any other field in the body is written |
+| `POST /api/admin/accounts` | the initial list | — (there is nothing to remove) |
+
+**The invariant: an id leaves the list only when its caller named it.** A client holding a list read
+before another edit cannot drop the id that edit added, and two operators adding one id each both
+land — the add/remove operation never round-trips the list, and the lock serializes the two writes.
+
+**Every change is audited** as `account.supported_models_changed` with `added`, `removed`, the
+`source` (`discover`, `operator-edit`, `operator-replace`, `account-update`) and the caller as the
+row's actor, plus one `account supported models changed` info line. An edit that changes nothing
+writes no row.
+
+**A removal is remembered** in `accounts.supported_models_removed` (`[{ model, removedAt, by }]`) for
+`MODEL_REMOVAL_MEMORY_DAYS` (default 30), pruned on each write and filtered at catalog load. Routing
+reads it for one thing only: an account dropped `model-unsupported` for an id it recently removed
+carries the removal on its rejection, the `404 model_not_found` sentence names it in place of
+"a client change" (`"<id>" was removed from <label>'s supported models at T by X`), and the refusal
+writes one `warn` line `model refused: removed from the account's supported models` with the
+account, the id, when and by whom. It never admits or excludes an account.
 
 ## Worked example
 

@@ -54,6 +54,7 @@ export function adminFixture(auth: AdminServices["auth"]): AdminServices {
     recheck: { recheck: unexpected, recheckAll: unexpected },
     testNow: { test: unexpected, lastCheckedAt: unexpected },
     discoverModels: { discover: unexpected },
+    models: { edit: unexpected, replace: unexpected },
     connect: {
       beginDevice: unexpected,
       deviceStatus: unexpected,

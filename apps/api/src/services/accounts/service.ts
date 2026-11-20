@@ -12,6 +12,7 @@ import type { CredentialCipher } from "../crypto/cipher"
 import { describeProvider } from "./providers"
 import { checkAccountShape, resolveBilling } from "./rules"
 import type { AccountListQuery, CreateAccountBody, UpdateAccountBody } from "./schemas"
+import { replaceFromPatch, type SupportedModelsWriter } from "./supported-models-writer"
 import { type AccountView, toAccountView } from "./view"
 
 /**
@@ -56,6 +57,7 @@ export interface AccountsServiceDeps {
   /** Read-only: a disable or delete names the pools the account was a member of (#454). */
   readonly pools: Pick<PoolRepository, "listMembershipsForAccount" | "findByIds">
   readonly cipher: Pick<CredentialCipher, "encrypt">
+  readonly supportedModels: Pick<SupportedModelsWriter, "write">
   /** Only ever touched for a provider the registry says carries a `CLAUDE_CONFIG_DIR`. */
   readonly configDirs: AccountConfigDirs
   /** Publish durable filesystem tombstone and close account owner admission before the barrier. */
@@ -192,6 +194,11 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
       })
       if (!checked.ok) return checked
 
+      // First, through the one list writer (own audit row): a refusal leaves every field unwritten.
+      const { supportedModels, supportedModelsRemoving, ...fields } = body
+      const listed = await replaceFromPatch(deps.supportedModels, id, body)
+      if (listed?.ok === false) return listed
+      if (listed?.ok && Object.keys(fields).length === 0) return ok(toAccountView(listed.value.row))
       const row = await deps.accounts.updateOperatorAccount({
         id,
         patch: {
@@ -202,7 +209,6 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
           ...(body.baseUrl === undefined ? {} : { baseUrl: body.baseUrl }),
           ...(body.dialect === undefined ? {} : { dialect: body.dialect }),
           ...(body.modelAliases === undefined ? {} : { modelAliases: body.modelAliases }),
-          ...(body.supportedModels === undefined ? {} : { supportedModels: body.supportedModels }),
           ...(body.windowTokenLimits === undefined
             ? {}
             : { windowTokenLimits: body.windowTokenLimits }),
@@ -224,7 +230,7 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         subjectType: AUDIT_SUBJECTS.account,
         subjectId: row.id,
         // Which fields moved, never their values: a rotated credential is one flag.
-        detail: { label: row.label, fields: Object.keys(body).sort() },
+        detail: { label: row.label, fields: Object.keys(fields).sort() },
       })
 
       return ok(toAccountView(row))

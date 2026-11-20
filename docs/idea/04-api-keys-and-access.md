@@ -390,7 +390,7 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | Group | Purpose | Built |
 |---|---|---|
 | `/api/admin/auth/**` | login, logout, session probe, CSRF token | yes |
-| `/api/admin/accounts/**` | upstream account CRUD, health, re-check, test, model discovery, connect/reconnect | yes — CRUD + disable + re-check + test + `POST /:id/models/discover`, and connect/reconnect for both flows (the `claude` CLI's login, and the authorization-code flow the router drives) |
+| `/api/admin/accounts/**` | upstream account CRUD, health, re-check, test, model discovery, connect/reconnect | yes — CRUD + disable + re-check + test + `POST /:id/models/discover` + `PATCH`/`PUT /:id/models`, and connect/reconnect for both flows (the `claude` CLI's login, and the authorization-code flow the router drives) |
 | `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order, overflow account | yes |
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
