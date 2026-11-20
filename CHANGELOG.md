@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.72.1]
+
+### Fixed
+
+- Admin login budgets are shared in Postgres across replicas and restarts. Local passwords, OIDC starts and callbacks reserve attempts atomically before expensive work. Storage failures refuse login without a memory fallback. Migration 0053 adds bounded throttle buckets and namespace locks; successful login clears its budgets. Password concurrency remains per-process. Deployment still requires one replica for the other process-local state.
+
 ## [2.72.0] — 2026-11-20
 
 ### Added
@@ -2392,3 +2398,4 @@ your tooling config.
 [2.70.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.1
 [2.71.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.71.0
 [2.72.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.0
+[2.72.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.1

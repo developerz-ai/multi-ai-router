@@ -207,6 +207,16 @@ Never paste an ID token, authorization code, client secret, password, or callbac
 
 ## Input and resource bounds
 
+All three login budgets (local, OIDC start, OIDC callback) are durable Postgres namespaces,
+shared across replicas and restarts. Each hashed IP (IPv6 /64) is charged atomically before
+password verification or provider work. Database time is read after acquiring the namespace
+lock. Storage errors refuse login with the generic failure sentence, without issuing a session
+or falling back to memory. Successful local authentication resets its bucket; successful OIDC
+authentication resets both OIDC buckets before issuing a session. The first-denial flag is
+claimed once across replicas, preserving `429` and `Retry-After` without repeated audit writes.
+Tracking capacity is shared per namespace and never evicts live failures. The password work
+limit is per process, reserved before awaiting database admission and released on every failure.
+
 Configured issuer and callback URLs must be absolute HTTP(S) URLs without userinfo or fragments; the issuer also cannot contain a query. Explicit scopes must include `openid`. Local-only deployments can leave the OIDC block absent.
 
 Password attempts reserve per-IP and global hashing capacity before asynchronous verification. `ADMIN_LOGIN_MAX_CONCURRENT` defaults to 4 and `ADMIN_LOGIN_MAX_TRACKED_IPS` to 10000. OIDC starts are throttled before allocating state, and callbacks per IP before the state is consumed; a completed sign-in resets both buckets for that address. A full throttle table is swept at most once a second. All identity-provider reads, including response bodies, have a deadline (`ADMIN_OIDC_REQUEST_TIMEOUT_MS`, default 10000). The discovery document is cached for `ADMIN_OIDC_DISCOVERY_TTL_SECONDS` (default 86400) and dropped at once when a token exchange fails, so a moved endpoint is re-discovered on the next sign-in rather than at the next restart; JWKS keys live for the provider's `Cache-Control: max-age` (floored at five minutes or the configured TTL, whichever is lower) or `ADMIN_OIDC_JWKS_TTL_SECONDS` (default 3600) without one. `/oidc/start` ignores any query parameter — a `next` the console forwards never steers a redirect — and the callback page always returns to `/`. Tokens with future issue times, missing required authorized-party claims, or a mismatching authorized party are rejected.
