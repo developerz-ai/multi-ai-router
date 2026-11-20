@@ -2,8 +2,13 @@ import { NoHealthyAccountError, QuotaExhaustedError } from "@multi-ai-router/cor
 import type { AttemptFailure } from "../routing"
 import type { ChainContext } from "./chain"
 import type { ChainFailure } from "./chain-error"
-import { DEFAULT_PROBE_HOLD_MS } from "./health"
 import { attemptRecord, errorClassOf, outcomeOf } from "./records"
+
+/**
+ * `error.router.signal` on the refusal: the one machine token that tells a client this `429` is
+ * the router's own recovery bookkeeping, not a provider's spent window.
+ */
+export const AWAITING_RECOVERY_PERMIT_SIGNAL = "awaiting-recovery-permit"
 
 /** Each awaiting-permit refusal, and whether its one `UsageRecord` is still owed. */
 const awaitingPermit = new WeakMap<QuotaExhaustedError, { readonly owesRecord: boolean }>()
@@ -35,25 +40,30 @@ function yieldsToRefusal(held: ChainFailure | null): boolean {
 
 /** Refusal is request accounting, never a provider attempt or an account strike. */
 export function createChainRefusals(ctx: ChainContext) {
-  let refused = false
+  /** The soonest any refused account's probe hold ends: the earliest it could take a request. */
+  let refusedUntil: Date | null = null
   let preparationFailed = false
   return {
-    record() {
-      refused = true
+    record(accountId: string) {
+      const until = ctx.runtime.health.probeHoldUntil(accountId, ctx.runtime.clock.now())
+      if (refusedUntil === null || until.getTime() < refusedUntil.getTime()) refusedUntil = until
     },
     recordPreparation() {
       preparationFailed = true
     },
     failIfAny(held: ChainFailure | null, lastFailure: AttemptFailure | null): void {
-      if (!refused && !preparationFailed) return
+      if (refusedUntil === null && !preparationFailed) return
       const now = ctx.runtime.clock.now()
-      if (refused && yieldsToRefusal(held)) {
-        const wait = ctx.runtime.recovery?.retryAfterMs ?? DEFAULT_PROBE_HOLD_MS
+      if (refusedUntil !== null && yieldsToRefusal(held)) {
+        // The permit's arrival is not known here, so the honest wait is the probe hold — never the
+        // coordinator's re-check tick, a park that lapsed before the permit (developerz.ai, 2026-11-20).
+        const wait = refusedUntil.getTime() - now.getTime()
         const error = new QuotaExhaustedError(
           "recovering accounts are awaiting a recovery permit",
           {
             retryAfterSeconds: Math.max(1, Math.ceil(wait / 1000)),
-            resetsAt: new Date(now.getTime() + wait),
+            resetsAt: refusedUntil,
+            detail: { signal: AWAITING_RECOVERY_PERMIT_SIGNAL, resetSource: "estimated" },
           },
         )
         awaitingPermit.set(error, { owesRecord: held === null && lastFailure === null })

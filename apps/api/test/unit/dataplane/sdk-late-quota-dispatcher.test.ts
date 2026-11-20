@@ -24,7 +24,6 @@ for (const mode of ["ordinary", "probe", "early-reading"] as const) {
       },
     })
     const recovery: RecoveryAccess = {
-      retryAfterMs: 1000,
       quotaStaleAfterMs: 60000,
       catalog: entries,
       currentSnapshot: () => entries.accounts()[0]?.snapshot,
