@@ -99,8 +99,16 @@ export const updateAccountBody = z
     baseUrl: BASE_URL.nullable().optional(),
     dialect: Dialect.nullable().optional(),
     modelAliases: MODEL_ALIASES.nullable().optional(),
-    /** `null` (or `[]`) drops the declaration, which returns the account to passthrough. */
+    /**
+     * A full replace of the list. `null` (or `[]`) drops the declaration, which returns the account
+     * to passthrough. Every id the replacement drops must be named in `supportedModelsRemoving`, or
+     * the write is refused `409 supported_models_removal_unacknowledged` naming them: a client
+     * holding a stale copy cannot drop an id it never saw. To add or remove single ids, use
+     * `PATCH /:id/models`.
+     */
     supportedModels: SUPPORTED_MODELS.nullable().optional(),
+    /** The ids the `supportedModels` replace removes, named on purpose. Only beside it. */
+    supportedModelsRemoving: SUPPORTED_MODELS.optional(),
     /** `null` clears every configured ceiling, which removes the bars rather than zeroing them. */
     windowTokenLimits: WINDOW_TOKEN_LIMITS.nullable().optional(),
     /** `null` clears them: the account's requests go as the client sent them. */
@@ -118,6 +126,10 @@ export const updateAccountBody = z
   })
   .strict()
   .refine((patch) => Object.keys(patch).length > 0, { message: "no fields to update" })
+  .refine(
+    (patch) => patch.supportedModelsRemoving === undefined || patch.supportedModels !== undefined,
+    { message: "supportedModelsRemoving names the ids a supportedModels replace drops; send both" },
+  )
 
 export type UpdateAccountBody = z.infer<typeof updateAccountBody>
 
@@ -163,3 +175,33 @@ export const testNowBody = z
   .strict()
 
 export type TestNowBody = z.infer<typeof testNowBody>
+
+/**
+ * `PATCH /:id/models`: add and remove single ids under the row lock, without sending the list.
+ * Two operators adding one id each both land — no read-modify-write of a several-hundred-entry
+ * list, and so no lost update.
+ */
+export const editSupportedModelsBody = z
+  .object({
+    add: SUPPORTED_MODELS.optional(),
+    remove: SUPPORTED_MODELS.optional(),
+  })
+  .strict()
+  .refine((body) => (body.add?.length ?? 0) + (body.remove?.length ?? 0) > 0, {
+    message: "name at least one model id to add or remove",
+  })
+
+export type EditSupportedModelsBody = z.infer<typeof editSupportedModelsBody>
+
+/**
+ * `PUT /:id/models`: the full replace, as its own named action. `removing` is required — `[]` when
+ * the replacement removes nothing — and must name every id the replacement drops.
+ */
+export const replaceSupportedModelsBody = z
+  .object({
+    models: SUPPORTED_MODELS.nullable(),
+    removing: SUPPORTED_MODELS,
+  })
+  .strict()
+
+export type ReplaceSupportedModelsBody = z.infer<typeof replaceSupportedModelsBody>

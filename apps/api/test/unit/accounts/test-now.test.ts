@@ -483,3 +483,34 @@ describe("createTestNowService — the operator's own cooldown", () => {
     expect(again.ok && again.value.tested).toBe(false)
   })
 })
+
+describe("the account.tested row says what a failed probe hit", () => {
+  // Prod 2026-11-20: a ChatGPT account cooling on a weekly window was probed hourly by
+  // `cooldown_recheck` from 02:08 to 08:55, and every `account.tested` row said only
+  // `outcome: failed`. Whether the upstream still walled it or refused the probe for another reason
+  // lived only in a pod log that a redeploy deleted.
+  test("a 429 is recorded with its failure kind and the probe model", async () => {
+    const { service, audited } = harness({
+      fetch: async () =>
+        jsonResponse(429, {
+          type: "error",
+          error: { type: "rate_limit_error", message: "slow down" },
+        }),
+    })
+    await service.test("acc-1", { model: "glm-4.7" })
+    expect(audited[0]?.detail).toMatchObject({
+      outcome: "failed",
+      model: "glm-4.7",
+      failureKind: "rate-limited",
+    })
+  })
+
+  test("a success carries the model and no failure kind", async () => {
+    const { service, audited } = harness({
+      fetch: async () => jsonResponse(200, { id: "msg_1", content: [] }),
+    })
+    await service.test("acc-1", { model: "glm-4.7" })
+    expect(audited[0]?.detail).toMatchObject({ outcome: "ok", model: "glm-4.7" })
+    expect(audited[0]?.detail).not.toHaveProperty("failureKind")
+  })
+})

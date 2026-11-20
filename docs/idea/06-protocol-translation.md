@@ -94,7 +94,7 @@ max_output_tokens, context_source, pricing }`, in provider order — an additive
 that wants the largest window can see which provider holds it.
 
 **`/v1/providers`** answers `{ object: "list", data: [{ id, accounts, available, active, disabled,
-cooling_down, exhausted, needs_reauth }] }`, one row per provider with an in-scope account, sorted by
+cooling_down, exhausted, needs_reauth, cooling }] }`, one row per provider with an in-scope account, sorted by
 id. `accounts` counts in-scope accounts **whatever their status**, so it is not liveness; `available`
 is those not standing-blocked (`active` + `cooling_down`, because a cooldown is a clock). The five
 status counts split the same accounts by their **live** status — the health-overlaid one routing
@@ -102,6 +102,16 @@ reads, so an account the breaker cooled or a `402` exhausted a moment ago is cou
 its stored `active` — and always sum to `accounts`, every status present with `0` when none. A reader
 sizing a key's capacity reads `active`. Added in 2.64.0, additive: a reader of the first three fields
 is unaffected.
+
+`cooling` lists, per provider, every in-scope account the router holds out **on a clock**, soonest
+first: `{ cooldown_until, reason, window, reset_source }`. `reason` is `cooling-down` (the breaker),
+`credential-rejected` (a refused key on its re-test clock) or `quota-window-spent` (with `window`
+naming it); `cooldown_until` is `null` when the router holds it with no stated instant;
+`reset_source` says whose instant it is. A standing block (`exhausted`, `needs_reauth`, `disabled`)
+is counted, not listed. No account id or label: a key-holder can say "the router holds one of these
+until T" without learning anything about credentials outside its scope. A long hold is re-checked
+against the upstream by `cooldown_recheck` (hourly by default) before its instant arrives, so the
+instant is an upper bound, not a promise. `[]` when nothing is held.
 
 Both take the same router key and the same scope intersection as everything else on `/v1`. The model
 set comes from the same implementation `GET /v1/models` uses, because a second opinion about what a

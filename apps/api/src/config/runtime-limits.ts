@@ -27,6 +27,7 @@ export const RUNTIME_LIMIT_ENV_FIELDS = {
   ROUTING_MAX_REPORTED_RESET_SECONDS: atLeastOne.optional(),
   LEAST_USED_TOKEN_WINDOW_SECONDS: atLeastOne.optional(),
   MODEL_REFUSAL_TTL_SECONDS: atLeastOne.optional(),
+  MODEL_REMOVAL_MEMORY_DAYS: atLeastOne.optional(),
   // Upstream model listings and plan-quota reads.
   MODEL_LISTING_MAX_BYTES: atLeastOne.optional(),
   UPSTREAM_BUFFERED_BODY_MAX_BYTES: atLeastOne.optional(),
@@ -71,6 +72,9 @@ export function readRuntimeLimitsEnv(raw: RuntimeLimitEnv) {
       leastUsedTokenWindowSeconds: raw.LEAST_USED_TOKEN_WINDOW_SECONDS ?? 3_600,
       // How long an account's refusal of a model keeps it out of that model's candidates.
       modelRefusalTtlSeconds: raw.MODEL_REFUSAL_TTL_SECONDS ?? 3_600,
+      // How long an id removed from an account's `supportedModels` is remembered, so a refusal for
+      // it names the edit ("removed at T by X"). Explanation only; it never admits an account.
+      modelRemovalMemoryDays: raw.MODEL_REMOVAL_MEMORY_DAYS ?? 30,
     },
     // A provider's model listing or plan-quota body read past this is refused, never buffered.
     modelListingMaxBytes: raw.MODEL_LISTING_MAX_BYTES ?? 8_388_608,

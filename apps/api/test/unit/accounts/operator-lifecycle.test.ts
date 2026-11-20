@@ -4,6 +4,7 @@ import { createCredentialCipher } from "../../../src/services/crypto/cipher"
 import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
+import { testSupportedModelsWriter } from "../../support/supported-models-writer"
 
 const NOW = new Date("2026-10-03T12:00:00Z")
 function harness(options: { auditFails?: boolean; barrierFails?: boolean } = {}) {
@@ -12,6 +13,7 @@ function harness(options: { auditFails?: boolean; barrierFails?: boolean } = {})
   const dirs = createMemoryConfigDirs()
   const service = createAccountsService({
     accounts: store.accounts,
+    supportedModels: testSupportedModelsWriter(store.accounts),
     keys: store.keys,
     pools: store.pools,
     configDirs: dirs.dirs,

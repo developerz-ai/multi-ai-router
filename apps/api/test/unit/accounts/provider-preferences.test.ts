@@ -11,6 +11,7 @@ import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
 import { silentLogger } from "../../support/silent-logger"
+import { testSupportedModelsWriter } from "../../support/supported-models-writer"
 
 /**
  * `providerPreferences` at the admin write: invalid is a `400` there, never a value stored and
@@ -25,6 +26,7 @@ function harness() {
   const configDirs = createMemoryConfigDirs()
   const service = createAccountsService({
     accounts: store.accounts,
+    supportedModels: testSupportedModelsWriter(store.accounts),
     keys: store.keys,
     pools: store.pools,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),

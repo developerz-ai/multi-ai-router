@@ -82,3 +82,23 @@ export function formatModelAliases(aliases: Readonly<Record<string, string>> | n
     .map(([requested, upstream]) => `${requested} = ${upstream}`)
     .join("\n")
 }
+
+/**
+ * The model list is sent only when the operator changed it, and then with every id it removes named
+ * in `supportedModelsRemoving`: the API refuses a replace that drops an id it does not name, so a
+ * dialog opened before someone else added an id cannot silently take it away (prod 2026-11-15).
+ */
+export function supportedModelsPatch(
+  loaded: readonly string[],
+  edited: readonly string[],
+): { supportedModels?: readonly string[] | null; supportedModelsRemoving?: readonly string[] } {
+  const kept = new Set(edited)
+  const had = new Set(loaded)
+  const removing = loaded.filter((id) => !kept.has(id))
+  const changed = removing.length > 0 || edited.some((id) => !had.has(id))
+  if (!changed) return {}
+  return {
+    supportedModels: edited.length > 0 ? edited : null,
+    ...(removing.length > 0 ? { supportedModelsRemoving: removing } : {}),
+  }
+}

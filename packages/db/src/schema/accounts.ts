@@ -30,6 +30,20 @@ export type ModelAliasMap = Record<string, string>
 export type SupportedModelList = string[]
 
 /**
+ * One id that left an account's `supported_models`, when and by whom. Kept so a request refused
+ * for that id can say *why* in one hop: "removed at T by X" instead of a bare `model-unsupported`
+ * (prod 2026-11-15: a hand-added id vanished in a "Discover models" overwrite and ~320 tasks
+ * failed over 19 h before anyone connected the refusals to the edit).
+ */
+export interface SupportedModelRemoval {
+  readonly model: string
+  /** ISO-8601. A string because this lives in jsonb, which has no timestamp type. */
+  readonly removedAt: string
+  /** The audit actor of the write that removed it (`admin-api-token`, an SSO email, `system`). */
+  readonly by: string
+}
+
+/**
  * One credential to one provider. Many accounts per provider is the normal case
  * — five Claude subscriptions side by side is the point of the product — so
  * nothing here may key on `provider` alone. `label` is the human disambiguator.
@@ -138,11 +152,24 @@ export const accounts = pgTable(
      * else, and it is what `GET /v1/models` enumerates.
      *
      * Populated by the operator, or by `POST /:id/models/discover`, which reads
-     * the provider's own listing. Deliberately not refreshed on a timer: a model
-     * catalog that changes under a running deployment would change routing
-     * without an operator ever asking for it.
+     * the provider's own listing and merges it in. Deliberately not refreshed on
+     * a timer: a model catalog that changes under a running deployment would
+     * change routing without an operator ever asking for it.
+     *
+     * **Written only through `editSupportedModels`** (row lock, one transaction),
+     * never through the field-wise `update`: an id leaves this list only when a
+     * caller named it, so a stale client or a catalog that never listed a
+     * hand-added id cannot drop it (prod 2026-11-15).
      */
     supportedModels: jsonb("supported_models").$type<SupportedModelList>(),
+
+    /**
+     * The ids recently removed from {@link supportedModels}, with when and by
+     * whom, bounded to `MODEL_REMOVAL_MEMORY_DAYS`. Read by routing only to
+     * explain a `model-unsupported` refusal; it never admits or excludes an
+     * account. NULL means nothing was removed inside the window.
+     */
+    supportedModelsRemoved: jsonb("supported_models_removed").$type<SupportedModelRemoval[]>(),
 
     /**
      * Operator-set token ceilings per quota window, keyed by `QuotaWindowKind`.

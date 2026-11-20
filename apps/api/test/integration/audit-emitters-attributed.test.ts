@@ -10,6 +10,7 @@ import { ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes } from "../../src/routes/a
 import { ADMIN_KEYS_BASE_PATH, adminKeyRoutes } from "../../src/routes/admin/keys"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "../../src/routes/admin/pools"
 import {
+  type AccountModelsService,
   type ConnectService,
   createAccountsService,
   type DiscoverModelsService,
@@ -25,6 +26,7 @@ import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 import { silentLogger } from "../support/silent-logger"
+import { testSupportedModelsWriter } from "../support/supported-models-writer"
 
 /**
  * multi-ai-router#453's guard: every place that writes an audit row is reached under a caller.
@@ -78,6 +80,10 @@ const EMITTERS: Record<string, readonly Entry[]> = {
     { via: "guarded", group: ACCOUNTS, driven: true },
   ],
   "services/accounts/discover-models.ts:accountModelsDiscovered": [
+    { via: "guarded", group: ACCOUNTS },
+  ],
+  // Discovery, PATCH/PUT /:id/models and the account PATCH: all guarded account routes.
+  "services/accounts/supported-models-writer.ts:accountSupportedModelsChanged": [
     { via: "guarded", group: ACCOUNTS },
   ],
   "services/accounts/test-now.ts:accountTested": [
@@ -266,6 +272,7 @@ function harness() {
       guard,
       service: createAccountsService({
         accounts: store.accounts,
+        supportedModels: testSupportedModelsWriter(store.accounts),
         keys: store.keys,
         pools: store.pools,
         cipher,
@@ -277,6 +284,7 @@ function harness() {
       recheck: {} as RecheckService,
       testNow: {} as TestNowService,
       discoverModels: {} as DiscoverModelsService,
+      models: {} as AccountModelsService,
       connect: {} as ConnectService,
     }),
   )

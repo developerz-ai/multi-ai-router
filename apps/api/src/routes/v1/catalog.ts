@@ -108,6 +108,15 @@ export function renderProviders(
       accounts: provider.accounts,
       available: provider.available,
       ...provider.statuses,
+      // What the router holds out on a clock, for this key's scope only, and until when. The
+      // instant is the router's own expectation (`reset_source` says whose word it is); the
+      // account is re-checked against the upstream on `cooldown_recheck`'s clock before then.
+      cooling: provider.cooling.map((entry) => ({
+        cooldown_until: entry.until?.toISOString() ?? null,
+        reason: entry.reason,
+        window: entry.window ?? null,
+        reset_source: entry.resetSource,
+      })),
     })),
   })
 }

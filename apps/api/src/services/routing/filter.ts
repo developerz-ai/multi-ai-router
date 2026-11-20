@@ -18,7 +18,7 @@
  * while it was down.
  */
 
-import { resolveModel } from "./model"
+import { removalOf, resolveModel } from "./model"
 import { DEFAULT_QUOTA_SPENT_THRESHOLD, findSpentWindow } from "./quota"
 import { hasRecoveryPermit, recoveryAllowsQuota, recoveryIsGated } from "./recovery-filter"
 import type { RejectedCandidate } from "./result"
@@ -82,7 +82,14 @@ export function evaluateCandidate(
   // told to wait for an account that will never serve it (prod, 2026-10-04). Unsupported is the
   // permanent fact; it invalidates the binding and names a client change.
   const resolution = resolveModel(account, model)
-  if (!resolution.supported) return drop({ reason: "model-unsupported" })
+  if (!resolution.supported) {
+    // A recent removal is the likeliest cause, so the refusal carries it (prod 2026-11-15).
+    const removed = removalOf(account, resolution.upstreamModel)
+    return drop({
+      reason: "model-unsupported",
+      ...(removed === undefined ? {} : { removedFromList: removed }),
+    })
+  }
   // The provider itself said it does not serve this name; trust that over the declared list
   // until the learned refusal lapses.
   const refused = account.refusedModels?.get(resolution.upstreamModel)

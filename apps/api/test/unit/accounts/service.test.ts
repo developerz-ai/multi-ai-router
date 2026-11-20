@@ -11,6 +11,7 @@ import { accountDeletionFixture } from "../../support/account-deletion"
 import { createMemoryConfigDirs, type MemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore, type MemoryStore } from "../../support/memory-store"
 import { silentLogger } from "../../support/silent-logger"
+import { testSupportedModelsWriter } from "../../support/supported-models-writer"
 
 /**
  * The accounts service, with in-memory stores and a real cipher.
@@ -38,6 +39,7 @@ function harness(): Harness {
   const configDirs = createMemoryConfigDirs()
   const service = createAccountsService({
     accounts: store.accounts,
+    supportedModels: testSupportedModelsWriter(store.accounts),
     keys: store.keys,
     pools: store.pools,
     cipher: createCredentialCipher({ key: new Uint8Array(32).fill(7) }),

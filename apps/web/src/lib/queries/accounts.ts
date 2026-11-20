@@ -8,10 +8,12 @@ import {
   deleteAccount,
   disableAccount,
   discoverAccountModels,
+  editAccountModels,
   listAccounts,
   type RecheckResult,
   recheckAccount,
   recheckAllAccounts,
+  type SupportedModelsEditResult,
   type TestAccountInput,
   type TestNowResult,
   testAccount,
@@ -160,6 +162,22 @@ export function useDiscoverAccountModels() {
     mutationFn: (id: string) => discoverAccountModels(id),
     onSuccess: (result: DiscoverModelsResult) => {
       client.setQueryData(queryKeys.accounts.models(result.accountId), result)
+    },
+    onSettled: () => invalidateAccountReaders(client),
+  }))
+}
+
+/**
+ * Remove (or add) single model ids — the deliberate removal "Discover models" leaves to the operator
+ * for ids no longer in the catalogue. The discovery's cached diff is dropped, since it described a
+ * list that no longer exists.
+ */
+export function useEditAccountModels() {
+  const client = useQueryClient()
+  return useMutation(() => ({
+    mutationFn: editAccountModels,
+    onSuccess: (result: SupportedModelsEditResult) => {
+      client.removeQueries({ queryKey: queryKeys.accounts.models(result.accountId) })
     },
     onSettled: () => invalidateAccountReaders(client),
   }))

@@ -41,6 +41,7 @@ export type MemoryAccounts = Pick<
   | "findById"
   | "findByIds"
   | "update"
+  | "editSupportedModels"
   | "updateStatus"
   | "updateStatusWhen"
   | "disable"

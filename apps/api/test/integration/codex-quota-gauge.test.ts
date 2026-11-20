@@ -12,6 +12,7 @@ import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
 import { OPENAI_AUTH_CLAIM } from "../../src/providers"
 import { ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes } from "../../src/routes/admin/accounts"
 import {
+  type AccountModelsService,
   type AccountView,
   type ConnectService,
   createAccountsService,
@@ -24,6 +25,7 @@ import { createAuditRecorder } from "../../src/services/admin"
 import type { HealthStore, RoutingCatalog } from "../../src/services/dataplane"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { silentLogger } from "../support/silent-logger"
+import { testSupportedModelsWriter } from "../support/supported-models-writer"
 import { account, NOW, type TestClock } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness } from "./harness"
 
@@ -269,6 +271,7 @@ async function adminAppFor(catalog: RoutingCatalog, health: HealthStore, clock: 
   const accountsRepo = createAccountRepository(db.db)
   const accountsService = createAccountsService({
     accounts: accountsRepo,
+    supportedModels: testSupportedModelsWriter(accountsRepo),
     keys: noopKeys,
     pools: createPoolRepository(db.db),
     cipher: CRYPTOR,
@@ -289,6 +292,7 @@ async function adminAppFor(catalog: RoutingCatalog, health: HealthStore, clock: 
       recheck: unreachableRecheck(),
       testNow: unreachableTestNow(),
       discoverModels: unreachableDiscoverModels(),
+      models: {} as AccountModelsService,
       connect: unreachableConnect(),
     }),
   )

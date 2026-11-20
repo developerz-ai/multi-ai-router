@@ -215,6 +215,7 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMount
       recheck: admin.recheck,
       testNow: admin.testNow,
       discoverModels: admin.discoverModels,
+      models: admin.models,
       connect: admin.connect,
     }),
   )

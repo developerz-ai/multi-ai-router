@@ -17,6 +17,7 @@ import type {
   UtilizationSource,
 } from "@multi-ai-router/core"
 import type { CooldownReason } from "./breaker"
+import type { ModelRemoval } from "./model"
 import type { ModelFamily } from "./model-family"
 
 /**
@@ -129,6 +130,8 @@ export interface AccountSnapshot {
    * model here until its reset, and leaves the account serving every other one.
    */
   readonly refusedModels?: ReadonlyMap<string, ModelRefusal>
+  /** Ids recently removed from {@link supportedModels}: explains a refusal, never decides one. */
+  readonly removedModels?: ReadonlyMap<string, ModelRemoval>
   /** Client model name -> this account's upstream name. Absent means pass the name through. */
   readonly modelAliases?: Readonly<Record<string, string>>
   /** Per-window quota state. Windows reset independently; the account is blocked by any spent one. */

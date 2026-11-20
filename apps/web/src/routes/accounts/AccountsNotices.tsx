@@ -1,6 +1,7 @@
 import { Show } from "solid-js"
 import { Banner } from "../../components/Banner"
 import { errorMessage } from "../../lib/api/errors"
+import { DiscoverKeptNotice } from "./DiscoverKeptNotice"
 
 interface Outcome<T> {
   readonly isError: boolean
@@ -15,7 +16,12 @@ export interface AccountsNoticesProps {
   readonly test: Outcome<unknown>
   /** A row's Enable. Null while the edit dialog is open, which shows its own errors. */
   readonly enableError: unknown
-  readonly discover: Outcome<{ readonly saved: boolean; readonly message: string }>
+  readonly discover: Outcome<{
+    readonly accountId: string
+    readonly saved: boolean
+    readonly message: string
+    readonly notInCatalogue: readonly string[]
+  }> & { readonly reset: () => void }
 }
 
 /**
@@ -54,6 +60,18 @@ export function AccountsNotices(props: AccountsNoticesProps) {
         <Banner title="Model discovery failed" tone="danger">
           {errorMessage(props.discover.error)}
         </Banner>
+      </Show>
+
+      {/* Mounted only with ids to show, so the removal it owns exists only while it is offered. */}
+      <Show when={props.discover.data?.notInCatalogue.length ? props.discover.data : undefined}>
+        {(kept) => (
+          <DiscoverKeptNotice
+            accountId={kept().accountId}
+            message={kept().message}
+            notInCatalogue={kept().notInCatalogue}
+            onRemoved={() => props.discover.reset()}
+          />
+        )}
       </Show>
 
       <Show when={props.discover.isSuccess && props.discover.data?.saved === false}>

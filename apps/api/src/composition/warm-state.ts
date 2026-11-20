@@ -105,7 +105,11 @@ export function createWarmState(
   let recoveryComponents: ReturnType<typeof createRecoveryComponents> | undefined
   const catalogSnapshots = createCatalogSnapshotRepository(database)
   const catalog = createRoutingCatalog({
-    load: () => loadCatalog(catalogSnapshots),
+    load: () =>
+      loadCatalog(catalogSnapshots, {
+        now,
+        memoryMs: env.routingLimits.modelRemovalMemoryDays * 86_400_000,
+      }),
     onInstalled: (loaded) => {
       reconcileSdkQuota(loaded)
       recoveryComponents?.reconcile(loaded)

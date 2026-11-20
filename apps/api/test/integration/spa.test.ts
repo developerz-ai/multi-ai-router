@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { type AppDeps, createApp } from "../../src/app"
 import { createLogger } from "../../src/logging/logger"
 import {
+  type AccountModelsService,
   createAccountsService,
   createClaudeConnectService,
   createConnectService,
@@ -31,6 +32,7 @@ import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 import { silentLogger } from "../support/silent-logger"
+import { testSupportedModelsWriter } from "../support/supported-models-writer"
 import {
   unreachableReportDelivery,
   unreachableUsageReports,
@@ -404,6 +406,7 @@ describe("the full app, mounted end to end", () => {
         }),
         accounts: createAccountsService({
           accounts: store.accounts,
+          supportedModels: testSupportedModelsWriter(store.accounts),
           keys: store.keys,
           pools: store.pools,
           cipher: adminCipher,
@@ -466,6 +469,7 @@ describe("the full app, mounted end to end", () => {
         discoverModels: {
           discover: () => Promise.reject(new Error("not exercised by an unauthenticated request")),
         } as DiscoverModelsService,
+        models: {} as AccountModelsService,
         settings: createSettingsService({
           prices: memoryPrices(),
           scheduledTasks: memoryTasks(),

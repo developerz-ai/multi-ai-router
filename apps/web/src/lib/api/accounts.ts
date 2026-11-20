@@ -58,8 +58,13 @@ export interface UpdateAccountInput {
   readonly baseUrl?: string | null
   readonly dialect?: Dialect | null
   readonly modelAliases?: Readonly<Record<string, string>> | null
-  /** `null` (or `[]`) drops the declaration, returning the account to "accepts any model". */
+  /**
+   * A replace of the list. `null` (or `[]`) drops the declaration, returning the account to
+   * "accepts any model". Every id it drops must be named in `supportedModelsRemoving`, or the API
+   * refuses it with `409 supported_models_removal_unacknowledged`.
+   */
   readonly supportedModels?: readonly string[] | null
+  readonly supportedModelsRemoving?: readonly string[]
   /** `null` clears every configured ceiling, which removes the bars rather than zeroing them. */
   readonly windowTokenLimits?: Readonly<Partial<Record<QuotaWindowKind, number>>> | null
   /** OpenRouter's `provider` object, validated by the API. `null` clears it. */
@@ -166,9 +171,38 @@ export interface DiscoverModelsResult {
   readonly accountId: string
   readonly models: readonly string[]
   readonly saved: boolean
+  /** Listed ids the discovery added. It merges: an id already on the list is never removed. */
+  readonly added: readonly string[]
+  /** Ids on the account's list the catalogue did not carry — kept, for the operator to judge. */
+  readonly notInCatalogue: readonly string[]
+  readonly supportedModels: readonly string[] | null
   /** Safe to render as-is — the server never sends raw upstream or credential text here. */
   readonly message: string
   readonly latencyMs: number
+}
+
+/** What `PATCH /accounts/:id/models` answers: the list after the edit, and what moved. */
+export interface SupportedModelsEditResult {
+  readonly accountId: string
+  readonly supportedModels: readonly string[] | null
+  readonly added: readonly string[]
+  readonly removed: readonly string[]
+}
+
+/** Add or remove single ids under the server's row lock — never a read-modify-write of the list. */
+export function editAccountModels(input: {
+  readonly id: string
+  readonly add?: readonly string[]
+  readonly remove?: readonly string[]
+}): Promise<SupportedModelsEditResult> {
+  return request<SupportedModelsEditResult>({
+    method: "PATCH",
+    path: `/accounts/${input.id}/models`,
+    body: {
+      ...(input.add === undefined ? {} : { add: input.add }),
+      ...(input.remove === undefined ? {} : { remove: input.remove }),
+    },
+  })
 }
 
 /** One GET at the provider's own listing. Costs no tokens, so it needs no confirmation. */

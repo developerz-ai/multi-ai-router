@@ -7,7 +7,7 @@ import {
   providerUnderstandsContextTags,
 } from "../../providers/registry"
 import type { RoutableAccount } from "../dataplane"
-import type { AccountSnapshot, PoolSnapshot } from "../routing"
+import type { AccountSnapshot, ModelRemoval, PoolSnapshot } from "../routing"
 import { toQuotaEvidence } from "../routing/quota-evidence"
 
 /**
@@ -25,7 +25,20 @@ export interface CatalogData {
   readonly pools: readonly PoolSnapshot[]
 }
 
-export async function loadCatalog(sources: CatalogSources): Promise<CatalogData> {
+/**
+ * Which removals from `supported_models` the snapshot carries. Absent: every stored one — the
+ * writer already prunes the column to `MODEL_REMOVAL_MEMORY_DAYS` on each write; with it, one that
+ * aged out since the last write is dropped too.
+ */
+export interface RemovalMemory {
+  readonly now: () => Date
+  readonly memoryMs: number
+}
+
+export async function loadCatalog(
+  sources: CatalogSources,
+  removalMemory?: RemovalMemory,
+): Promise<CatalogData> {
   // One repeatable-read snapshot: another replica may commit a complete pool edit between
   // statements, but this load must never combine its old policy with its new membership.
   const {
@@ -64,7 +77,12 @@ export async function loadCatalog(sources: CatalogSources): Promise<CatalogData>
 
   return {
     accounts: accountRows.map((row) =>
-      toRoutableAccount(row, windowsByAccount.get(row.id), recoveryByAccount.get(row.id)),
+      toRoutableAccount(
+        row,
+        windowsByAccount.get(row.id),
+        recoveryByAccount.get(row.id),
+        removalHorizon(removalMemory),
+      ),
     ),
     pools: poolRows.map((pool) => ({
       id: pool.id,
@@ -86,6 +104,7 @@ function toRoutableAccount(
   row: AccountRow,
   quotaWindows: readonly QuotaWindowState[] | undefined,
   recovery: RecoveryRow | undefined,
+  removedAfter: number,
 ): RoutableAccount {
   return {
     id: row.id,
@@ -112,6 +131,7 @@ function toRoutableAccount(
       // The provider's default family narrows an undeclared subscription to its vendor's names; an
       // explicit list above replaces it (`services/routing/model-family.ts`).
       ...modelFamilyOf(row),
+      ...removedModelsOf(row, removedAfter),
       ...(providerUnderstandsContextTags(row.provider) ? { understandsContextTags: true } : {}),
       ...routingVariantsOf(row),
       ...(providerCarriesSession(row.provider) ? { carriesSession: true } : {}),
@@ -151,4 +171,21 @@ function routingVariantsOf(row: AccountRow): Pick<AccountSnapshot, "routingVaria
 function modelFamilyOf(row: AccountRow): Pick<AccountSnapshot, "modelFamily"> {
   const family = providerModelFamily(row.provider)
   return family === undefined ? {} : { modelFamily: family }
+}
+
+function removalHorizon(memory: RemovalMemory | undefined): number {
+  return memory === undefined ? Number.NEGATIVE_INFINITY : memory.now().getTime() - memory.memoryMs
+}
+
+/** The removals still inside the window, keyed by id; absent when there are none. */
+function removedModelsOf(
+  row: AccountRow,
+  removedAfter: number,
+): Pick<AccountSnapshot, "removedModels"> {
+  const removed = new Map<string, ModelRemoval>()
+  for (const entry of row.supportedModelsRemoved ?? []) {
+    const at = new Date(entry.removedAt)
+    if (at.getTime() > removedAfter) removed.set(entry.model, { at, by: entry.by })
+  }
+  return removed.size === 0 ? {} : { removedModels: removed }
 }

@@ -18,6 +18,7 @@ import { oauthCallbackRoutes } from "../../src/routes/admin/oauth-callback"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "../../src/routes/admin/pools"
 import { ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes } from "../../src/routes/admin/providers"
 import {
+  createAccountModelsService,
   createAccountsService,
   createClaudeConnectService,
   createConnectService,
@@ -40,6 +41,7 @@ import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 import { pasteOnlyFlow } from "../support/oauth-flows"
 import { silentLogger } from "../support/silent-logger"
+import { testSupportedModelsWriter } from "../support/supported-models-writer"
 
 /**
  * The admin CRUD plane driven through a real Hono app with `app.request(...)`.
@@ -131,8 +133,10 @@ function harness(
 
   // One instance, shared: "Discover models" writes through the same service the route reads, which
   // is what `composition/admin.ts` does and what keeps the warm catalog coherent in production.
+  const listWriter = testSupportedModelsWriter(store.accounts, { audit, now })
   const accountsService = createAccountsService({
     accounts: store.accounts,
+    supportedModels: testSupportedModelsWriter(store.accounts),
     keys: store.keys,
     pools: store.pools,
     cipher,
@@ -170,13 +174,14 @@ function harness(
       }),
       discoverModels: createDiscoverModelsService({
         accounts: store.accounts,
-        write: accountsService,
+        models: listWriter,
         cipher,
         audit,
         timeoutMs: 1_000,
         fetch:
           options.discoverFetch ?? (() => Promise.reject(new Error("no upstream in this harness"))),
       }),
+      models: createAccountModelsService(listWriter),
     }),
   )
   app.route(
@@ -562,11 +567,66 @@ describe("POST /:id/models/discover — the model catalog", () => {
     const account = created.body as { id: string; supportedModels: string[] }
     expect(account.supportedModels).toEqual(["glm-4.7"])
 
-    // `null` clears it, which returns the account to passthrough.
-    const cleared = await call(app, "PATCH", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}`, {
+    // `null` clears it, which returns the account to passthrough — but only when the ids it drops
+    // are named: a clear that does not name them is refused, naming them back.
+    const unnamed = await call(app, "PATCH", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}`, {
       supportedModels: null,
     })
+    expect(unnamed.status).toBe(409)
+    expect(JSON.stringify(unnamed.body)).toContain("supported_models_removal_unacknowledged")
+    expect(JSON.stringify(unnamed.body)).toContain("glm-4.7")
+    const cleared = await call(app, "PATCH", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}`, {
+      supportedModels: null,
+      supportedModelsRemoving: ["glm-4.7"],
+    })
     expect((cleared.body as { supportedModels: unknown }).supportedModels).toBeNull()
+  })
+
+  test("PATCH /:id/models adds and removes single ids and answers the diff", async () => {
+    const { app } = harness()
+    const created = await call(app, "POST", ADMIN_ACCOUNTS_BASE_PATH, {
+      label: "typed",
+      provider: "zai",
+      credential: SECRET,
+      supportedModels: ["glm-4.7", "glm-4.6"],
+    })
+    const { id } = created.body as { id: string }
+    const edited = await call(app, "PATCH", `${ADMIN_ACCOUNTS_BASE_PATH}/${id}/models`, {
+      add: ["glm-5"],
+      remove: ["glm-4.6"],
+    })
+    expect(edited.status).toBe(200)
+    expect(edited.body).toEqual({
+      accountId: id,
+      supportedModels: ["glm-4.7", "glm-5"],
+      added: ["glm-5"],
+      removed: ["glm-4.6"],
+    })
+    const empty = await call(app, "PATCH", `${ADMIN_ACCOUNTS_BASE_PATH}/${id}/models`, {})
+    expect(empty.status).toBe(400)
+  })
+
+  test("PUT /:id/models refuses a replace that drops an id it does not name", async () => {
+    const { app } = harness()
+    const created = await call(app, "POST", ADMIN_ACCOUNTS_BASE_PATH, {
+      label: "typed",
+      provider: "zai",
+      credential: SECRET,
+      supportedModels: ["glm-4.7", "glm-4.7-pinned"],
+    })
+    const { id } = created.body as { id: string }
+    const refused = await call(app, "PUT", `${ADMIN_ACCOUNTS_BASE_PATH}/${id}/models`, {
+      models: ["glm-4.7"],
+      removing: [],
+    })
+    expect(refused.status).toBe(409)
+    expect(JSON.stringify(refused.body)).toContain('\\"glm-4.7-pinned\\"')
+    const named = await call(app, "PUT", `${ADMIN_ACCOUNTS_BASE_PATH}/${id}/models`, {
+      models: ["glm-4.7"],
+      removing: ["glm-4.7-pinned"],
+    })
+    expect(named.status).toBe(200)
+    expect((named.body as { removed: string[] }).removed).toEqual(["glm-4.7-pinned"])
   })
 
   test("does not exist for an account that does not", async () => {

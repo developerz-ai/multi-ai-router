@@ -2,13 +2,16 @@ import { Hono, type MiddlewareHandler } from "hono"
 import { DEFAULT_ADMIN_JSON_MAX_BYTES } from "../../config/admin-bodies"
 import type { AdminAuthEnv } from "../../middleware/adminAuth"
 import {
+  type AccountModelsService,
   type AccountsService,
   accountListQuery,
   type ConnectService,
   completeConnectBody,
   createAccountBody,
   type DiscoverModelsService,
+  editSupportedModelsBody,
   type RecheckService,
+  replaceSupportedModelsBody,
   type TestNowService,
   testNowBody,
   updateAccountBody,
@@ -37,9 +40,13 @@ import { render } from "./render"
  * a subprocess turn per account, is not a button this console offers (`services/accounts/test-now.ts`).
  *
  * `POST /:id/models/discover` is the third and cheapest: it reads the provider's own model listing
- * and writes it into the account's `supportedModels`. It spends no tokens, so unlike "Test now" it
- * carries no cooldown and no confirmation — and unlike either of the other two it changes the row,
- * which is why the write goes back through the accounts service (`services/accounts/discover-models.ts`).
+ * and merges it into the account's `supportedModels` — adds, never removes — answering with what it
+ * added and what is on the list but not in the catalogue. It spends no tokens, so unlike "Test now"
+ * it carries no cooldown and no confirmation (`services/accounts/discover-models.ts`).
+ *
+ * `PATCH /:id/models` adds and removes single ids under the row lock; `PUT /:id/models` replaces the
+ * list and must name every id it removes. Both, the discovery and the account `PATCH` write through
+ * one function (`services/accounts/supported-models-writer.ts`).
  *
  * **Connect is two calls with an authorization in between.** `POST /:id/connect`
  * answers with an authorization URL — the `claude` CLI's own for a Claude
@@ -66,6 +73,7 @@ export interface AdminAccountRoutesDeps {
   readonly recheck: RecheckService
   readonly testNow: TestNowService
   readonly discoverModels: DiscoverModelsService
+  readonly models: AccountModelsService
   readonly connect: ConnectService
   /** `adminAuth(adminAuthService)`. Required, so no mount can forget the guard. */
   readonly guard: MiddlewareHandler<AdminAuthEnv>
@@ -144,6 +152,32 @@ export function adminAccountRoutes(deps: AdminAccountRoutesDeps): Hono<AdminAuth
     const id = validateId(c.req.param("id"))
     if (!id.ok) return render(c, id)
     return render(c, await deps.discoverModels.discover(id.value))
+  })
+
+  routes.patch("/:id/models", async (c) => {
+    const id = validateId(c.req.param("id"))
+    if (!id.ok) return render(c, id)
+    const body = validate(
+      editSupportedModelsBody,
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
+    )
+    if (!body.ok) return render(c, body)
+    return render(c, await deps.models.edit(id.value, body.value))
+  })
+
+  routes.put("/:id/models", async (c) => {
+    const id = validateId(c.req.param("id"))
+    if (!id.ok) return render(c, id)
+    const body = validate(
+      replaceSupportedModelsBody,
+      await readJsonBody(c.req.raw, {
+        maximumBytes: deps.maximumJsonBytes ?? DEFAULT_ADMIN_JSON_MAX_BYTES,
+      }),
+    )
+    if (!body.ok) return render(c, body)
+    return render(c, await deps.models.replace(id.value, body.value))
   })
 
   // Same service call as `/:id/connect`; the mode is only what the operator called it.

@@ -234,6 +234,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
             dialect: null,
             modelAliases: null,
             supportedModels: null,
+            supportedModelsRemoved: null,
             windowTokenLimits: null,
             providerPreferences: null,
             billing: "subscription",

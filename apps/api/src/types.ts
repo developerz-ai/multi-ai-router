@@ -1,5 +1,6 @@
 import type { Logger } from "./logging/logger"
 import type {
+  AccountModelsService,
   AccountsService,
   ConnectService,
   DiscoverModelsService,
@@ -82,11 +83,12 @@ export interface AdminServices {
    */
   readonly authProbe?: AccountAuthProbe
   /**
-   * "Discover models": reads the upstream's own listing into `supportedModels`. The one button of
-   * the three that changes the row, which is why it writes through `accounts` rather than beside it
-   * (`services/accounts/discover-models.ts`).
+   * "Discover models": reads the upstream's own listing and merges it into `supportedModels` —
+   * adds, never removes — through the one list writer (`services/accounts/discover-models.ts`).
    */
   readonly discoverModels: DiscoverModelsService
+  /** `PATCH` / `PUT /:id/models`: add and remove single ids, or a replace that names its removals. */
+  readonly models: AccountModelsService
   /** Connect and reconnect, both flows: the `claude` CLI's login, and the router's own PKCE one. */
   readonly connect: ConnectService
 }
