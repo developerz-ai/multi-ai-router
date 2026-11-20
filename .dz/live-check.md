@@ -7,25 +7,35 @@ running pod's image tag does.
 
 ## Cluster identity (read-only)
 
-Repo secrets `DEVELOPERZ_LIVE_CHECK_SSH_KEY` + `DEVELOPERZ_LIVE_CHECK_KUBECONFIG` +
-`DEVELOPERZ_LIVE_CHECK_SSH_KNOWN_HOSTS`, the bastion's one `known_hosts` line (host name,
-key type, key). This repository is public, so the guide never names the host: the recipe
-reads it from that secret. An unset secret is `cannot_grade`, naming it.
-ServiceAccount `dz-live-check`, server `https://127.0.0.1:26443`, through an SSH account on
-the bastion that can forward to the k3s API and do nothing else (no shell). The source of
-truth is `developerz-ai/infrastructure` `stacks/platform/dz-live-check/README.md`; if this
-block stops answering, read that page for the current bastion host key and API targets.
-Needs `ssh` and `kubectl` on the box; without them the check is `cannot_grade`, naming the
-missing tool.
+Four repo secrets, all set by the platform's publisher:
+
+| Secret | Holds |
+|---|---|
+| `DEVELOPERZ_LIVE_CHECK_SSH_KEY` | the SSH private key for the forwarding-only bastion account |
+| `DEVELOPERZ_LIVE_CHECK_KUBECONFIG` | kubeconfig for ServiceAccount `dz-live-check`, server `https://127.0.0.1:26443` |
+| `DEVELOPERZ_LIVE_CHECK_SSH_KNOWN_HOSTS` | the bastion's pinned `known_hosts` line; its first field is the SSH host |
+| `DEVELOPERZ_LIVE_CHECK_API_TARGETS` | the k3s API `host:port` targets the tunnel forwards to, space-separated, in failover order |
+
+This guide names no host, host key or address: the recipe reads every one from those secrets,
+so never write one into it. An unset secret is `cannot_grade`, naming it. The bastion account
+can forward to the k3s API and do nothing else (no shell). If the tunnel or `/readyz` fails
+with every secret set, the published values are stale: `cannot_grade`, naming the step that
+failed; the source of truth is the infrastructure repository's
+`stacks/platform/dz-live-check/README.md`. Needs `ssh` and `kubectl` on the box; without them
+the check is `cannot_grade`, naming the missing tool.
 
 ```bash
+for v in DEVELOPERZ_LIVE_CHECK_SSH_KEY DEVELOPERZ_LIVE_CHECK_KUBECONFIG \
+  DEVELOPERZ_LIVE_CHECK_SSH_KNOWN_HOSTS DEVELOPERZ_LIVE_CHECK_API_TARGETS; do
+  [ -n "${!v:-}" ] || echo "cannot_grade: $v is unset"
+done
 d="$HOME/.cache/developerz-live-check"; umask 077; mkdir -p "$d"
 printf '%s\n' "$DEVELOPERZ_LIVE_CHECK_SSH_KEY" >"$d/id"
 printf '%s\n' "$DEVELOPERZ_LIVE_CHECK_KUBECONFIG" >"$d/kubeconfig"
 printf '%s\n' "$DEVELOPERZ_LIVE_CHECK_SSH_KNOWN_HOSTS" >"$d/known_hosts"
-bastion="dz-live-check@$(cut -d' ' -f1 "$d/known_hosts")"
+bastion="dz-live-check@$(head -n1 "$d/known_hosts" | cut -d' ' -f1)"
 export KUBECONFIG="$d/kubeconfig"
-for t in 100.64.0.8:6443 100.64.0.11:6443 100.64.0.9:6443; do
+for t in $DEVELOPERZ_LIVE_CHECK_API_TARGETS; do
   ssh -f -N -M -S "$d/ctl" -o BatchMode=yes -o IdentitiesOnly=yes -i "$d/id" \
     -o UserKnownHostsFile="$d/known_hosts" -o StrictHostKeyChecking=yes \
     -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 \
