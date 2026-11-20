@@ -633,7 +633,9 @@ Rules:
   refusal that clears with time (`extra-usage-gated`) on a one-account pool keeps its held `429`:
   the same request succeeds later. Such a refusal counts even when its transport
   refused before the upstream started: it is a classified verdict, not a preparation fault, so it
-  takes the failure tail (usage row, sentence, wall count). Before, the chain cooled
+  takes the failure tail (usage row, sentence, wall count). Both Claude-subscription transports
+  carry the flag: the fast transport dropped it until 2.70.1, so there the breaker read the same
+  refusal as a bare `429` and cooled the account. Before, the chain cooled
   each account it tried, so one client's prompt walked the pool and other tenants saw `429` until
   the cooldowns lapsed (plan 101, 05.14).
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.

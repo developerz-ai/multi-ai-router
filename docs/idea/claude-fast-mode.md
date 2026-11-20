@@ -201,4 +201,8 @@ unchanged.
 **Refusals.** A fast-path `invalid-request` reaches the client as the router's
 `InvalidRequestError`, carrying `error.router` with `wall: "request"`, in every dialect. Anthropic's
 text, with the account's token and pattern-shaped credentials redacted, goes only to the attempt
-warn line, as `upstreamMessage`. Other statuses keep their verdict and also log that text.
+warn line, as `upstreamMessage`, beside its classifier rule as `signal`. Other statuses keep their
+status-shaped verdict and also log that text and signal. A classification marked
+`requestAttributable` or `permanentForRequest` carries the flag onto the attempt's failure on this
+transport as on the Agent SDK's, so a fast-path `claude-sdk:extra-usage-gated` (`400` or `429`)
+fails over without cooling the account (2.70.1).

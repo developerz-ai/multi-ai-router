@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **"Discover models" merges and never removes an id.** It replaced `supportedModels` with the upstream's catalogue; on 2026-11-15 that dropped a hand-added id the catalogue does not list and ~320 tasks were refused `model-unsupported` over 19 h. It now adds every listed id the account lacks, keeps every id it has, and answers `added` and `notInCatalogue` beside `models`; the console shows the kept ids with one deliberate "Remove these from the account" (`PATCH /:id/models`). The edit dialog sends the model list only when the operator changed it, naming what it removes. Regression: `apps/api/test/unit/accounts/discover-models.test.ts`, `apps/web/test/unit/DiscoverKeptNotice.test.tsx`, `apps/web/test/unit/AccountEditDialog.test.tsx`.
 
+## [2.70.1] — 2026-11-20
+
+### Fixed
+
+- **A fast-mode Claude subscription is no longer cooled by a refusal the request provoked.** On the fast transport (`CLAUDE_FAST_MODE=true`, the default) Anthropic's request-scoped `invalid_request_error` "Third-party apps now draw from your extra usage, not your plan limits…" is classified `claude-sdk:extra-usage-gated` with `requestAttributable: true`, but `errorResponseFailure` dropped the flag on the way to the attempt's failure, so the breaker read a bare `429` and tripped a cooldown plus a recovery probe. Measured by developerz.ai on 2026-11-20: one pool's only subscription, at 27% of its 7-day window, took 797 such `429`s in 24 h and every one cooled it, and 2,905 requests were refused unstarted `quota_exhausted` while it cooled. The fast path now carries `requestAttributable` and `permanentForRequest` from its classification onto the failure, as the Agent-SDK path already did, so the refusal fails over without a cooldown or breaker strike and a second one in the chain still ends it as the request wall. A genuine rate-limit `429` on the same path still cools the account. The attempt's `upstream attempt failed` warn line now names the classifier rule as `signal` for every fast-path refusal, not only `invalid-request`. Client answers are unchanged: every kind but `invalid-request` keeps its status-shaped relay, `Retry-After` and router sentence included. Spec: `docs/idea/05-routing-and-failover.md`, `docs/idea/claude-fast-mode.md`. Regression: `apps/api/test/integration/claude-fast-request-attributable.test.ts`.
+
 ## [2.70.0] — 2026-11-20
 
 ### Added
@@ -2366,3 +2372,4 @@ your tooling config.
 [2.67.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.67.0
 [2.68.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.0
 [2.70.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.0
+[2.70.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.1
