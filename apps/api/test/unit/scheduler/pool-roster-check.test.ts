@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import { type PoolRoster, poolRosterSchema } from "../../../src/config/pool-roster"
 import { createLogger } from "../../../src/logging/logger"
 import { createMetrics } from "../../../src/observability/metrics"
@@ -73,6 +73,23 @@ async function driftFixture(store: ReturnType<typeof createMemoryStore>) {
 }
 
 describe("pool_roster_check", () => {
+  test("an already cancelled run performs no reads or reporting", async () => {
+    const read = mock(async () => [])
+    const recordDrift = mock(() => undefined)
+    const task = createPoolRosterCheckTask({
+      roster: ROSTER,
+      pools: { list: read, listMembersForPools: read },
+      accounts: { listSummaries: read },
+      recordDrift,
+      intervalMs: INTERVAL_MS,
+    })
+    const controller = new AbortController()
+    controller.abort()
+    const result = await task.run({ now: NOW, logger: silentLogger(), signal: controller.signal })
+    expect(result).toEqual({ outcome: "success", itemsProcessed: 0 })
+    expect(read).not.toHaveBeenCalled()
+    expect(recordDrift).not.toHaveBeenCalled()
+  })
   test("the fixture roster is one the loader would accept", () => {
     // `poolRosterSchema` refuses an overflow that is its pool's sole member, so a fixture that
     // broke that rule would exercise a roster no deployment can configure.

@@ -69,6 +69,7 @@ export function createPoolRosterCheckTask(deps: PoolRosterCheckDeps): ScheduledT
     intervalMs: deps.intervalMs,
 
     run: async ({ logger, signal }): Promise<TaskOutcome> => {
+      if (signal.aborted) return { outcome: "success", itemsProcessed: 0 }
       try {
         const live = await readLive(deps)
         if (signal.aborted) return { outcome: "success", itemsProcessed: 0 }
