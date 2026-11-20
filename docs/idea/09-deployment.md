@@ -33,8 +33,11 @@ sanitized issue, never file contents, unknown key names or parser excerpts.
 
 `POOL_ROSTER_CHECK_INTERVAL_MINUTES` defaults to `15` and accepts positive whole minutes only.
 Its timer bound is `floor(2147483647 / (60000 * (1 + SCHEDULER_JITTER_FRACTION)))` minutes,
-including positive jitter. This release only validates configuration: no drift-check runner,
-scheduler task, monitoring, database comparison or membership writes are enabled by either variable.
+including positive jitter. It is the cadence of the `pool_roster_check` task: that task exists only
+while `POOL_ROSTER_PATH` is set, runs under the same advisory lock and `ScheduledTaskRun` recording
+as every other periodic task, and **reports only** — it compares the roster against live pools and
+memberships and writes no pool, membership or Account. See
+[05-routing-and-failover.md](05-routing-and-failover.md#the-deployment-roster-and-the-check-that-reports-drift).
 
 ## The promise
 

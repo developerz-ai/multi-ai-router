@@ -1072,6 +1072,70 @@ that would break the rule (`overflow_not_member`, `400`), including an edit that
 overflow's own membership, and routing ignores an overflow reference that predates the rule
 rather than honoring it.
 
+### The deployment roster, and the check that reports drift
+
+Membership is normally written through the admin plane. A deployment can also **declare** the pools
+it expects in a version-1 JSON roster, mounted read-only and named by `POOL_ROSTER_PATH`; the mount
+rules, boot refusal and env reference are in
+[09-deployment.md](09-deployment.md#optional-deployment-pool-roster). The shape:
+
+```json
+{"version":1,"pools":[{"name":"team-a","members":["claude-1","claude-2","api-key"],"overflow":"api-key"}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `pools[].name` | The Pool's name — exact, case-sensitive, unique in the file. The name is how a roster entry finds its live Pool. |
+| `pools[].members[]` | **Account labels**, not ids — the label an operator gave the Account. At least one, no duplicates within a pool; the same label may appear in different pools. A roster never creates, renames or relabels an Account. Labels are not required to be unique across Accounts: where two share one, the check reads the first Account it sees holding it, and a Pool holding a *different* Account with that label reports `missing_member` — so give every Account its own label. |
+| `pools[].overflow` | **Required, not optional.** A label that **must also appear in that same `members` list**, and must not be its sole member. |
+
+The overflow rule is the one above, restated declaratively: the overflow is a **member of last
+resort**, withheld from the policy until every other member is ineligible for a new session, and
+never an account from outside the pool. The roster's schema is stricter than the admin plane's
+writes: an `overflow` that is not a member, or that is the Pool's only member, refuses the file at
+boot, while an admin write only refuses `overflow_not_member` (`400`) — the sole-member shape it
+still accepts is the one a roster refuses to declare. Because `overflow` is a required field, every
+roster entry names a member of last resort: a Pool the operator deliberately runs with **no**
+overflow cannot be declared, and listing it anyway reports `no_overflow` on every run until the Pool
+is given one or removed from the roster.
+
+A live Pool the roster does not name is **not** drift: the roster governs the pools it lists, and an
+operator's ad-hoc Pool is configuration, not a discrepancy.
+
+#### Keeping the members independent
+
+**The roster's members are the operator's assertion that those Accounts are independent upstream
+subscriptions.** Five Claude Max subs side by side is the shape this whole page rests on — five
+quota windows, five cooldowns, five resets. Two Accounts minted from the *same* subscription are
+one window wearing two labels: the pool fails over from one to the other and lands on the same
+wall, and the roster that lists both reads as redundancy that does not exist. So declare one entry
+per subscription, not one entry per Account row you happened to create, and retire or re-label the
+duplicate rather than leaving it in a pool.
+
+#### The drift check
+
+`pool_roster_check` is a **read-only** scheduled task: pools, their memberships and account labels
+are read, then folded against the roster by the pure `diffRoster`. It **reports; it never
+reconciles** — no pool, membership or Account is created, edited or deleted by it. A drift is a
+decision (an Account was retired, a label was typo'd, a member was meant to be added), so the
+check's whole output is one alert line per item and one gauge series per (pool, kind); a task that
+"fixed" the roster by writing the database would silently change what the operator declared.
+
+| Kind | What drifted |
+|---|---|
+| `pool_missing` | The roster names a Pool no live Pool carries. Reported under the **roster's name** — that Pool has no id, and the name is the only handle an operator has to go fix it. |
+| `missing_member` | A roster member whose label resolves to no Account at all, or resolves to an Account the Pool's membership does not hold. |
+| `unexpected_member` | The Pool holds an Account the roster's members do not name. |
+| `no_overflow` | The roster names an overflow and the live Pool engages none — the pool has no member of last resort, so it serves nothing once every ordinary member is ineligible. |
+| `overflow_mismatch` | The live overflow is a member the roster does not name as the overflow, or is not a member at all. The item names the Account that **is** engaged, because that is the row to change. |
+
+The check resolves a member **by label to the live Account's id**, so a pool whose membership holds
+the right Account compares equal even though the roster never mentions an id. It runs on
+`POOL_ROSTER_CHECK_INTERVAL_MINUTES` through the ordinary scheduler (advisory lock, `ScheduledTaskRun`
+outcome) and is constructed **only** when `POOL_ROSTER_PATH` is set. Metric, alert line and the
+monitoring condition are in
+[08-observability.md](08-observability.md#pool-roster-drift).
+
 ## Reset visibility and manual re-check
 
 The operator's two questions when a pool degrades are *"when does it come back?"* and *"is it

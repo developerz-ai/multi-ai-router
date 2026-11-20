@@ -5,7 +5,8 @@ const MINUTE_MS = 60_000
 
 /**
  * Every runtime task's cadence, in milliseconds, keyed by its `scheduled_task` name.
- * `pool_roster_check` is persistence-only until optional roster scheduling lands.
+ * `pool_roster_check` is absent because it only exists when a roster is configured: its cadence
+ * comes from {@link poolRosterCheckIntervalMs}, which answers `null` when there is nothing to run.
  *
  * Exported because the admin plane's task-health screen has to judge "is this
  * task overdue?" against the schedule *this process is actually running*
@@ -33,4 +34,15 @@ export function scheduledTaskIntervals(
     plan_quota_read: env.scheduler.planQuotaReadIntervalMinutes * MINUTE_MS,
     pool_reap: env.scheduler.poolReapIntervalMinutes * MINUTE_MS,
   }
+}
+
+/**
+ * `pool_roster_check`'s cadence, or `null` when no roster is configured — the one place the
+ * existence of the task is decided, so `index.ts` cannot construct one without a roster to check.
+ * Kept out of {@link scheduledTaskIntervals} rather than added to it as optional: widening that
+ * record to `Partial` would force every reader of a cadence to handle `undefined` for fifteen
+ * tasks that always have one.
+ */
+export function poolRosterCheckIntervalMs(env: ScheduledTaskDeps["env"]): number | null {
+  return env.poolRoster === null ? null : env.poolRosterCheckIntervalMinutes * MINUTE_MS
 }

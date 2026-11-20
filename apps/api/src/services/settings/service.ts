@@ -67,9 +67,10 @@ export interface SettingsServiceDeps {
    */
   readonly usageReports: Pick<UsageReportRepository, "lastDeliveredAt">
   /**
-   * Each task's cadence in milliseconds — `scheduledTaskIntervals(env)`, the same function
-   * `createScheduledTasks` builds the running tasks from. Injected rather than re-derived from
-   * `Env` here, so the screen cannot judge health against a schedule nobody is running.
+   * Each task's cadence in milliseconds — `taskHealthIntervals(env)`: the map of every cadence this
+   * process is actually running, including `pool_roster_check` when a roster configured it.
+   * Injected rather than re-derived from `Env` here, so the screen cannot judge health against a
+   * schedule nobody is running.
    */
   readonly intervals: Readonly<Partial<Record<ScheduledTaskName, number>>>
   readonly now: () => Date

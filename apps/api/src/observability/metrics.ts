@@ -7,6 +7,7 @@ export type {
   MetricsOptions,
   ProbeAdmissionSample,
   RequestMetricSample,
+  RosterDriftSeries,
   RouterMetrics,
   SdkConcurrencySample,
   UsageQueueSample,
@@ -84,6 +85,11 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     help: "Awaited usage admission duration including database lock, transaction and promise wait.",
     labels: [],
     buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 15],
+  })
+  const rosterDrift = s.registry.gauge({
+    name: "router_pool_roster_drift",
+    help: "Desired-versus-live pool roster drift items, by pool and kind.",
+    labels: ["pool_id", "kind"],
   })
   const self = createSelfMetrics(s.registry)
   countDropped = self.seriesDropped
@@ -251,6 +257,17 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
       s.dbPoolConnections.set({ state: "in_use" }, sample.inUse)
       s.dbPoolConnections.set({ state: "idle" }, sample.idle)
       s.dbPoolConnections.set({ state: "waiting" }, sample.waiting)
+    },
+
+    // `clear()` first, always: the check reports the current drift in full, so a repaired item must
+    // stop being exported and a pool that went away must not keep its last count (registry.ts,
+    // `Gauge.clear`). Clearing and re-setting in one call also means a scrape never sees the union
+    // of two runs.
+    setRosterDrift(items) {
+      rosterDrift.clear()
+      for (const item of items) {
+        rosterDrift.set({ pool_id: item.poolId, kind: item.kind }, item.count)
+      }
     },
 
     onCollect: (collect) => s.registry.onCollect(collect),
