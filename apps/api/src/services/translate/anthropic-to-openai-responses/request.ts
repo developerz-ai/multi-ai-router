@@ -42,7 +42,8 @@ import {
  * Responses takes a **flat list of items** rather than a transcript of messages, which is the whole
  * structural difference from the openai-chat sibling:
  *
- * 1. `system` leaves the list entirely and becomes `instructions`.
+ * 1. `system` leaves the list entirely and becomes `instructions` — moved to a leading `developer`
+ *    item after the alias, toward a model that does not cache it (`shared/responses-model-dials.ts`).
  * 2. A turn becomes one `message` item, with `tool_use` and `tool_result` blocks carved out of it
  *    as `function_call` / `function_call_output` items **at the position they were found**. A turn
  *    interleaving text with calls therefore yields more than one message item, which is the cheaper
@@ -154,6 +155,11 @@ export function anthropicToOpenAiResponsesRequestFromParsed(
         : !request.tool_choice.disable_parallel_tool_use,
     tool_choice: toolChoice === undefined ? undefined : toolChoiceToOpenAiResponses(toolChoice),
     reasoning: reasoningFor(request),
+    // The caller's own word only; the per-model default is applied after the alias.
+    text:
+      request.output_config?.verbosity === undefined
+        ? undefined
+        : { verbosity: request.output_config.verbosity },
     // The router holds no conversation state and an Anthropic client has no way to name a stored
     // response on its next turn, so one left behind is litter nobody can reference or delete.
     store: false,

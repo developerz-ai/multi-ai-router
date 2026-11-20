@@ -133,8 +133,10 @@ describe("openai-chat response_format against a Codex account", () => {
 
     expect(upstream.calls).toHaveLength(1)
     const sent = sentBody(upstream)
+    // The GPT-5/6 verbosity default joins the format rather than replacing it (2.72.0).
     expect(sent.text).toEqual({
       format: { type: "json_schema", name: "chat_title", strict: true, schema: SCHEMA },
+      verbosity: "low",
     })
     expect("response_format" in sent).toBe(false)
     expect(sent.stream).toBe(true)
