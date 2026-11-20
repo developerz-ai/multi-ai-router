@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.71.0] — 2026-11-20
+
 ### Added
 
 - **Single model ids are added and removed under a row lock, and a full replace must name what it removes.** `PATCH /api/admin/accounts/:id/models` takes `{ add?, remove? }` (at least one id) and answers `{ accountId, supportedModels, added, removed }`; two operators adding one id each both land, because nothing round-trips the list and the write is a `SELECT … FOR UPDATE` read-decide-write in one transaction (`editSupportedModels`, `packages/db/src/repositories/account-supported-models.ts`). `PUT /api/admin/accounts/:id/models` takes `{ models, removing }`: every id the replacement drops must be in `removing`, or it is refused `409 supported_models_removal_unacknowledged` naming the unnamed ids, so a client holding a list read before another edit cannot drop the id that edit added. The account `PATCH`'s `supportedModels` follows the same rule through a new `supportedModelsRemoving` field, and its refusal leaves every other field in the body unwritten; a `PATCH` sending the whole list plus one id (what an operator did by hand on 2026-11-20) still lands. Every writer of the column — discovery, both new operations, the account `PATCH` — goes through one function (`services/accounts/supported-models-writer.ts`); the field-wise repository `update` can no longer write it. Spec: `docs/idea/05-routing-and-failover.md#every-write-to-supportedmodels-goes-through-one-function`. Regression: `apps/api/test/unit/accounts/supported-models.test.ts`, `apps/api/test/integration/admin-api.test.ts`, `packages/db/test/integration/account-supported-models.test.ts` (eight concurrent add-one edits all land; without the row lock it loses updates).
@@ -2373,3 +2375,4 @@ your tooling config.
 [2.68.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.68.0
 [2.70.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.0
 [2.70.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.1
+[2.71.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.71.0
