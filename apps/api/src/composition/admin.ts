@@ -7,7 +7,6 @@ import {
 } from "@multi-ai-router/db"
 import { usageSnapshotStatementTimeoutMs } from "../config/usage-snapshot"
 import { createCredentialMetadataReader, createSdkTestProbe } from "../providers"
-import { scheduledTaskIntervals } from "../scheduler"
 import {
   claudeCliFromEnv,
   connectFromEnv,
@@ -32,6 +31,7 @@ import { accountProviders, catalogLabels, createUsageService } from "../services
 import { createAdminAuth } from "./admin-auth"
 import type { AdminPlane, AdminPlaneDeps } from "./admin-types"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
+import { taskHealthIntervals } from "./task-health-intervals"
 import { createUsageReportDelivery, createUsageReports } from "./usage-reports"
 
 export type { AdminPlane, AdminPlaneDeps } from "./admin-types"
@@ -278,8 +278,9 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
         audit,
         env,
         // From the registry the scheduler was actually built with, so the health screen cannot
-        // judge a task against a cadence this process is not running.
-        intervals: scheduledTaskIntervals(env),
+        // judge a task against a cadence this process is not running — including
+        // `pool_roster_check`, which is only there when a roster made it.
+        intervals: taskHealthIntervals(env),
         now,
         // Read-after-write on cost: a saved override is pricing requests by the time the console
         // sees the response, the same guarantee the coherence decorators give the catalog.

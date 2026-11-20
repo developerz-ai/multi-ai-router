@@ -6,12 +6,13 @@ import { createCooldownRecheckTasks } from "./cooldown-recheck"
 import { createCredentialTasks } from "./credential-tasks"
 import type { ScheduledTaskDeps } from "./deps"
 import { createIdleAccountProbeTask } from "./idle-account-probe"
-import { scheduledTaskIntervals } from "./intervals"
+import { poolRosterCheckIntervalMs, scheduledTaskIntervals } from "./intervals"
 import { createJanitorTask } from "./janitor"
 import { createModelCatalogRefreshTask } from "./model-catalog-refresh"
 import { createOauthPurgeTask } from "./oauth-purge"
 import { createPlanQuotaReadTasks } from "./plan-quota-read"
 import { createPoolReapTasks } from "./pool-reap"
+import { createPoolRosterCheckTasks } from "./pool-roster-check"
 import { createQuotaFloorTask } from "./quota-floor"
 import { createReportTasks } from "./report-tasks"
 import { createTranscriptSweepTask } from "./sdk-transcript-sweep"
@@ -175,6 +176,11 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
       windowMs: env.retention.emptyPoolDays * DAY_MS,
       intervalMs: intervals.pool_reap,
       batchSize,
+    }),
+    // One task, only when a roster is configured: `poolRosterCheckIntervalMs` answers `null` when
+    // `POOL_ROSTER_PATH` is unset, and the factory builds nothing for a null cadence.
+    ...createPoolRosterCheckTasks(deps.poolRosterCheck, {
+      intervalMs: poolRosterCheckIntervalMs(env),
     }),
   ]
 }

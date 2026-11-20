@@ -23,6 +23,7 @@ import type { IdleAccountProbeDeps } from "./idle-account-probe"
 import type { ModelCatalogRefreshDeps } from "./model-catalog-refresh"
 import type { PlanQuotaReadPorts } from "./plan-quota-read"
 import type { PoolReapPorts } from "./pool-reap"
+import type { PoolRosterCheckPorts } from "./pool-roster-check"
 import type { ReportTaskDeps } from "./report-tasks"
 
 /** Everything the task registry (`index.ts`) is handed: one port per task, plus the config. */
@@ -123,10 +124,20 @@ export interface ScheduledTaskDeps
   readonly planQuotaRead?: PlanQuotaReadPorts
   /** The empty-pool reap's candidate read and the reaper it hands each one. Absent: no task. */
   readonly poolReap?: PoolReapPorts
+  /**
+   * The roster check's live reads and its gauge write. Absent when no `POOL_ROSTER_PATH` is
+   * configured, and then no task is built: a roster check with no roster has nothing to compare.
+   */
+  readonly poolRosterCheck?: PoolRosterCheckPorts
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<
     Env,
-    "retention" | "janitorIntervalMinutes" | "schedulerLimits" | "usageBackfillFullScanHours"
+    | "retention"
+    | "janitorIntervalMinutes"
+    | "schedulerLimits"
+    | "usageBackfillFullScanHours"
+    | "poolRoster"
+    | "poolRosterCheckIntervalMinutes"
   > &
     CredentialTaskDeps["env"] &
     ReportTaskDeps["env"]

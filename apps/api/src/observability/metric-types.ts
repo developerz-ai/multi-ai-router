@@ -55,6 +55,18 @@ export interface SdkConcurrencySample {
  */
 export type RequestMetricSample = RequestSample & { readonly modelKnown?: boolean }
 
+/**
+ * One drifted item on `router_pool_roster_drift`, from `scheduler/tasks/pool-roster-check.ts`.
+ *
+ * `poolId` is the pool's **name** for a `pool_missing` item — that pool has no id, and the name is
+ * the only handle an operator has to go fix the roster. Every other kind carries the live pool id.
+ */
+export interface RosterDriftSeries {
+  readonly poolId: string
+  readonly kind: string
+  readonly count: number
+}
+
 export interface RouterMetrics {
   /** One client request, at the point it ended. */
   observeRequest(sample: RequestMetricSample): void
@@ -82,6 +94,13 @@ export interface RouterMetrics {
   setSnapshotLoadedAt(store: "routing_catalog" | "model_catalog", at: Date | null): void
   /** Per scrape, from the pool wrapper's own in-flight count — see `DbPoolSample`. */
   setDbPool(sample: DbPoolSample): void
+  /**
+   * **Replaces every `router_pool_roster_drift` series**, from the roster check's own item list.
+   * Not an increment: the check reports the whole of what is drifted right now, so a repaired
+   * drift must stop appearing and a pool that vanished must stop reporting its last count. That
+   * makes the gauge read `0`-absent for a clean roster, which is what the alert rule expects.
+   */
+  setRosterDrift(items: readonly RosterDriftSeries[]): void
   /**
    * When the operator's price overrides were last loaded, from the warm book's own `loadedAt()`.
    * `null` before the first successful load leaves the gauge absent rather than reporting the
