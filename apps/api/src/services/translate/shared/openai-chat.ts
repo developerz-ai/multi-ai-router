@@ -116,6 +116,9 @@ export const openAiChatRequestSchema = z.object({
   // "invalid". An enum here would `400` a dial the upstream accepts, which is the router picking the
   // model's behaviour — the one thing it never does.
   reasoning_effort: z.string().nullish(),
+  // Carried toward openai-responses as `text.verbosity`. Lenient: it was stripped before it was
+  // read, so a shape this build does not expect stays absent rather than becoming a `400`.
+  verbosity: z.string().min(1).nullish().catch(undefined),
   n: z.number().int().nullish(),
   logprobs: z.boolean().nullish(),
   top_logprobs: z.number().int().nullish(),
