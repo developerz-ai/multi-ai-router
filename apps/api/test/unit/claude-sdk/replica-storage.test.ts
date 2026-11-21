@@ -221,6 +221,45 @@ test("local replica storage retries initialization after the prior guardian rele
   }
 })
 
+test("local replica storage refuses a guardian that retires during initialization", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-replica-storage-"))
+  const token = { accountId: crypto.randomUUID(), owner: crypto.randomUUID(), generation: 2n }
+  const helper = join(root, "retiring-guardian")
+  let storage: ReturnType<typeof createLocalReplicaStorage> | undefined
+  try {
+    await mkdir(join(root, token.accountId))
+    await writeFile(
+      helper,
+      `#!/usr/bin/env python3
+import os
+import sys
+import time
+marker = os.path.join(sys.argv[2], ".replica-storage-identity")
+os.mkfifo(marker)
+if os.fork() == 0:
+    os.close(3)
+    os.close(4)
+    time.sleep(0.1)
+    with open(marker, "w") as file:
+        file.write("00000000-0000-0000-0000-000000000000")
+    os._exit(0)
+os.write(3, b"R")
+`,
+      { mode: 0o700 },
+    )
+    storage = createLocalReplicaStorage(root, helper, {
+      async retireLocalOwners() {},
+      async drainMetadata() {},
+    })
+    await expect(storage.attach(token, null)).rejects.toThrow(
+      "local storage guardian retired during initialization",
+    )
+  } finally {
+    await storage?.stop()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 for (const loseAfterValidation of [false, true]) {
   test(`replica-lease refuses unconfirmed exclusive attachment, recheck=${loseAfterValidation}`, async () => {
     const f = await fixture()

@@ -41,8 +41,10 @@ export function createLocalReplicaStorage(
       try {
         await new Promise<void>((resolve, reject) => {
           status.once("data", (data: Buffer) => {
-            if (data.toString() === "R") resolve()
-            else reject(new Error("local storage admission refused"))
+            if (data.toString() === "R") {
+              live = true
+              resolve()
+            } else reject(new Error("local storage admission refused"))
           })
           child.once("error", () => reject(new Error("local storage admission unavailable")))
           child.once("close", () => reject(new Error("local storage admission refused")))
@@ -58,6 +60,7 @@ export function createLocalReplicaStorage(
         try {
           const stat = await file.stat()
           identity = await file.readFile("utf8")
+          if (!live) throw new Error("local storage guardian retired during initialization")
           if (
             !stat.isFile() ||
             stat.nlink !== 1 ||
@@ -68,10 +71,10 @@ export function createLocalReplicaStorage(
         } finally {
           await file.close()
         }
+        if (!live) throw new Error("local storage guardian retired during initialization")
         storage = createReplicaStorage(root, identity, adapter)
         control = childControl
         exit = childExit
-        live = true
       } catch (error) {
         childControl.end()
         await childExit.catch(() => {})
@@ -79,12 +82,9 @@ export function createLocalReplicaStorage(
       }
     })()
     initializing = attempt
-    void attempt.then(
-      () => undefined,
-      () => {
-        if (initializing === attempt) initializing = undefined
-      },
-    )
+    void attempt.catch(() => {
+      if (initializing === attempt) initializing = undefined
+    })
     return attempt
   }
   const adapter: ExclusiveStorageAttachment = {
