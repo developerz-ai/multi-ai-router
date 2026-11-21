@@ -41,6 +41,12 @@ export interface FailureContext {
   readonly now: Date
   readonly unknownResetRetryAfterSeconds?: number
   /**
+   * A verified, fresh, provider-reported key-cap reset (the same evidence the breaker uses). Only
+   * set for a `credits-exhausted` classification that is really a resettable spend cap; absent for a
+   * drained balance and for evidence too stale or ambiguous to support an instant.
+   */
+  readonly keyCapResetsAt?: Date
+  /**
    * The router-authored sentence for this failure, when the transport had one that says more than
    * the class does (`SdkFailure.clientMessage`). Read for the `429` alone, because that is the one
    * verdict where the classes differ in remedy and not just in wording: a spent plan window and a
@@ -110,6 +116,17 @@ export function toRouterError(
   }
 
   if (classification.kind === "credits-exhausted") {
+    // A spent periodic key cap with a verified reset is a clock, not a drained balance. Keep the
+    // developerz.ai sentence shape: it regex-matches the rate-limited wording. Without verified
+    // evidence the frozen top-up sentence below is untouched.
+    const keyCapReset = context?.keyCapResetsAt
+    if (context !== undefined && keyCapReset !== undefined) {
+      return new QuotaExhaustedError(`upstream rate limited (${classification.signal})`, {
+        retryAfterSeconds: secondsUntil(keyCapReset, context.now),
+        resetsAt: keyCapReset,
+        detail: { ...detail, resetSource: "provider-reported" },
+      })
+    }
     return new CreditsExhaustedError(
       `upstream account is out of credits (${classification.signal}) — needs a top-up, no timer will fix it`,
       { detail },

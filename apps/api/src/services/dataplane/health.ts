@@ -10,6 +10,7 @@ import {
   recordSuccess,
   withPlanReset,
 } from "../routing"
+import { verifiedKeyCapReset } from "../routing/plan-reset"
 import { mergeQuotaWindows } from "../routing/quota"
 import { createHealthDurability } from "./health-durability"
 import { refuseHeld, throttleHeld } from "./health-model-holds"
@@ -40,6 +41,11 @@ const REFUSED: ProbeAdmission = { admitted: false, held: false }
 
 export interface HealthStore {
   stateOf(accountId: string): AccountHealthState
+  /**
+   * The same verified, fresh `spend_limit` reset the breaker uses to cool a key-cap refusal, for the
+   * client error path. `null` means the evidence does not support a reset; no instant is invented.
+   */
+  keyCapResetAt(accountId: string, now: Date): Date | null
   reconcile(accountId: string, facts: HealthAccountFacts): void
   acknowledgeBreaker(accountId: string, breaker: BreakerState, row: AccountBreakerRow): void
   acceptsObservation(accountId: string, observation: HealthObservation): boolean
@@ -135,6 +141,9 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
   return {
     stateOf: read,
+    keyCapResetAt(accountId, now) {
+      return verifiedKeyCapReset(read(accountId).quotaWindows, now, planReadingMaxAgeMs)
+    },
     acknowledgeBreaker: durability.acknowledgeBreaker,
     reconcile: durability.reconcile,
     captureAttempt: durability.captureAttempt,

@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import type { RouterError } from "@multi-ai-router/core"
+import { CreditsExhaustedError, QuotaExhaustedError, type RouterError } from "@multi-ai-router/core"
 import { routerErrorObject } from "../../../src/errors/router-object"
 import { toRouterError } from "../../../src/providers/failure/router-error"
 import { failureBody } from "../../../src/services/admin"
@@ -184,6 +184,39 @@ describe("providers/failure/router-error.ts — one account's answer", () => {
       "upstream account is out of credits (openai:insufficient_quota) — needs a top-up, no timer will fix it",
     )
     expect(error?.detail).toEqual({ scope: "account", signal: "openai:insufficient_quota" })
+  })
+
+  test("a verified key-cap reset is a recoverable clock wall, never a top-up", () => {
+    const error = toRouterError(classification("credits-exhausted", "http-status:402"), {
+      signal: null,
+      now: NOW,
+      keyCapResetsAt: at(30_000),
+    })
+    expect(error).toBeInstanceOf(QuotaExhaustedError)
+    expect(error?.message).toBe("upstream rate limited (http-status:402)")
+    expect(error?.message).not.toContain("top-up")
+    expect(error?.message).not.toContain("no timer")
+    const quota = error as QuotaExhaustedError
+    expect(quota.status).toBe(429)
+    expect(quota.resetsAt).toEqual(at(30_000))
+    expect(quota.retryAfterSeconds).toBe(30)
+    expect(routerErrorObject(error, quota.retryAfterSeconds ?? null, "req-1")).toMatchObject({
+      wall: "clock",
+      retry_after_s: 30,
+      reset_at: at(30_000).toISOString(),
+      reset_source: "provider-reported",
+    })
+  })
+
+  test("a drained balance keeps the frozen credits sentence even when a signal is present", () => {
+    const error = toRouterError(
+      { ...classification("credits-exhausted", "http-status:402"), rateLimit: null },
+      { signal: null, now: NOW, keyCapResetsAt: undefined },
+    )
+    expect(error).toBeInstanceOf(CreditsExhaustedError)
+    expect(error?.message).toBe(
+      "upstream account is out of credits (http-status:402) — needs a top-up, no timer will fix it",
+    )
   })
 
   test("credential rejected", () => {

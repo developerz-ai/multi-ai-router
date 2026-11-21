@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { QuotaWindowState } from "@multi-ai-router/core"
 import { type AttemptFailure, spentPlanReset, withPlanReset } from "../../../src/services/routing"
+import { verifiedKeyCapReset } from "../../../src/services/routing/plan-reset"
 
 /**
  * A limit refusal that names no reset borrows the spent plan window's. Prod fingerprint, 2026-11-06:
@@ -104,5 +105,36 @@ describe("withPlanReset leaves everything else alone", () => {
 
   test("no windows, no reset", () => {
     expect(spentPlanReset([], NOW, FRESH)).toBeNull()
+  })
+})
+
+describe("verifiedKeyCapReset, the client path's key-cap evidence", () => {
+  const cap = (overrides: Partial<QuotaWindowState> = {}) =>
+    window({ window: "spend_limit", ...overrides })
+
+  test("a fresh spent provider-reported cap yields its exact reset", () => {
+    expect(verifiedKeyCapReset([cap()], NOW, FRESH)).toEqual(WEEKLY_RESET)
+  })
+
+  test("a plan window that is not a key cap lends nothing", () => {
+    expect(verifiedKeyCapReset([window()], NOW, FRESH)).toBeNull()
+  })
+
+  test("headroom, estimated/unknown reset, past reset and stale reading invent no instant", () => {
+    for (const held of [
+      cap({ utilization: 0.99 }),
+      cap({ resetSource: "estimated" }),
+      cap({ resetSource: "unknown", resetsAt: undefined }),
+      cap({ resetsAt: new Date(NOW.getTime() - 1) }),
+      cap({ utilization: undefined, utilizationSource: "threshold-triggered" }),
+      cap({ blocksRouting: false }),
+      cap({ lastCheckedAt: new Date(NOW.getTime() - FRESH - 1) }),
+    ]) {
+      expect(verifiedKeyCapReset([held], NOW, FRESH)).toBeNull()
+    }
+  })
+
+  test("no windows, no reset", () => {
+    expect(verifiedKeyCapReset([], NOW, FRESH)).toBeNull()
   })
 })

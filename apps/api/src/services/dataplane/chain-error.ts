@@ -143,6 +143,11 @@ export interface AnsweredFailureContext {
   readonly now: Date
   readonly unknownResetRetryAfterSeconds?: number
   /**
+   * A verified, fresh key-cap reset read from the health store. Forwarded only when it exists; an
+   * absent value leaves the client error path exactly as it was.
+   */
+  readonly keyCapResetsAt?: Date
+  /**
    * The router-authored sentence for this failure (`AttemptFailure.message`). Rendered only when
    * the transport produced a classification but no upstream body — never the SDK's own words.
    */
@@ -191,6 +196,9 @@ export function answeredFailure(
           ...(context.unknownResetRetryAfterSeconds === undefined
             ? {}
             : { unknownResetRetryAfterSeconds: context.unknownResetRetryAfterSeconds }),
+          ...(context.keyCapResetsAt === undefined
+            ? {}
+            : { keyCapResetsAt: context.keyCapResetsAt }),
           // Only for a transport that classified **without** a body — the Agent SDK. There
           // `AttemptFailure.message` is the router-authored sentence; on the HTTP path the same
           // field carries the classification's signal token, which is a log breadcrumb and not a

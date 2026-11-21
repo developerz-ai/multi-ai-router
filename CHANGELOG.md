@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A verified, resettable OpenRouter key cap now answers the client with a clock wall (`429 quota_exhausted`, `reset_at` and `retry_after_s` from the provider's reset, no top-up instruction) instead of a `402 credits-exhausted` error. Genuinely drained balances keep the top-up wording; missing, stale, estimated or past reset evidence invents no timestamp.
+
 ## [2.73.0]
 
 ### Added

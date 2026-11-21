@@ -1080,6 +1080,15 @@ Ties keep the earliest attempt's, so the account named is the first one that fai
 except between two spent windows, where the **sooner** wait wins, for the same reason the
 "every candidate unavailable" table reports the soonest reset.
 
+The two descriptions stay distinct all the way to the client. A clock fixes a resettable periodic
+key cap: a fresh, provider-reported `spend_limit` window that is spent and names a future reset
+yields `quota_exhausted` (`429`, `wall: clock`, `reset_at`, `retry_after_s`) and temporary
+`upstream rate limited (...)` wording, never a top-up instruction. Only a genuinely drained balance,
+where no such reset evidence exists, says `credits-exhausted` (`402`, "needs a top-up, no timer will
+fix it"). Missing, stale, estimated, headroom or past reset evidence is never turned into an invented
+instant: it keeps the human-wall sentence. The developerz.ai client's frozen-sentence regex contract
+(`upstream rate limited`, `earliest reset ... (estimated)`) still holds unchanged.
+
 Every attempt still writes its own `UsageRecord`, so the account that could not be dispatched to
 stays visible to the operator. It just does not answer the client.
 

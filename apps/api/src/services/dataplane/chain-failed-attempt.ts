@@ -36,13 +36,18 @@ export function finishFailedAttempt(
     outcome,
     ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
   )
+  const now = runtime.clock.now()
+  // The same verified, fresh spend_limit reset the breaker already used to cool this refusal. Read
+  // once; absent evidence yields null and leaves the client's credits-exhausted answer untouched.
+  const keyCapResetsAt = runtime.health.keyCapResetAt(servable.account.id, now)
   const failure = answeredFailure(
     outcome.classification,
     outcome.upstream,
     servable.translation === null ? null : runtime.ingressDialect,
     {
       rateLimit: outcome.rateLimit,
-      now: runtime.clock.now(),
+      now,
+      ...(keyCapResetsAt === undefined || keyCapResetsAt === null ? {} : { keyCapResetsAt }),
       ...(runtime.unknownResetRetryAfterSeconds === undefined
         ? {}
         : { unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds }),

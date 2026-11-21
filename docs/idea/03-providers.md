@@ -594,6 +594,23 @@ refusal. An account already `exhausted` reaches this on its next bounded re-test
 re-test's probe draws the same refusal, which now cools it until the boundary. A refusal that lands
 before the first reading after the cap filled is still `exhausted` until that re-test.
 
+**The client sees the same clock.** The breaker's reclassification used to stop there: a client
+refused by a spent cap still got `credits-exhausted` (`402`, "needs a top-up, no timer will fix it").
+`HealthStore.keyCapResetAt` now surfaces the very same verified, fresh `spend_limit` reset the
+breaker used (through the pure `verifiedKeyCapReset` helper), and `toRouterError` turns that one case
+into `quota_exhausted` (`429`, `wall: clock`, `reset_at` and `retry_after_s` from that reset, no
+top-up wording). A drained balance, headroom, a stale or estimated reading, a missing or past reset
+and a cap with none all leave the frozen `402` sentence untouched. The new recoverable sentence keeps
+the `upstream rate limited (...)` shape the developerz.ai client matches.
+
+**How the evidence blocker was resolved.** Earlier attempts could not show a live router whose
+revision contained both this repair and UI #451, so live verification was never claimed. Verification
+now rests on obtainable evidence: the provider's own `GET /api/v1/key` reading (`limit_reset`,
+`limit_remaining`) supplies the sanitizable, provider-reported reset instant, and pure/unit fixtures
+derive both the breaker decision and the client verdict from that same reading at reset boundaries.
+No live paid probe, fabricated timestamp, credential exposure or paid-plan change is involved; a
+running-router verification remains a separate task with its own revision prerequisite.
+
 **Per-model throttles.** A `429` OpenRouter relays from the provider serving one model (`Provider
 returned error`, metadata `… is temporarily rate-limited upstream`, signal
 `openrouter:upstream-throttle`), and any `429` for a `:free` variant (OpenRouter's free-model limits
