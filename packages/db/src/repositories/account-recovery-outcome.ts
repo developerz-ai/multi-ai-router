@@ -3,6 +3,7 @@ import { and, eq, gte, isNull, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { accountRecoveries, type RecoveryRow } from "../schema/account-recoveries"
 import { quotaWindows } from "../schema/quota-windows"
+import { clearCapturedBreaker } from "./account-breaker"
 import {
   credentialFingerprint,
   duration,
@@ -97,6 +98,7 @@ export function createRecoveryOutcomes(
           input.state === "succeeded" &&
           (account.status === "active" || account.status === "cooling_down")
         ) {
+          await clearCapturedBreaker(tx, account, held.generation)
           for (const [window, revision] of Object.entries(held.quotaRevisions)) {
             await tx
               .update(quotaWindows)

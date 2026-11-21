@@ -22,7 +22,15 @@ export function assembleRuntimeLifecycle(
 ) {
   const { logger } = deps
   const { schedulerLock, refreshLock } = repositories
-  const { catalog, prices, modelCatalogStore, recoveryComponents, quotaWriter, statusWriter } = warm
+  const {
+    catalog,
+    prices,
+    modelCatalogStore,
+    recoveryComponents,
+    quotaWriter,
+    statusWriter,
+    breakerWriter,
+  } = warm
   const { ownership } = cli
   const { usage } = telemetry
   const { activeRequests } = request
@@ -53,6 +61,7 @@ export function assembleRuntimeLifecycle(
       usage.start()
       quotaWriter.start()
       statusWriter.start()
+      breakerWriter.start()
       // Synchronous by design: the first sweep is not a boot precondition.
       scheduler.start()
       // Awaited: rebuilt from `tokenExpiresAt`, so a token that expired during downtime is due now.
@@ -95,6 +104,7 @@ export function assembleRuntimeLifecycle(
         { name: "usage-writer", run: () => usage.stop() },
         { name: "quota-writer", run: () => quotaWriter.stop() },
         { name: "status-writer", run: () => statusWriter.stop() },
+        { name: "breaker-writer", run: () => breakerWriter.stop() },
       ],
     ],
   })

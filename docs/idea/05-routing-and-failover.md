@@ -251,7 +251,7 @@ So the router spends the permit itself (`dataplane/recovery-probe.ts`):
 | Admission | Through the designated start guard a client request uses, run once at the final upstream start: it consumes the permit, so the router and a client can never both spend it. |
 | Verdict | An answer settles `succeeded` and records health success. A refusal of the probe's own request (`client-error`, `model-unsupported`) settles `uncertain` with no health verdict: unlike a client's request, whose refusal proves the account served (`chain-recovery.ts`), a refused ping proves only that the endpoint answered. The router warns once with the model and its source and offers that account nothing more until its lifecycle changes (a re-check, a credential or status edit) or the process restarts; a client request, which brings its own model, still recovers it. Editing `supported_models` alone does not change the lifecycle, so the fix is: correct `supported_models`, then re-check. There is no retry with another model: the permit is single-start, and a second send would need an admission path that spends no permit, widening the one-send-per-generation bound. The cost: an account whose declared list leads with a retired model stays gated without client traffic, and any one-off `400`/`404` on a good model stops re-probing the same way until a re-check or a restart. Any other failure settles `failed` and strikes the breaker as a recovery probe. A spent permit with no verdict back settles `uncertain`. The verdict is recorded before the probe's rate-limit reading is folded, the order the client path uses (`chain-recovery.ts`): folded first, a limiting reading advances the verdict version and the success is refused as stale. |
 | Bound | One offer per permit, one permit per generation. A failed probe's breaker clock keeps the account out of the reopen sweep until it elapses, and a provider-reported reset (the HTTP half now folds its rate-limit reading into the health store, as the SDK half always did) keeps it out until the reset. A dead account is probed on the breaker's backoff (`ROUTING_BASE_BACKOFF_MS` doubling to `ROUTING_MAX_BACKOFF_MS`), never faster than `RECOVERY_COOLDOWN_MS`: the cadence one persistent client would have driven. |
-| Known limit: replicas | The breaker clock that bounds the reopen lives in the owner replica's in-memory health store. With several replicas, another replica that never saw the failure holds no clock, so it may reopen the account at `nextAllowedAt` (`RECOVERY_COOLDOWN_MS`) and probe it again. Production runs one replica; scaling out needs the clock made durable first. |
+| Fleet authority | Account breaker clocks, the half-open **probe hold** (`account_breakers.probe_held_until`) and parked status all persist off-path and hydrate through the routing catalog. Postgres checks the persisted deadline at automatic recovery begin and permit issue, so an unexpired durable cooldown cannot be bypassed by a replica missing its local clock, and a probe taken by a request on replica A is refused on replica B until that hold expires or A releases it. Existing durable recovery generations and single-use permits, not local holds, authorize the designated start. **The bound is one off-path flush plus one catalog refresh**: a hold or cooldown observed on replica A is honoured on replica B within `1.2 × ACCOUNT_STATUS_WRITE_INTERVAL_MS + 1.2 × CATALOG_REFRESH_SECONDS × 1000` plus the two measured durations, the budget in [09-deployment.md](09-deployment.md#breaker-propagation-is-conditional-not-immediate). Deployment still requires one replica for unrelated state. |
 
 ### Native before alias
 
@@ -661,7 +661,7 @@ Accepted on purpose; each row names what would make it worth building (developer
 | Limit | Why it stands | Trip condition |
 |---|---|---|
 | No idempotency key on a non-streamed retry: an attempt that timed out after the upstream finished is billed by that upstream, then served again by the next account | No upstream in the pool honours a client idempotency key on inference, so a key would bind nothing | An upstream ships an idempotency key for inference, or usage records show attempts past `UPSTREAM_TIMEOUT_MS` with `tokens_out > 0` above 1 % of a week's non-streamed attempts |
-| Breaker and recovery clocks live in one replica's memory | Production runs one replica (`#breaker`, "Known limit: replicas") | Before a second replica is deployed |
+| Breaker observations propagate eventually, and a crash before flush can lose new evidence | Off-path coalescing preserves the normal request latency budget; durable recovery permits fence designated starts | Before a second replica is deployed, validate the propagation bound and remaining deployment constraints |
 | Sealed Codex reasoning replays only on the account that minted it; a failover is a cold cache from that step ([06](06-protocol-translation.md)) | The seal is the upstream account's encrypted content; no other account can read it | Failover share on sealed-reasoning conversations above 5 % of their turns in a week |
 | A router-minted thinking signature is refused by a real Anthropic upstream; same key and model, a chain hop from a translated account to a passthrough one is the residual gap ([06](06-protocol-translation.md)) | Clients strip on provider/wire/model change; the residual needs one pool mixing translated and passthrough accounts for one model | A pool serving one model through both an `anthropic` passthrough account and a translated one |
 | Fast mode rewrites `system[0]` (billing block + checksum) per request, and a fast/SDK switch is a different prefix, so the next turn prefills cold ([claude-fast-mode](claude-fast-mode.md)) | Caching survives by upstream tolerance of the rewrite, observed on canaries | Cache-read share on Claude-subscription turns after a fast-mode release falls below the share before it |
@@ -774,20 +774,55 @@ is weekly). A reported reset past that ceiling cools the account to the ceiling 
 `estimated`, because the instant is then ours: a misread or ten-year `Retry-After` must not park an
 account for as long as it says (`routing/backoff.ts`).
 
-A **cooldown** is in-memory routing hygiene, not durable truth: after a restart the first failing
-request re-marks it. It expires with its own reset window (see the retention table in
-[09-deployment.md](09-deployment.md)). A later mark may extend an entry; an
-earlier one never shortens it, so two concurrent failures cannot un-learn the longer reset.
+### Durable account breaker clocks and precedence
 
-A **standing block is durable**, and the split is the same `cooling_down` ≠ `exhausted` rule one
-level down. Re-deriving a cooldown costs one failed request; re-deriving `exhausted` costs the
-operator the only notice they were going to get, because the thing that ends it is a human who has
-to be *told*. So the moment the breaker forms `exhausted` or `needs_reauth`, the replica that
-observed it writes the verdict through to `accounts.status` on an `ACCOUNT_STATUS_WRITE_INTERVAL_MS`
-timer — off the request path, coalesced per account, and guarded so it can never overwrite the
-operator's `disabled` or a block already recorded ([02-domain-model.md](02-domain-model.md#account)).
-The catalog hydrates the row at boot, so a restarted replica filters the account out by name instead
-of re-learning it with a failed request, and the console's red banner has a source.
+Account cooldown deadlines, their reason/reset provenance and breaker backoff evidence are durable
+as well as warm. Observations coalesce per account on `ACCOUNT_STATUS_WRITE_INTERVAL_MS`, off the
+normal request-critical SQL path. Boot and routing-catalog refresh hydrate the persisted evidence;
+a fresh process need not send a failing request to rediscover a stored cooldown. Local in-flight
+counts, recent-token accounting, model refusals/throttles and local probe holds remain local.
+
+Configured `disabled`, `exhausted` and `needs_reauth` outrank clock recovery. Neither expiry,
+catalog refresh, restart nor a stale success enables a parked account. Only the existing authorized
+operator/authentication recovery transitions may clear those blocks, including the bounded exhausted
+re-test described below. A later cooldown may extend a deadline; older or shorter evidence cannot
+erase the longer live restriction. Observation writes compare captured lifecycle and credential
+facts, and success/recovery compares captured verdict authority: late outcomes cannot erase newer
+cooldown evidence. Operator recovery and credential/lifecycle changes fence old observations.
+
+Postgres recovery generations and single-use permits already own fleet admission. A local half-open
+hold is bookkeeping, not a second distributed lease. Automatic begin and permit issue check the
+persisted unexpired cooldown in addition to existing status, generation and quota fences. Concurrent
+replicas compete for one designated permit; it is consumed at the final upstream start. This is not
+a claim of remote exactly-once execution or instantaneous catalog visibility.
+
+The persisted deadline is authoritative even when a contender has no local cooldown clock. Permit
+issuance alone is not proof of admission safety: the regression must count actual stub-upstream
+starts by independent runtimes competing for the same durable generation. Successful recovery
+clears only the breaker evidence captured by that generation, not restrictions observed afterward.
+
+For healthy persistence and catalog refresh, define `W = ACCOUNT_STATUS_WRITE_INTERVAL_MS` and
+`C = CATALOG_REFRESH_SECONDS × 1000`. The propagation budget from an observed restriction to another
+replica installing it is:
+
+```text
+1.2 × W + 1.2 × C + persistence duration + catalog read/install duration + overlapping refresh delay
+```
+
+Both timer allowances include their maximum positive 20% jitter. Include measured I/O, installation
+work and any already-running refresh that must finish before the next read; this is a conditional
+healthy-service bound, not an unconditional wall-clock SLA. Until installation, another warm replica
+may select from older evidence. Failed persistence retains pending restrictions and retries with
+visible logs; failed refresh retains the last installed restrictive state rather than claiming
+recovery. An outage or stalled timer invalidates the healthy-service bound. Shutdown drains pending
+observations within the configured background drain budget, but a crash before flush, or an
+unacknowledged drain, can still lose the freshest observation. No live two-replica deployment proof
+is implied by this contract.
+
+The budget assumes both timers keep firing, writes commit, catalog reads see those commits and
+read/install work and overlapping refresh delay remain bounded. Manual `flush()` and refresh calls
+prove transfer and merge semantics only; timer-driven tests must separately exercise the scheduled
+write and catalog refresh path. Neither kind of repository test substitutes for live deployment proof.
 
 **A rejected key is a re-tested cooldown, never `disabled`.** Through v2.14.0 an `api-key` (or
 `none`) account's `401`/`403` parked it at an in-memory `disabled` — reported by the breaker,
@@ -817,7 +852,7 @@ disabled)` while the stored row said `active` — the operator's word, minted by
   `credential-rejected`, and the reading is not counted as a second refusal. A reading that names
   no reset moves nothing. A probe
   that is merely rate-limited proved the key works and drops the label. It is not a standing block
-  — nothing is announced, nothing is stored.
+  : its cooldown evidence is persisted, but it is not stored as a standing status block.
 - The filter drops it as `credential-rejected`, a reason of its own. It is **not** recoverable for
   reporting: it sits in the `needs a human` clause (`kimi credential rejected upstream, re-checked
   after <t> (estimated)`), it is never offered as the pool's `earliest reset`, and alone it is the
@@ -836,10 +871,10 @@ account is never read as a spent window. The reverse holds as well: a body that 
 both a reached limit and a clock that reopens it. Either one alone stays `auth`, and terms-of-service
 wording counts only in the same sentence as the suspension, where it outranks any clock.
 
-### One half-open probe per account per replica
+### Half-open bookkeeping and durable recovery admission
 
-Each replica admits one half-open probe for an account at a time. Admission is held in that
-replica's warm health store; it is not a fleet-wide exclusion guarantee. A cooldown expiring makes the
+Each replica holds one local half-open probe for an account at a time, while the existing Postgres
+recovery generation and permit remain the fleet admission authority. A cooldown expiring makes the
 account eligible to **every** waiting request at the same instant, so without one, the backlog that
 piled up during a five-minute cooldown dispatches onto the recovering account together and rate
 limits it again before it has answered any of them.
@@ -850,8 +885,8 @@ limits it again before it has answered any of them.
 | **A refusal costs nothing** | The chain drops that candidate and walks on — no attempt spent, no `UsageRecord`, no upstream contacted. Nothing happened to that account. |
 | **The hold is a routing state** | It rides in the health snapshot, so every request selecting *after* it was taken is filtered out as `probe-in-flight` — a `429` carrying the hold's expiry, because a clock fixes this in milliseconds. Never a `500`, and never a queue. |
 | **Released on the verdict** | The moment the attempt is classified, not when its stream settles: the probe's question was "is this account back?", and it has been answered. `ROUTING_HALF_OPEN_HOLD_MS` is the backstop for a probe that never reports at all. |
-| **Per account and replica** | One account recovering does not gate another. Separate replicas may each admit a probe; distributed recovery admission remains W3B. |
-| **Manual recovery intent** | **Re-check now** installs an explicit full-health recovery epoch. It does not create a durable fleet-wide probe permit or promise that exactly one subsequent request will reach the provider. |
+| **Per account** | One account recovering does not gate another. Local holds do not authorize extra fleet starts: designated attempts require the current durable permit, consumed once at final upstream admission. |
+| **Manual recovery intent** | **Re-check now** installs explicit full-health recovery intent through the existing durable generation. The coordinator may issue one designated permit; it does not promise that a subsequent request reaches the provider or that a prior remote call ended. |
 
 ### Health signals feeding it
 
@@ -1392,7 +1427,7 @@ A wall after the commit point is past failover. An `event: error` the upstream s
 
 A transient edge `401`/`403` on a cooling OAuth account parks it like a real refusal, and `needs_reauth` drops the stated reset. If the refresh then succeeds the account is back early; if the token endpoint is also down past the retry budget, the attempt is spent until an operator's Re-check.
 
-Each replica keeps its own timer, and the advisory lock only stops two runs overlapping. So each replica rechecks the cooldowns in its own memory, the "one per interval" bound is per replica, and a success clears only that replica's breaker. The interval is a nominal, jittered gap, not a guarantee.
+Each replica keeps its own timer, and the advisory lock only stops two runs overlapping. The sweep reads its installed health snapshot, including durable account clocks received through catalog refresh. Recovery still uses the existing durable generation and permit fences; a success cannot clear newer persisted evidence. The interval is a nominal, jittered gap, not a guarantee, and clock propagation follows the conditional budget above.
 
 Successful CLI/browser authorization, guarded passive authentication recovery, manual credential replacement and explicit enable publish their recovery generation in the same account transaction, already settled (`cancelled`, outcome now, `nextAllowedAt` after `RECOVERY_COOLDOWN_MS`): the generation bump fences stale observations and supersedes any open probe, but routing is never gated on a probe after a credential was just verified or an operator just enabled the account. Through v2.22.0 these published `pending`, and the first requests after a reconnect were refused as `probe-in-flight` until a permit was issued on demand (prod, 2026-10-06). Routine refresh preserves operator intent.
 

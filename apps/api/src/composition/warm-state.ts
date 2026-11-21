@@ -1,4 +1,8 @@
-import { createCatalogSnapshotRepository } from "@multi-ai-router/db"
+import {
+  type BreakerObservation,
+  createAccountBreakerRepository,
+  createCatalogSnapshotRepository,
+} from "@multi-ai-router/db"
 import { captureException } from "../observability"
 import { createSdkQuotaStore } from "../providers"
 import { IDLE_PROBE_MODELS } from "../scheduler/tasks/idle-account-probe"
@@ -9,6 +13,7 @@ import {
   createHealthStore,
   createQuotaWindowWriter,
 } from "../services/dataplane"
+import { createBreakerWriter } from "../services/dataplane/breaker-writer"
 import { accountHealthFacts } from "../services/dataplane/health-observation"
 import { quotaCatalogReconciler } from "../services/dataplane/quota-catalog"
 import { createModelCatalogStore } from "../services/models"
@@ -42,10 +47,7 @@ export function createWarmState(
     flushIntervalMs: env.dataPlane.quotaWriteIntervalMs,
     shutdownDrainMs: env.background.shutdownDrainMs,
   })
-  // The durable half of the breaker, and for the same reason: the replica that observed the verdict
-  // is the only one holding it. A cooldown is not written — a clock recovers it — but `exhausted`
-  // and `needs_reauth` end only when a human acts, and a verdict that dies with the process is a
-  // human who never finds out (`services/dataplane/status-writer.ts`).
+  // Parked statuses retain their existing authorized recovery path. Breaker clocks replicate off-path.
   const statusWriter = createAccountStatusWriter({
     accounts,
     logger,
@@ -58,6 +60,25 @@ export function createWarmState(
   // returns every account tripped in the same second in the same millisecond. `probeHoldMs` is the
   // other half — the gate that admits one half-open probe onto a recovering account.
   const health = createHealthStore({
+    onBreaker: (accountId, breaker, observation) => {
+      const input: BreakerObservation = {
+        accountId,
+        expected: observation,
+        observedRevision: observation.breaker?.revision ?? 0,
+        ...breaker,
+        cooldownSource: breaker.cooldownSource ?? "unknown",
+      }
+      pendingBreakers.set(accountId, { input, breaker })
+      breakerWriter.record(input)
+    },
+    // A probe hold is the other half of the half-open gate: taken on one replica, honoured by every
+    // other within one flush interval plus one catalog refresh (05-routing-and-failover.md).
+    onProbeHold: (accountId, heldUntil, observation) =>
+      breakerWriter.recordProbeHold({
+        accountId,
+        expected: observation,
+        probeHeldUntil: heldUntil,
+      }),
     failureThreshold: env.failover.failureThreshold,
     baseBackoffMs: env.failover.baseBackoffMs,
     maxBackoffMs: env.failover.maxBackoffMs,
@@ -90,6 +111,28 @@ export function createWarmState(
     onReset: (accountId) => {
       sdkQuota.forget(accountId)
       statusWriter.forget(accountId)
+      breakerWriter.forget(accountId)
+      pendingBreakers.delete(accountId)
+    },
+  })
+  const pendingBreakers = new Map<
+    string,
+    {
+      input: BreakerObservation
+      breaker: import("../services/routing").BreakerState
+    }
+  >()
+  const breakerWriter = createBreakerWriter({
+    repository: createAccountBreakerRepository(database),
+    logger,
+    flushIntervalMs: env.dataPlane.accountStatusWriteIntervalMs,
+    shutdownDrainMs: env.background.shutdownDrainMs,
+    acknowledge: (input, row) => {
+      const pending = pendingBreakers.get(input.accountId)
+      if (pending?.input === input) {
+        pendingBreakers.delete(input.accountId)
+        health.acknowledgeBreaker(input.accountId, pending.breaker, row)
+      }
     },
   })
   // A failed periodic refresh keeps serving the last snapshot; it must say so (04.5).
@@ -118,7 +161,25 @@ export function createWarmState(
         if (!nextIds.has(id)) health.reset(id)
       }
       catalogAccountIds = nextIds
-      for (const account of loaded) health.reconcile(account.id, accountHealthFacts(account))
+      for (const account of loaded) {
+        health.reconcile(account.id, accountHealthFacts(account))
+        const pending = pendingBreakers.get(account.id)
+        if (pending === undefined) continue
+        const expected = pending.input.expected
+        if (
+          account.lifecycleVersion > expected.lifecycleVersion ||
+          account.healthRecoveryVersion > expected.healthRecoveryVersion ||
+          account.authRecoveryVersion > expected.authRecoveryVersion ||
+          (account.lifecycleVersion === expected.lifecycleVersion &&
+            (account.authMaterial !== expected.authMaterial ||
+              account.snapshot.status === "disabled" ||
+              account.snapshot.status === "exhausted" ||
+              account.snapshot.status === "needs_reauth"))
+        ) {
+          pendingBreakers.delete(account.id)
+          breakerWriter.forget(account.id)
+        }
+      }
     },
     refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000,
     onRefreshError: refreshFailed("routing-catalog"),
@@ -161,6 +222,7 @@ export function createWarmState(
     sdkQuota,
     quotaWriter,
     statusWriter,
+    breakerWriter,
     health,
     catalog,
     recoveryComponents,

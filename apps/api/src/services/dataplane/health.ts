@@ -1,17 +1,17 @@
 import type { AuthKind, QuotaWindowState } from "@multi-ai-router/core"
-import type { RateLimitSignal, RateLimitWindow } from "../../providers"
+import type { AccountBreakerRow } from "@multi-ai-router/db"
+import type { RateLimitSignal } from "../../providers"
 import {
   type AttemptFailure,
   type BreakerOptions,
   type BreakerState,
-  HEALTHY,
-  type ModelRefusal,
   phase,
   recordFailure,
   recordSuccess,
   withPlanReset,
 } from "../routing"
 import { mergeQuotaWindows } from "../routing/quota"
+import { createHealthDurability } from "./health-durability"
 import { refuseHeld, throttleHeld } from "./health-model-holds"
 import {
   createHealthObservations,
@@ -20,33 +20,10 @@ import {
 } from "./health-observation"
 import { configuredBreaker, type HealthStoreOptions } from "./health-options"
 import { foldRateLimit } from "./health-reading"
-import { recoverHealth } from "./health-recovery"
-import { rotateTokens, type TokenWindow } from "./health-tokens"
+import { type AccountHealthState, FRESH } from "./health-state"
+import { rotateTokens } from "./health-tokens"
 
-export interface AccountHealthState {
-  readonly breaker: BreakerState
-  readonly inFlight: number
-  /** Output tokens over the last one to two `tokenWindowMs` windows (02.10); since boot without one. */
-  readonly recentTokens: number
-  /** The two buckets `recentTokens` sums, when a window is configured. */
-  readonly tokenWindow?: TokenWindow
-  readonly limiterWindows: readonly RateLimitWindow[]
-  readonly quotaWindows: readonly QuotaWindowState[]
-  readonly lastSignalAt: Date | null
-  readonly probeHeldUntil: Date | null
-  /** Upstream models held off this account — refused as unknown (10.16) or throttled alone. */
-  readonly refusedModels?: ReadonlyMap<string, ModelRefusal>
-}
-
-const FRESH: AccountHealthState = {
-  breaker: HEALTHY,
-  inFlight: 0,
-  recentTokens: 0,
-  limiterWindows: [],
-  quotaWindows: [],
-  lastSignalAt: null,
-  probeHeldUntil: null,
-}
+export type { AccountHealthState } from "./health-state"
 
 export const DEFAULT_PROBE_HOLD_MS = 30_000
 
@@ -64,6 +41,7 @@ const REFUSED: ProbeAdmission = { admitted: false, held: false }
 export interface HealthStore {
   stateOf(accountId: string): AccountHealthState
   reconcile(accountId: string, facts: HealthAccountFacts): void
+  acknowledgeBreaker(accountId: string, breaker: BreakerState, row: AccountBreakerRow): void
   acceptsObservation(accountId: string, observation: HealthObservation): boolean
   captureAttempt(accountId: string, facts: HealthAccountFacts): HealthObservation
   beginAttempt(accountId: string): void
@@ -143,20 +121,23 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
   const write = (accountId: string, patch: Partial<AccountHealthState>): void => {
     states.set(accountId, { ...read(accountId), ...patch })
   }
+  const durability = createHealthDurability(
+    observations,
+    read,
+    (id, state) => {
+      states.set(id, state)
+      if (state.probeHeldUntil === null) probeTokens.delete(id)
+    },
+    (id) => probeTokens.has(id),
+    options,
+  )
+  const publish = durability.publish
 
   return {
     stateOf: read,
-    reconcile(accountId, facts) {
-      const kind = observations.reconcile(accountId, facts)
-      if (kind === null) return
-      const previous = read(accountId)
-      const recovered = recoverHealth(previous, kind, facts)
-      if (recovered !== previous) {
-        states.set(accountId, recovered)
-        probeTokens.delete(accountId)
-      }
-    },
-    captureAttempt: observations.capture,
+    acknowledgeBreaker: durability.acknowledgeBreaker,
+    reconcile: durability.reconcile,
+    captureAttempt: durability.captureAttempt,
     acceptsObservation: observations.accepts,
 
     beginAttempt(accountId) {
@@ -189,6 +170,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
         return
       if (!observations.acceptsSuccess(accountId, observation)) return
       write(accountId, { breaker: recordSuccess() })
+      publish(accountId, read(accountId).breaker, observation)
     },
 
     recordFailure(accountId, failure, now, caller, observation) {
@@ -200,6 +182,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       const after = recordFailure(before, planned, now, breakerOptions(caller))
       if (after !== before) observations.advanceVerdict(accountId)
       write(accountId, { breaker: after })
+      publish(accountId, after, observation)
       if (after.status !== before.status && phase(after, now) === "blocked") {
         options.onBlocked?.(
           accountId,
@@ -221,6 +204,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       )
       if (folded.breaker !== read(accountId).breaker) observations.advanceVerdict(accountId)
       states.set(accountId, folded)
+      publish(accountId, folded.breaker, observation)
       if (signal.quotaWindows !== undefined) {
         if (observation !== undefined)
           acceptedQuota.set(
@@ -264,10 +248,12 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
         return REFUSED
       }
 
-      write(accountId, { probeHeldUntil: new Date(now.getTime() + probeHoldMs) })
+      const heldUntil = new Date(now.getTime() + probeHoldMs)
+      write(accountId, { probeHeldUntil: heldUntil })
       const token = ++nextProbeToken
       probeTokens.set(accountId, token)
       probeAdmitted += 1
+      durability.publishHold(accountId, heldUntil)
       return { admitted: true, held: true, token }
     },
 
@@ -275,6 +261,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (token !== undefined && probeTokens.get(accountId) !== token) return
       probeTokens.delete(accountId)
       if (states.has(accountId)) write(accountId, { probeHeldUntil: null })
+      durability.publishHold(accountId, null)
     },
 
     probeHoldUntil(accountId, now) {
@@ -285,8 +272,12 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
     probeStats: () => ({ admitted: probeAdmitted, refused: probeRefused }),
 
     reset(accountId) {
+      // Nothing durable to release: both callers reset an account that is already gone from the
+      // catalog, and their `onReset` forgets this id's queued breaker and hold writes before any
+      // flush, so a release published here would reach Postgres as nothing.
       states.delete(accountId)
       observations.forget(accountId)
+      durability.forget(accountId)
       probeTokens.delete(accountId)
       options.onReset?.(accountId)
     },

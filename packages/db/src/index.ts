@@ -1,14 +1,9 @@
 /**
- * `@multi-ai-router/db` — the only module in the system that knows SQL.
- *
- * Public surface, explicitly listed: the schema (tables + enums + row types),
- * the connection factory, the migration runner, and the repositories services
- * call instead of writing queries.
+ * `@multi-ai-router/db`: the only module that knows SQL. Public surface: schema, connection
+ * factory, migration runner, repositories.
  */
 
-export type { AdvisoryLockRun } from "./advisory-lock"
-
-export { advisoryLockKey } from "./advisory-lock"
+export { type AdvisoryLockRun, advisoryLockKey } from "./advisory-lock"
 export type {
   Database,
   DatabaseExecutor,
@@ -34,6 +29,12 @@ export {
   runMigrations,
 } from "./migrate"
 export type { PoolSample } from "./pool-metrics"
+export type {
+  AccountBreakerRepository,
+  BreakerObservation,
+  ProbeHoldObservation,
+} from "./repositories/account-breaker"
+export { createAccountBreakerRepository } from "./repositories/account-breaker"
 export type {
   AccountAuthorizationMethods,
   AccountLifecycleMethods,
@@ -144,10 +145,7 @@ export type {
   ScheduledTaskRepository,
 } from "./repositories/scheduled-task-repository"
 export { createScheduledTaskRepository } from "./repositories/scheduled-task-repository"
-export type {
-  SessionRepository,
-  UpsertSessionInput,
-} from "./repositories/session-repository"
+export type { SessionRepository, UpsertSessionInput } from "./repositories/session-repository"
 export { createSessionRepository } from "./repositories/session-repository"
 export type { UsageBatchInsert, UsageBatchResult } from "./repositories/usage-batch-mutation"
 export {
@@ -216,6 +214,7 @@ export type { UsageWeekRead, UsageWeekRow } from "./repositories/usage-week-read
 export { UsageWeekRowCeilingError } from "./repositories/usage-week-read"
 export type { SchedulerLockPoolHandle, SchedulerLockPoolOptions } from "./scheduler-lock"
 export { createSchedulerLockPool } from "./scheduler-lock"
+export { type AccountBreakerRow, accountBreakers } from "./schema/account-breakers"
 export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
 export { accountRecoveries } from "./schema/account-recoveries"
 export type {

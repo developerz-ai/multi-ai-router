@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { AccountStatus, QuotaWindowState } from "@multi-ai-router/core"
+import { type AccountBreakerRow, credentialFingerprint } from "@multi-ai-router/db"
 import type { RateLimitSignal } from "../../../src/providers"
 import { buildSnapshot, createHealthStore, overlayHealth } from "../../../src/services/dataplane"
 import { account, catalog, NOW } from "./fixtures"
@@ -17,6 +18,158 @@ function signal(overrides: Partial<RateLimitSignal> = {}): RateLimitSignal {
 }
 
 describe("health store", () => {
+  test("newer durable evidence cannot be erased by an old acknowledgment or catalog", () => {
+    const facts = {
+      lifecycleVersion: 0,
+      healthRecoveryVersion: 0,
+      authRecoveryVersion: 0,
+      authMaterial: null,
+      status: "active" as const,
+    }
+    const row: AccountBreakerRow = {
+      accountId: "a",
+      revision: 1,
+      ...facts,
+      credentialFingerprint: credentialFingerprint(null),
+      status: "cooling_down",
+      cooldownUntil: new Date(NOW.getTime() + 60000),
+      cooldownSource: "estimated",
+      cooldownReason: null,
+      consecutiveFailures: 1,
+      probeHeldUntil: null,
+      capturedGeneration: null,
+    }
+    const store = createHealthStore()
+    store.reconcile("a", { ...facts, breaker: row })
+    const observation = store.captureAttempt("a", { ...facts, breaker: row })
+    store.recordFailure(
+      "a",
+      { kind: "rate-limited", resetsAt: new Date(NOW.getTime() + 180000), message: "429" },
+      NOW,
+      undefined,
+      observation,
+    )
+    const pending = store.stateOf("a").breaker
+    const newer = { ...row, revision: 3, cooldownUntil: new Date(NOW.getTime() + 240000) }
+    store.reconcile("a", { ...facts, breaker: newer })
+    store.acknowledgeBreaker("a", pending, { ...row, revision: 2 })
+    store.reconcile("a", { ...facts, breaker: row })
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(newer.cooldownUntil)
+    store.reconcile("a", { ...facts, lifecycleVersion: 1, healthRecoveryVersion: 1 })
+    expect(store.stateOf("a").breaker.status).toBe("active")
+    store.reconcile("a", { ...facts, breaker: newer })
+    expect(store.stateOf("a").breaker.status).toBe("active")
+  })
+
+  test("pending local parking survives a newer nonterminal catalog until authorized recovery", () => {
+    const facts = {
+      lifecycleVersion: 0,
+      healthRecoveryVersion: 0,
+      authRecoveryVersion: 0,
+      authMaterial: null,
+      status: "active" as const,
+    }
+    for (const status of ["exhausted", "needs_reauth", "disabled"] as const) {
+      const store = createHealthStore()
+      store.reconcile("a", { ...facts, status })
+      store.reconcile("a", { ...facts, status, authRecoveryVersion: 1 })
+      store.recordSuccess("a")
+      expect(store.stateOf("a").breaker.status).toBe(status)
+    }
+    const store = createHealthStore()
+    const observation = store.captureAttempt("a", facts)
+    store.recordFailure(
+      "a",
+      { kind: "credits-exhausted", message: "402" },
+      NOW,
+      undefined,
+      observation,
+    )
+    store.reconcile("a", {
+      ...facts,
+      breaker: {
+        accountId: "a",
+        revision: 1,
+        ...facts,
+        credentialFingerprint: credentialFingerprint(null),
+        status: "active",
+        cooldownUntil: null,
+        cooldownSource: "unknown",
+        cooldownReason: null,
+        consecutiveFailures: 0,
+        probeHeldUntil: null,
+        capturedGeneration: null,
+      },
+    })
+    store.recordSuccess("a")
+    expect(store.stateOf("a").breaker.status).toBe("exhausted")
+    store.reconcile("a", { ...facts, lifecycleVersion: 1, healthRecoveryVersion: 1 })
+    expect(store.stateOf("a").breaker.status).toBe("active")
+  })
+
+  test("durable breaker hydration fences old success and preserves pending local cooldown", () => {
+    const facts = {
+      lifecycleVersion: 0,
+      healthRecoveryVersion: 0,
+      authRecoveryVersion: 0,
+      authMaterial: null,
+      status: "active" as const,
+    }
+    const store = createHealthStore()
+    const old = store.captureAttempt("a", facts)
+    const cooldownUntil = new Date(NOW.getTime() + 60000)
+    const row: AccountBreakerRow = {
+      accountId: "a",
+      revision: 1,
+      ...facts,
+      credentialFingerprint: "digest",
+      status: "cooling_down",
+      cooldownUntil,
+      cooldownSource: "estimated",
+      cooldownReason: null,
+      consecutiveFailures: 1,
+      probeHeldUntil: null,
+      capturedGeneration: null,
+    }
+    store.reconcile("a", { ...facts, breaker: row })
+    store.recordSuccess("a", old)
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(cooldownUntil)
+    const fresh = store.captureAttempt("a", { ...facts, breaker: row })
+    const later = new Date(NOW.getTime() + 120000)
+    store.recordFailure(
+      "a",
+      { kind: "rate-limited", resetsAt: later, message: "429" },
+      NOW,
+      undefined,
+      fresh,
+    )
+    store.reconcile("a", { ...facts, breaker: row })
+    expect(store.stateOf("a").breaker.cooldownUntil).toEqual(later)
+    const restart = createHealthStore()
+    restart.reconcile("a", { ...facts, breaker: row })
+    expect(restart.stateOf("a").breaker.cooldownUntil).toEqual(cooldownUntil)
+    restart.reconcile("a", { ...facts, status: "exhausted", breaker: row })
+    expect(restart.stateOf("a").breaker.status).toBe("exhausted")
+  })
+
+  test("limiter-derived cooldown is announced for off-path persistence", () => {
+    const changes: string[] = []
+    const store = createHealthStore({
+      onBreaker: (_id, breaker) => {
+        changes.push(breaker.status)
+      },
+    })
+    const facts = {
+      lifecycleVersion: 0,
+      healthRecoveryVersion: 0,
+      authRecoveryVersion: 0,
+      authMaterial: null,
+      status: "active" as const,
+    }
+    const observation = store.captureAttempt("a", facts)
+    store.applyRateLimit("a", signal({ limited: true, retryAfterSeconds: 60 }), NOW, observation)
+    expect(changes).toEqual(["cooling_down"])
+  })
   test("a fresh account is healthy and in no cooldown", () => {
     const store = createHealthStore()
     expect(store.stateOf("a").breaker.status).toBe("active")
@@ -400,6 +553,86 @@ describe("the half-open probe gate", () => {
     store.reset("a")
 
     expect(store.stateOf("a").probeHeldUntil).toBeNull()
+  })
+
+  const holding = (probeHeldUntil: Date | null, revision = 1): AccountBreakerRow => ({
+    accountId: "a",
+    revision,
+    lifecycleVersion: 0,
+    healthRecoveryVersion: 0,
+    authRecoveryVersion: 0,
+    credentialFingerprint: credentialFingerprint(null),
+    status: "cooling_down",
+    cooldownUntil: new Date(NOW.getTime() + 60_000),
+    cooldownSource: "unknown",
+    cooldownReason: null,
+    consecutiveFailures: 1,
+    probeHeldUntil,
+    capturedGeneration: null,
+  })
+
+  const factsFor = {
+    lifecycleVersion: 0,
+    healthRecoveryVersion: 0,
+    authRecoveryVersion: 0,
+    authMaterial: null,
+    status: "cooling_down" as const,
+  }
+
+  test("a hold another replica took refuses admission here, with no local admit", () => {
+    // The whole point of the column: replica B never ran `admitProbe`, but a probe is already in
+    // flight from replica A, so B must not start a second one.
+    const store = createHealthStore({ probeHoldMs: 15_000, jitter: () => 0 })
+    store.reconcile("a", { ...factsFor, breaker: holding(new Date(recovered.getTime() + 10_000)) })
+
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: false, held: false })
+  })
+
+  test("a durable hold that has lapsed admits again", () => {
+    const store = createHealthStore({ probeHoldMs: 15_000, jitter: () => 0 })
+    store.reconcile("a", { ...factsFor, breaker: holding(new Date(recovered.getTime() + 10_000)) })
+    const after = new Date(recovered.getTime() + 10_001)
+
+    expect(store.admitProbe("a", after).admitted).toBe(true)
+  })
+
+  test("a release published by the holding replica clears the rejected replica's copy", () => {
+    const store = createHealthStore({ probeHoldMs: 15_000, jitter: () => 0 })
+    store.reconcile("a", { ...factsFor, breaker: holding(new Date(recovered.getTime() + 10_000)) })
+    store.reconcile("a", {
+      ...factsFor,
+      breaker: holding(null, 2),
+    })
+
+    expect(store.admitProbe("a", recovered).admitted).toBe(true)
+  })
+
+  test("a probe in flight here is not clobbered by a snapshot that predates it", () => {
+    // The local hold is newer than the row another replica last wrote; adopting the older row would
+    // hand the gate to a second request mid-probe.
+    const store = createHealthStore({ probeHoldMs: 15_000, jitter: () => 0 })
+    store.reconcile("a", { ...factsFor, breaker: holding(null) })
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: true, held: true, token: 1 })
+    store.reconcile("a", { ...factsFor, breaker: holding(null, 2) })
+
+    expect(store.admitProbe("a", recovered)).toEqual({ admitted: false, held: false })
+  })
+
+  test("taking a hold publishes it; releasing publishes the release", () => {
+    const published: (Date | null)[] = []
+    const store = createHealthStore({
+      probeHoldMs: 15_000,
+      jitter: () => 0,
+      onProbeHold: (_id, heldUntil) => published.push(heldUntil),
+    })
+    store.reconcile("a", { ...factsFor, breaker: holding(null) })
+    store.admitProbe("a", recovered)
+    store.releaseProbe("a")
+
+    expect(published.map((at) => at?.getTime() ?? null)).toEqual([
+      recovered.getTime() + 15_000,
+      null,
+    ])
   })
 })
 

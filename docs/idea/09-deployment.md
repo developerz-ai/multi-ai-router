@@ -349,7 +349,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `MAX_REQUEST_JSON_DEPTH` | no | `256` | Data-plane JSON nesting depth, including the root. Integer 2–4096. Excess depth, malformed JSON, or duplicate decoded top-level `model` fields return `400` before upstream dispatch. The scanner validates structure through EOF, decodes bounded routing tokens, and preserves opaque payload bytes. |
 | `ADMIN_JSON_MAX_BYTES` | no | `1048576` (1 MiB) | Positive safe-integer byte ceiling for guarded admin JSON requests. Authentication runs before buffering. Actual streamed bytes enforce the limit; oversized bodies return `413` before mutation. |
 | `ADMIN_LOGIN_JSON_MAX_BYTES` | no | `8192` (8 KiB) | Positive safe-integer byte ceiling for anonymous local-login JSON. Oversized bodies return `413` before credential verification; malformed JSON remains `400`. |
-| `ACCOUNT_STATUS_WRITE_INTERVAL_MS` | no | `1000` | How often a standing block the breaker just formed — `exhausted`, `needs_reauth` — is written through to `accounts.status`. Not a poll, and not a cooldown: a cooldown is clock-recoverable and deliberately stays in memory. Shorter than the quota interval because what it bounds is worse — a lost reading costs a stale gauge, a lost block costs the operator the banner telling them an account needs topping up. Routing is unaffected at any setting; the breaker holds the verdict either way. |
+| `ACCOUNT_STATUS_WRITE_INTERVAL_MS` | no | `1000` | Off-path coalesced persistence cadence for account breaker cooldown clocks and standing blocks (`exhausted`, `needs_reauth`). The observing process restricts immediately; other processes hydrate committed evidence through the routing catalog. Together with `CATALOG_REFRESH_SECONDS`, jitter and measured I/O, this sets the conditional propagation budget below. Failed writes retain pending restrictions and retry with visible logs. A crash before flush can lose new evidence. |
 
 The listener body ceiling is the maximum of the data-plane, admin and login ceilings. Each route
 also enforces its own limit; raising the data-plane limit does not raise an admin limit.
@@ -378,7 +378,7 @@ One background janitor service, one schedule, every window env-tunable.
 | Expired/consumed OAuth state & PKCE verifiers | 10 min | `RETENTION_OAUTH_STATE_MINUTES` | One-shot values. |
 | Revoked / expired API keys | 30 days after revocation, then purged | `RETENTION_REVOKED_KEYS_DAYS` | Keeps historical usage joinable for a while. The purge writes a tombstone in the same statement (below). |
 | API key tombstones (`api_key_tombstones`: id, name, prefix, owner, owner kind, tool, purge time; **no value or ciphertext**) | 730 days + 1 day after the key was purged or deleted | `RETENTION_USAGE_DAILY_DAYS` | A purged key's usage rows keep its id for as long as the daily rollups do, so the tombstone keeps its name and attribution for the same horizon (plus one day, since rollups age by whole UTC day). Written by the janitor purge and by the operator delete; read only by the usage label loader, never by verification, reveal or the key list. |
-| Rate-limit & circuit-breaker state | expires with its reset window | — | Derived state, not durable state. |
+| Account breaker evidence | routing restriction expires with its stored deadline | No janitor retention sweep | Durable cooldown deadline, reason/reset provenance, the half-open **probe hold** (`probe_held_until`, cleared when its probe releases or the hold lapses) and backoff evidence hydrate at boot and catalog refresh. Local model holds and accounting remain process-local; deadline expiry alone does not clear a parked account. |
 | Pools with no member | 7 days memberless, then deleted | `RETENTION_EMPTY_POOL_DAYS` | A memberless Pool serves nothing and answers every key scoped to it with the empty-candidate refusal. A key whose only Pools are all deleted is revoked in the same transaction. |
 | Orphaned `CLAUDE_CONFIG_DIR`s on the volume | 24 h unclaimed | `RETENTION_ORPHAN_CONFIG_DIR_HOURS` | **Not a disk-space sweep.** Each holds a subscription's OAuth credentials in cleartext; one whose account no longer exists is a credential nothing will ever rotate or revoke. Only names that are account ids are candidates, and only past the grace — the directory is created *before* its row, so a young one may be a login still being made. |
 | Agent-SDK session transcripts on the volume | 24 h since the transcript's last turn | `RETENTION_SDK_TRANSCRIPT_HOURS` | The `claude` CLI writes `projects/<cwd>/<session>.jsonl` (+ `<session>/`) per SDK session under each Account's `CLAUDE_CONFIG_DIR` and never removes them — production measured 250 MB per account, all of it older than any row that could resume it. Only those two artifact shapes are ever candidates; credentials, settings, and the CLI's own state in the same directory are never looked at, symlinks are never followed, and a resume onto a swept transcript is replayed in place rather than failed. Cadence: `SDK_TRANSCRIPT_SWEEP_INTERVAL_MINUTES`. |
@@ -406,8 +406,48 @@ Two operational consequences:
 
 | | |
 |---|---|
-| **One replica, not a horizontal fleet** | **Background tasks only:** before doing work, each task takes a Postgres advisory lock named for that task; exactly one replica runs a given sweep and the others skip. This is not a claim that a multi-replica router is safe. The router is run as **one replica**: warm caches, breaker/health clocks, key/session bindings, per-key rate-limit windows and pending login/OAuth device-flow state are per-process, and each account's CLI state lives on a node-local per-Account `CLAUDE_CONFIG_DIR` volume. Admin login budgets are shared in Postgres, but password concurrency remains per-process. A second replica is safe only once per-account replica ownership uses a Postgres lease with a fencing token, breaker/cooldown clocks are durable, per-key rate limits are shared, pending login/device flows are durable, and SDK in-flight session bindings are shared (so a stream stays on the owning replica). |
+| **One replica, not a horizontal fleet** | Before work, each scheduled task takes its Postgres advisory lock; exactly one replica runs a given sweep and the others skip. Durable account breaker clocks, half-open probe holds and the existing Postgres recovery generations/single-use permits cover cooldown persistence, probe admission and designated recovery admission. Admin login budgets are also shared. This does **not** make multiple router replicas safe: deployment remains **one replica** until subscription ownership and CLI login/refresh coordination, node-local per-Account `CLAUDE_CONFIG_DIR` state, SDK in-flight session ownership/bindings, per-key rate-limit windows and pending login/OAuth device flows are resolved. Warm caches, local accounting/model holds and password concurrency remain per-process. Durable recovery admission is not a substitute for subscription/session ownership. |
 | **Every run is recorded** | Task, start, finish, outcome, and items processed land in a `ScheduledTaskRun` row, surfaced in the admin UI. That record is how you tell a task that is idle from one that is wedged — see Troubleshooting. |
+
+### Breaker propagation is conditional, not immediate
+
+The observing replica holds a restriction immediately in memory. Its account breaker observation,
+**and a half-open probe hold taken by one of its requests**, coalesce off-path on
+`ACCOUNT_STATUS_WRITE_INTERVAL_MS`; other replicas install persisted evidence at boot or
+routing-catalog refresh. Local in-flight/token accounting, model holds and quota bookkeeping are
+not fleet state. The existing Postgres recovery generation and single-use permit, consumed at final
+upstream start, remain admission authority. Automatic begin/issue cannot bypass a persisted
+unexpired cooldown. Stored `disabled`, `exhausted` and `needs_reauth` outrank clock recovery;
+restart, refresh and stale success do not clear them. Existing authorized recovery transitions and
+captured lifecycle/credential/verdict fences protect newer restrictions.
+
+With healthy persistence and catalog refresh, the observation-to-installation budget is the bound a probe hold and a cooldown both travel:
+
+```text
+1.2 × ACCOUNT_STATUS_WRITE_INTERVAL_MS
++ 1.2 × CATALOG_REFRESH_SECONDS × 1000
++ measured persistence duration
++ measured catalog read/install duration
++ overlapping refresh delay
+```
+
+The 1.2 factors allow maximum positive 20% jitter on both snapshot timers. Include time spent
+waiting for an already-running refresh before the next read. This is bounded eventual propagation
+under those health and timing assumptions, not an unconditional wall-clock SLA or immediate
+consistency. Before installation another warm replica can select from older evidence. Persistence
+failure retains pending restrictions and retries with visible logs; refresh failure keeps the last
+installed restrictive state. Outages, stalled timers and unbounded I/O remove the healthy-service
+bound. Shutdown attempts a bounded background drain; a crash before flush or an unacknowledged
+drain can still lose the newest observation. These restrictions are why a second replica is not
+licensed by this change. No live two-replica deployment validation is claimed here.
+
+Repository tests and deployment validation are separate gates. Manual flush/refresh checks establish
+persisted transfer and merge behavior, not timer-driven propagation; scheduled-path tests must cover
+the healthy-service budget. Durable admission checks must count actual stub-upstream starts across
+independent runtimes, not just permit issuance results. A passing repository gate would still leave
+the live two-replica proof outstanding. The prior failed gate is not evidence of a pass or of an
+infrastructure root cause. CLI ownership, sessions, login and refresh constraints remain separate
+work; durable breaker clocks and permits do not remove the single-replica deployment requirement.
 
 ## Reverse proxy
 
@@ -639,7 +679,7 @@ long tool loops sees p99s of 90 s and more, which a 20 s drain cuts on every rol
 orchestrator grace to the complete budget above. On a single-replica `Recreate` deployment with no
 balancer polling `/readyz` (a hostPort or sidecar proxy straight to the pod), `SHUTDOWN_READY_GRACE_MS`
 buys nothing: set it to `0` and give that time to the drain. The router keeps per-replica in-memory
-state (warm caches, health, bindings) and the per-Account `CLAUDE_CONFIG_DIR` volume, so it is run
+state (warm caches, local accounting/model holds, in-flight bindings) and the per-Account `CLAUDE_CONFIG_DIR` volume, so it is run
 as one replica; a roll is therefore a gap, and the drain is what bounds the damage.
 
 **A crash is a shutdown too.** An uncaught exception logs one redacted line, reaches GlitchTip, runs
@@ -774,7 +814,7 @@ measurement on a shared runner is a flaky test. Details and caveats:
 |---|---|
 | Concurrent open streams — one socket plus a small buffer per in-flight request | CPU cores. Routing is rendezvous hashing over a short array; passthrough parses nothing. |
 | **Concurrent Claude-subscription requests** — see below | Model size or prompt length. Big prompts are bytes to forward, not work to do. |
-| Usage-record write rate, and retained history on the Postgres volume | Number of configured accounts. Health state is in memory. |
+| Usage-record write rate, and retained history on the Postgres volume | Number of configured accounts. Selection reads warm health snapshots; account breaker clocks persist off-path. |
 
 **The Agent-SDK path is the labeled exception, and it is the one that costs real memory.** Claude
 subscription accounts go through the Claude Agent SDK, which spawns a `claude` subprocess per

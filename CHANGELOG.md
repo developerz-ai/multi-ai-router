@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.72.1]
+## [2.72.2]
+
+### Fixed
+
+- Account breaker cooldown clocks persist off-path and hydrate on restart and routing-catalog refresh. **Half-open probe admission is durable too**: `account_breakers.probe_held_until` (migration `0054`) records the probe one replica's request took, so a peer never starts a second probe on the same account; a release clears it, a later deadline wins over an earlier one, and a hold belonging to a superseded lifecycle/recovery/credential generation is dropped rather than honoured. One bound covers both the clock and the hold: up to `1.2 × ACCOUNT_STATUS_WRITE_INTERVAL_MS + 1.2 × CATALOG_REFRESH_SECONDS × 1000`, plus measured persistence/read/install durations and overlapping refresh delay. That is bounded eventual consistency under healthy persistence and refresh, not immediate fleet visibility. Failed writes retain restrictions and retry with visible logs; a crash before flush can still lose new evidence.
+- Recovery admission strengthens the existing Postgres generation and single-use permit authority, rather than adding a second lease. Persisted unexpired cooldowns block automatic begin/issue; lifecycle, credential and verdict fencing prevents late success or recovery outcomes from erasing newer restrictions. Stored `exhausted` and `needs_reauth` remain parked until authorized recovery. Local accounting and model holds remain local, and deployment still requires one replica for unrelated ownership, session, login and refresh constraints. Spec: `docs/idea/05-routing-and-failover.md`, `docs/idea/09-deployment.md`.
+- Verification scope: manual flush/refresh checks do not establish the timer-driven propagation bound, and repository tests do not establish live two-replica deployment safety. The prior failed gate is not a passing result; live two-replica validation remains outstanding.
+
+## 2.72.1 — never tagged; its contents first ship in [v2.72.2](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.2)
 
 ### Fixed
 
@@ -2398,4 +2406,4 @@ your tooling config.
 [2.70.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.1
 [2.71.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.71.0
 [2.72.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.0
-[2.72.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.1
+[2.72.2]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.2
