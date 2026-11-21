@@ -6,6 +6,7 @@ import type {
 import type { Logger } from "../../logging/logger"
 import { abortReason } from "./abort"
 import type { CredentialRefreshClaim } from "./credential-freshness"
+import { CredentialRefreshLeaseUnavailable } from "./ownership-errors"
 
 /**
  * The holder record behind `credential-freshness.ts`: who is inside each Account's refresh window,
@@ -26,10 +27,19 @@ export interface RefreshWindowDeps {
 export interface RefreshWindow {
   /** An owning claim, or `null` when the caller must wait (see `tryOwn` below). */
   tryOwn(accountId: string, signal: AbortSignal): Promise<CredentialRefreshClaim | null>
-  /** Whether `held` is an owning claim of this gate, still ACTIVE and on `accountId`'s record. */
+  /**
+   * Whether `held` is an owning claim of this gate, still ACTIVE, on `accountId`'s record, and
+   * backed by a lease this gate still holds. A local entry alone is never enough.
+   */
   stillOwns(accountId: string, held: CredentialRefreshClaim): boolean
   /** Resolves when any holder recorded for the Account now releases. */
   anyRelease(accountId: string): Promise<void>[]
+  /**
+   * Re-check the cross-replica lease on a poll path that already holds a local claim. Refuses when
+   * a lease cannot be won afresh: the caller must not keep refreshing on the local entry alone.
+   */
+  /** `null` when the lease is still held elsewhere; the caller goes back to waiting. */
+  recheckLease(accountId: string, signal: AbortSignal): Promise<CredentialRefreshClaim | null>
 }
 
 /**
@@ -41,7 +51,7 @@ interface Holder {
   released: boolean
   readonly done: Promise<void>
   readonly release: () => void
-  /** Attached by `bind` once the cross-replica lease is won; absent when unwired, busy, or released first. */
+  /** Attached by `bind` once the cross-replica lease is won; absent on every non-acquiring path. */
   lease?: CredentialRefreshLease
 }
 
@@ -106,10 +116,61 @@ export function createRefreshWindow(deps: RefreshWindowDeps): RefreshWindow {
   }
 
   /**
+   * The cross-replica lease is the authority for a refresh window. There is no such thing as a
+   * local-only admission: every acquiring path must win it, and every non-acquiring path releases
+   * whatever it took. `onRefused` is what a caller that may wait does with a lease held by another
+   * replica; a re-checking caller that already holds a claim passes no callback and refuses outright.
+   *
+   * Returns the lease for the caller to bind, `null` to wait, or throws the fail-closed refusal.
+   */
+  const acquireLease = async (
+    accountId: string,
+    signal: AbortSignal,
+    onRefused?: () => void,
+  ): Promise<CredentialRefreshLease | null> => {
+    if (deps.refreshLock === undefined) {
+      throw new CredentialRefreshLeaseUnavailable(
+        `claude credential refresh lease unavailable: no lock wired for ${accountId}`,
+      )
+    }
+    let lease: CredentialRefreshLeaseResult
+    try {
+      lease = await deps.refreshLock.tryAcquire(accountId, signal)
+    } catch (error) {
+      const wrapped = new CredentialRefreshLeaseUnavailable(
+        `claude credential refresh lease unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
+      // A caller that may wait backs off on any lock failure; a re-checker refuses.
+      if (onRefused !== undefined) {
+        deps.logger?.warn("claude credential refresh lease unavailable; waiting for owner", {
+          accountId,
+          reason: wrapped.message,
+        })
+        onRefused()
+        return null
+      }
+      throw wrapped
+    }
+    if (lease.acquired) return lease.lease
+    // Busy, capacity or aborted: none of them may grant a local claim.
+    if (onRefused !== undefined) {
+      if (signal.aborted) throw abortReason(signal, "the credential refresh wait was abandoned")
+      onRefused()
+      return null
+    }
+    if (signal.aborted) throw abortReason(signal, "the credential refresh wait was abandoned")
+    throw new CredentialRefreshLeaseUnavailable(
+      `claude credential refresh lease unavailable: ${lease.reason}`,
+    )
+  }
+
+  /**
    * Takes ownership when no ACTIVE holder stands in the way. Resolves with the owning claim —
-   * local entry plus, when the lock is wired and won, the cross-replica lease — or `null` when the
-   * caller must wait: an ACTIVE holder, a lease somebody else already holds, or a lease that could
-   * not be won while an unreleased holder is still on the record.
+   * local entry plus the cross-replica lease — or `null` when the caller must wait: an ACTIVE
+   * holder or a lease somebody else already holds. A lease that cannot be won while an unreleased
+   * holder is still on the record also waits: the cap frees *ownership*, not the refresh already
+   * in flight, so a second local owner would be the double-spend race itself.
    */
   const tryOwn = async (
     accountId: string,
@@ -122,55 +183,29 @@ export function createRefreshWindow(deps: RefreshWindowDeps): RefreshWindow {
     const active = recorded !== undefined && [...recorded].some((entry) => isActive(entry))
     if (active) return null
     // Every holder on the record that never released may still be inside its refresh window, even
-    // one that aged out: the cap frees *ownership*, it does not un-refresh a token. Read before
-    // `admit` — it answers "is somebody else already inside", not "is this entry on the record".
+    // one that aged out. Read before `admit` — it answers "is somebody else already inside", not
+    // "is this entry on the record".
     const unreleased = recorded !== undefined && [...recorded].some((entry) => !entry.released)
     const { entry, bind } = admit(accountId)
     const claim: CredentialRefreshClaim = { release: entry.release }
     owners.set(claim, entry)
-    if (deps.refreshLock === undefined) return claim
-    let lease: CredentialRefreshLeaseResult
+    // Every exit after `admit` that does not acquire the lease releases the local entry: a refusal
+    // never leaves a local owner standing behind a lease that was never won. The `onRefused`
+    // callback handles the busy/capacity wait case; thrown refusals are fail-closed, except when an
+    // unreleased owner may still be inside its window (then the caller waits for its release).
+    let lease: CredentialRefreshLease | null = null
     try {
-      lease = await deps.refreshLock.tryAcquire(accountId, signal)
+      lease = await acquireLease(accountId, signal, entry.release)
     } catch (error) {
-      deps.logger?.warn(
-        "claude credential refresh lease unavailable; proceeding on the local entry",
-        {
-          accountId,
-          reason: error instanceof Error ? error.message : String(error),
-        },
-      )
-      return claim
-    }
-    if (lease.acquired) {
-      bind(lease.lease)
-      return claim
-    }
-    if (lease.reason === "busy") {
-      // Somebody else — here or on another replica — is inside. Step back down and wait like
-      // everyone else: taking over while the lease is held is the double-spend race itself.
+      if (error instanceof CredentialRefreshLeaseUnavailable && unreleased && !signal.aborted) {
+        entry.release()
+        return null
+      }
       entry.release()
-      return null
+      throw error
     }
-    if (signal.aborted) {
-      entry.release()
-      throw abortReason(signal, "the credential refresh wait was abandoned")
-    }
-    if (unreleased) {
-      // The pool could not give out a session while a holder that never released is still on the
-      // record. That holder may still be inside its refresh window, so this caller must not
-      // become a second local owner of the same window: step back down and wait like everybody
-      // else, and let the wait cap fail it open. Taking over here is the double-spend race itself.
-      entry.release()
-      return null
-    }
-    deps.logger?.warn(
-      "claude credential refresh lease unavailable; proceeding on the local entry",
-      {
-        accountId,
-        reason: lease.reason,
-      },
-    )
+    if (lease === null) return null
+    bind(lease)
     return claim
   }
 
@@ -178,8 +213,16 @@ export function createRefreshWindow(deps: RefreshWindowDeps): RefreshWindow {
     tryOwn,
     stillOwns: (accountId, held) => {
       const own = owners.get(held)
-      return own !== undefined && isActive(own) && holders.get(accountId)?.has(own) === true
+      // A holder entry is necessary but never sufficient: the lease is the authority for the
+      // window, and a claim that never bound one is not an admission (#101 identity rule kept).
+      return (
+        own !== undefined &&
+        isActive(own) &&
+        holders.get(accountId)?.has(own) === true &&
+        own.lease !== undefined
+      )
     },
     anyRelease: (accountId) => recordedHolders(accountId).map((held) => held.done),
+    recheckLease: async (accountId, signal) => tryOwn(accountId, signal),
   }
 }

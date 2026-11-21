@@ -7,6 +7,10 @@ import {
   createCredentialFreshness,
 } from "../../../src/providers/claude-sdk/credential-freshness"
 import type { CredentialMetadata } from "../../../src/providers/claude-sdk/credential-metadata"
+import {
+  CredentialMetadataOwnershipUnavailable,
+  CredentialRefreshLeaseUnavailable,
+} from "../../../src/providers/claude-sdk/ownership-errors"
 
 /**
  * The gate that stops two `claude` subprocesses from spending one rotating refresh token.
@@ -44,6 +48,9 @@ interface CredentialCell {
 
 interface Harness {
   readonly deps: CredentialFreshnessDeps
+  /** A default cross-replica lease; tests that exercise a missing or broken lock override it. */
+  readonly lock: Pick<CredentialRefreshLock, "tryAcquire">
+  readonly lockState: { attempts: number; acquires: number; releases: number; holds: boolean }
   /** Advances the fake clock, which is also what a waiter's patience is measured against. */
   advance(ms: number): void
   setMetadata(next: CredentialMetadata): void
@@ -60,6 +67,7 @@ function harness(
   let reads = 0
   const warnings: string[] = []
 
+  const defaultLock = fakeLock()
   const deps: CredentialFreshnessDeps = {
     reader: {
       read: async () => {
@@ -67,6 +75,7 @@ function harness(
         return cell.metadata
       },
     },
+    refreshLock: defaultLock.lock,
     configDirs: { pathFor: (id: string) => `/data/claude/${id}` },
     skewMs: 300_000,
     coldMarginMs: 600_000,
@@ -89,6 +98,8 @@ function harness(
 
   return {
     deps,
+    lock: defaultLock.lock,
+    lockState: defaultLock.state,
     advance: (ms) => {
       clock += ms
     },
@@ -110,17 +121,23 @@ function fakeLock() {
   // `attempts` counts every request for the lease, granted or refused; `acquires` counts the
   // grants. The difference is what tells "never even reached the lock" from "reached it and was
   // refused" — the distinction between a local holder still standing and a takeover candidate.
+  // Leases are per Account: one subscription's window never throttles another's in the pool.
   const state = { attempts: 0, acquires: 0, releases: 0, holds: false }
+  const held = new Set<string>()
   const lock: Pick<CredentialRefreshLock, "tryAcquire"> = {
-    tryAcquire: async () => {
+    tryAcquire: async (accountId) => {
       state.attempts += 1
-      if (state.holds) return { acquired: false, reason: "busy" as const }
-      state.holds = true
+      if (held.has(accountId)) return { acquired: false, reason: "busy" as const }
+      held.add(accountId)
+      state.holds = held.size > 0
       state.acquires += 1
+      let released = false
       const lease: CredentialRefreshLease = {
         release: async () => {
-          if (!state.holds) return
-          state.holds = false
+          if (released) return
+          released = true
+          held.delete(accountId)
+          state.holds = held.size > 0
           state.releases += 1
         },
       }
@@ -156,7 +173,7 @@ describe("credential freshness", () => {
     const order: string[] = []
 
     // The winner is not delayed at all — it goes on to spawn, and refreshes as part of that.
-    await gate.ensureFresh(ACCOUNT, never)
+    const winner = await gate.ensureFresh(ACCOUNT, never)
     order.push("winner")
 
     const loser = gate.ensureFresh(ACCOUNT, never).then(() => {
@@ -167,8 +184,10 @@ describe("credential freshness", () => {
     await Promise.resolve()
     expect(order).toEqual(["winner"])
 
-    // The winner's subprocess refreshes: the file now carries a token eight hours out.
+    // The winner's subprocess refreshes and exits its turn, releasing the lease. Only then can the
+    // waiter re-admit on a re-won lease rather than a local-only claim.
     h.setMetadata(credential(8 * 3_600_000))
+    winner.release()
     await loser
 
     expect(order).toEqual(["winner", "loser"])
@@ -187,15 +206,19 @@ describe("credential freshness", () => {
     expect(h.warnings()).toEqual([])
   })
 
-  test("a winner that never refreshes releases the waiter at the cap, and says so", async () => {
+  test("a winner that never refreshes refuses the waiter at the cap, and says so", async () => {
     const h = harness(credential(60_000))
     const gate = createCredentialFreshness(h.deps)
 
-    await gate.ensureFresh(ACCOUNT, never)
+    const owner = await gate.ensureFresh(ACCOUNT, never)
     // The file never changes: the winner crashed, or the CLI did not refresh when expected.
-    await gate.ensureFresh(ACCOUNT, never)
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
 
-    expect(h.warnings()).toEqual(["claude credential refresh did not land; proceeding anyway"])
+    expect(h.warnings()).toEqual(["claude credential refresh did not land; refusing admission"])
+    // No local-only claim was granted and the real owner's lease is untouched.
+    owner.release()
   })
 
   test("a blanked credential is let straight through — parking it is routing's job, not this gate's", async () => {
@@ -220,7 +243,7 @@ describe("credential freshness", () => {
     expect(h.reads()).toBe(2)
   })
 
-  test("an unreadable credential file never blocks a caller", async () => {
+  test("an unreadable credential file refuses the caller instead of bypassing the window", async () => {
     const h = harness(credential(60_000), {
       reader: {
         read: async () => {
@@ -230,9 +253,46 @@ describe("credential freshness", () => {
     })
     const gate = createCredentialFreshness(h.deps)
 
-    await gate.ensureFresh(ACCOUNT, never)
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialMetadataOwnershipUnavailable,
+    )
+    expect(h.warnings()).toEqual(["claude credential freshness ownership unavailable"])
+  })
 
-    expect(h.warnings()).toEqual(["claude credential freshness unreadable"])
+  test("a lock that reports busy or capacity grants no claim", async () => {
+    for (const outcome of ["busy", "capacity"] as const) {
+      const h = harness(credential(60_000))
+      let granted = 0
+      const gate = createCredentialFreshness({
+        ...h.deps,
+        refreshLock: {
+          tryAcquire: async () => {
+            granted += 1
+            return { acquired: false as const, reason: outcome }
+          },
+        },
+      })
+      await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+        CredentialRefreshLeaseUnavailable,
+      )
+      // The lock was asked repeatedly but never granted one: no credential-file bypass.
+      expect(granted).toBeGreaterThan(0)
+    }
+  })
+
+  test("an aborted lease acquisition rejects with the caller's own reason", async () => {
+    const h = harness(credential(60_000))
+    const controller = new AbortController()
+    const gate = createCredentialFreshness({
+      ...h.deps,
+      refreshLock: {
+        tryAcquire: async () => {
+          controller.abort(new Error("client went away"))
+          return { acquired: false as const, reason: "aborted" as const }
+        },
+      },
+    })
+    await expect(gate.ensureFresh(ACCOUNT, controller.signal)).rejects.toThrow("client went away")
   })
 
   test("ownership expires, so a quiet Account does not arrive at its next window already blocked", async () => {
@@ -241,13 +301,16 @@ describe("credential freshness", () => {
 
     await gate.ensureFresh(ACCOUNT, never)
 
-    // Hours later the token is stale again and nobody is actually inside. The next caller must
-    // take ownership immediately rather than waiting out the cap behind a ghost.
+    // Hours later the token is stale again. The local holder entry has aged out, but its lease was
+    // never released: the lease is the authority, so a newcomer waits and then refuses rather than
+    // becoming a second local owner of a window somebody else might still be refreshing.
     h.advance(8 * 3_600_000)
     h.setMetadata(credential(60_000))
-    await gate.ensureFresh(ACCOUNT, never)
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
 
-    expect(h.warnings()).toEqual([])
+    expect(h.warnings()).toEqual(["claude credential refresh did not land; refusing admission"])
   })
 
   test("a waiter abandoned by its caller rejects with the caller's own reason", async () => {
@@ -329,7 +392,7 @@ describe("claims — every admission carries an exit", () => {
     const steps = stepSleep()
     const gate = createCredentialFreshness({ ...h.deps, refreshLock: lock, sleep: steps.sleep })
 
-    await gate.ensureFresh(ACCOUNT, never)
+    const owner = await gate.ensureFresh(ACCOUNT, never)
     const pending = gate.ensureFresh(ACCOUNT, never)
     await drain()
     // The arrival re-classified, found the ACTIVE holder, and is parked in the wait — and the
@@ -338,18 +401,18 @@ describe("claims — every admission carries an exit", () => {
     expect(state.acquires).toBe(1)
     expect(steps.parked()).toBe(1)
 
-    // The holder's subprocess refreshes mid-wait — the file reads fresh BEFORE the waiter's next
-    // poll is stepped, so its re-classification, not the cap, is what ends the wait.
+    // The holder's subprocess refreshes mid-wait and exits its turn, releasing the lease. The file
+    // reads fresh BEFORE the waiter's next poll is stepped, so it is the re-classification, not the
+    // cap, that ends the wait — but only a re-won lease grants a claim.
     h.setMetadata(credential(8 * 3_600_000))
+    owner.release()
     steps.step()
     const claim = await pending
-    expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
-    // A no-op claim with no timeout warning: the re-classification let it through, never the cap.
     expect(h.warnings()).toEqual([])
-    // A window-closed claim owns nothing: its release is inert.
+    expect(state.acquires).toBe(2)
+    expect(state.releases).toBe(1)
     claim.release()
-    expect(state.releases).toBe(0)
   })
 
   test("of N concurrent admissions exactly one owns the open window, and the winner's release frees the next", async () => {
@@ -357,19 +420,32 @@ describe("claims — every admission carries an exit", () => {
     const { lock, state } = fakeLock()
     const gate = createCredentialFreshness({ ...h.deps, refreshLock: lock })
 
-    const claims = await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: 6 }, () => gate.ensureFresh(ACCOUNT, never)),
     )
-    // One owner; the other five waited behind the ACTIVE holder and capped out — no second lease
-    // was ever granted while the first holder kept its claim.
+    const claims = results
+      .filter(
+        (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof gate.ensureFresh>>> =>
+          result.status === "fulfilled",
+      )
+      .map((result) => result.value)
+    // One owner; the other five waited behind the ACTIVE holder and refused at the cap — no second
+    // lease was ever granted while the first holder kept its claim.
     expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
     expect(h.warnings()).toHaveLength(5)
     expect(new Set(h.warnings())).toEqual(
-      new Set(["claude credential refresh did not land; proceeding anyway"]),
+      new Set(["claude credential refresh did not land; refusing admission"]),
     )
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(5)
+    for (const result of results) {
+      if (result.status === "rejected") {
+        expect(result.reason).toBeInstanceOf(CredentialRefreshLeaseUnavailable)
+      }
+    }
+    expect(claims).toHaveLength(1)
 
-    // Exactly one of the six claims is the owner: releasing all of them frees the lease once.
+    // Releasing the one claim frees the lease: the five refusals granted nothing.
     for (const claim of claims) claim.release()
     expect(state.releases).toBe(1)
     expect(state.holds).toBe(false)
@@ -386,15 +462,19 @@ describe("claims — every admission carries an exit", () => {
     const gate = createCredentialFreshness({ ...h.deps, refreshLock: lock })
 
     const owner = await gate.ensureFresh(ACCOUNT, never)
-    await gate.ensureFresh(ACCOUNT, never)
-    expect(h.warnings()).toEqual(["claude credential refresh did not land; proceeding anyway"])
-    // The waiter proceeded fail-open and left the holder's entry and lease exactly as they were.
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
+    expect(h.warnings()).toEqual(["claude credential refresh did not land; refusing admission"])
+    // The waiter granted no claim and left the holder's entry and lease exactly as they were.
     expect(state.holds).toBe(true)
     expect(state.releases).toBe(0)
 
     // Now past the cap the holder is a takeover candidate — but the lease is still held, so the
     // newcomer waits like everyone else: no competing refresher is admitted.
-    await gate.ensureFresh(ACCOUNT, never)
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
     expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
 
@@ -434,10 +514,12 @@ describe("claims — every admission carries an exit", () => {
     const gateB = createCredentialFreshness({ ...h.deps, refreshLock: lock })
 
     const a = await gateA.ensureFresh(ACCOUNT, never)
-    await gateB.ensureFresh(ACCOUNT, never)
+    await expect(gateB.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
     expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
-    expect(h.warnings()).toEqual(["claude credential refresh did not land; proceeding anyway"])
+    expect(h.warnings()).toEqual(["claude credential refresh did not land; refusing admission"])
     a.release()
     expect(state.holds).toBe(false)
 
@@ -446,10 +528,9 @@ describe("claims — every admission carries an exit", () => {
     c.release()
   })
 
-  test("a waiter whose credential file goes unreadable mid-wait proceeds with a no-op claim", async () => {
+  test("a waiter whose credential file goes unreadable mid-wait refuses admission", async () => {
     // The initial read succeeds (window open) and the in-loop re-read fails: the wait must end
-    // fail-open with a no-op claim, never a crash — the regression this pins had the waiter
-    // resolve with an undefined claim on exactly this path.
+    // fail-closed, never resolving with an undefined claim on exactly this path.
     let reads = 0
     const h = harness(credential(60_000), {
       reader: {
@@ -464,40 +545,31 @@ describe("claims — every admission carries an exit", () => {
     })
     const gate = createCredentialFreshness(h.deps)
 
-    await gate.ensureFresh(ACCOUNT, never)
-    const claim = await gate.ensureFresh(ACCOUNT, never)
-    expect(h.warnings()).toEqual([])
-    claim.release()
+    const owner = await gate.ensureFresh(ACCOUNT, never)
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialMetadataOwnershipUnavailable,
+    )
+    expect(h.warnings()).toEqual(["claude credential freshness ownership unavailable"])
+    owner.release()
   })
 
-  test("an unavailable or failing lease degrades fail-open with a warn, on the local entry alone", async () => {
+  test("an unavailable or failing lease refuses admission, never a local-entry claim", async () => {
     const h = harness(credential(60_000))
     const gate = createCredentialFreshness({
       ...h.deps,
       refreshLock: { tryAcquire: async () => ({ acquired: false, reason: "capacity" as const }) },
     })
 
-    const claim = await gate.ensureFresh(ACCOUNT, never)
-    expect(h.warnings()).toEqual([
-      "claude credential refresh lease unavailable; proceeding on the local entry",
-    ])
-    // The local entry still serializes this replica: the second arrival waits, then caps out.
-    await gate.ensureFresh(ACCOUNT, never)
-    expect(h.warnings()).toEqual([
-      "claude credential refresh lease unavailable; proceeding on the local entry",
-      "claude credential refresh did not land; proceeding anyway",
-    ])
-    claim.release()
-    const next = await gate.ensureFresh(ACCOUNT, never)
-    // Every admission retries the lease and degrades again — visible each time, never silent.
-    expect(h.warnings()).toEqual([
-      "claude credential refresh lease unavailable; proceeding on the local entry",
-      "claude credential refresh did not land; proceeding anyway",
-      "claude credential refresh lease unavailable; proceeding on the local entry",
-    ])
-    next.release()
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
+    expect(h.warnings()).toEqual(["claude credential refresh did not land; refusing admission"])
+    // No local entry is left behind: every subsequent admission retries the lease and refuses.
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
 
-    // A lock that throws degrades the same way — never a rejected spawn.
+    // A lock that throws refuses the same way — no claim is granted.
     const h2 = harness(credential(60_000))
     const broken = createCredentialFreshness({
       ...h2.deps,
@@ -507,100 +579,49 @@ describe("claims — every admission carries an exit", () => {
         },
       },
     })
-    const still = await broken.ensureFresh(ACCOUNT, never)
-    expect(h2.warnings()).toEqual([
-      "claude credential refresh lease unavailable; proceeding on the local entry",
-    ])
-    still.release()
+    await expect(broken.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
+    // A missing lock is just as unavailable as a broken one.
+    const h3 = harness(credential(60_000), { refreshLock: undefined })
+    const unwired = createCredentialFreshness(h3.deps)
+    await expect(unwired.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
   })
 
-  test("an aged-out owner whose release never ran keeps its entry recorded, and a newcomer that cannot win the lease does not become a second local owner", async () => {
-    // The takeover case, and the defect it hides: an owner admitted into the window whose turn
-    // died before its exit ran never releases, so its entry ages out while the owner may still be
-    // inside its refresh window. A newcomer is then admitted — and if the lease cannot be won, it
-    // must NOT come back owning the same window on the local entry alone, and it must not erase
-    // the aged-out owner's record. Both halves are observable: the newcomer is refused (it waits,
-    // as a busy lease refuses it), and the aged-out owner's entry stays on the record, so a later
-    // caller is refused too.
+  test("an aged-out owner whose release never ran keeps its lease authority, and a newcomer that cannot win it never becomes a second local owner", async () => {
+    // The owner admitted into the window whose turn died before its exit ran never releases its
+    // lease. Its local entry ages out, but the cross-replica lease is the authority: a newcomer
+    // that cannot win it must never come back owning the same window on the local entry alone.
     const h = harness(credential(60_000))
-    const steps = stepSleep()
-    // The first admission wins the lease; every later attempt is refused with "capacity" — the
-    // pool could not give out a session, so the cross-replica lock cannot vouch for the window.
     let attempts = 0
     const lock: Pick<CredentialRefreshLock, "tryAcquire"> = {
       tryAcquire: async () => {
         attempts += 1
         if (attempts === 1) {
-          return {
-            acquired: true as const,
-            lease: { release: async () => {} },
-          }
+          return { acquired: true as const, lease: { release: async () => {} } }
         }
         return { acquired: false as const, reason: "capacity" as const }
       },
     }
-    const gate = createCredentialFreshness({ ...h.deps, refreshLock: lock, sleep: steps.sleep })
+    const gate = createCredentialFreshness({ ...h.deps, refreshLock: lock })
 
-    // The owner is admitted and holds the window. Its turn dies here: `release()` never runs.
+    // The owner holds the lease; its turn dies here, so `release()` never runs.
     const owner = await gate.ensureFresh(ACCOUNT, never)
     expect(attempts).toBe(1)
-
-    // The entry ages out past the cap: ownership expires, but the owner may still be refreshing.
     h.advance(20_100)
 
-    // A newcomer arrives and the lease cannot be won. It must wait behind the aged-out owner
-    // rather than take the window on the local entry alone — two local owners of one credential
-    // is the double-spend race itself. The refusal shows as a parked waiter: an owner claim
-    // resolves straight away, a refused one waits for the cap.
-    let settled = false
-    const newcomer = gate.ensureFresh(ACCOUNT, never).then((claim) => {
-      settled = true
-      return claim
-    })
-    await drain()
-    expect(attempts).toBe(2)
-    expect(settled).toBe(false)
+    // A newcomer asks for the same credential. It reaches the lease, is refused capacity, and has
+    // no local-only fallback: it caps out and throws the fail-closed admission error.
+    await expect(gate.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
+    expect(attempts).toBeGreaterThan(1)
+    expect(h.warnings()).toContain("claude credential refresh did not land; refusing admission")
 
-    // The waiter's patience runs out: it proceeds fail-open with a no-op claim, exactly as any
-    // other waiter does. It never owned the window — the no-op claim releases nothing.
-    h.advance(20_000)
-    steps.step()
-    await drain()
-    const waited = await newcomer
-    expect(settled).toBe(true)
-    expect(h.warnings()).toEqual(["claude credential refresh did not land; proceeding anyway"])
-    waited.release()
-
-    // The aged-out owner's entry is still on record — the refused takeover did not erase it. A
-    // later caller whose lease also cannot be won is therefore refused too, instead of being let
-    // through as a local owner of a window the aged-out owner may still be inside. Erase the
-    // entry and this caller owns the window outright: the second local owner.
-    let laterSettled = false
-    const later = gate.ensureFresh(ACCOUNT, never).then((claim) => {
-      laterSettled = true
-      return claim
-    })
-    await drain()
-    expect(attempts).toBe(3)
-    expect(laterSettled).toBe(false)
-    h.advance(20_000)
-    steps.step()
-    await drain()
-    const laterWaited = await later
-    expect(h.warnings()).toEqual([
-      "claude credential refresh did not land; proceeding anyway",
-      "claude credential refresh did not land; proceeding anyway",
-    ])
-    laterWaited.release()
-
-    // The aged-out owner's own release is what ends the window: the next caller owns it outright,
-    // with no wait.
+    // The owner's own release is what frees the lease: only then can a new caller own the window.
     owner.release()
-    const reads = h.reads()
-    const next = await gate.ensureFresh(ACCOUNT, never)
-    expect(h.reads()).toBe(reads + 1)
-    expect(attempts).toBe(4)
-    next.release()
   })
 
   test("a lease lost to the caller's own abort rejects with that abort and rolls the admission back", async () => {
@@ -716,31 +737,29 @@ describe("the refresh window across the races that matter", () => {
     // finds the holder locally and never reaches the cross-replica lock at all.
     h.advance(100)
     const waiter = gate.ensureFresh(ACCOUNT, never)
+    void waiter.catch(() => undefined)
     await drain()
     expect(state.attempts).toBe(1)
     expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
 
     // The waiter exhausts its patience while the holder's entry is still the one on record — the
-    // exact moment the historical bug erased it. It must proceed fail-open and leave the holder's
+    // exact moment the historical bug erased it. It must fail closed and leave the holder's
     // entry and its lease exactly as they were: erasing one we do not own is the takeover race.
     h.advance(20_100)
     steps.step()
     await drain()
-    const claim = await waiter
-    expect(h.warnings()).toEqual(["claude credential refresh did not land; proceeding anyway"])
+    await expect(waiter).rejects.toBeInstanceOf(CredentialRefreshLeaseUnavailable)
+    expect(h.warnings()).toEqual(["claude credential refresh did not land; refusing admission"])
     expect(state.releases).toBe(0)
     expect(state.holds).toBe(true)
     expect(state.acquires).toBe(1)
-    claim.release()
 
     // The holder's entry has now aged out, so takeover is the only path left for anyone else — and
     // the lease is still held, so the takeover is refused and no competing refresher is admitted.
-    let tookOver = false
-    const takeover = gate.ensureFresh(ACCOUNT, never).then((c) => {
-      tookOver = true
-      return c
-    })
+    const tookOver = false
+    const takeover = gate.ensureFresh(ACCOUNT, never)
+    void takeover.catch(() => undefined)
     await drain()
     // It reached the lock and was refused: it did not take the window, and it did not resolve as
     // an owner either — a lease somebody else holds means waiting, not proceeding.
@@ -749,16 +768,15 @@ describe("the refresh window across the races that matter", () => {
     expect(state.holds).toBe(true)
     expect(state.releases).toBe(0)
     expect(tookOver).toBe(false)
-    // The refused takeover keeps waiting; it runs out of patience and proceeds fail-open, still
-    // without ever owning the window.
+    // The refused takeover keeps waiting; it runs out of patience and fails closed, still without
+    // ever owning the window.
     h.advance(20_000)
     steps.step()
     await drain()
-    const waited = await takeover
+    await expect(takeover).rejects.toBeInstanceOf(CredentialRefreshLeaseUnavailable)
     expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
     expect(state.releases).toBe(0)
-    waited.release()
 
     // The owner's own exit is what ends the window; only then may a new caller own it.
     owner.release()
@@ -788,13 +806,9 @@ describe("the refresh window across the races that matter", () => {
     expect(state.holds).toBe(true)
 
     // The other replica asks for the same credential and is refused the lease.
-    let owned = false
-    const waiter = gateB.ensureFresh(ACCOUNT, never).then((claim) => {
-      owned = true
-      return claim
-    })
+    const waiter = gateB.ensureFresh(ACCOUNT, never)
+    void waiter.catch(() => undefined)
     await drain()
-    expect(owned).toBe(false)
     expect(state.attempts).toBe(2)
     expect(state.acquires).toBe(1)
     expect(state.holds).toBe(true)
@@ -810,7 +824,6 @@ describe("the refresh window across the races that matter", () => {
     steps.step()
     await drain()
     const ownerB = await waiter
-    expect(owned).toBe(true)
     expect(state.acquires).toBe(2)
     expect(state.holds).toBe(true)
 
@@ -854,7 +867,7 @@ describe("wouldRefresh — whether a spawn now would rotate the refresh token", 
     expect(await gate.wouldRefresh(ACCOUNT)).toBe(false)
   })
 
-  test("is false, and says so, when the file cannot be read", async () => {
+  test("fails closed when the file cannot be read", async () => {
     const h = harness(credential(-1), {
       reader: {
         read: async () => {
@@ -863,8 +876,10 @@ describe("wouldRefresh — whether a spawn now would rotate the refresh token", 
       },
     })
     const gate = createCredentialFreshness(h.deps)
-    expect(await gate.wouldRefresh(ACCOUNT)).toBe(false)
-    expect(h.warnings()).toEqual(["claude credential freshness unreadable"])
+    await expect(gate.wouldRefresh(ACCOUNT)).rejects.toBeInstanceOf(
+      CredentialMetadataOwnershipUnavailable,
+    )
+    expect(h.warnings()).toEqual(["claude credential freshness ownership unavailable"])
   })
 
   test("the no-op gate never calls a credential cold", async () => {
