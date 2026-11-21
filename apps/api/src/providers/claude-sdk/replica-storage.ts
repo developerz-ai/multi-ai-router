@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { constants } from "node:fs"
-import { lstat, mkdir, open, realpath, writeFile } from "node:fs/promises"
+import { constants, lstat, mkdir, open, realpath, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import type { ReplicaLeaseToken } from "@multi-ai-router/db"
@@ -9,8 +8,6 @@ import { makeAnchoredRoot } from "./config-dir-fs"
 import type { ExclusiveStorageAttachment, ReplicaStorage } from "./replica-storage-types"
 
 export type { ExclusiveStorageAttachment, ReplicaStorage } from "./replica-storage-types"
-
-/** Single-node mode pins a random persistent volume identity and holds a root-wide kernel lock. */
 export function createLocalReplicaStorage(
   root: string,
   helper: string,
@@ -22,16 +19,17 @@ export function createLocalReplicaStorage(
   let live = false
   let storage: ReplicaStorage | undefined
   let initializing: Promise<void> | undefined
-  const initialize = () =>
-    (initializing ??= (async () => {
+  const initialize = () => {
+    if (initializing) return initializing
+    const attempt = (async () => {
       await makeAnchoredRoot(root, 0o700)
       const child = spawn(helper, ["storage-local", root, randomUUID()], {
         stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
         env: {},
       })
-      control = child.stdio[4] as Writable
+      const childControl = child.stdio[4] as Writable
       const status = child.stdio[3] as Readable
-      exit = new Promise<void>((resolve, reject) => {
+      const childExit = new Promise<void>((resolve, reject) => {
         child.once("error", () => reject(new Error("local storage guardian unavailable")))
         child.once("close", (code) => {
           live = false
@@ -39,40 +37,56 @@ export function createLocalReplicaStorage(
           else reject(new Error("local storage guardian retirement uncertain"))
         })
       })
-      void exit.catch(() => {})
-      await new Promise<void>((resolve, reject) => {
-        status.once("data", (data: Buffer) => {
-          if (data.toString() === "R") {
-            live = true
-            resolve()
-          } else reject(new Error("local storage admission refused"))
+      void childExit.catch(() => {})
+      try {
+        await new Promise<void>((resolve, reject) => {
+          status.once("data", (data: Buffer) => {
+            if (data.toString() === "R") resolve()
+            else reject(new Error("local storage admission refused"))
+          })
+          child.once("error", () => reject(new Error("local storage admission unavailable")))
+          child.once("close", () => reject(new Error("local storage admission refused")))
         })
-        child.once("error", () => reject(new Error("local storage admission unavailable")))
-        child.once("close", () => reject(new Error("local storage admission refused")))
-      })
-      if ((await realpath(root)) !== root) throw new Error("local storage root is not anchored")
-      const marker = join(root, ".replica-storage-identity")
-      try {
-        await writeFile(marker, randomUUID(), { flag: "wx", mode: 0o600 })
+        if ((await realpath(root)) !== root) throw new Error("local storage root is not anchored")
+        const marker = join(root, ".replica-storage-identity")
+        try {
+          await writeFile(marker, randomUUID(), { flag: "wx", mode: 0o600 })
+        } catch (error) {
+          if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
+        }
+        const file = await open(marker, constants.O_RDONLY | constants.O_NOFOLLOW)
+        try {
+          const stat = await file.stat()
+          identity = await file.readFile("utf8")
+          if (
+            !stat.isFile() ||
+            stat.nlink !== 1 ||
+            stat.size !== 36 ||
+            !/^[0-9a-f-]{36}$/.test(identity)
+          )
+            throw new Error("local storage identity refused")
+        } finally {
+          await file.close()
+        }
+        storage = createReplicaStorage(root, identity, adapter)
+        control = childControl
+        exit = childExit
+        live = true
       } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
+        childControl.end()
+        await childExit.catch(() => {})
+        throw error
       }
-      const file = await open(marker, constants.O_RDONLY | constants.O_NOFOLLOW)
-      try {
-        const stat = await file.stat()
-        identity = await file.readFile("utf8")
-        if (
-          !stat.isFile() ||
-          stat.nlink !== 1 ||
-          stat.size !== 36 ||
-          !/^[0-9a-f-]{36}$/.test(identity)
-        )
-          throw new Error("local storage identity refused")
-      } finally {
-        await file.close()
-      }
-      storage = createReplicaStorage(root, identity, adapter)
-    })())
+    })()
+    initializing = attempt
+    void attempt.then(
+      () => undefined,
+      () => {
+        if (initializing === attempt) initializing = undefined
+      },
+    )
+    return attempt
+  }
   const adapter: ExclusiveStorageAttachment = {
     ...drains,
     confirm: async () => live,
@@ -92,7 +106,6 @@ export function createLocalReplicaStorage(
       await initialize()
       if (previous !== null && previous !== identity)
         throw new Error("assigned local storage mismatch")
-      // Import legacy directories only on the original, exclusively locked volume.
       if (previous === null) {
         const path = join(root, token.accountId)
         const stat = await lstat(path)
@@ -117,8 +130,6 @@ export function createLocalReplicaStorage(
     },
   }
 }
-
-/** The helper is the storage authority, not a credential reader. Its stdout is a bounded receipt. */
 export function createStorageAttachmentHelper(
   helperPath: string,
   root: string,
@@ -188,8 +199,6 @@ export function createStorageAttachmentHelper(
     provisionNew: (token, identity) => invoke("allocate", token, identity),
   }
 }
-
-/** Validation only. Never creates directories or copies live credentials during takeover. */
 export function createReplicaStorage(
   root: string,
   identity: string,
@@ -198,6 +207,7 @@ export function createReplicaStorage(
   if (resolve(root) !== root || !identity.length || identity.length > 512)
     throw new Error("invalid replica storage configuration")
   const pending = new Map<string, Promise<void>>()
+  const failedDrains = new Map<string, unknown>()
   const exclusive = async (
     token: ReplicaLeaseToken,
     task: () => Promise<void>,
@@ -205,17 +215,16 @@ export function createReplicaStorage(
   ) => {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token.accountId))
       throw new Error("invalid account storage identity")
+    const failedDrain = failedDrains.get(token.accountId)
+    if (failedDrain !== undefined) throw failedDrain
     const previous = pending.get(token.accountId)
     const work = (async () => {
-      // A rejected drain is not proof of quiescence and cannot be bypassed by a successor.
       await previous
       try {
         await attachment.retireLocalOwners(token.accountId)
         await attachment.drainMetadata(token.accountId)
       } catch (error) {
-        // Only uncertain retirement permanently parks this process's storage admission.
-        pending.set(token.accountId, Promise.reject(error))
-        void pending.get(token.accountId)?.catch(() => {})
+        failedDrains.set(token.accountId, error)
         throw error
       }
       if (!allocate && !(await attachment.confirm(token, identity)))
@@ -258,7 +267,6 @@ export function createReplicaStorage(
           const opened = await directory.stat()
           if (opened.dev !== state.dev || opened.ino !== state.ino)
             throw new Error("account storage changed during attachment")
-          // Identity is an operator-provisioned, non-secret marker on the persistent volume.
           const marker = await open(
             `/proc/self/fd/${directory.fd}/.storage-identity`,
             constants.O_RDONLY | constants.O_NOFOLLOW,

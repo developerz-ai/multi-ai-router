@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test"
+import { spawn } from "node:child_process"
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { Duplex } from "node:stream"
 import {
+  createLocalReplicaStorage,
   createReplicaStorage,
   createStorageAttachmentHelper,
   type ExclusiveStorageAttachment,
@@ -38,6 +41,40 @@ async function fixture() {
     },
     async dispose() {
       await rm(root, { recursive: true, force: true })
+    },
+  }
+}
+
+async function holdLocalStorageLock(root: string) {
+  const child = spawn(
+    resolve("native/config-owner"),
+    ["storage-local", root, crypto.randomUUID()],
+    { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
+  )
+  const status = child.stdio[3]
+  const control = child.stdio[4]
+  if (!(status instanceof Duplex) || !(control instanceof Duplex))
+    throw new Error("local storage guardian pipes unavailable")
+  const exited = new Promise<void>((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`local storage guardian exited: ${code}`))
+    })
+  })
+  void exited.catch(() => {})
+  await new Promise<void>((resolve, reject) => {
+    status.once("data", (data: Buffer) => {
+      if (data.toString() === "R") resolve()
+      else reject(new Error("local storage guardian admission refused"))
+    })
+    child.once("error", reject)
+    child.once("close", () => reject(new Error("local storage guardian admission refused")))
+  })
+  return {
+    async release() {
+      control.end()
+      await exited
     },
   }
 }
@@ -150,12 +187,39 @@ for (const stage of ["retireLocalOwners", "drainMetadata"] as const) {
       await expect(storage.attach({ ...f.token, generation: 3n }, "volume-one")).rejects.toThrow(
         "drain uncertain",
       )
+      await expect(storage.attach({ ...f.token, generation: 4n }, "volume-one")).rejects.toThrow(
+        "drain uncertain",
+      )
       expect(f.calls).toEqual(calls)
     } finally {
       await f.dispose()
     }
   })
 }
+
+test("local replica storage retries initialization after the prior guardian releases its volume lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-replica-storage-"))
+  const token = { accountId: crypto.randomUUID(), owner: crypto.randomUUID(), generation: 2n }
+  let guardian: Awaited<ReturnType<typeof holdLocalStorageLock>> | undefined
+  let storage: ReturnType<typeof createLocalReplicaStorage> | undefined
+  try {
+    await mkdir(join(root, token.accountId))
+    guardian = await holdLocalStorageLock(root)
+    storage = createLocalReplicaStorage(root, resolve("native/config-owner"), {
+      async retireLocalOwners() {},
+      async drainMetadata() {},
+    })
+    await expect(storage.attach(token, null)).rejects.toThrow("local storage admission refused")
+    await guardian.release()
+    guardian = undefined
+    await storage.attach(token, null)
+    expect(storage.identity).toMatch(/^[0-9a-f-]{36}$/)
+  } finally {
+    await guardian?.release()
+    await storage?.stop()
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 for (const loseAfterValidation of [false, true]) {
   test(`replica-lease refuses unconfirmed exclusive attachment, recheck=${loseAfterValidation}`, async () => {
