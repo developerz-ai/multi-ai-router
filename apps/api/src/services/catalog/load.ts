@@ -1,5 +1,11 @@
 import type { QuotaWindowState } from "@multi-ai-router/core"
-import type { AccountRow, CatalogSnapshotRepository, RecoveryRow } from "@multi-ai-router/db"
+import {
+  type AccountBreakerRow,
+  type AccountRow,
+  type CatalogSnapshotRepository,
+  credentialFingerprint,
+  type RecoveryRow,
+} from "@multi-ai-router/db"
 import {
   providerCarriesSession,
   providerModelFamily,
@@ -47,6 +53,7 @@ export async function loadCatalog(
     members,
     windows: windowRows,
     recoveries,
+    breakers = [],
   } = await sources.read()
 
   // Quota state is durable and routing reads it per request, so it is hydrated
@@ -64,6 +71,7 @@ export async function loadCatalog(
   }
 
   const recoveryByAccount = new Map(recoveries.map((row) => [row.accountId, row]))
+  const breakerByAccount = new Map(breakers.map((row) => [row.accountId, row]))
   const membersByPool = new Map<string, { accountId: string; weight: number; priority: number }[]>()
   for (const member of members) {
     const bucket = membersByPool.get(member.poolId) ?? []
@@ -82,6 +90,7 @@ export async function loadCatalog(
         windowsByAccount.get(row.id),
         recoveryByAccount.get(row.id),
         removalHorizon(removalMemory),
+        breakerByAccount.get(row.id),
       ),
     ),
     pools: poolRows.map((pool) => ({
@@ -105,8 +114,18 @@ function toRoutableAccount(
   quotaWindows: readonly QuotaWindowState[] | undefined,
   recovery: RecoveryRow | undefined,
   removedAfter: number,
+  candidate?: AccountBreakerRow,
 ): RoutableAccount {
+  const breaker =
+    candidate !== undefined &&
+    candidate.lifecycleVersion === row.lifecycleVersion &&
+    candidate.healthRecoveryVersion === row.healthRecoveryVersion &&
+    candidate.authRecoveryVersion === row.authRecoveryVersion &&
+    candidate.credentialFingerprint === credentialFingerprint(row.authMaterial)
+      ? candidate
+      : undefined
   return {
+    ...(breaker === undefined ? {} : { breaker }),
     id: row.id,
     ...(recovery === undefined ? {} : { recovery }),
     lifecycleVersion: row.lifecycleVersion,

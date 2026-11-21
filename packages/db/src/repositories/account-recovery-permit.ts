@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { accountRecoveries } from "../schema/account-recoveries"
+import { captureBreaker, effectiveBreaker } from "./account-breaker"
 import {
   credentialFingerprint,
   duration,
@@ -75,6 +76,16 @@ export function createRecoveryPermits(
         const now = await recoveryClock(tx)
         if (held.preparationLeaseUntil === null || held.preparationLeaseUntil <= now)
           return undefined
+        const breaker = await effectiveBreaker(tx, account)
+        if (
+          breaker?.status === "exhausted" ||
+          breaker?.status === "needs_reauth" ||
+          (breaker?.cooldownUntil !== null &&
+            breaker?.cooldownUntil !== undefined &&
+            breaker.cooldownUntil > now)
+        )
+          return undefined
+        await captureBreaker(tx, account, held.generation)
         const [row] = await tx
           .update(accountRecoveries)
           .set({

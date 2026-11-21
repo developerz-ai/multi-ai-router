@@ -1,5 +1,6 @@
 import { inArray } from "drizzle-orm"
 import type { Database } from "../client"
+import { type AccountBreakerRow, accountBreakers } from "../schema/account-breakers"
 import { accountRecoveries, type RecoveryRow } from "../schema/account-recoveries"
 import type { AccountRow } from "../schema/accounts"
 import type { PoolMemberRow, PoolRow } from "../schema/pools"
@@ -13,6 +14,7 @@ export interface CatalogSnapshotRows {
   readonly members: readonly PoolMemberRow[]
   readonly windows: readonly QuotaWindowRow[]
   readonly recoveries: readonly RecoveryRow[]
+  readonly breakers?: readonly AccountBreakerRow[]
 }
 
 export interface CatalogSnapshotRepository {
@@ -43,7 +45,19 @@ export function createCatalogSnapshotRepository(db: Database): CatalogSnapshotRe
                     ),
                   ),
           ])
-          return { accounts: accountRows, pools: poolRows, members, windows, recoveries }
+          const breakers =
+            accountRows.length === 0
+              ? []
+              : await tx
+                  .select()
+                  .from(accountBreakers)
+                  .where(
+                    inArray(
+                      accountBreakers.accountId,
+                      accountRows.map((row) => row.id),
+                    ),
+                  )
+          return { accounts: accountRows, pools: poolRows, members, windows, recoveries, breakers }
         },
         { isolationLevel: "repeatable read", accessMode: "read only" },
       ),

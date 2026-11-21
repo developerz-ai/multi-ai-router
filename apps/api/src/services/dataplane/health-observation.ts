@@ -1,4 +1,5 @@
 import type { AccountStatus } from "@multi-ai-router/core"
+import type { AccountBreakerRow } from "@multi-ai-router/db"
 
 /** Durable facts from the unmodified catalog row; never a health overlay. */
 export interface HealthAccountFacts {
@@ -8,6 +9,7 @@ export interface HealthAccountFacts {
   readonly authMaterial: string | null
   readonly status: AccountStatus
   readonly recoveryGeneration?: string | null
+  readonly breaker?: AccountBreakerRow
 }
 
 /** Project only durable facts; do not retain driver, quota, or routing snapshots in observations. */
@@ -26,6 +28,7 @@ export function accountHealthFacts(
     authMaterial: account.authMaterial,
     status: account.snapshot.status,
     recoveryGeneration: account.snapshot.recovery?.generation ?? null,
+    ...(account.breaker === undefined ? {} : { breaker: account.breaker }),
   }
 }
 
@@ -41,6 +44,7 @@ export function sameAccountFacts(left: HealthAccountFacts, right: HealthAccountF
     left.authRecoveryVersion === right.authRecoveryVersion &&
     left.authMaterial === right.authMaterial &&
     left.status === right.status &&
+    (left.breaker?.revision ?? 0) === (right.breaker?.revision ?? 0) &&
     (left.recoveryGeneration ?? null) === (right.recoveryGeneration ?? null)
   )
 }
@@ -52,7 +56,12 @@ export function recoveryKind(
 ): "full" | "authentication" | null {
   if (before === undefined) return null
   if (after.healthRecoveryVersion > before.healthRecoveryVersion) return "full"
-  if (after.status === "disabled" || after.status === "exhausted") return null
+  if (
+    after.status === "disabled" ||
+    after.status === "exhausted" ||
+    after.status === "needs_reauth"
+  )
+    return null
   if (
     after.authRecoveryVersion > before.authRecoveryVersion ||
     (after.status === "active" && after.authMaterial !== before.authMaterial)
@@ -81,19 +90,34 @@ interface HeldObservation {
 export function createHealthObservations() {
   const held = new Map<string, HeldObservation>()
   let generation = 0
-  const reconcile = (accountId: string, facts: HealthAccountFacts) => {
+  const reconcile = (
+    accountId: string,
+    facts: HealthAccountFacts,
+  ): "full" | "authentication" | "none" | null => {
     const previous = held.get(accountId)
     if (previous !== undefined && sameAccountFacts(previous.facts, facts)) return null
     // A preselected request must never move health backwards across an operator mutation.
     if (previous !== undefined && facts.lifecycleVersion < previous.facts.lifecycleVersion)
       return null
+    if (
+      previous !== undefined &&
+      facts.lifecycleVersion === previous.facts.lifecycleVersion &&
+      (facts.healthRecoveryVersion < previous.facts.healthRecoveryVersion ||
+        facts.authRecoveryVersion < previous.facts.authRecoveryVersion ||
+        (facts.healthRecoveryVersion === previous.facts.healthRecoveryVersion &&
+          facts.authRecoveryVersion === previous.facts.authRecoveryVersion &&
+          facts.authMaterial === previous.facts.authMaterial &&
+          (facts.breaker?.revision ?? 0) < (previous.facts.breaker?.revision ?? 0)))
+    ) {
+      return null
+    }
     const kind = recoveryKind(previous?.facts, facts)
     held.set(accountId, {
       facts,
       generation: ++generation,
       verdictVersion: previous?.verdictVersion ?? 0,
     })
-    return kind
+    return kind ?? "none"
   }
   const accepts = (accountId: string, observation?: HealthObservation): boolean => {
     if (observation === undefined) return true
@@ -117,6 +141,7 @@ export function createHealthObservations() {
         authMaterial: facts.authMaterial,
         status: facts.status,
         recoveryGeneration: facts.recoveryGeneration ?? null,
+        ...(facts.breaker === undefined ? {} : { breaker: facts.breaker }),
         observationGeneration: current?.generation ?? 0,
         verdictVersion: current?.verdictVersion ?? 0,
       }

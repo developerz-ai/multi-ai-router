@@ -1,9 +1,134 @@
 {
-  "id": "f89a41a1-d2b2-4c8b-892c-e94288b08b9f",
+  "id": "43f95a5d-ead7-42dc-9ce9-8b6b84e27836",
   "prevId": "c59eb8fb-98be-4706-8191-a788f107ab62",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.account_breakers": {
+      "name": "account_breakers",
+      "schema": "",
+      "columns": {
+        "account_id": {
+          "name": "account_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lifecycle_version": {
+          "name": "lifecycle_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "health_recovery_version": {
+          "name": "health_recovery_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_recovery_version": {
+          "name": "auth_recovery_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "credential_fingerprint": {
+          "name": "credential_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "account_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cooldown_until": {
+          "name": "cooldown_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cooldown_source": {
+          "name": "cooldown_source",
+          "type": "reset_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cooldown_reason": {
+          "name": "cooldown_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consecutive_failures": {
+          "name": "consecutive_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "probe_held_until": {
+          "name": "probe_held_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "captured_generation": {
+          "name": "captured_generation",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "account_breakers_account_id_accounts_id_fk": {
+          "name": "account_breakers_account_id_accounts_id_fk",
+          "tableFrom": "account_breakers",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "account_breakers_counts_valid": {
+          "name": "account_breakers_counts_valid",
+          "value": "\"account_breakers\".\"revision\" >= 0 and \"account_breakers\".\"consecutive_failures\" >= 0 and \"account_breakers\".\"lifecycle_version\" >= 0 and \"account_breakers\".\"health_recovery_version\" >= 0 and \"account_breakers\".\"auth_recovery_version\" >= 0"
+        },
+        "account_breakers_clock_valid": {
+          "name": "account_breakers_clock_valid",
+          "value": "(\"account_breakers\".\"status\" = 'cooling_down' and \"account_breakers\".\"cooldown_until\" is not null) or (\"account_breakers\".\"status\" <> 'cooling_down' and \"account_breakers\".\"cooldown_until\" is null)"
+        },
+        "account_breakers_reason_valid": {
+          "name": "account_breakers_reason_valid",
+          "value": "\"account_breakers\".\"cooldown_reason\" is null or (\"account_breakers\".\"cooldown_reason\" = 'credential-rejected' and \"account_breakers\".\"status\" = 'cooling_down')"
+        },
+        "account_breakers_probe_hold_valid": {
+          "name": "account_breakers_probe_hold_valid",
+          "value": "\"account_breakers\".\"probe_held_until\" is null or \"account_breakers\".\"status\" = 'cooling_down'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.account_exhausted_watches": {
       "name": "account_exhausted_watches",
       "schema": "",

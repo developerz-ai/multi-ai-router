@@ -1,14 +1,9 @@
 /**
- * `@multi-ai-router/db` — the only module in the system that knows SQL.
- *
- * Public surface, explicitly listed: the schema (tables + enums + row types),
- * the connection factory, the migration runner, and the repositories services
- * call instead of writing queries.
+ * `@multi-ai-router/db`: the only module that knows SQL. Public surface: schema, connection
+ * factory, migration runner, repositories.
  */
 
-export type { AdvisoryLockRun } from "./advisory-lock"
-
-export { advisoryLockKey } from "./advisory-lock"
+export { type AdvisoryLockRun, advisoryLockKey } from "./advisory-lock"
 export type {
   Database,
   DatabaseExecutor,
@@ -34,6 +29,12 @@ export {
   runMigrations,
 } from "./migrate"
 export type { PoolSample } from "./pool-metrics"
+export type {
+  AccountBreakerRepository,
+  BreakerObservation,
+  ProbeHoldObservation,
+} from "./repositories/account-breaker"
+export { createAccountBreakerRepository } from "./repositories/account-breaker"
 export type {
   AccountAuthorizationMethods,
   AccountLifecycleMethods,
@@ -218,6 +219,7 @@ export type { UsageWeekRead, UsageWeekRow } from "./repositories/usage-week-read
 export { UsageWeekRowCeilingError } from "./repositories/usage-week-read"
 export type { SchedulerLockPoolHandle, SchedulerLockPoolOptions } from "./scheduler-lock"
 export { createSchedulerLockPool } from "./scheduler-lock"
+export { type AccountBreakerRow, accountBreakers } from "./schema/account-breakers"
 export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
 export { accountRecoveries } from "./schema/account-recoveries"
 export type { AccountReplicaLeaseRow, ReplicaLeaseState } from "./schema/account-replica-leases"
@@ -229,7 +231,6 @@ export type {
 } from "./schema/accounts"
 export { accounts } from "./schema/accounts"
 export type { AdminCredentialRow, NewAdminCredentialRow } from "./schema/admin-credentials"
-// --- tables -----------------------------------------------------------------
 export { adminCredentials } from "./schema/admin-credentials"
 export type { AdminSessionRow, NewAdminSessionRow } from "./schema/admin-sessions"
 export { adminSessions } from "./schema/admin-sessions"
@@ -252,7 +253,6 @@ export type {
 } from "./schema/audit-events"
 export { AUDIT_ACTOR_KINDS, auditEvents } from "./schema/audit-events"
 export type { CostBasis, UsageOutcome } from "./schema/enums"
-// --- enums ------------------------------------------------------------------
 export {
   accountStatus,
   costBasis,
@@ -265,8 +265,6 @@ export {
   USAGE_OUTCOME_SUCCESS,
   utilizationSource,
 } from "./schema/enums"
-// The whole schema as one namespace, for `drizzle(sql, { schema })` and for
-// query builders that need a table this barrel does not name individually.
 export * as schema from "./schema/index"
 export type { ModelCatalogRow, NewModelCatalogRow } from "./schema/model-catalog"
 export { modelCatalog } from "./schema/model-catalog"

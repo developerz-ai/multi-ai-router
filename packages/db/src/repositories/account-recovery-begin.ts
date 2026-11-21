@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm"
 import type { DatabaseExecutor } from "../client"
 import { accountRecoveries } from "../schema/account-recoveries"
 import { accounts } from "../schema/accounts"
+import { effectiveBreaker } from "./account-breaker"
 import type { AccountObservation } from "./account-lifecycle-types"
 import {
   credentialFingerprint,
@@ -81,6 +82,15 @@ export function createRecoveryBegin(
         const account = await lockAccount(tx, input.accountId)
         if (account === undefined) return undefined
         const held = await lockRecovery(tx, input.accountId)
+        const breaker = await effectiveBreaker(tx, account)
+        if (
+          breaker?.status === "exhausted" ||
+          breaker?.status === "needs_reauth" ||
+          (breaker?.cooldownUntil !== null &&
+            breaker?.cooldownUntil !== undefined &&
+            breaker.cooldownUntil > (await recoveryClock(tx)))
+        )
+          return undefined
         if (
           held !== undefined &&
           (held.state === "pending" || held.state === "issued") &&

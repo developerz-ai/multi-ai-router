@@ -1,8 +1,18 @@
 import type { AccountStatus, QuotaWindowState } from "@multi-ai-router/core"
-import type { BreakerOptions } from "../routing"
+import type { BreakerOptions, BreakerState } from "../routing"
 import type { HealthObservation } from "./health-observation"
 
 export interface HealthStoreOptions {
+  readonly onBreaker?: (accountId: string, breaker: BreakerState, facts: HealthObservation) => void
+  /**
+   * A probe hold taken or released on the request path, published off-path so every replica honours
+   * it. `null` releases. Absent: holds stay per process.
+   */
+  readonly onProbeHold?: (
+    accountId: string,
+    heldUntil: Date | null,
+    facts: HealthObservation,
+  ) => void
   /**
    * `MAX_REPORTED_RESET_SECONDS`: a provider-reported reset further out than this is bounded, on a
    * failure and on a limiter reading alike (04.2). Absent: no ceiling.

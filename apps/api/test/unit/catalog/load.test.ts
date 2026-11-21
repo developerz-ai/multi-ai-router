@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import type { AccountRow, QuotaWindowRow, RecoveryRow } from "@multi-ai-router/db"
+import {
+  type AccountBreakerRow,
+  type AccountRow,
+  credentialFingerprint,
+  type QuotaWindowRow,
+  type RecoveryRow,
+} from "@multi-ai-router/db"
 import { type CatalogSources, loadCatalog } from "../../../src/services/catalog"
 import { resolveModel } from "../../../src/services/routing"
 import { accountRow as durableAccountRow } from "../../support/account-row"
@@ -50,6 +56,114 @@ function sources(rows: readonly AccountRow[]): CatalogSources {
 }
 
 describe("loadCatalog and the declared model set", () => {
+  test("breaker evidence is optional and fenced by lifecycle, recovery and credential identity", async () => {
+    const account = row()
+    const breaker: AccountBreakerRow = {
+      accountId: account.id,
+      revision: 1,
+      lifecycleVersion: account.lifecycleVersion,
+      healthRecoveryVersion: account.healthRecoveryVersion,
+      authRecoveryVersion: account.authRecoveryVersion,
+      credentialFingerprint: credentialFingerprint(account.authMaterial),
+      status: "cooling_down",
+      cooldownUntil: new Date(EPOCH.getTime() + 60000),
+      cooldownSource: "estimated",
+      cooldownReason: null,
+      consecutiveFailures: 1,
+      probeHeldUntil: null,
+      capturedGeneration: null,
+    }
+    const load = async (candidate: AccountBreakerRow) =>
+      loadCatalog({
+        read: async () => ({
+          accounts: [account],
+          pools: [],
+          members: [],
+          windows: [],
+          recoveries: [],
+          breakers: [candidate],
+        }),
+      })
+    expect((await load(breaker)).accounts[0]?.breaker).toEqual(breaker)
+    for (const patch of [
+      { lifecycleVersion: 1 },
+      { healthRecoveryVersion: 1 },
+      { authRecoveryVersion: 1 },
+      { credentialFingerprint: "stale" },
+    ]) {
+      expect((await load({ ...breaker, ...patch })).accounts[0]?.breaker).toBeUndefined()
+    }
+    expect((await loadCatalog(sources([account]))).accounts[0]?.breaker).toBeUndefined()
+  })
+  test("a probe hold travels with its breaker row and dies with a stale fence", async () => {
+    // The hold is the half-open gate other replicas honour. Carried on the breaker row, it must reach
+    // the routable account; carried by a superseded generation it must be dropped, not honoured.
+    const account = row()
+    const hold = new Date(EPOCH.getTime() + 30_000)
+    const breaker: AccountBreakerRow = {
+      accountId: account.id,
+      revision: 1,
+      lifecycleVersion: account.lifecycleVersion,
+      healthRecoveryVersion: account.healthRecoveryVersion,
+      authRecoveryVersion: account.authRecoveryVersion,
+      credentialFingerprint: credentialFingerprint(account.authMaterial),
+      status: "cooling_down",
+      cooldownUntil: new Date(EPOCH.getTime() + 60_000),
+      cooldownSource: "estimated",
+      cooldownReason: null,
+      consecutiveFailures: 1,
+      probeHeldUntil: hold,
+      capturedGeneration: null,
+    }
+    const load = async (candidate: AccountBreakerRow) =>
+      loadCatalog({
+        read: async () => ({
+          accounts: [account],
+          pools: [],
+          members: [],
+          windows: [],
+          recoveries: [],
+          breakers: [candidate],
+        }),
+      })
+    expect((await load(breaker)).accounts[0]?.breaker?.probeHeldUntil).toEqual(hold)
+    expect(
+      (await load({ ...breaker, credentialFingerprint: "stale" })).accounts[0]?.breaker,
+    ).toBeUndefined()
+  })
+  test("matching breaker rows never replace parked account status", async () => {
+    for (const status of ["exhausted", "needs_reauth", "disabled"] as const) {
+      const account = row({ status })
+      const breaker: AccountBreakerRow = {
+        accountId: account.id,
+        revision: 2,
+        lifecycleVersion: account.lifecycleVersion,
+        healthRecoveryVersion: account.healthRecoveryVersion,
+        authRecoveryVersion: account.authRecoveryVersion,
+        credentialFingerprint: credentialFingerprint(account.authMaterial),
+        status: "cooling_down",
+        cooldownUntil: new Date(EPOCH.getTime() + 60000),
+        cooldownSource: "provider-reported",
+        cooldownReason: null,
+        consecutiveFailures: 2,
+        probeHeldUntil: null,
+        capturedGeneration: null,
+      }
+      const loaded = await loadCatalog({
+        read: async () => ({
+          accounts: [account],
+          pools: [],
+          members: [],
+          windows: [],
+          recoveries: [],
+          breakers: [breaker],
+        }),
+      })
+      expect(loaded.accounts[0]?.snapshot.status).toBe(status)
+      expect(loaded.accounts[0]?.snapshot.health.cooldownUntil).toBeUndefined()
+      expect(loaded.accounts[0]?.breaker).toEqual(breaker)
+    }
+  })
   test("a stored list reaches routing — the column exists so this can happen at all", async () => {
     const { accounts } = await loadCatalog(sources([row({ supportedModels: ["glm-4.6"] })]))
     expect(accounts[0]?.snapshot.supportedModels).toEqual(["glm-4.6"])
