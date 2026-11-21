@@ -126,7 +126,7 @@ export function openAiChatToOpenAiResponsesRequestFromParsed(
       typeof request.reasoning_effort === "string"
         ? { effort: request.reasoning_effort }
         : undefined,
-    text: responseFormatToResponsesText(request.response_format),
+    text: responsesText(request),
     // An empty key names no prefix, and sending one would key every such caller together.
     prompt_cache_key:
       typeof request.prompt_cache_key === "string" && request.prompt_cache_key.length > 0
@@ -245,3 +245,11 @@ function contentText(
 }
 
 /** `stop: []` and `stop: ""` name no sequence at all; only a stated one is worth a refusal. */
+
+/** `response_format` as `text.format` and the caller's `verbosity` beside it; absent when neither. */
+function responsesText(request: ParsedOpenAiChatRequest): OpenAiResponsesRequest["text"] {
+  const format = responseFormatToResponsesText(request.response_format)
+  const verbosity = request.verbosity ?? undefined
+  if (verbosity === undefined) return format
+  return { ...format, verbosity }
+}

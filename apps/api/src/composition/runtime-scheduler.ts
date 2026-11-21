@@ -1,4 +1,5 @@
 import { createExhaustedWatchRepository } from "@multi-ai-router/db"
+import type { RosterDriftSeries } from "../observability/metric-types"
 import { IDLE_PROBE_MODELS, schedulerFromEnv } from "../scheduler"
 import { createLastLoginLookup } from "../services/accounts/last-login"
 import { describeProvider } from "../services/accounts/providers"
@@ -139,6 +140,19 @@ export function createRuntimeScheduler(
       read: (account) => readPlanQuota({ ...catalogRefreshDeps, health, now }, account),
     },
     poolReap: { pools: repositories.pools, reaper: admin.poolReaper },
+    // Only when a roster is configured: the key is omitted entirely otherwise, so the registry sees
+    // `undefined` and builds no `pool_roster_check` task. `listSummaries` is the ciphertext-free
+    // read, so a drift check never loads an account's credential to learn its label.
+    ...(env.poolRoster === null
+      ? {}
+      : {
+          poolRosterCheck: {
+            roster: env.poolRoster,
+            pools: repositories.pools,
+            accounts,
+            recordDrift: (items: readonly RosterDriftSeries[]) => metrics.setRosterDrift(items),
+          },
+        }),
     env,
     schedulerLock,
     logger,

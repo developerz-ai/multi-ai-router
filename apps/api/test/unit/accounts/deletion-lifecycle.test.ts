@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createAccountsService } from "../../../src/services/accounts/service"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
+import { testSupportedModelsWriter } from "../../support/supported-models-writer"
 
 for (const auditFailure of [false, true]) {
   test(`durable deletion/barrier precedes deferred owned-directory cleanup even auditFailure=${auditFailure}`, async () => {
@@ -15,6 +16,7 @@ for (const auditFailure of [false, true]) {
     const events: string[] = []
     const service = createAccountsService({
       accounts: store.accounts,
+      supportedModels: testSupportedModelsWriter(store.accounts),
       keys: store.keys,
       pools: store.pools,
       cipher: { encrypt: (value) => value },

@@ -156,6 +156,17 @@
   }
 }
 
+.navRail {
+  position: absolute;
+  inset-block: 20%;
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform var(--duration-base) var(--ease-out);
+}
+
 // Three simultaneous cues, so colour never does the work alone: the rail
 // (shape), the weight (typography), and the tint (colour).
 .navLinkActive {
@@ -166,17 +177,6 @@
   .navRail {
     transform: scaleY(1);
   }
-}
-
-.navRail {
-  position: absolute;
-  inset-block: 20%;
-  inset-inline-start: 0;
-  width: 3px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  transform: scaleY(0);
-  transition: transform var(--duration-base) var(--ease-out);
 }
 
 .navLabel {

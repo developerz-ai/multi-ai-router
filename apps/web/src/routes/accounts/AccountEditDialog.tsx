@@ -8,6 +8,7 @@ import {
   formatModelList,
   parseModelAliases,
   parseModelList,
+  supportedModelsPatch,
 } from "../../lib/account-models"
 import type { UpdateAccountInput } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
@@ -115,7 +116,6 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
     const takesPreferences = props.provider?.providerPreferences === true
     if (account === null || !parsedAliases.ok || (takesPreferences && !prefs.ok)) return
 
-    const models = parseModelList(supportedModels())
     const aliasMap = parsedAliases.aliases
 
     props.onSubmit({
@@ -126,7 +126,8 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
       // `null` clears, so an emptied box returns the account to the provider default.
       baseUrl: baseUrl().trim().length > 0 ? baseUrl().trim() : null,
       dialect: dialect().length > 0 ? (dialect() as Dialect) : null,
-      supportedModels: models.length > 0 ? models : null,
+      // Only when changed, with what it removes named (`supportedModelsPatch`).
+      ...supportedModelsPatch(account.supportedModels ?? [], parseModelList(supportedModels())),
       modelAliases: Object.keys(aliasMap).length > 0 ? aliasMap : null,
       ...numeric("weight", weight()),
       ...numeric("priority", priority()),

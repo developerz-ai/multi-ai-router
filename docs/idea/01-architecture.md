@@ -379,12 +379,36 @@ decision in [10-roadmap.md](10-roadmap.md).
 
 ### The periodic tasks
 
+Persisted task names and constructed periodic tasks are separate contracts. Migration **0051**
+appends `pool_roster_check` to the scheduled-task enum with `IF NOT EXISTS`, preserving every
+existing value and run. The derived task-name and run-row types and the generic run repository
+can record it, and the task is constructed **only when a deployment roster is configured**
+(`POOL_ROSTER_PATH`): a roster check with no roster has nothing to compare. Its cadence is
+`POOL_ROSTER_CHECK_INTERVAL_MINUTES` (15) through `poolRosterCheckIntervalMs`, which answers
+`null` when no roster is configured and then builds no task at all — a `null` cadence must never
+become a `0` ms timer. That cadence deliberately stays out of `scheduledTaskIntervals`, whose
+return type still excludes the name: the fifteen other tasks always have one, and widening that
+record to `Partial` would force every reader of a cadence to handle `undefined`. Like every other
+task it runs on a jittered in-process timer under its own `pg_try_advisory_lock`, has a run
+deadline, and records its last run and outcome in `ScheduledTaskRun`. It **reads only**: pools,
+their memberships and account labels are read and folded against the roster by the pure
+`diffRoster`, and every drifted item is one `warn` alert line plus one `router_pool_roster_drift`
+series. See
+[05-routing-and-failover.md](05-routing-and-failover.md#the-deployment-roster-and-the-check-that-reports-drift)
+for the roster and its drift kinds, [08-observability.md](08-observability.md#pool-roster-drift)
+for the gauge and the alert condition.
+
+Settings task-health entries require a supplied cadence: names without one are omitted, while
+all existing runtime tasks retain their cadences. Supplying a cadence makes the persisted name
+eligible for task-health rendering; it does not itself construct or schedule a task.
+
 | Task | Cadence | Notes |
 |---|---|---|
 | Janitor / retention sweeps | every `JANITOR_INTERVAL_MINUTES`, jittered | Bounded batches; windows in [09-deployment.md](09-deployment.md) |
 | Usage rollup (raw → daily aggregates) | hourly | Idempotent per (day, key, account, model) |
 | Circuit-breaker half-open probes | when a cooling-down account's reset passes | Not a fixed interval — scheduled per account |
 | Cooldown recheck (`cooldown_recheck`) | every `COOLDOWN_RECHECK_INTERVAL_MINUTES` (hourly) | The look an account on a long cooldown gets before its stated reset, because providers do reset windows early. Selects from the live snapshot: a cooldown or spent window that outlasts the next tick, and never `exhausted`, `needs_reauth`, `disabled` or a `credential-rejected` key, checked again at a start guard of its own. A Claude subscription gets the turn-free usage read and no request; an HTTP account gets one minimal real request through "Test now". Success ends the cooldown. A `429` keeps its window readings and drops its verdict, so the stated reset, its source and the failure streak stand. Any other failure settles through the recovery probe's verdict path, so out of credits becomes `exhausted` and a refused token parks. The same task presses "Re-check now" on an `exhausted` account on the bounded re-test clock (`EXHAUSTED_RECHECK_FIRST_MINUTES` doubling, stopping one worst-case `cooldown_recheck` timer-and-two-runs span below `EXHAUSTED_RECHECK_MAX_MINUTES` so actual re-tests stay within the cap), each re-test a `warn` alert line. At most `IDLE_ACCOUNT_PROBE_BATCH_SIZE` accounts per tick, oldest look first. See [05-routing-and-failover.md](05-routing-and-failover.md#the-hourly-cooldown-recheck) |
+| Pool roster check (`pool_roster_check`) | every `POOL_ROSTER_CHECK_INTERVAL_MINUTES` (15), jittered; constructed only while `POOL_ROSTER_PATH` is set | The declared roster folded against live state by the pure `diffRoster`: `pool_missing`, `missing_member`, `unexpected_member`, `no_overflow`, `overflow_mismatch`. One `warn` line and one `router_pool_roster_drift` series per drifted item, labels and ids only, never a credential. **Reports; never reconciles** — no Pool, membership or Account is created, edited or deleted, because a drift is the operator's decision. See [05-routing-and-failover.md](05-routing-and-failover.md#the-deployment-roster-and-the-check-that-reports-drift) |
 | Empty pool reap (`pool_reap`) | every `POOL_REAP_INTERVAL_MINUTES` (hourly) | Deletes a Pool memberless since `RETENTION_EMPTY_POOL_DAYS` (7) ago by `pools.empty_since`, at most `SWEEP_BATCH_SIZE` a tick, longest-empty first. Revokes a key scoped only to Pools that are all gone; a key with another target just loses the Pool. Each Pool re-checked under its row lock, so a member added since wins. Every deletion and revocation a `warn` alert line. See [02-domain-model.md](02-domain-model.md#pool) |
 | Plan quota read (`plan_quota_read`) | every `PLAN_QUOTA_READ_INTERVAL_MINUTES` (15) | Reads a provider's own usage endpoint for accounts whose driver declares one, bounded by `PLAN_QUOTA_READ_BATCH_SIZE`. Advisory: it ranks accounts and, once a real limit refusal names no reset, says how long that cooldown lasts (`routing/plan-reset.ts`); a reading alone never blocks one. Drivers: `opencode-go`, `minimax`, `zai`, `kimi` |
 | Quota refresh for subscription accounts | opportunistic, plus a slow floor | Prefer signals already in hand: `rate_limit_event` events arrive on responses we are already making, so an actively used account needs no polling. The floor covers idle accounts; **Re-check now** records manual recovery intent and preserves existing quota evidence — see [05-routing-and-failover.md](05-routing-and-failover.md) |

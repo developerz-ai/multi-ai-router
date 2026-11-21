@@ -1,3 +1,4 @@
+import { createAdminLoginThrottleRepository } from "@multi-ai-router/db"
 import type { AuditRecorder } from "../services/admin"
 import {
   adminAuthConfigFromEnv,
@@ -5,27 +6,28 @@ import {
   createLocalAdminCredentials,
 } from "../services/admin-auth"
 import { createOIDCFlow } from "../services/admin-auth/oidc/flow"
+import { createSharedThrottle } from "../services/admin-auth/shared-throttle"
 import type { AdminPlaneDeps } from "./admin-types"
 
 /** The console's sign-in: session service, OIDC flow and local credential, from env. */
 export function createAdminAuth(deps: AdminPlaneDeps, audit: AuditRecorder) {
   const { env, now } = deps
+  const config = adminAuthConfigFromEnv({
+    adminSessionIdleMinutes: env.adminAuth.sessionIdleMinutes,
+    adminSessionAbsoluteHours: env.adminAuth.sessionAbsoluteHours,
+    adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
+    adminLoginMaxConcurrent: env.adminAuth.loginMaxConcurrent,
+    adminLoginMaxTrackedIps: env.adminAuth.loginMaxTrackedIps,
+    adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
+    adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
+    adminSessionTouchIntervalSeconds: env.adminAuth.sessionTouchIntervalSeconds,
+  })
   return createAdminAuthService({
     env,
+    config,
+    throttle: createSharedThrottle(createAdminLoginThrottleRepository(deps.database), config),
     store: deps.sessionStore,
     localCredentialTtlMs: env.adminCredentialMetadataTtlSeconds * 1_000,
-    // The env layer speaks minutes and hours; the service speaks seconds.
-    // `adminAuthConfigFromEnv` is the single conversion, so the two never drift.
-    config: adminAuthConfigFromEnv({
-      adminSessionIdleMinutes: env.adminAuth.sessionIdleMinutes,
-      adminSessionAbsoluteHours: env.adminAuth.sessionAbsoluteHours,
-      adminLoginMaxAttempts: env.adminAuth.loginMaxAttempts,
-      adminLoginMaxConcurrent: env.adminAuth.loginMaxConcurrent,
-      adminLoginMaxTrackedIps: env.adminAuth.loginMaxTrackedIps,
-      adminLoginAttemptWindowMinutes: env.adminAuth.loginAttemptWindowMinutes,
-      adminLoginLockoutMinutes: env.adminAuth.loginLockoutMinutes,
-      adminSessionTouchIntervalSeconds: env.adminAuth.sessionTouchIntervalSeconds,
-    }),
     // No OIDC variables means no OIDC door: the login page learns what is
     // offered from `methods()`, and the start/callback routes answer 404.
     oidc:

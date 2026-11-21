@@ -35,6 +35,7 @@ import {
   recoverableCondition,
   remainder,
   unresolved,
+  unsupportedCause,
   where,
 } from "./no-candidates-wording"
 import {
@@ -145,7 +146,7 @@ export function noCandidatesError(input: NoCandidatesInput): RouterError {
   if (total > 0 && input.rejected.every((entry) => entry.reason === "model-unsupported")) {
     const named = input.model === undefined ? "this model" : `model "${input.model}"`
     return new ModelNotFoundError(
-      `no account${where(input.groups)} serves ${named} — a client change (${total} ${accountWord(total)} in scope: ${labels(input.rejected)})`,
+      `no account${where(input.groups)} serves ${named} — ${unsupportedCause(input.rejected)} (${total} ${accountWord(total)} in scope: ${labels(input.rejected)})`,
       { detail: pool("model-unsupported") },
     )
   }

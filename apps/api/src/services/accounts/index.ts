@@ -55,6 +55,8 @@ export type {
 } from "./discover-models"
 export { createDiscoverModelsService } from "./discover-models"
 export { type LiveHealthDeps, liveHealthCheck } from "./live-health"
+export type { AccountModelsService, SupportedModelsView } from "./models-service"
+export { createAccountModelsService } from "./models-service"
 export type { ProviderConnectFlow, ProviderDescriptor, ProviderTransport } from "./providers"
 export { describeProvider, describeProviders } from "./providers"
 export type { RecheckResult, RecheckService, RecheckServiceDeps } from "./recheck"
@@ -91,6 +93,8 @@ export type {
   AccountListQuery,
   CompleteConnectBody,
   CreateAccountBody,
+  EditSupportedModelsBody,
+  ReplaceSupportedModelsBody,
   TestNowBody,
   UpdateAccountBody,
 } from "./schemas"
@@ -98,11 +102,26 @@ export {
   accountListQuery,
   completeConnectBody,
   createAccountBody,
+  editSupportedModelsBody,
+  replaceSupportedModelsBody,
   testNowBody,
   updateAccountBody,
 } from "./schemas"
 export type { AccountsService, AccountsServiceDeps } from "./service"
 export { createAccountsService } from "./service"
+export type {
+  SupportedModelsChange,
+  SupportedModelsEdit,
+  SupportedModelsRefusal,
+} from "./supported-models"
+export { planSupportedModelsEdit } from "./supported-models"
+export type {
+  SupportedModelsSource,
+  SupportedModelsWrite,
+  SupportedModelsWriter,
+  SupportedModelsWriterDeps,
+} from "./supported-models-writer"
+export { createSupportedModelsWriter } from "./supported-models-writer"
 export type { TestNowResult, TestNowService, TestNowServiceDeps } from "./test-now"
 export { createTestNowService } from "./test-now"
 export type { AccountCredentialView, AccountView } from "./view"

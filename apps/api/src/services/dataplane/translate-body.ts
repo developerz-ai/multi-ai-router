@@ -1,6 +1,6 @@
 import type { OpenAiChatCeiling } from "@multi-ai-router/core"
 import { TranslationError } from "@multi-ai-router/core"
-import { disableThinkingDefaultForForcedTool } from "../translate"
+import { applyResponsesModelDials, disableThinkingDefaultForForcedTool } from "../translate"
 import { type ParsedIngressRequest, parseIngressRequest } from "../translate/parse-ingress"
 import type { TranslationContext, TranslationPair } from "../translate/registry"
 import type { TranslationDrop } from "../translate/shared/drops"
@@ -226,10 +226,11 @@ export function createTranslatedRequestBody(
           withModel.session_id = cacheKey
         }
       }
-      // The one vendor dial decided by the *upstream* model (post-alias, the billed name) rather
-      // than the conversion shape, so it is applied here and not baked into the cached body: a
-      // forced tool to a think-by-default openai-chat vendor is sent `enable_thinking: false`
-      // (`translate/shared/thinking-default.ts`). Never toward any other egress.
+      // The dials decided by the *upstream* model (post-alias, the billed name) rather than the
+      // conversion shape, so they are applied here and not baked into the cached body. Toward
+      // openai-chat: a forced tool to a think-by-default vendor is sent `enable_thinking: false`
+      // (`translate/shared/thinking-default.ts`). Toward openai-responses: the system prompt's
+      // placement and the `text.verbosity` default (`translate/shared/responses-model-dials.ts`).
       const outgoing =
         pair.egress === "openai-chat" && context.thinkingDefaultModels !== undefined
           ? disableThinkingDefaultForForcedTool(
@@ -237,7 +238,9 @@ export function createTranslatedRequestBody(
               upstreamModel,
               context.thinkingDefaultModels,
             )
-          : withModel
+          : pair.egress === "openai-responses"
+            ? applyResponsesModelDials(withModel, upstreamModel, responsesEgress)
+            : withModel
       return encoder.encode(JSON.stringify(outgoing))
     },
   }

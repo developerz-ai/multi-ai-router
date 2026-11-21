@@ -208,8 +208,8 @@ listed ids of their own and are never stripped; `x:free:nitro` is served where `
 An unknown base stays `model-unsupported`. Why: a hand-added `deepseek/deepseek-v4.1-flash:floor`
 dropped out of `openrouter-dz-coding-30d`'s `supportedModels` when the account was re-listed from
 `/models` (2026-11-15 ~05:38Z), and ~2,000 requests over 19 h were refused while the base id sat in
-the list. Discovery now audits (`account.models_discovered.detail.removed`) and logs every declared
-id an overwrite drops.
+the list. Discovery no longer overwrites: it merges and never removes an id
+([below](#every-write-to-supportedmodels-goes-through-one-function)).
 
 ### A recovery permit ranks first
 
@@ -402,7 +402,9 @@ in the same scope sat idle (prod, 2026-10-06).
 
 #### Waiting out the router's own recovery hold
 
-`probe-in-flight` with an `estimated` reset is not a provider verdict: it is a recovery awaiting its permit from the coordinator, or another request's half-open probe. Both settle within a coordinator tick or one request. When a selection fails and at least one rejection is such a hold that can release before the budget runs out, the request does not answer `429`. A session bound to a held account counts the same way; for a blocked binding, only the bound account's own hold counts. The request re-reads the warm snapshot and selects again every `RECOVERY_COORDINATOR_INTERVAL_MS`, for at most `RECOVERY_REQUEST_WAIT_MS` (default 5 s, `0` disables), and is served as soon as the permit lands. The same applies to a chain that sent nothing and ended only because a recovering account's permit or probe belonged to someone else, including when another account in that chain answered a clock-recoverable `429`. Rejections that no short wait can change (provider-reported spent windows, `exhausted`, `needs_reauth`, `disabled`, model-unsupported, a hold whose instant falls past the budget) never start a wait on their own. On give-up the request fails with the error the last selection computed, or with the refusal's `429` and its short `Retry-After`, recording exactly one `UsageRecord` when no attempt did. The client's abort ends the wait. The wait never runs on a request whose first selection succeeded, so it adds no overhead to served traffic.
+`probe-in-flight` with an `estimated` reset is not a provider verdict: it is a recovery awaiting its permit from the coordinator, or another request's half-open probe. Both settle within a coordinator tick or one request. When a selection fails and at least one rejection is such a hold that can release before the budget runs out, the request does not answer `429`. A session bound to a held account counts the same way; for a blocked binding, only the bound account's own hold counts. The request re-reads the warm snapshot and selects again every `RECOVERY_COORDINATOR_INTERVAL_MS`, for at most `RECOVERY_REQUEST_WAIT_MS` (default 5 s, `0` disables), and is served as soon as the permit lands. The same applies to a chain that sent nothing and ended only because a recovering account's permit or probe belonged to someone else, including when another account in that chain answered a clock-recoverable `429`. Rejections that no short wait can change (provider-reported spent windows, `exhausted`, `needs_reauth`, `disabled`, model-unsupported, a hold whose instant falls past the budget) never start a wait on their own. On give-up the request fails with the error the last selection computed, or with the refusal's `429` (`error.router.signal` `awaiting-recovery-permit`, `reset_source` `estimated`), recording exactly one `UsageRecord` when no attempt did. The client's abort ends the wait. The wait never runs on a request whose first selection succeeded, so it adds no overhead to served traffic.
+
+That refusal's `Retry-After` and `reset_at` are the soonest refused account's probe hold ending (`ROUTING_HALF_OPEN_HOLD_MS`): a held half-open probe's own expiry, or a whole hold from the refusal when only a permit was missing, since the router does not know when another request's permit settles. Through v2.69.0 it was `RECOVERY_RETRY_AFTER_MS` (1 s) with `signal: null`: the request had already waited out its budget, so a client parked until that instant walled again at once (developerz.ai, 2026-11-20: 57 of 212 run errors on one key).
 
 **Riding a probe already on the wire (plan 101, 12.5).** A recovery probe on a slow provider can outlast the budget: one customer deployment on 2026-11-09, a zai probe settled after 21 s while every waiter's 5 s ran out behind it and answered `429` with the account about to serve (14.4k such 429s in 14 days). Past `RECOVERY_REQUEST_WAIT_MS`, a request whose only router-owned obstacle is a `probe-in-flight` account whose permit was issued and is no longer available on this replica — a request holds it, so its outcome is coming — keeps re-selecting on the same cadence, up to `RECOVERY_PROBE_WAIT_MS` from its first pause (absent, or not above the budget, rides nothing). The same holds for a chain refused for want of that account's permit. Time asleep in either wait is reported as `recoveryWaitMs` and excluded from `router_overhead_seconds` ([08-observability.md](08-observability.md)).
 
@@ -631,7 +633,9 @@ Rules:
   refusal that clears with time (`extra-usage-gated`) on a one-account pool keeps its held `429`:
   the same request succeeds later. Such a refusal counts even when its transport
   refused before the upstream started: it is a classified verdict, not a preparation fault, so it
-  takes the failure tail (usage row, sentence, wall count). Before, the chain cooled
+  takes the failure tail (usage row, sentence, wall count). Both Claude-subscription transports
+  carry the flag: the fast transport dropped it until 2.70.1, so there the breaker read the same
+  refusal as a bare `429` and cooled the account. Before, the chain cooled
   each account it tried, so one client's prompt walked the pool and other tenants saw `429` until
   the cooldowns lapsed (plan 101, 05.14).
 - **Once bytes have been streamed to the client, the request fails honestly.** No silent restart.
@@ -1072,6 +1076,70 @@ that would break the rule (`overflow_not_member`, `400`), including an edit that
 overflow's own membership, and routing ignores an overflow reference that predates the rule
 rather than honoring it.
 
+### The deployment roster, and the check that reports drift
+
+Membership is normally written through the admin plane. A deployment can also **declare** the pools
+it expects in a version-1 JSON roster, mounted read-only and named by `POOL_ROSTER_PATH`; the mount
+rules, boot refusal and env reference are in
+[09-deployment.md](09-deployment.md#optional-deployment-pool-roster). The shape:
+
+```json
+{"version":1,"pools":[{"name":"team-a","members":["claude-1","claude-2","api-key"],"overflow":"api-key"}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `pools[].name` | The Pool's name — exact, case-sensitive, unique in the file. The name is how a roster entry finds its live Pool. |
+| `pools[].members[]` | **Account labels**, not ids — the label an operator gave the Account. At least one, no duplicates within a pool; the same label may appear in different pools. A roster never creates, renames or relabels an Account. Labels are not required to be unique across Accounts: where two share one, the check reads the first Account it sees holding it, and a Pool holding a *different* Account with that label reports `missing_member` — so give every Account its own label. |
+| `pools[].overflow` | **Required, not optional.** A label that **must also appear in that same `members` list**, and must not be its sole member. |
+
+The overflow rule is the one above, restated declaratively: the overflow is a **member of last
+resort**, withheld from the policy until every other member is ineligible for a new session, and
+never an account from outside the pool. The roster's schema is stricter than the admin plane's
+writes: an `overflow` that is not a member, or that is the Pool's only member, refuses the file at
+boot, while an admin write only refuses `overflow_not_member` (`400`) — the sole-member shape it
+still accepts is the one a roster refuses to declare. Because `overflow` is a required field, every
+roster entry names a member of last resort: a Pool the operator deliberately runs with **no**
+overflow cannot be declared, and listing it anyway reports `no_overflow` on every run until the Pool
+is given one or removed from the roster.
+
+A live Pool the roster does not name is **not** drift: the roster governs the pools it lists, and an
+operator's ad-hoc Pool is configuration, not a discrepancy.
+
+#### Keeping the members independent
+
+**The roster's members are the operator's assertion that those Accounts are independent upstream
+subscriptions.** Five Claude Max subs side by side is the shape this whole page rests on — five
+quota windows, five cooldowns, five resets. Two Accounts minted from the *same* subscription are
+one window wearing two labels: the pool fails over from one to the other and lands on the same
+wall, and the roster that lists both reads as redundancy that does not exist. So declare one entry
+per subscription, not one entry per Account row you happened to create, and retire or re-label the
+duplicate rather than leaving it in a pool.
+
+#### The drift check
+
+`pool_roster_check` is a **read-only** scheduled task: pools, their memberships and account labels
+are read, then folded against the roster by the pure `diffRoster`. It **reports; it never
+reconciles** — no pool, membership or Account is created, edited or deleted by it. A drift is a
+decision (an Account was retired, a label was typo'd, a member was meant to be added), so the
+check's whole output is one alert line per item and one gauge series per (pool, kind); a task that
+"fixed" the roster by writing the database would silently change what the operator declared.
+
+| Kind | What drifted |
+|---|---|
+| `pool_missing` | The roster names a Pool no live Pool carries. Reported under the **roster's name** — that Pool has no id, and the name is the only handle an operator has to go fix it. |
+| `missing_member` | A roster member whose label resolves to no Account at all, or resolves to an Account the Pool's membership does not hold. |
+| `unexpected_member` | The Pool holds an Account the roster's members do not name. |
+| `no_overflow` | The roster names an overflow and the live Pool engages none — the pool has no member of last resort, so it serves nothing once every ordinary member is ineligible. |
+| `overflow_mismatch` | The live overflow is a member the roster does not name as the overflow, or is not a member at all. The item names the Account that **is** engaged, because that is the row to change. |
+
+The check resolves a member **by label to the live Account's id**, so a pool whose membership holds
+the right Account compares equal even though the roster never mentions an id. It runs on
+`POOL_ROSTER_CHECK_INTERVAL_MINUTES` through the ordinary scheduler (advisory lock, `ScheduledTaskRun`
+outcome) and is constructed **only** when `POOL_ROSTER_PATH` is set. Metric, alert line and the
+monitoring condition are in
+[08-observability.md](08-observability.md#pool-roster-drift).
+
 ## Reset visibility and manual re-check
 
 The operator's two questions when a pool degrades are *"when does it come back?"* and *"is it
@@ -1148,12 +1216,44 @@ failover, and sends the smallest real completion the account's dialect can make.
 
 | Property | Behavior |
 |---|---|
-| What it does | One `GET` at the provider's own model listing, on this account's own dialect and credential, through the same attempt path — then writes the ids into `supportedModels` so selection and `GET /v1/models` both see them. |
+| What it does | One `GET` at the provider's own model listing, on this account's own dialect and credential, through the same attempt path — then **merges** the ids into `supportedModels` so selection and `GET /v1/models` both see them. It adds every listed id the account lacks and keeps every id it already has. |
+| Never removes | An id on the list the catalogue does not carry — a pinned variant, a hand-added id — is kept and answered as `notInCatalogue`, beside `added`. Removing one is a separate, deliberate `PATCH /:id/models {"remove": [...]}` (the console's "Remove these from the account"). Prod 2026-11-15: a discovery that replaced the list dropped a hand-added id, and ~320 tasks over 19 h were refused `model-unsupported`. |
 | Cost | None. A listing bills no tokens and spends no quota window, which is why it carries neither a cooldown nor a confirmation — the opposite of Test now on both counts. |
 | Not a poll | Nothing schedules it. A catalog that refreshed itself would change routing without an operator asking, and an upstream retiring one name would quietly take an account out of selection mid-deployment. |
 | Empty answer | Written as *nothing*, never as `[]`. An upstream that listed no models has told the router nothing; declaring "serves no model" would turn a config gap into a `503` per request. |
 | Refused for | Claude subscriptions — the Agent SDK owns that catalog and there is no listing endpoint to ask — and any provider with no implementation. Refused by name, before a socket is opened. |
-| Where the write goes | Through the accounts service, so it audits the field change and refreshes the warm routing catalog exactly like an operator's edit would. A second audit row, `account.models_discovered`, records that the question was asked at all. |
+| Where the write goes | Through the one `supportedModels` writer (below), so it holds the row lock, audits the ids that moved and refreshes the warm routing catalog exactly like an operator's edit would. A second audit row, `account.models_discovered`, records that the question was asked at all. |
+
+### Every write to `supportedModels` goes through one function
+
+`services/accounts/supported-models.ts` is the rule; `supported-models-writer.ts` runs it inside the
+repository's row lock (`editSupportedModels`: `SELECT … FOR UPDATE`, decide, write, one
+transaction). The field-wise account `update` cannot write the column at all. Its writers:
+
+| Writer | Shape | Removes an id when |
+|---|---|---|
+| "Discover models" | add | never |
+| `PATCH /api/admin/accounts/:id/models` `{ add?, remove? }` | add / remove single ids | the caller named it in `remove` |
+| `PUT /api/admin/accounts/:id/models` `{ models, removing }` | full replace | the caller named it in `removing`; an id the replacement drops that `removing` does not name refuses the write `409 supported_models_removal_unacknowledged`, naming it |
+| `PATCH /api/admin/accounts/:id` `{ supportedModels, supportedModelsRemoving? }` | full replace | same rule as `PUT`; refused before any other field in the body is written |
+| `POST /api/admin/accounts` | the initial list | — (there is nothing to remove) |
+
+**The invariant: an id leaves the list only when its caller named it.** A client holding a list read
+before another edit cannot drop the id that edit added, and two operators adding one id each both
+land — the add/remove operation never round-trips the list, and the lock serializes the two writes.
+
+**Every change is audited** as `account.supported_models_changed` with `added`, `removed`, the
+`source` (`discover`, `operator-edit`, `operator-replace`, `account-update`) and the caller as the
+row's actor, plus one `account supported models changed` info line. An edit that changes nothing
+writes no row.
+
+**A removal is remembered** in `accounts.supported_models_removed` (`[{ model, removedAt, by }]`) for
+`MODEL_REMOVAL_MEMORY_DAYS` (default 30), pruned on each write and filtered at catalog load. Routing
+reads it for one thing only: an account dropped `model-unsupported` for an id it recently removed
+carries the removal on its rejection, the `404 model_not_found` sentence names it in place of
+"a client change" (`"<id>" was removed from <label>'s supported models at T by X`), and the refusal
+writes one `warn` line `model refused: removed from the account's supported models` with the
+account, the id, when and by whom. It never admits or excludes an account.
 
 ## Worked example
 

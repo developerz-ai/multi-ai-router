@@ -221,6 +221,10 @@ export const anthropicRequestSchema = z.object({
   output_config: z
     .looseObject({
       effort: z.string().optional().catch(undefined),
+      // Not an Anthropic field: the router's one place for an Anthropic-wire caller to state
+      // Responses `text.verbosity` (low | medium | high), carried verbatim toward openai-responses
+      // only. Lenient for the same reason as `effort`.
+      verbosity: z.string().min(1).optional().catch(undefined),
       // Anthropic's structured-output constraint, as the Messages API states it on the wire:
       // `output_config.format` — `{type: "json_schema", schema: {...}}`. Named here so it can be
       // refused by name instead of dropped with the rest of `output_config` (`shared/reject.ts`).

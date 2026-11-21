@@ -106,7 +106,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     // A refused probe is not an attempt; another request already owns recovery.
     const probe = admitHalfOpenProbe(runtime.health, decision.candidate, attemptStartedAt)
     if (!probe.admitted) {
-      refusals.record()
+      refusals.record(accountId)
       runtime.recovery?.hint(accountId, "cooldown-expired")
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
       logCandidateDropped(ctx.log, accountId, decision.attempt, "half-open-probe-in-flight")
@@ -210,7 +210,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       }
       progress = priorProgress
       ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
-      if (outcome.kind === "admission-refused") refusals.record()
+      if (outcome.kind === "admission-refused") refusals.record(accountId)
       else refusals.recordPreparation()
       logUnstartedDrop(ctx.log, accountId, decision.attempt, outcome)
       continue

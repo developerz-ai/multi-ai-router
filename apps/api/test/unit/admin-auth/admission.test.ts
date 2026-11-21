@@ -15,6 +15,10 @@ for (const uniqueIps of [false, true]) {
       release = resolve
     })
     let verifies = 0
+    let entered = () => {}
+    const entry = new Promise<void>((resolve) => {
+      entered = resolve
+    })
     const service = createAdminAuthService({
       env,
       config: { maxFailedAttempts: 2, maxConcurrentLogins: uniqueIps ? 2 : 4 },
@@ -24,6 +28,7 @@ for (const uniqueIps of [false, true]) {
         remove: async () => false,
         verify: async () => {
           verifies++
+          if (verifies === 2) entered()
           await gate
           return false
         },
@@ -34,6 +39,7 @@ for (const uniqueIps of [false, true]) {
         .completeLocalLogin({ password: "wrong", ip: uniqueIps ? `ip-${i}` : "ip" })
         .catch((error: unknown) => error),
     )
+    await entry
     expect(verifies).toBe(2)
     release()
     const outcomes = await Promise.all(pending)
@@ -43,6 +49,10 @@ for (const uniqueIps of [false, true]) {
 
 test("a successful login reset cannot bypass the global password work limit", async () => {
   const completions: ((verified: boolean) => void)[] = []
+  let entered = () => {}
+  let entry = new Promise<void>((resolve) => {
+    entered = resolve
+  })
   const service = createAdminAuthService({
     env,
     config: { maxFailedAttempts: 2, maxConcurrentLogins: 2 },
@@ -50,17 +60,26 @@ test("a successful login reset cannot bypass the global password work limit", as
       isConfigured: async () => true,
       set: async () => {},
       remove: async () => false,
-      verify: () => new Promise<boolean>((resolve) => completions.push(resolve)),
+      verify: () =>
+        new Promise<boolean>((resolve) => {
+          completions.push(resolve)
+          if (completions.length >= 2) entered()
+        }),
     },
   })
   const login = () =>
     service.completeLocalLogin({ password: "password", ip: "ip" }).catch((error: unknown) => error)
   const successful = login()
   const stillRunning = login()
+  await entry
   expect(completions).toHaveLength(2)
   completions[0]?.(true)
   await successful
+  entry = new Promise<void>((resolve) => {
+    entered = resolve
+  })
   const afterReset = login()
+  await entry
   expect(completions).toHaveLength(3)
   expect(await login()).toBeInstanceOf(AdminLoginThrottledError)
   expect(completions).toHaveLength(3)

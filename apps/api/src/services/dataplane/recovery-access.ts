@@ -23,7 +23,6 @@ export interface RecoveryAttempt {
   finish(state: "succeeded" | "failed" | "uncertain"): void
 }
 export interface RecoveryAccess {
-  readonly retryAfterMs: number
   readonly quotaStaleAfterMs: number
   readonly catalog: RoutingCatalog
   currentSnapshot(accountId: string): AccountSnapshot | undefined
@@ -69,7 +68,6 @@ export function createRecoveryAccess(deps: {
     })
   }
   return {
-    retryAfterMs: deps.retryAfterMs,
     quotaStaleAfterMs: deps.quotaStaleAfterMs,
     catalog: {
       pools: () => deps.catalog.pools(),

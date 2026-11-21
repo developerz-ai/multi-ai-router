@@ -68,7 +68,6 @@ function chain(
     operation: "messages",
     requestStarted: 0,
     recovery: {
-      retryAfterMs: 1000,
       quotaStaleAfterMs: 1000,
       catalog: c,
       currentSnapshot: () => upstream.snapshot,

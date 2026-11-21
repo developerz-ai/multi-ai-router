@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { TranslationError } from "@multi-ai-router/core"
+import { CODEX_RESPONSES_EGRESS } from "../../../src/providers/drivers/openai-oauth"
 import {
   createReasoningSealer,
   type ReasoningSeal,
 } from "../../../src/services/crypto/reasoning-seal"
 import { createTranslatedRequestBody } from "../../../src/services/dataplane"
-import type { TranslationContext, TranslationPair } from "../../../src/services/translate"
+import {
+  type TranslationContext,
+  type TranslationPair,
+  translationPair,
+} from "../../../src/services/translate"
 
 /**
  * The lazy conversion cache: parsed at most once, converted at most once per **target shape**, and
@@ -162,5 +167,49 @@ describe("reasoning seal: bound to the selected account", () => {
     translated.bodyFor(pair, "gpt-5", "max_tokens")
     translated.bodyFor(pair, "gpt-5", "max_tokens")
     expect(calls).toHaveLength(1)
+  })
+})
+
+describe("Responses model dials: decided by the upstream model, after the alias", () => {
+  const pair = translationPair("anthropic", "openai-responses")
+  if (pair === null) throw new Error("anthropic -> openai-responses is not registered")
+  const source = new TextEncoder().encode(
+    JSON.stringify({
+      model: "fast",
+      system: "be terse",
+      max_tokens: 64,
+      messages: [{ role: "user", content: "hi" }],
+    }),
+  )
+  const send = (translated: ReturnType<typeof createTranslatedRequestBody>, model: string) =>
+    decode(translated.bodyFor(pair, model, "max_tokens", undefined, CODEX_RESPONSES_EGRESS))
+
+  test("one conversion, two accounts: only the gpt-6.2 alias moves the system prompt", () => {
+    const translated = createTranslatedRequestBody(source, CONTEXT)
+    const older = send(translated, "gpt-6.1-sol")
+    const newer = send(translated, "gpt-6.2-sol")
+    const again = send(translated, "gpt-6.1-sol")
+
+    expect(older.instructions).toBe("be terse")
+    expect((older.input as unknown[])[0]).toMatchObject({ role: "user" })
+    expect(newer.instructions).toBe("")
+    expect((newer.input as unknown[])[0]).toEqual({
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "be terse" }],
+    })
+    // The cached conversion is shared, so the move must not have leaked into it.
+    expect(again).toEqual(older)
+    for (const body of [older, newer]) expect(body.text).toEqual({ verbosity: "low" })
+  })
+
+  test("toward any other egress nothing is added", () => {
+    const chat = translationPair("anthropic", "openai-chat")
+    if (chat === null) throw new Error("anthropic -> openai-chat is not registered")
+    const body = decode(
+      createTranslatedRequestBody(source, CONTEXT).bodyFor(chat, "gpt-6.2-sol", "max_tokens"),
+    )
+    expect(body.text).toBeUndefined()
+    expect(body.verbosity).toBeUndefined()
   })
 })

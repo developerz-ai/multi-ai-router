@@ -1011,6 +1011,7 @@ identity beyond its label.
 | `router_build_info` | gauge | `version`, `revision` | Always `1`; the labels are the payload. First in the exposition. Join on it — `router_build_info * on() group_left(version) …` — to annotate a graph with the build that produced it, instead of putting a `version` label on every other series and multiplying their cardinality to say the same thing once. `revision` is the commit sha the image was built from, because a version is not an identity: a rebuilt `latest`, an rc cut twice and a locally built image all report the same one. `unknown` when nothing stamped the build (`ROUTER_REVISION`) — never a fabricated sha |
 | `router_requests_total` | counter | `ingress_dialect`, `model`, `key_id`, `outcome` | Client-facing requests. `model` is the requested name when it resolved against the routing catalog, `other` when it did not. Every request that reaches an inference route counts once, including one refused **before** dispatch — an unknown key (`key_id="none"`), a key store that could not answer — under its own `outcome`, so an alert on this counter sees them (`middleware/requestCounting.ts`). A body Bun refuses over `maxRequestBodySize` never reaches the app and is not counted |
 | `router_pool_serving_members` | gauge | `pool_id` | Members of each pool whose account is currently `active` on this replica, health overlaid, computed at scrape time from the warm snapshot. Every pool, no inventory needed. **Alert at `0`**: the pool has no member left to serve, so every request to it fails over or is refused (13.14). Pair with the absent-success alert below |
+| `router_pool_roster_drift` | gauge | `pool_id`, `kind` | Drift between the configured deployment roster and live pools — see [Pool roster drift](#pool-roster-drift). Absent when there is none, so alert on `> 0` |
 | `router_request_duration_seconds` | histogram | `ingress_dialect`, `model`, `streamed` | End-to-end client request latency, upstream time included |
 | **`router_overhead_seconds`** | histogram | `ingress_dialect`, `path` (`passthrough`\|`translate`\|`agent_sdk`) | **Time spent in the router, excluding upstream.** First-class: shown on the dashboard next to upstream latency, because "the router is slow" and "the provider is slow" are different problems. A regression here is a bug, not a tuning opportunity ([06-protocol-translation.md](06-protocol-translation.md)) |
 | `router_upstream_duration_seconds` | histogram | `provider`, `account_id`, `streamed` | Upstream time alone. Together with the above, the two halves always add up |
@@ -1068,6 +1069,7 @@ knowing which clock each one is on:
 | `router_accounts`, `router_breaker_state`, `router_credential_rejected`, `router_quota_*`, `router_usage_queue_depth`, `router_sdk_subprocess*`, `router_price_overrides_loaded_timestamp_seconds` | Sampled **per scrape** from the same warm state the request path reads | Cannot disagree with the router about which accounts are cooling down, or about how many subprocesses it is holding. A gauge mirrored on every acquire would put bookkeeping on the path the gate exists to bound |
 | `router_price_table_asof_timestamp_seconds` | Set once at construction | The date is compiled into the image; nothing at runtime can move it |
 | `router_task_*` | Each settled scheduler tick | `skipped_locked` (held task exclusion) and `skipped_capacity` (local session capacity) record no duration/items and leave the failure streak alone |
+| `router_pool_roster_drift` | Each settled `pool_roster_check` tick, **replaced wholesale** | The whole of what is drifted right now, not an increment: a repaired drift drops its series on the next run and a clean roster exports none. A **failed** run leaves the previous series in place rather than reporting clean |
 
 Two deliberate absences. `router_overhead_seconds` has no sample for a request rejected before an
 egress path was chosen — there is no `path` to report, and inventing a fourth label value to hold
@@ -1672,6 +1674,7 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Cooldown recheck (`cooldown_recheck`) | `COOLDOWN_RECHECK_INTERVAL_MINUTES` (hourly) |
 | Plan quota read (`plan_quota_read`) | `PLAN_QUOTA_READ_INTERVAL_MINUTES` (15) |
 | Empty pool reap (`pool_reap`) | `POOL_REAP_INTERVAL_MINUTES` (hourly); deletes Pools memberless past `RETENTION_EMPTY_POOL_DAYS`. Two `warn` alert lines: `empty pool reaped` (`poolId`, `poolName`, `emptySince`, `revokedKeyIds`, `detachedKeyIds`) per Pool, and `key revoked: every pool it was scoped to was reaped` (`keyId`, `poolId`) per revoked key — a client holding that key starts failing `401` |
+| Roster drift check (`pool_roster_check`) | `POOL_ROSTER_CHECK_INTERVAL_MINUTES` (15); **constructed only when `POOL_ROSTER_PATH` is set**, read-only, never reconciles — see [Pool roster drift](#pool-roster-drift) |
 
 ### The catalog refresh is not a scheduled task
 
@@ -1699,6 +1702,56 @@ in a single-replica deployment the interval is nearly irrelevant. Detail:
 | `router_task_items_total` | counter | `task` | Items processed — rows deleted, records rolled up, accounts probed, config directories reaped |
 | `router_task_consecutive_failures` | gauge | `task` | Resets to zero on success. Non-zero and climbing is a task failing quietly |
 | `router_task_runs_total` | counter | `task`, `outcome` (`success`\|`partial`\|`failed`\|`skipped_locked`\|`skipped_capacity`) | Held task exclusion keeps its usual interval; local capacity pressure retries after `SCHEDULER_LOCAL_CAPACITY_RETRY_MS`. Neither skip is a task failure |
+
+### Pool roster drift
+
+A deployment may declare its expected pools in a version-1 JSON roster named by
+`POOL_ROSTER_PATH`; the format, the overflow rule and what is *not* drift are in
+[05-routing-and-failover.md](05-routing-and-failover.md#the-deployment-roster-and-the-check-that-reports-drift).
+The check compares that declaration against live state and **reports**; it never creates, edits or
+deletes a Pool, a membership or an Account. What an operator watches:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `router_pool_roster_drift` | gauge | `pool_id`, `kind` | Count of drifted items for that pool and kind. Absent when there is no drift — see below |
+
+The five `kind` values, one per line in [05-routing-and-failover.md](05-routing-and-failover.md#the-drift-check):
+
+| `kind` | Meaning |
+|---|---|
+| `pool_missing` | The roster names a Pool no live Pool carries |
+| `missing_member` | A roster member that resolves to no Account, or to an Account the Pool does not hold |
+| `unexpected_member` | The Pool holds an Account the roster does not name |
+| `no_overflow` | The roster names an overflow and the live Pool engages none — no member of last resort |
+| `overflow_mismatch` | The live overflow is not the member the roster names as overflow (or is not a member) |
+
+`pool_id` carries the **roster name** on a `pool_missing` series — that Pool has no id, and the
+name is the only handle a dashboard or runbook has to point at. Every other kind carries the live
+Pool's id. The value is a count, so two missing members in one pool are one series reading `2`, not
+two series: the label set stays bounded by the roster.
+
+**Every series is rebuilt per run, so absence means clean.** The collector `setRosterDrift()` clears
+the gauge and re-sets one series per (pool, kind) present in this run's diff — a repaired drift does
+not linger as a stale non-zero series; it disappears on the run after the fix. The one case that
+stays stale is a **failed** run: a read that threw leaves the previous values in place, because
+clearing them would report "no drift" for a check that did not run. Watch
+`router_task_consecutive_failures{task="pool_roster_check"}` beside it.
+
+**Alert lines.** Each drifted item emits one `logger.warn("pool roster drift")` carrying `pool`,
+`poolId`, `kind` and `account` (the roster label, or the Account id when no Account answers it).
+Labels and Account ids only — **the line never carries a credential**: no token, no refresh token, no
+`CLAUDE_CONFIG_DIR` path. The `warn` lines are the per-item detail; the gauge is the aggregate.
+
+**Monitoring condition:**
+
+```
+router_pool_roster_drift > 0
+```
+
+Any series above zero is a declaration and a database disagreeing about which accounts serve a
+pool — somebody retired an Account the roster still names, or added one it does not. It is a
+*warning*, not a page: routing still works, and the correction is an operator's edit to the roster
+or the pool.
 
 ## Retention
 

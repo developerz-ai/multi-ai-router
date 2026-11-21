@@ -382,6 +382,7 @@ describe("GET /v1/providers", () => {
         cooling_down: 0,
         exhausted: 0,
         needs_reauth: 0,
+        cooling: [],
       },
       // Two z.ai credentials, one usable — the state an operator needs to see.
       {
@@ -393,6 +394,7 @@ describe("GET /v1/providers", () => {
         cooling_down: 0,
         exhausted: 1,
         needs_reauth: 0,
+        cooling: [],
       },
     ])
   })

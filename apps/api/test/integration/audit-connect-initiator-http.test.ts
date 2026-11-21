@@ -8,6 +8,7 @@ import { requestId } from "../../src/middleware/requestId"
 import { ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes } from "../../src/routes/admin/accounts"
 import { oauthCallbackRoutes } from "../../src/routes/admin/oauth-callback"
 import {
+  type AccountModelsService,
   type AccountsService,
   type ClaudeConnectService,
   createConnectService,
@@ -113,6 +114,7 @@ function harness() {
         recheck: {} as RecheckService,
         testNow: {} as TestNowService,
         discoverModels: {} as DiscoverModelsService,
+        models: {} as AccountModelsService,
         connect,
       }),
     )

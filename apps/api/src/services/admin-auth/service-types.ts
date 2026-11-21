@@ -4,6 +4,7 @@ import type { AdminAuthConfig } from "./config"
 import type { LocalAdminCredentials } from "./localCredential"
 import type { OIDCFlow } from "./oidc/flow"
 import type { AdminSession, SessionStore } from "./sessionStore"
+import type { SharedThrottle } from "./shared-throttle"
 
 export interface AdminAuthDeps {
   /**
@@ -21,6 +22,8 @@ export interface AdminAuthDeps {
   readonly local?: LocalAdminCredentials | null
   readonly store?: SessionStore
   readonly config?: Partial<AdminAuthConfig>
+  /** Production injects Postgres; absence is an isolated-test memory budget. */
+  readonly throttle?: SharedThrottle
   /** Injected clock, so expiry and lockout are testable without waiting. */
   readonly now?: () => number
   /** Absent means no audit rows and nothing else different. See the module comment. */

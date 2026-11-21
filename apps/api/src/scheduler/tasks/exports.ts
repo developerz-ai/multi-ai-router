@@ -9,7 +9,7 @@ export type { ConfigDirReapDeps, OrphanConfigDir, ReapPlan, ReapPlanInput } from
 export { createConfigDirReapTask, planConfigDirReap } from "./config-dir-reap"
 export type { IdleAccountProbeDeps } from "./idle-account-probe"
 export { createIdleAccountProbeTask, IDLE_PROBE_MODELS } from "./idle-account-probe"
-export { scheduledTaskIntervals } from "./intervals"
+export { poolRosterCheckIntervalMs, scheduledTaskIntervals } from "./intervals"
 export type { JanitorDeps } from "./janitor"
 export { createJanitorTask } from "./janitor"
 export type { ModelCatalogRefreshDeps } from "./model-catalog-refresh"

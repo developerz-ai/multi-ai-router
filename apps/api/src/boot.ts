@@ -8,6 +8,7 @@ import {
 } from "@multi-ai-router/db"
 import { createRuntime, type Runtime, type RuntimeDeps } from "./composition"
 import { type Env, EnvValidationError, parseEnv } from "./config/env"
+import { loadPoolRoster } from "./config/pool-roster"
 import type { Logger } from "./logging/logger"
 import { captureException, flushSentry } from "./observability"
 import { ConfigDirError } from "./providers/claude-sdk/config-dir"
@@ -118,7 +119,8 @@ export async function assertAdminSignInConfigured(
 /** A malformed environment exits non-zero naming the offending variable, and never starts. */
 export function readEnv(): Env {
   try {
-    return parseEnv(process.env)
+    const env = parseEnv(process.env)
+    return { ...env, poolRoster: loadPoolRoster(env.poolRosterPath) }
   } catch (error) {
     if (error instanceof EnvValidationError) {
       process.stderr.write(`${error.message}\n`)

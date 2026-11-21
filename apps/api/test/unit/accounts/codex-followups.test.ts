@@ -70,7 +70,7 @@ describe("A. the Codex model listing", () => {
       },
       codexRow(),
     )
-    expect(seen[0]).toBe("https://chatgpt.com/backend-api/codex/models?client_version=0.170.0")
+    expect(seen[0]).toBe("https://chatgpt.com/backend-api/codex/models?client_version=0.171.0")
     expect(listed).toEqual({
       ok: true,
       entries: [
@@ -84,7 +84,7 @@ describe("A. the Codex model listing", () => {
     const warnings: { msg: string; fields?: Record<string, unknown> }[] = []
     const service = createDiscoverModelsService({
       accounts: { findById: async () => codexRow() },
-      write: { update: async () => ({ ok: true, value: {} }) as never },
+      models: { write: async () => ({ ok: true, value: {} }) as never },
       cipher: { decrypt: (value) => value },
       audit: { record: async () => {} },
       timeoutMs: 5_000,

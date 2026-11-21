@@ -30,6 +30,13 @@ import { splitContextTag } from "./context-tag"
 import { inModelFamily } from "./model-family"
 import type { AccountSnapshot } from "./types"
 
+/** One id an operator or a discovery took off an account's list, and by whom (`removedModels`). */
+export interface ModelRemoval {
+  readonly at: Date
+  /** The audit actor of the write that removed it. */
+  readonly by: string
+}
+
 export interface ModelResolution {
   /** The name to send upstream. Equal to the requested name unless an alias renamed it. */
   readonly upstreamModel: string
@@ -73,6 +80,23 @@ function serves(account: AccountSnapshot, upstreamModel: string): boolean {
   }
   if (account.modelFamily !== undefined) return inModelFamily(account.modelFamily, upstreamModel)
   return true
+}
+
+/**
+ * The recent removal that explains why this account does not serve `upstreamModel`, if one does:
+ * the id itself, or the base id under a routing variant (`x:floor` refused because `x` left).
+ */
+export function removalOf(
+  account: AccountSnapshot,
+  upstreamModel: string,
+): ({ readonly model: string } & ModelRemoval) | undefined {
+  const removed = account.removedModels
+  if (removed === undefined) return undefined
+  const exact = removed.get(upstreamModel)
+  if (exact !== undefined) return { model: upstreamModel, ...exact }
+  const base = routingVariantBase(account, upstreamModel)
+  const viaBase = base === null ? undefined : removed.get(base)
+  return base === null || viaBase === undefined ? undefined : { model: base, ...viaBase }
 }
 
 /**

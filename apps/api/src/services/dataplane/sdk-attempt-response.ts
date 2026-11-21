@@ -66,11 +66,15 @@ export function releasingWith(response: Response, release: () => void): Response
  * be answered with the upstream's own words when no other candidate serves.
  *
  * A fast-transport refusal (`claude-fast/response.ts`) also carries its private classification.
- * Its scrubbed upstream text goes to the attempt log as `upstreamMessage`. When that classification
- * is `invalid-request`, the attempt also gets a router verdict: the fast body is only a sentence
- * the router wrote, so it is rendered as the router's own `InvalidRequestError`, which carries
- * `error.router` with `wall: "request"`. Every other status keeps its status-shaped verdict
- * unchanged.
+ * Its signal and scrubbed upstream text go to the attempt log as `upstreamSignal` and
+ * `upstreamMessage`, and its `requestAttributable` / `permanentForRequest` ride the failure, as on
+ * the Agent-SDK path (`sdk-attempt.ts`): without them the breaker read a request-provoked `429` as
+ * the account's and cooled it (prod 2026-11-20, `claude-sdk:extra-usage-gated`). When that
+ * classification is `invalid-request`, the attempt also gets a router verdict: the fast body is
+ * only a sentence the router wrote, so it is rendered as the router's own `InvalidRequestError`,
+ * which carries `error.router` with `wall: "request"`. Every other kind keeps its status-shaped
+ * verdict: handing it to `classification` would render it through `toRouterError` instead
+ * (`chain-error.ts`) and change what the client reads for a `429`, `401` or `402`.
  */
 export async function errorResponseFailure(
   response: Response,
@@ -92,6 +96,8 @@ export async function errorResponseFailure(
       // Router-authored (docs/idea/07-security.md): the SDK body is relayed as an *upstream*
       // answer where relaying is safe, but this sentence is what a router-shaped error renders.
       message: "the Claude Agent SDK turn ended in an upstream error",
+      ...(fast?.classification.requestAttributable === true ? { requestAttributable: true } : {}),
+      ...(fast?.classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
     },
     classification: refusal?.classification ?? null,
     rateLimit,
@@ -101,6 +107,7 @@ export async function errorResponseFailure(
       bodyText,
       contentType: response.headers.get("content-type"),
     },
+    ...(fast === undefined ? {} : { upstreamSignal: fast.classification.signal }),
     ...(fast?.classification.message === undefined
       ? {}
       : { upstreamMessage: fast.classification.message }),

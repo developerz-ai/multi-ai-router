@@ -76,8 +76,14 @@ request's total prompt (input + cache read + cache write) reaches that size; abs
 whatever the prompt. These are the numbers the router's own usage records are priced by, so a client
 pricing its own usage from them gets the router's answer.
 
-**`reasoning`** is the upstream listing's own `{ supported, toggle?, effort? }` for the model, read
-into `model_catalog` by the hourly sweep and absent where no serving account's listing stated one.
+**`reasoning`** is the upstream listing's own `{ supported, toggle?, effort?, default? }` for the
+model, read into `model_catalog` by the hourly sweep and absent where no serving account's listing
+stated one. `default` is the level the upstream's own client uses when none is asked for; additive
+in 2.72.0, so a reader that ignores it parses as before. The ChatGPT/Codex listing states both
+(`supported_reasoning_levels`, `default_reasoning_level`): `gpt-6.2-sol` reads
+`{ supported: true, effort: ["low", "medium", "high", "xhigh", "max"], default: "low" }`. Codex's
+`ultra` and `persistent` are UI selections its client rewrites before sending, so they are never
+stated as levels.
 A driver may read its listing off another of its surfaces (`ProviderModelListing.dialect`):
 OpenCode Go's anthropic `/v1/models` names ids only, so a Go seat serving on that surface still
 reads `/openai/v1/models`, which carries `limit.context`, `limit.output` and
@@ -94,7 +100,7 @@ max_output_tokens, context_source, pricing }`, in provider order — an additive
 that wants the largest window can see which provider holds it.
 
 **`/v1/providers`** answers `{ object: "list", data: [{ id, accounts, available, active, disabled,
-cooling_down, exhausted, needs_reauth }] }`, one row per provider with an in-scope account, sorted by
+cooling_down, exhausted, needs_reauth, cooling }] }`, one row per provider with an in-scope account, sorted by
 id. `accounts` counts in-scope accounts **whatever their status**, so it is not liveness; `available`
 is those not standing-blocked (`active` + `cooling_down`, because a cooldown is a clock). The five
 status counts split the same accounts by their **live** status — the health-overlaid one routing
@@ -102,6 +108,16 @@ reads, so an account the breaker cooled or a `402` exhausted a moment ago is cou
 its stored `active` — and always sum to `accounts`, every status present with `0` when none. A reader
 sizing a key's capacity reads `active`. Added in 2.64.0, additive: a reader of the first three fields
 is unaffected.
+
+`cooling` lists, per provider, every in-scope account the router holds out **on a clock**, soonest
+first: `{ cooldown_until, reason, window, reset_source }`. `reason` is `cooling-down` (the breaker),
+`credential-rejected` (a refused key on its re-test clock) or `quota-window-spent` (with `window`
+naming it); `cooldown_until` is `null` when the router holds it with no stated instant;
+`reset_source` says whose instant it is. A standing block (`exhausted`, `needs_reauth`, `disabled`)
+is counted, not listed. No account id or label: a key-holder can say "the router holds one of these
+until T" without learning anything about credentials outside its scope. A long hold is re-checked
+against the upstream by `cooldown_recheck` (hourly by default) before its instant arrives, so the
+instant is an upper bound, not a promise. `[]` when nothing is held.
 
 Both take the same router key and the same scope intersection as everything else on `/v1`. The model
 set comes from the same implementation `GET /v1/models` uses, because a second opinion about what a
@@ -894,7 +910,7 @@ bytes were already sent`.
 | `retry_after_s` | Equal to the `Retry-After` header, `null` when none is sent |
 | `accounts` | The accounts the verdict names, as `{account, state, reset_at}`: on a `pool` verdict every member by its filter reason (`cooling-down`, `quota-window-spent`, `probe-in-flight`, `exhausted`, `needs-reauth`, `model-unsupported`, …), otherwise each attempted account by its usage outcome. `account` is opaque: `acct_` + 16 hex of SHA-256 of the router id (`errors/account-ref.ts`), the same value as `x-router-account`. Opacity holds only once a caller stops reading sentences: the frozen session-bound one prints the raw router id |
 | `pools` | Names of the pools selection drew from |
-| `signal` | Scrubbed like the message. The machine token that decided it: a classifier signal (`anthropic:rate_limit_error`, `openai:insufficient_quota`), a filter reason, `no-account-in-scope`, `timeout`; `null` when none |
+| `signal` | Scrubbed like the message. The machine token that decided it: a classifier signal (`anthropic:rate_limit_error`, `openai:insufficient_quota`), a filter reason, `no-account-in-scope`, `timeout`, `awaiting-recovery-permit` (a chain refused only because a recovering account's permit or half-open probe belonged to another request: the router's own bookkeeping, never a provider's window; `reset_at` is the soonest such account's probe hold ending, `reset_source` `estimated`); `null` when none. Open set: a client branches on the tokens it knows and treats any other as unknown |
 | `attempts` | Upstream attempts made before the router answered; `0` when none |
 | `request_id` | The request id, as `x-request-id` |
 | `reconnect` | Accounts a human must reconnect for this to be served, as `{account, label, provider, url}`; `[]` when none ([below](#reconnect-needed)) |
@@ -1046,7 +1062,9 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `temperature` in (1, 2] | OpenAI → `anthropic` | carried verbatim; Anthropic's range ends at 1, so the `400` is the upstream's |
 | `max_tokens` below 16 | `anthropic` → `openai-responses` | carried verbatim as `max_output_tokens`; an upstream minimum is the upstream's `400` (minimum unverified). Not toward Codex, which takes no ceiling at all ([Surface rules](#surface-rules)) |
 | More than 4 `stop_sequences` | `anthropic` → `openai-chat` | carried verbatim as `stop`; OpenAI's limit of 4 is the upstream's `400` |
-| `verbosity` / `text.verbosity`, OpenRouter's `reasoning` object on openai-chat | OpenAI → any other dialect | dropped silently: not in the parsed schema. Only `reasoning_effort` / `reasoning.effort` is read as the reasoning dial |
+| `verbosity` (openai-chat), `output_config.verbosity` (anthropic, a router extension) | → `openai-responses` | **carried** verbatim as `text.verbosity` (beside any `text.format`). Unstated, toward a GPT-5/6 upstream model (opencode's `supportsVerbosity`, `shared/responses-model-dials.ts`) the router sends `text.verbosity: "low"`, what Codex and opencode send that family; toward any other model none. Decided on the post-alias model, after the conversion |
+| `verbosity` / `text.verbosity` toward any other dialect, OpenRouter's `reasoning` object on openai-chat | OpenAI → any other dialect | dropped silently: not in the parsed schema. Only `reasoning_effort` / `reasoning.effort` is read as the reasoning dial |
+| Top-level `system` / `instructions` toward GPT-6.2 or later | → `openai-responses` | **moved** to a leading `developer` input item (`input_text`). From GPT-6.2 top-level `instructions` are appended after `input` and billed uncached on every request (developers.openai.com prompt-caching guide, read 2026-11-20), so a system prompt there is never a cache read. `instructions` stays `""` where the surface requires the field (Codex), absent elsewhere. Decided on the post-alias model by a version threshold (`gpt-6.2` onward, `cachesTopLevelInstructions`), applied per attempt so one conversion serves a `gpt-6.1` and a `gpt-6.2` account alike; older models keep `instructions` unchanged |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
 | `max_tokens` / `max_completion_tokens` | → `openai-chat` | not lossy, but **not one name either** — emitted under whichever of the two the selected Account accepts. See [The output ceiling](#the-output-ceiling-one-field-two-names) |
 | Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |
@@ -1121,7 +1139,7 @@ tested anywhere under `services/translate/`.
 | Rule | Effect on a body the router wrote |
 |---|---|
 | `requireStream` | `stream: true`, whatever the client asked |
-| `requireInstructions` | `instructions: ""` when the client sent no system prompt |
+| `requireInstructions` | `instructions: ""` when the client sent no system prompt, or when the prompt moved to a leading `developer` item for a GPT-6.2+ model ([Known lossy edges](#known-lossy-edges)) |
 | `unsupportedFields` | each removed, reported as a drop by name (never by value), and named to the caller on the answer in `x-router-dropped-params`, in the caller's own words — Anthropic's `max_tokens` as `max_tokens`. Never removed silently: Anthropic's mandatory ceiling was, until plan 101 slice 09 (R4), so a caller whose ceiling Codex never saw had no way to know. The warn line it used to cost per Claude Code turn (174 an hour, prod 2026-10-16) is now one per key, pair and drop signature per window (`dataplane/translation-drop-log.ts`) |
 | `stripLookaroundPatterns` | a `pattern` containing a regex lookaround is removed from every walked tool-schema position and reported by tool name and schema path; non-lookaround patterns and data keywords are kept (`shared/schema-lookarounds.ts`) |
 | `cacheKeyHeader` | the header the upstream derives prompt-cache affinity from (Codex: `session-id`). The one rule that also applies to a **byte relay**, because it touches no body byte: a translated request sends the `prompt_cache_key` its body carries under it (the caller's, else the session-derived one), a relay forwards the client's own header of that name (otherwise stripped at the trust boundary, `dataplane/egress/headers.ts`). An unbound session and no caller key, or a key no header can carry, sends none; a driver header is never overridden (`dataplane/egress/cache-key-header.ts`) |

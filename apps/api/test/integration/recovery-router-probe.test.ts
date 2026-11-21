@@ -230,6 +230,7 @@ test.skipIf(!databaseUrl)(
       expect(f.audits).toContainEqual({
         provider: "zai",
         outcome: "ok",
+        model: "glm-4.6",
         trigger: "router_recovery",
       })
     } finally {
@@ -511,8 +512,8 @@ test.skipIf(!databaseUrl)(
       expect(starts).toBe(2)
       expect((await f.recovery())?.state).toBe("succeeded")
       expect(f.audits).toEqual([
-        { provider: "zai", outcome: "ok", trigger: "operator" },
-        { provider: "zai", outcome: "ok", trigger: "router_recovery" },
+        { provider: "zai", outcome: "ok", model: "glm-4.6", trigger: "operator" },
+        { provider: "zai", outcome: "ok", model: "glm-4.6", trigger: "router_recovery" },
       ])
     } finally {
       await f.close()

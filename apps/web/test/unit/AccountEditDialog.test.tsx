@@ -196,7 +196,9 @@ describe("AccountEditDialog submission", () => {
     withMount(base({ onSubmit: (next) => (patch = next) }), () => {
       submitForm()
       expect(patch?.label).toBe("zai-primary")
-      expect(patch?.supportedModels).toEqual(["glm-4.6", "glm-4.7"])
+      // The one exception: an unchanged model list is not re-sent. A replace from a dialog opened
+      // before another edit would drop ids it never saw, so the list goes only when it moved.
+      expect(patch).not.toHaveProperty("supportedModels")
       expect(patch?.modelAliases).toEqual({ "claude-sonnet-4-5": "glm-4.6" })
       expect(patch?.weight).toBe(300)
       expect(patch?.priority).toBe(2)
@@ -217,10 +219,31 @@ describe("AccountEditDialog submission", () => {
         submitForm()
         expect(patch?.baseUrl).toBeNull()
         expect(patch?.supportedModels).toBeNull()
+        expect(patch?.supportedModelsRemoving).toEqual(["glm-4.6", "glm-4.7"])
         expect(patch?.modelAliases).toBeNull()
         expect(patch?.dialect).toBe("openai-chat")
       },
     )
+  })
+
+  test("an added model sends the list and names nothing removed", () => {
+    let patch: UpdateAccountInput | undefined
+    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
+      typeInto(fieldByLabel("Models it serves"), "glm-4.6, glm-4.7, glm-5")
+      submitForm()
+      expect(patch?.supportedModels).toEqual(["glm-4.6", "glm-4.7", "glm-5"])
+      expect(patch).not.toHaveProperty("supportedModelsRemoving")
+    })
+  })
+
+  test("a removed model is named in supportedModelsRemoving", () => {
+    let patch: UpdateAccountInput | undefined
+    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
+      typeInto(fieldByLabel("Models it serves"), "glm-4.7")
+      submitForm()
+      expect(patch?.supportedModels).toEqual(["glm-4.7"])
+      expect(patch?.supportedModelsRemoving).toEqual(["glm-4.6"])
+    })
   })
 
   test("edited routing numbers are sent as numbers, not strings", () => {

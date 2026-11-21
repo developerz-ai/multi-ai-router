@@ -14,6 +14,7 @@ import type {
   RouterError,
   RoutingPolicy,
 } from "@multi-ai-router/core"
+import type { ModelRemoval } from "./model"
 import type { Candidate, KeyScopeSnapshot } from "./types"
 
 /** Why an in-scope account did not survive filtering. One reason per account: the first that hit. */
@@ -62,6 +63,11 @@ export interface RejectedCandidate {
   readonly resetSource?: ResetSource
   /** The window that blocked it, when the reason is `quota-window-spent`. */
   readonly window?: QuotaWindowKind
+  /**
+   * `model-unsupported` only, and only when the id was on this account's list until recently: the
+   * id that left, when and by whom — the cause of the refusal, in the refusal (prod 2026-11-15).
+   */
+  readonly removedFromList?: { readonly model: string } & ModelRemoval
 }
 
 /** What a policy wants the operator and the logs to know about the ordering it produced. */

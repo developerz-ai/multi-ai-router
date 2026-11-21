@@ -25,7 +25,7 @@ export function logAttemptFailure(
     attempt,
     status: outcome.failure.status,
     failureKind: outcome.failure.kind,
-    signal: outcome.classification?.signal,
+    signal: outcome.classification?.signal ?? outcome.upstreamSignal,
     reason: outcome.failure.message,
     upstreamMessage: scrubbedQuote(
       outcome.classification?.message ?? outcome.upstreamMessage,

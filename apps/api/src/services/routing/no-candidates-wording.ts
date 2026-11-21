@@ -43,7 +43,7 @@ export function remainder(rejected: readonly RejectedCandidate[], described: num
   }
   if (unsupported.length > 0) {
     clauses.push(
-      `${unsupported.length} more ${unsupported.length === 1 ? "does" : "do"} not serve this model — a client change (${labels(unsupported)})`,
+      `${unsupported.length} more ${unsupported.length === 1 ? "does" : "do"} not serve this model — ${unsupportedCause(unsupported)} (${labels(unsupported)})`,
     )
   }
   return clauses.length === 0 ? "" : `; ${clauses.join("; ")}`
@@ -118,4 +118,21 @@ export function qualifier(source: ResetSource | undefined): string {
 
 export function accountWord(count: number): string {
   return count === 1 ? "account" : "accounts"
+}
+
+/**
+ * Why accounts dropped `model-unsupported` do not serve the model. A client change, unless the id
+ * was on an account's list until recently — then the edit that removed it is the cause, and the
+ * sentence names it so the next debugger needs no second hop (prod 2026-11-15: a removed id was
+ * refused for 19 h while the error told every caller to change its model).
+ */
+export function unsupportedCause(entries: readonly RejectedCandidate[]): string {
+  const removals = entries.flatMap((entry) =>
+    entry.removedFromList === undefined
+      ? []
+      : [
+          `"${entry.removedFromList.model}" was removed from ${entry.label}'s supported models at ${entry.removedFromList.at.toISOString()} by ${entry.removedFromList.by}`,
+        ],
+  )
+  return removals.length === 0 ? "a client change" : removals.join("; ")
 }

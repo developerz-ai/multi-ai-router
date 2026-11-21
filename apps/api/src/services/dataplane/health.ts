@@ -97,6 +97,8 @@ export interface HealthStore {
   ): void
   admitProbe(accountId: string, now: Date): ProbeAdmission
   releaseProbe(accountId: string, token?: number): void
+  /** The live probe hold's own expiry, else a whole fresh hold from `now`: the honest wait. */
+  probeHoldUntil(accountId: string, now: Date): Date
   probeStats(): { readonly admitted: number; readonly refused: number }
   reset(accountId: string): void
   entries(): ReadonlyMap<string, AccountHealthState>
@@ -273,6 +275,11 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       if (token !== undefined && probeTokens.get(accountId) !== token) return
       probeTokens.delete(accountId)
       if (states.has(accountId)) write(accountId, { probeHeldUntil: null })
+    },
+
+    probeHoldUntil(accountId, now) {
+      const held = read(accountId).probeHeldUntil
+      return held !== null && held > now ? held : new Date(now.getTime() + probeHoldMs)
     },
 
     probeStats: () => ({ admitted: probeAdmitted, refused: probeRefused }),

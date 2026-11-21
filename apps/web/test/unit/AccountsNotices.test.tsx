@@ -10,7 +10,7 @@ function text(overrides: Partial<Parameters<typeof AccountsNotices>[0]>): string
   const dispose = render(
     () => (
       <AccountsNotices
-        discover={IDLE}
+        discover={{ ...IDLE, reset: () => {} }}
         enableError={null}
         recheck={IDLE}
         recheckAll={IDLE}

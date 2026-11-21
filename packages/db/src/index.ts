@@ -8,7 +8,6 @@
 
 export type { AdvisoryLockRun } from "./advisory-lock"
 
-// --- leader election --------------------------------------------------------
 export { advisoryLockKey } from "./advisory-lock"
 export type {
   Database,
@@ -17,7 +16,6 @@ export type {
   DatabaseOptions,
   SqlConnection,
 } from "./client"
-// --- connection -------------------------------------------------------------
 export { createDatabase, DATABASE_POOL_DEFAULTS } from "./client"
 export type {
   CredentialRefreshLease,
@@ -29,7 +27,6 @@ export type {
 } from "./credential-refresh-lock"
 export { createCredentialRefreshLockPool } from "./credential-refresh-lock"
 export type { MigrateOptions } from "./migrate"
-// --- migrations -------------------------------------------------------------
 export {
   defaultMigrationsFolder,
   MigrationLockTimeoutError,
@@ -52,7 +49,6 @@ export type {
   AccountSummaryRow,
   CreateAccountInput,
 } from "./repositories/account-repository"
-// --- repositories -----------------------------------------------------------
 export {
   ACCOUNT_LAST_USED_MIN_INTERVAL_DEFAULT_MS,
   createAccountRepository,
@@ -65,6 +61,12 @@ export {
   ADMIN_CREDENTIAL_SINGLETON,
   createAdminCredentialRepository,
 } from "./repositories/admin-credential-repository"
+export type {
+  LoginThrottleDecision,
+  LoginThrottleNamespace,
+  LoginThrottlePolicy,
+} from "./repositories/admin-login-throttle-repository"
+export { createAdminLoginThrottleRepository } from "./repositories/admin-login-throttle-repository"
 export { AdminMutationConflictError } from "./repositories/admin-mutation-conflict"
 export type {
   AdminMutationRepository,
@@ -216,7 +218,6 @@ export type { SchedulerLockPoolHandle, SchedulerLockPoolOptions } from "./schedu
 export { createSchedulerLockPool } from "./scheduler-lock"
 export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
 export { accountRecoveries } from "./schema/account-recoveries"
-// --- row types --------------------------------------------------------------
 export type {
   AccountRow,
   ModelAliasMap,

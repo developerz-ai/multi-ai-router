@@ -6,6 +6,39 @@ purge, quota floor) are also shipped — in-process jittered timers, one `pg_try
 task, last run and outcome recorded to `ScheduledTaskRun` — and the retention windows below are what
 they sweep against.
 
+## Optional deployment pool roster
+
+`POOL_ROSTER_PATH` is optional: unset or blank disables loading without filesystem access.
+When configured, it must be an absolute path to deployment-owned JSON mounted read-only into
+the router. The file belongs to the deployment, not this repository's membership authority;
+no authoritative roster is shipped in the image. Restart the router to load changes.
+
+Synthetic version-1 example:
+
+```json
+{"version":1,"pools":[{"name":"example-pool","members":["example-primary","example-overflow"],"overflow":"example-overflow"}]}
+```
+
+The root accepts only `version` (the number `1`) and `pools` (an array, possibly empty).
+Each pool accepts only `name`, `members`, and `overflow`. Names and account labels must be
+nonblank strings; identity is exact and case-sensitive, with no trimming or normalization.
+Pool names are unique. Members form a nonempty array with no duplicate labels within a pool;
+the same account label may appear in different pools. Overflow must be a member and cannot
+be the sole member. Unknown fields, unsupported versions and wrong types are refused.
+
+Production `readEnv` synchronously loads and validates the snapshot before runtime creation,
+database migrations or listener startup. Missing/unreadable files, invalid JSON or invalid
+schemas exit 1 on stderr naming `POOL_ROSTER_PATH`, its configured path and only the first
+sanitized issue, never file contents, unknown key names or parser excerpts.
+
+`POOL_ROSTER_CHECK_INTERVAL_MINUTES` defaults to `15` and accepts positive whole minutes only.
+Its timer bound is `floor(2147483647 / (60000 * (1 + SCHEDULER_JITTER_FRACTION)))` minutes,
+including positive jitter. It is the cadence of the `pool_roster_check` task: that task exists only
+while `POOL_ROSTER_PATH` is set, runs under the same advisory lock and `ScheduledTaskRun` recording
+as every other periodic task, and **reports only** — it compares the roster against live pools and
+memberships and writes no pool, membership or Account. See
+[05-routing-and-failover.md](05-routing-and-failover.md#the-deployment-roster-and-the-check-that-reports-drift).
+
 ## The promise
 
 **`docker compose up -d` after one sign-in method and one secret file edit.** No database to provision — and no IdP required either, if a local admin password suits the machine.
@@ -257,7 +290,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `OAUTH_REFRESH_MAX_ATTEMPTS` | no | `5` | Attempts against an unreachable token endpoint before the account is parked at `needs_reauth`. A *refused* refresh is never retried — only a clock fixes an outage. |
 | `ADMIN_SESSION_IDLE_MINUTES` | no | `43200` | Sliding idle window, and the session cookie's `Max-Age`. Thirty days: a single-operator console behind SSO whose sessions survive a redeploy (they live in `admin_sessions`), so the operator is not asked to sign in weekly — the trade is written down in [13-admin-oidc.md](13-admin-oidc.md#session-and-callback-behavior). Raising it leaves an abandoned browser a live credential for longer. **`0` refused at boot**: it expires a session at the instant it is issued, so login answers `200` and everything after it answers `401`. |
 | `ADMIN_SESSION_ABSOLUTE_HOURS` | no | `720` | Hard ceiling on a session's total life regardless of activity — thirty days, matching the idle window. A purely sliding session is one a thief renews forever; logout is a real row deletion, and a login mints a fresh id. **`0` refused at boot** — same failure as the idle window. |
-| `ADMIN_LOGIN_MAX_ATTEMPTS` | no | `5` | Failed logins per throttle key (per IP, per username) before it locks. **`0` refused at boot**: it locks a key on its zeroth failure, so nobody can log in at all. |
+| `ADMIN_LOGIN_MAX_ATTEMPTS` | no | `5` | Attempts per hashed IP (IPv6 /64), separately for local passwords, OIDC starts and callbacks. One Postgres budget per namespace across replicas, surviving restarts; admission is charged before work. **`0` refused at boot**. |
 | `ADMIN_LOGIN_ATTEMPT_WINDOW_MINUTES` | no | `15` | Failures older than this stop counting toward the lock. **`0` refused at boot**: a failure counted in a window of nothing means the throttle can never trip, and brute-force protection is off with no sign of it. |
 | `ADMIN_LOGIN_LOCKOUT_MINUTES` | no | `15` | How long a tripped throttle key stays locked. **`0` refused at boot** — a lockout that has already elapsed is the same silent hole. |
 | `ADMIN_SESSION_TOUCH_INTERVAL_SECONDS` | no | `60` | How long a session's idle-window slide may go unpersisted. Due slides await a conditional update of an existing, unexpired row; this coalesces the `admin_sessions` write to one per interval per session instead of one per authenticated request. Must be **less than `ADMIN_SESSION_IDLE_MINUTES * 60`**, including resolved defaults, so the persisted row cannot expire before its next slide. `0` persists every slide. |
@@ -298,6 +331,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `ROUTING_MAX_REPORTED_RESET_SECONDS` | no | `691200` (8 days) | Ceiling on a reset instant an upstream reports. Past it the reset is clamped and labelled `estimated`: the longest documented provider window is weekly. |
 | `LEAST_USED_TOKEN_WINDOW_SECONDS` | no | `3600` | Width of the decaying window `least-used` ranks recent output tokens over. |
 | `MODEL_REFUSAL_TTL_SECONDS` | no | `3600` | How long an account that refused a model stays out of that model's candidates. |
+| `MODEL_REMOVAL_MEMORY_DAYS` | no | `30` | How long an id removed from an account's `supportedModels` is remembered, so a `model-unsupported` refusal for it names when it was removed and by whom. Explanation only; it never admits or excludes an account. |
 | `UPSTREAM_TIMEOUT_MS` | no | `600000` | The whole deadline of a **non-streamed** HTTP attempt (its headers arrive only with the finished completion) and of an Agent-SDK attempt; also bounds an OAuth exchange. A streamed HTTP attempt runs on the three clocks below instead. **`0` refused at boot**: `AbortSignal.timeout(0)` fires before the socket does, aborting every upstream request. |
 | `UPSTREAM_FIRST_BYTE_TIMEOUT_MS` | no | `300000` | A **streamed** HTTP attempt's wait for response headers. Nothing has reached the client, so expiry is a `timeout` the chain fails over on and the breaker counts. 5 min: wide enough for a cold prefill of the largest contexts sold today and a provider queueing a stream before its headers, and half the 10 min a hung upstream used to hold a request. An estimate — tighten it against the per-provider time-to-first-byte the usage rows record. **`0` refused at boot**; must be at most `UPSTREAM_STREAM_TIMEOUT_MS`. See [05](05-routing-and-failover.md#upstream-deadlines). |
 | `UPSTREAM_IDLE_TIMEOUT_MS` | no | `55000` | The longest silence between a streamed attempt's body chunks, counted only while the router is waiting on the upstream (a client that stops reading is backpressure, not a stall). Expiry aborts the upstream and ends the client's stream with an error, recorded `upstream_timeout`, breaker struck — never a retry, bytes may be out. 55 s: under `SERVER_IDLE_TIMEOUT_SECONDS`' 60 s default, so a silent upstream is failed as an upstream timeout before the listener closes the socket and the attempt is misread as `client_cancelled`. Raise it with that one. **`0` refused at boot**; must be at most `UPSTREAM_STREAM_TIMEOUT_MS`. |
@@ -372,7 +406,7 @@ Two operational consequences:
 
 | | |
 |---|---|
-| **Running multiple router replicas is safe** | Before doing work, each task takes a Postgres advisory lock named for that task. Exactly one replica runs a given sweep; the others fail the try and skip. Scale the router horizontally without a leader-election component and without duplicate sweeps. |
+| **One replica, not a horizontal fleet** | **Background tasks only:** before doing work, each task takes a Postgres advisory lock named for that task; exactly one replica runs a given sweep and the others skip. This is not a claim that a multi-replica router is safe. The router is run as **one replica**: warm caches, breaker/health clocks, key/session bindings, per-key rate-limit windows and pending login/OAuth device-flow state are per-process, and each account's CLI state lives on a node-local per-Account `CLAUDE_CONFIG_DIR` volume. Admin login budgets are shared in Postgres, but password concurrency remains per-process. A second replica is safe only once per-account replica ownership uses a Postgres lease with a fencing token, breaker/cooldown clocks are durable, per-key rate limits are shared, pending login/device flows are durable, and SDK in-flight session bindings are shared (so a stream stays on the owning replica). |
 | **Every run is recorded** | Task, start, finish, outcome, and items processed land in a `ScheduledTaskRun` row, surfaced in the admin UI. That record is how you tell a task that is idle from one that is wedged — see Troubleshooting. |
 
 ## Reverse proxy
@@ -786,8 +820,9 @@ rather than discovering the ceiling under load: an unbounded subprocess count is
 The ceiling covers **every** path that spawns, dispatch and the console's **Test now** probe alike —
 a bound one caller can step around bounds nothing. `router_sdk_subprocesses` and
 `router_sdk_subprocess_queue_depth` are how you check the formula against your own traffic:
-saturation with an empty queue means the ceiling fits, sustained queue depth means raise it (if RAM
-allows) or add a replica. A
+saturation with an empty queue means the ceiling fits; sustained queue depth means raise it if RAM
+allows. The router runs as one replica, so adding one is not a capacity remedy — see the
+invariant and prerequisites in [the scheduler section](#the-scheduler-is-in-process). A
 same-dialect passthrough (the common case) does no body parsing at all; see
 [06-protocol-translation.md](06-protocol-translation.md).
 
