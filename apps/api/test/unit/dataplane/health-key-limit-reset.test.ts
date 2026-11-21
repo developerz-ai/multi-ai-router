@@ -96,6 +96,47 @@ describe("an openrouter key cap with a reset cools until that reset, failures fi
     expect(health.stateOf("or").breaker.cooldownUntil).toEqual(stated)
   })
 
+  test("keyCapResetAt exposes the same verified reset the breaker uses", () => {
+    const health = store()
+    health.applyRateLimit(
+      "or",
+      reading({ limit: 30, limit_reset: "daily", limit_remaining: 0 }),
+      READ_AT,
+    )
+    expect(health.keyCapResetAt("or", REFUSED_AT)).toEqual(MIDNIGHT)
+  })
+
+  test("keyCapResetAt invents no instant for headroom, no reset, a stale or past reading", () => {
+    // A fresh store per case: quota readings merge, so an earlier window must not lend a reset to
+    // a later reading that has none.
+    expect(store().keyCapResetAt("or", REFUSED_AT)).toBeNull()
+
+    const headroom = store()
+    headroom.applyRateLimit(
+      "or",
+      reading({ limit: 30, limit_reset: "daily", limit_remaining: 4 }),
+      READ_AT,
+    )
+    expect(headroom.keyCapResetAt("or", REFUSED_AT)).toBeNull()
+
+    const noReset = store()
+    noReset.applyRateLimit(
+      "or",
+      reading({ limit: 30, limit_reset: null, limit_remaining: 0 }),
+      READ_AT,
+    )
+    expect(noReset.keyCapResetAt("or", REFUSED_AT)).toBeNull()
+
+    const spent = store()
+    spent.applyRateLimit(
+      "or",
+      reading({ limit: 30, limit_reset: "daily", limit_remaining: 0 }),
+      READ_AT,
+    )
+    expect(spent.keyCapResetAt("or", new Date(READ_AT.getTime() + FRESH))).toBeNull()
+    expect(spent.keyCapResetAt("or", MIDNIGHT)).toBeNull()
+  })
+
   test("the 403 key-limit-window form, an estimated hourly re-test, also waits for the boundary", () => {
     const health = store()
     health.applyRateLimit(

@@ -73,14 +73,32 @@ export function withPlanReset(
   return { ...rest, resetsAt: planReset, resetSource: "provider-reported" }
 }
 
+/**
+ * The fresh, provider-reported reset of a spent `spend_limit` key cap, or `null`.
+ *
+ * The client error path needs exactly the evidence the breaker uses above: a cap with headroom, a
+ * stale or estimated reading, no reset, or a reset already past lends nothing and invents no instant.
+ * Pure, with the clock and freshness bound injected.
+ */
+export function verifiedKeyCapReset(
+  windows: readonly QuotaWindowState[],
+  now: Date,
+  maxAgeMs: number,
+): Date | null {
+  return spentPlanReset(
+    windows.filter((window) => window.window === "spend_limit"),
+    now,
+    maxAgeMs,
+  )
+}
+
 function withKeyCapReset(
   failure: AttemptFailure,
   windows: readonly QuotaWindowState[],
   now: Date,
   maxAgeMs: number,
 ): AttemptFailure {
-  const caps = windows.filter((window) => window.window === "spend_limit")
-  const capReset = spentPlanReset(caps, now, maxAgeMs)
+  const capReset = verifiedKeyCapReset(windows, now, maxAgeMs)
   if (capReset === null) return failure
   if (reportedReset(failure, now) !== null && failure.resetSource !== "estimated")
     return { ...failure, kind: "rate-limited" }
