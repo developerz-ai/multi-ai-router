@@ -50,7 +50,11 @@ const EXPIRING: CredentialMetadata = {
   hasTokens: true,
 }
 
-function gate(refreshLock?: CredentialFreshnessDeps["refreshLock"]) {
+function gate(
+  refreshLock?: CredentialFreshnessDeps["refreshLock"],
+  read: () => CredentialMetadata = () => EXPIRING,
+  sleep?: CredentialFreshnessDeps["sleep"],
+) {
   // Existing turn tests own the window explicitly; give them a real, stateful lease unless a test
   // injects one shared with another router instance. A no-op release would leave the lease held
   // forever and turn the next admission into a cap-timeout.
@@ -59,7 +63,7 @@ function gate(refreshLock?: CredentialFreshnessDeps["refreshLock"]) {
   const sleeps: number[] = []
   const warnings: string[] = []
   const deps: CredentialFreshnessDeps = {
-    reader: { read: async () => EXPIRING },
+    reader: { read: async () => read() },
     refreshLock: lock,
     configDirs: { pathFor: (id) => `/data/claude/${id}` },
     skewMs: 300_000,
@@ -67,10 +71,12 @@ function gate(refreshLock?: CredentialFreshnessDeps["refreshLock"]) {
     maxWaitMs: 20_000,
     pollMs: 250,
     now: () => new Date(clock),
-    sleep: async (ms) => {
-      sleeps.push(ms)
-      clock += ms
-    },
+    sleep:
+      sleep ??
+      (async (ms) => {
+        sleeps.push(ms)
+        clock += ms
+      }),
     logger: {
       warn: (message: string) => warnings.push(message),
       info: () => {},
@@ -138,23 +144,53 @@ function sharedLease() {
 }
 
 describe("concurrent refresh turns on one account across two router instances", () => {
-  test("produce exactly one refresh exchange; the non-owner waits or refuses, never refreshes locally", async () => {
+  test("produces one refresh exchange when the second replica reacquires after the first releases", async () => {
     const lease = sharedLease()
-    const a = gate(lease.lock)
-    // The second instance shares the same lease but starts after the first has claimed it: it must
-    // wait or refuse, never take a second local claim and spend another refresh token.
-    const b = gate({
-      tryAcquire: async () =>
-        lease.claims > 0
-          ? { acquired: false as const, reason: "busy" as const }
-          : lease.lock.tryAcquire(),
+    let metadata = EXPIRING
+    const a = gate(lease.lock, () => metadata)
+    let parked = (): void => {}
+    const parkedBehindOwner = new Promise<void>((resolve) => {
+      parked = resolve
+    })
+    let resumeAfterRelease = (): void => {}
+    const leaseReleased = new Promise<void>((resolve) => {
+      resumeAfterRelease = resolve
+    })
+    // Replica B must remain parked behind A's real shared lease until A's controlled refresh has
+    // updated the one metadata file both replicas read. An instant clock fake would run B to its cap.
+    const b = gate(
+      lease.lock,
+      () => metadata,
+      async () => {
+        parked()
+        await leaseReleased
+      },
+    )
+    let releaseRefresh = (): void => {}
+    const refreshComplete = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
     })
     let exchanges = 0
+    let queries = 0
+    let refreshStarted = (): void => {}
+    const refreshStartedPromise = new Promise<void>((resolve) => {
+      refreshStarted = resolve
+    })
     const runQuery: SdkQueryFn = ({ prompt }) => {
-      // Each `query()` is one refresh-token exchange: count it. A non-owner turn must never reach
-      // this function, so exactly one exchange means exactly one claim was spent on the token.
-      exchanges += 1
+      queries += 1
       drainPrompt(prompt)
+      if (metadata.accessTokenExpiresAt?.getTime() === EXPIRING.accessTokenExpiresAt?.getTime()) {
+        exchanges += 1
+        refreshStarted()
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "system", subtype: "init", session_id: "sess_1" }
+            await refreshComplete
+            for (const event of ONE_TURN) yield event
+            yield { type: "result", subtype: "success" }
+          },
+        }
+      }
       return sdkQueryStream({ turns: [ONE_TURN] })
     }
     const invokeA = createSdkInvoker({
@@ -178,23 +214,34 @@ describe("concurrent refresh turns on one account across two router instances", 
       session: { kind: "fresh" as const, reason: "no-session" as const },
     }
 
-    // The second instance sees an empty local holder map; only the shared lease can stop it.
-    // Both turns start together. Only one can win the shared lease; the other waits behind it and
-    // never spends a refresh token locally.
+    // A owns the shared lease and reaches its controlled refresh. B reads the same stale metadata,
+    // loses the same lease, and parks rather than progressing to its own refresh exchange.
     const first = invokeA(request)
+    await refreshStartedPromise
     const second = invokeB(request)
-    const [firstResponse, secondResponse] = await Promise.allSettled([first, second])
-    const statuses = [firstResponse, secondResponse].map((result) =>
+    await parkedBehindOwner
+
+    expect(exchanges).toBe(1)
+    expect(queries).toBe(1)
+
+    // This is the CLI's durable write: it lands before A's stream ends and its lease is released.
+    // B then reacquires the shared lease, sees the fresh expiry, and may run a normal turn without
+    // spending the rotating refresh token a second time.
+    metadata = { ...EXPIRING, accessTokenExpiresAt: new Date(NOW_MS + 8 * 3_600_000) }
+    releaseRefresh()
+    const firstResponse = await Promise.allSettled([first])
+    resumeAfterRelease()
+    const secondResponse = await Promise.allSettled([second])
+    const statuses = [...firstResponse, ...secondResponse].map((result) =>
       result.status === "fulfilled" ? result.value.status : "rejected",
     )
-    expect(statuses.filter((status) => status === 200)).toHaveLength(1)
-    expect(statuses.some((status) => status !== 200)).toBe(true)
-    expect(lease.claims).toBe(1)
+    expect(statuses).toEqual([200, 200])
+    // B reacquired after A released, so this covers the path the prior permanently-busy fake hid.
+    expect(lease.claims).toBe(2)
     expect(exchanges).toBe(1)
-    // The refused instance never reached `query()`: no second token exchange, no local bypass.
-    // The non-owner never refreshes locally: it waits on the lease, then refuses with a warning.
-    expect(b.warnings.some((line) => line.includes("refusing admission"))).toBe(true)
-    expect(lease.releases).toBe(1)
+    expect(queries).toBe(2)
+    expect(b.warnings).toEqual([])
+    expect(lease.releases).toBe(2)
   })
 })
 
