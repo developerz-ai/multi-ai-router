@@ -23,11 +23,14 @@ import {
 import { DEFAULT_QUOTA_SPENT_THRESHOLD } from "../services/routing"
 import { createWarmBackgroundStartGuard } from "./background-admission"
 import type { createCliResources } from "./cli-resources"
+import { generationOwnedCredentials } from "./credential-ownership"
 import { dispatchOptionsFromEnv } from "./dispatch-options"
+import { ownedInvoker } from "./owned-invoker"
 import type { createRuntimeRepositories } from "./runtime-repositories"
 import type { createRuntimeTelemetry } from "./runtime-telemetry"
 import type { RuntimeDeps } from "./runtime-types"
 import type { createWarmState } from "./warm-state"
+
 export function createRequestServices(
   deps: RuntimeDeps,
   repositories: ReturnType<typeof createRuntimeRepositories>,
@@ -90,25 +93,28 @@ export function createRequestServices(
 
   // The Claude subscription transport, over the semaphore pair above. Its quota store is built
   // with the rest of the warm state, since `HealthStore.reset` has to be able to clear it.
-  const invokeSdk = createSdkInvoker({
-    ownerLaunch: ownership.ownerLaunch,
-    concurrency: sdkConcurrency,
-    freshness: credentialFreshness,
-    cliPathOverride: env.claudeCliPath,
-    usageGauge,
-    pacing: {
-      idleMs: env.claudeSdkPacing.streamIdleMs,
-      heartbeatMs: env.claudeSdkPacing.streamHeartbeatMs,
-    },
-    denyHoldMs: env.claudeSdkPacing.denyHoldMs,
-    teardownMs: env.claudeSdkPacing.teardownMs,
-    onIgnoredOption: (detail) =>
-      logger.debug("subscription request option dropped", {
-        component: "claude-sdk",
-        field: detail.field,
-        value: detail.value,
-      }),
-  })
+  const invokeSdk = ownedInvoker(
+    cli.replicaLease,
+    createSdkInvoker({
+      ownerLaunch: ownership.ownerLaunch,
+      concurrency: sdkConcurrency,
+      freshness: credentialFreshness,
+      cliPathOverride: env.claudeCliPath,
+      usageGauge,
+      pacing: {
+        idleMs: env.claudeSdkPacing.streamIdleMs,
+        heartbeatMs: env.claudeSdkPacing.streamHeartbeatMs,
+      },
+      denyHoldMs: env.claudeSdkPacing.denyHoldMs,
+      teardownMs: env.claudeSdkPacing.teardownMs,
+      onIgnoredOption: (detail) =>
+        logger.debug("subscription request option dropped", {
+          component: "claude-sdk",
+          field: detail.field,
+          value: detail.value,
+        }),
+    }),
+  )
   const fastProfile = env.claudeFastMode ? fastProfileState(env.claudeCliPath) : "disabled"
   const fastEnabled = fastProfile === "verified"
   if (env.claudeFastMode && !fastEnabled)
@@ -122,12 +128,15 @@ export function createRequestServices(
       profile: fastProfile,
     })
   // The fenced read spawns two processes; it runs only when `.credentials.json` changed (05.2).
-  const fastCredentials = createFastCredentialCache({
-    read: (accountId, configDir) =>
-      ownership.withMetadataOwner(accountId, () => readFastCredential(configDir)),
-    now: () => now().getTime(),
-    admitted: (accountId) => ownership.isRevoked?.(accountId) !== true,
-  })
+  const fastCredentials = generationOwnedCredentials(
+    createFastCredentialCache({
+      read: (accountId, configDir) =>
+        ownership.withMetadataOwner(accountId, () => readFastCredential(configDir)),
+      now: () => now().getTime(),
+      admitted: (accountId) => ownership.isRevoked?.(accountId) !== true,
+    }),
+    cli.replicaLease,
+  )
   const fastInvoker = fastEnabled
     ? createFastInvoker({
         sdk: invokeSdk,
@@ -208,6 +217,7 @@ export function createRequestServices(
 
   const activeRequests = createActiveRequestRegistry(env.relayLifetimes)
   const dispatcher = createDispatcher({
+    accountEligible: cli.replicaLease.eligible,
     modelMetadata: modelCatalogStore,
     // Derived once from ENCRYPTION_KEY under its own HKDF label; never the encryption key itself.
     reasoningSealer: createReasoningSealer(env.encryptionKey),
@@ -218,7 +228,7 @@ export function createRequestServices(
     cipher,
     usage,
     limiter,
-    invokeSdk: fastInvoker ?? invokeSdk,
+    invokeSdk: fastInvoker ? ownedInvoker(cli.replicaLease, fastInvoker) : invokeSdk,
     quota: sdkQuota,
     // Direct HTTP carries each full history; SDK resume claims would serialize unrelated children.
     ...(fastInvoker === undefined ? { sessions: sessionStore } : {}),

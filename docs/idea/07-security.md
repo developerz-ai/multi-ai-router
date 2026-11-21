@@ -122,10 +122,66 @@ Missing/near-expiry credentials fall back to the SDK before inference; raw provi
 replaced with router-authored errors. Refresh tokens are never independently used or rotated.
 The config-directory volume remains live credential material. See [fast mode](claude-fast-mode.md).
 
+### Subscription storage ownership
+
+Production constructs the configured storage adapter, not just an injected test adapter. Every
+subscription operation requires a ready account lease and its fencing generation. First allocation
+acquires that lease and allocates persistent storage before native directory provisioning; it does
+not require an already-ready directory. Reattachment retains the assigned directory and credentials,
+not an empty replacement. Local guardians and metadata callbacks drain before attachment or lease
+release. Uncertain retirement refuses readiness and release.
+
+Lease authority and filesystem exclusion are distinct, and the lease is the outer fence over the
+local one: the Postgres row decides which replica may own an account, the native `flock` decides
+which process on this host writes the directory. Neither substitutes for the other. Database-time
+mutations compare the owner and generation while holding the row lock, and expired owners cannot
+renew, mark ready, drain or release. A session bound to a foreign owner is refused without reading
+that owner's credential, transcript or session: the non-owner path drops the candidate before
+selection rather than reaching the CLI. Release preserves the generation for the next acquisition.
+Local admission uses a conservative monotonic deadline; native supervision must independently
+enforce its deadline and control-channel loss, refusing stale activation before CLI execution and
+retiring descendant writers. Neither JavaScript cancellation nor a Postgres lease can revoke a paused
+remote host's filesystem access. That requires the storage authority below.
+
+Default `CLAUDE_OWNERSHIP_STORAGE_ATTACHMENT=local` generates a persistent volume identity in
+`.replica-storage-identity` and holds a root-wide local kernel lock through the native guardian.
+That lock protects single-node use only. It is never proof that a remote writer is excluded;
+shared RWX storage, a configured identity and lease expiry are not remote fencing. The lock file
+is validated before it is trusted: a regular file owned by the router uid at mode `0600` with
+`nlink` 1, so a symlink, hardlink or group/world-readable lock is refused rather than shared.
+
+`exclusive-reattach` constructs an executable adapter from
+`CLAUDE_OWNERSHIP_ATTACHMENT_HELPER_PATH`, with the configured storage identity. The executable runs
+without arguments or inherited environment. Its stdin receives one newline-terminated JSON object:
+
+```json
+{"version":1,"operation":"confirm","root":"/persistent/claude","accountId":"<account UUID>","owner":"<lease owner UUID>","generation":"42","identity":"<persistent storage identity>"}
+```
+
+`operation` is `confirm` for attachment or `allocate` for first allocation. `generation` is a decimal
+string, not a JSON number. The helper must exit successfully within
+`CLAUDE_OWNERSHIP_OPERATION_TIMEOUT_MS` and write one JSON receipt on stdout within 2048 bytes,
+echoing `version`, `operation`, `accountId`, `owner`, `generation` and `identity`, plus
+`"exclusive":true`. Extra diagnostic stdout is invalid. Stderr is discarded; no credential belongs
+in either stream. Timeout, failed exit or mismatched receipt refuses attachment.
+
+The helper is a trusted storage authority, not a script that merely echoes the input. It must
+enforce external writer exclusion for that generation before confirming, and retain persistent
+allocation history so `allocate` cannot replace previously assigned storage with an empty directory.
+Attachment proof (an externally enforced receipt) is what authorizes takeover: a TTL, an expired
+row, a shared path or an echoing helper is never proof of exclusive attachment, because a paused
+host keeps writing after its lease lapses. Allocation must create the anchored account directory
+and its matching `.storage-identity` marker; the router validates both and reconfirms exclusion
+before publishing readiness. The receipt alone cannot implement these storage guarantees.
+
+Deployments remain **single-replica** pending the broader distributed-state proofs described in
+[09-deployment.md](09-deployment.md). This contract does not claim live two-replica validation or
+completion of sibling distributed-state work.
+
 That is also why a directory outliving its Account is a security defect and not a housekeeping one.
-Deleting an Account removes its directory, but a crash between provisioning the directory and
-inserting the row cannot — and what stays behind is a live subscription's credentials that nothing
-will ever rotate, revoke, or notice. The `config_dir_reap` scheduled task removes them, guarded so
+Deleting an Account removes its directory, but interrupted deletion can leave live subscription
+credentials behind that nothing will rotate, revoke, or notice. The `config_dir_reap` scheduled
+task removes them only under the account's ownership fence, guarded so
 the sweep can never cost more than the leak it prevents: only names that are account ids are ever
 candidates, only after `RETENTION_ORPHAN_CONFIG_DIR_HOURS` unclaimed, and the volume is surveyed
 before the accounts table is read, so a row written mid-sweep can only ever *save* a directory.

@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.72.1]
+## [2.73.0]
+
+### Added
+
+- Account ownership leases with migration 0054: database-time TTLs, process-unique owner incarnations and monotonic bigint fencing generations. Subscription operations require local ownership, including warm fast-mode inference; stale renewals and releases cannot modify a successor. Local monotonic admission and native guardian expiry fail closed on ownership loss.
+- Nonlocal subscription candidates are omitted without widening key scope or changing model names. Bound foreign-owner sessions fail explicitly rather than silently cold-starting; no internal forwarding service is introduced.
+- First provisioning acquires ownership before allocating a directory, without requiring serving readiness first. Allocation authority must distinguish a genuinely new account from missing previously assigned storage. Expired or failed local lease entries can reconcile again; uncertain filesystem drain is not permission to release or publish readiness.
+
+### Fixed
+
+- Removed the first-provisioning cycle that required a ready lease before creating the directory that readiness required. Production now constructs the configured storage attachment adapter rather than merely accepting injected attachment proof. Expired and failed retained lease entries no longer permanently prevent reacquisition.
+- Runtime ownership supplies fencing generations to native authority checks. Stale activation and filesystem operations are refused; metadata callbacks and native guardians must drain before release. Uncertain drain blocks release and successor readiness, rather than treating lease expiry as proof that writers stopped.
+- The local storage lock is held to the same file authority as the account state lock: a regular file owned by this uid, unshared (`nlink` 1) and unreadable to group and other (`0600`). A world-readable, hardlinked or symlinked lock is refused rather than trusted as the single-writer fence.
+
+### Deployment
+
+- Ownership is not serving readiness. Handoff drains operations, metadata callbacks and native guardians before release, invalidates generation-bound caches and re-attaches the same persistent account storage. The image packages the native ownership helper, not a storage authority. Cross-node takeover requires a deployment-supplied attachment helper backed by externally enforced exclusive attachment: a TTL alone cannot fence a paused host. Independent local disks, arbitrary RWX NFS, copied live credentials and empty replacement directories are unsupported. Uncertain drain, attachment or storage identity fails closed. Default single-node operation pins a persistent local volume identity and holds a local kernel lock; neither that lock nor a configured identity proves remote writer exclusion or authorizes cross-node takeover.
+- Keep one replica for the remaining process-local routing, rate-limit, login-flow and session-coordination state. This release makes no claim of live two-replica deployment proof. The scoped release-note check verifies version consistency, not the broader distributed-state contract or deployment behavior.
+- Exclusive reattachment validates a bounded, generation-bound JSON receipt from the deployment's storage authority. An echo helper cannot supply remote exclusion. Local mode refuses configured storage identities and attachment helpers, preserving its generated volume identity instead.
+
+## 2.72.1 — 2026-11-20 (never tagged; first released in [v2.73.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.73.0))
 
 ### Fixed
 
@@ -2398,4 +2418,4 @@ your tooling config.
 [2.70.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.1
 [2.71.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.71.0
 [2.72.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.0
-[2.72.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.1
+[2.73.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.73.0

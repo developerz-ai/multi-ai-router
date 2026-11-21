@@ -3,35 +3,20 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 import type { Readable, Writable } from "node:stream"
-import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sdk"
+import type { SpawnedProcess } from "@anthropic-ai/claude-agent-sdk"
 import { WORKSPACE_DIR } from "./config-dir"
+import { ownerMonotonicMilliseconds } from "./owner-clock"
 import { diagnoseOwnerLaunchFailure } from "./owner-helper"
+import type { OwnerLaunch, OwnerLaunchConfig } from "./owner-launch-types"
+import type { ReplicaGenerationHandle } from "./replica-lease"
 
-export interface OwnerLaunchConfig {
-  readonly helperPath: string
-  readonly root: string
-  readonly maximumOwners: number
-  readonly termGraceMs: number
-  readonly pollMs: number
-  readonly maximumChildren: number
-  readonly admissionTimeoutMs: number
-}
-export interface OwnerLaunch {
-  readonly spawn: (input: SpawnOptions) => SpawnedProcess
-  readonly ready: Promise<void>
-  readonly exited: Promise<void>
-  readonly started: Promise<void>
-  prepare(): Promise<void>
-  release(): void
-  assertReady(): void
-  activate(): void
-  cancel(): void
-}
+export type { OwnerLaunch, OwnerLaunchConfig } from "./owner-launch-types"
 /** One idle guardian per SDK query. No CLI child exists until activate(). */
 export function createOwnerLaunch(
   config: OwnerLaunchConfig,
   accountId: string,
   metadata = false,
+  generation?: ReplicaGenerationHandle,
 ): OwnerLaunch {
   let child: ChildProcess | undefined
   let start: Writable | undefined
@@ -57,6 +42,7 @@ export function createOwnerLaunch(
   void started.catch(() => {})
   let prepareTimer: ReturnType<typeof setTimeout> | undefined
   let startTimer: ReturnType<typeof setTimeout> | undefined
+  let renewalTimer: ReturnType<typeof setInterval> | undefined
   let cancelled = false
   let resolveExit: () => void = () => {}
   let rejectExit: (error: Error) => void = () => {}
@@ -75,6 +61,7 @@ export function createOwnerLaunch(
   void ready.catch(() => {})
   const cancel = () => {
     cancelled = true
+    clearInterval(renewalTimer)
     rejectPrepared(new Error("credential owner cancelled"))
     rejectStarted(new Error("credential owner cancelled"))
     if (child) child.kill("SIGTERM")
@@ -83,12 +70,38 @@ export function createOwnerLaunch(
       resolveExit()
     }
   }
+  const authority = () => {
+    assertGeneration()
+    if (!generation) return []
+    const sampled = ownerMonotonicMilliseconds()
+    const remaining = Math.floor(generation.remainingMs())
+    if (remaining <= 0) throw new Error("credential owner lease expired")
+    // Absolute kernel deadlines cannot gain authority while queued or paused.
+    const deadline = sampled + BigInt(remaining)
+    return [generation.owner, String(generation.generation), String(deadline)]
+  }
+  const assertGeneration = () => {
+    try {
+      generation?.assert()
+    } catch (error) {
+      cancel()
+      throw error
+    }
+  }
+  generation?.signal.addEventListener("abort", cancel, { once: true })
+  void exited
+    .finally(() => {
+      clearInterval(renewalTimer)
+      generation?.signal.removeEventListener("abort", cancel)
+    })
+    .catch(() => {})
   return {
     ready,
     exited,
     started,
     cancel,
     prepare() {
+      assertGeneration()
       if (!isReady || cancelled || quiescent || !start || child?.exitCode !== null)
         return Promise.reject(new Error("credential owner preparation refused"))
       if (!prepareSent) {
@@ -105,6 +118,7 @@ export function createOwnerLaunch(
       if (metadata && activated) start?.end("D")
     },
     assertReady() {
+      assertGeneration()
       if (
         !isReady ||
         !isPrepared ||
@@ -119,6 +133,7 @@ export function createOwnerLaunch(
         throw new Error("credential owner was not ready for activation")
     },
     activate() {
+      assertGeneration()
       if (
         !isReady ||
         !isPrepared ||
@@ -136,10 +151,11 @@ export function createOwnerLaunch(
         rejectStarted(new Error("credential owner activation timed out"))
         cancel()
       }, config.admissionTimeoutMs)
-      if (metadata) start.write("S")
+      if (metadata || generation) start.write("S")
       else start.end("S")
     },
     spawn(input) {
+      const fence = authority()
       const directory = join(config.root, accountId)
       const workspace = join(config.root, WORKSPACE_DIR)
       // Inference subprocesses run in the shared neutral workspace (`options.ts`, #296); login and
@@ -161,7 +177,7 @@ export function createOwnerLaunch(
       const guardian = spawn(
         config.helperPath,
         [
-          metadata ? "hold" : "run",
+          generation ? (metadata ? "hold-fenced" : "run-fenced") : metadata ? "hold" : "run",
           config.root,
           accountId,
           randomUUID(),
@@ -170,6 +186,7 @@ export function createOwnerLaunch(
           String(config.pollMs),
           String(config.maximumChildren),
           String(config.admissionTimeoutMs),
+          ...fence,
           input.command,
           ...input.args,
         ],
@@ -191,6 +208,21 @@ export function createOwnerLaunch(
       }, config.admissionTimeoutMs)
       const status = guardian.stdio[3] as Readable
       start = guardian.stdio[4] as Writable
+      if (generation) {
+        let sentDeadline = BigInt(fence[2] ?? "0")
+        renewalTimer = setInterval(() => {
+          try {
+            const [owner, token, deadline] = authority()
+            const next = BigInt(deadline ?? "0")
+            if (isReady && !quiescent && next > sentDeadline) {
+              sentDeadline = next
+              start?.write(`U ${owner} ${token} ${deadline}\n`)
+            }
+          } catch {
+            cancel()
+          }
+        }, config.pollMs)
+      }
       start.on("error", cancel)
       status.on("error", () => {
         rejectReady(new Error("credential owner protocol unavailable"))

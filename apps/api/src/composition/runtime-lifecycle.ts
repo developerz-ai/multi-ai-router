@@ -23,7 +23,39 @@ export function assembleRuntimeLifecycle(
   const { logger } = deps
   const { schedulerLock, refreshLock } = repositories
   const { catalog, prices, modelCatalogStore, recoveryComponents, quotaWriter, statusWriter } = warm
-  const { ownership } = cli
+  const { ownership, replicaLease } = cli
+  let reconcileTimer: ReturnType<typeof setTimeout> | undefined
+  let reconciling: Promise<void> | undefined
+  let closing = false
+  let drainUncertain = false
+  const drain = async (task: () => Promise<void>) => {
+    try {
+      await task()
+    } catch (error) {
+      drainUncertain = true
+      throw error
+    }
+  }
+  const reconcile = () => {
+    const ids = catalog
+      .accounts()
+      .filter((account) => account.configDir !== null)
+      .map((account) => account.id)
+    return replicaLease.reconcile(ids)
+  }
+  const scheduleReconcile = () => {
+    if (closing) return
+    reconcileTimer = setTimeout(() => {
+      reconciling = reconcile()
+        .catch((error: unknown) => {
+          logger.warn("account ownership reconciliation failed", {
+            component: "runtime",
+            error: describeError(error, Number.POSITIVE_INFINITY),
+          })
+        })
+        .finally(scheduleReconcile)
+    }, deps.env.cliOwnership.replicaLease.heartbeatMs)
+  }
   const { usage } = telemetry
   const { activeRequests } = request
   const lifecycle = createRuntimeLifecycle({
@@ -32,6 +64,15 @@ export function assembleRuntimeLifecycle(
       // Awaited: an empty catalog would look exactly like a deployment with no accounts.
       await catalog.refresh()
       assertStarting()
+      replicaLease.start()
+      // Complete the initial snapshot in bounded batches before any background reader starts.
+      const count = catalog.accounts().filter((account) => account.configDir !== null).length
+      for (let offset = 0; offset < count; offset += deps.env.cliOwnership.replicaLease.batchSize) {
+        reconciling = reconcile()
+        await reconciling
+        assertStarting()
+      }
+      scheduleReconcile()
       catalog.start()
       recoveryComponents?.coordinator.start()
       // Awaited for the weaker reason: an unloaded book prices off the shipped table, which is
@@ -68,6 +109,14 @@ export function assembleRuntimeLifecycle(
       [
         { name: "request-admission", run: () => activeRequests.closeAdmission() },
         {
+          name: "replica-reconciliation",
+          run: () => {
+            closing = true
+            clearTimeout(reconcileTimer)
+            replicaLease.closeAdmission()
+          },
+        },
+        {
           name: "background-admission",
           run: () => {
             request.closeBackgroundAdmission()
@@ -80,12 +129,36 @@ export function assembleRuntimeLifecycle(
         { name: "model-catalog-timers", run: () => modelCatalogStore.stop() },
       ],
       [
-        { name: "active-requests", run: () => activeRequests.stop() },
-        { name: "account-connect", run: () => admin.connect.stop() },
-        { name: "cli-owners", run: () => ownership.stop() },
-        { name: "recovery-coordinator", run: () => recoveryComponents.coordinator.stop() },
-        { name: "scheduler", run: () => scheduler.stop() },
-        { name: "credential-refresher", run: () => refresher.stop() },
+        { name: "active-requests", run: () => drain(() => activeRequests.stop()) },
+        { name: "account-connect", run: () => drain(() => admin.connect.stop()) },
+        {
+          name: "recovery-coordinator",
+          run: () => drain(() => recoveryComponents.coordinator.stop()),
+        },
+        { name: "scheduler", run: () => drain(() => scheduler.stop()) },
+        { name: "credential-refresher", run: () => drain(() => refresher.stop()) },
+      ],
+      [
+        {
+          name: "cli-owners",
+          run: async () => {
+            if (drainUncertain) {
+              await replicaLease.stop(async () => {
+                throw new Error("runtime drain uncertain; lease release refused")
+              })
+              return
+            }
+            try {
+              await reconciling
+            } catch {
+              await replicaLease.stop(async () => {
+                throw new Error("ownership reconciliation uncertain")
+              })
+              return
+            }
+            await ownership.stop()
+          },
+        },
       ],
       [
         { name: "scheduler-lock-pool", run: () => schedulerLock.close() },

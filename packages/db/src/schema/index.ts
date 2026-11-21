@@ -6,6 +6,7 @@
 export * from "./account-exhausted-watches"
 export * from "./account-operator-checks"
 export * from "./account-recoveries"
+export * from "./account-replica-leases"
 export * from "./accounts"
 export * from "./admin-credentials"
 export * from "./admin-login-throttle"

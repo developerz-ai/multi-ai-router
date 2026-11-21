@@ -1,5 +1,8 @@
 import { resolve } from "node:path"
-import type { CredentialRefreshLock } from "@multi-ai-router/db"
+import {
+  type CredentialRefreshLock,
+  createAccountReplicaLeaseRepository,
+} from "@multi-ai-router/db"
 import {
   createCredentialFreshness,
   createCredentialMetadataReader,
@@ -7,10 +10,16 @@ import {
 } from "../providers"
 import { createAccountCliOwnership } from "../providers/claude-sdk/account-ownership"
 import { createAccountConfigDirs, WORKSPACE_DIR } from "../providers/claude-sdk/config-dir"
+import { createReplicaLeaseManager } from "../providers/claude-sdk/replica-lease"
+import {
+  createLocalReplicaStorage,
+  createReplicaStorage,
+  createStorageAttachmentHelper,
+  type ExclusiveStorageAttachment,
+} from "../providers/claude-sdk/replica-storage"
 import { createSessionCarrier } from "../providers/claude-sdk/session-carry"
 import { createSdkTranscripts } from "../providers/claude-sdk/transcripts"
 import { ownedCredentialMetadataReader } from "./credential-ownership"
-
 import type { RuntimeDeps } from "./runtime-types"
 export function createCliResources(
   deps: RuntimeDeps,
@@ -18,6 +27,8 @@ export function createCliResources(
   // The cross-replica half of the refresh-window gate, from the pool the OAuth refresher already
   // holds; the same reason it is a parameter and not a second pool here.
   refreshLock: Pick<CredentialRefreshLock, "tryAcquire">,
+  // Supplied by the storage integration, never inferred from a configured path or TTL.
+  attachment?: ExclusiveStorageAttachment,
 ) {
   const { env, logger } = deps
   // The replica's shared `claude` subprocess ceiling, constructed here
@@ -41,7 +52,123 @@ export function createCliResources(
     root: rawConfigDirs.root,
     helperPath: resolve(env.cliOwnership.helperPath),
   }
-  const ownership = createAccountCliOwnership(ownershipConfig)
+  const leaseConfig = env.cliOwnership.replicaLease
+  const replicaRepository = createAccountReplicaLeaseRepository(deps.database)
+  const injectedAttachment = attachment ?? deps.storageAttachment
+  const storageAuthority =
+    injectedAttachment ??
+    (leaseConfig.attachmentHelperPath
+      ? createStorageAttachmentHelper(
+          leaseConfig.attachmentHelperPath,
+          rawConfigDirs.root,
+          env.cliOwnership.operationTimeoutMs,
+        )
+      : undefined)
+  const drains = {
+    retireLocalOwners: async (id: string) => {
+      await localOwnership.retireLocalOwners?.(id)
+      await injectedAttachment?.retireLocalOwners(id)
+    },
+    drainMetadata: async (id: string) => {
+      await localOwnership.drainMetadata?.(id)
+      await injectedAttachment?.drainMetadata(id)
+    },
+  }
+  const localStorage =
+    leaseConfig.storageAttachment === "local"
+      ? createLocalReplicaStorage(rawConfigDirs.root, ownershipConfig.helperPath, drains)
+      : undefined
+  const replicaStorage =
+    localStorage ??
+    createReplicaStorage(
+      rawConfigDirs.root,
+      leaseConfig.storageIdentity ?? "unassigned-local-storage",
+      {
+        // Only the external authority's receipt proves cross-node exclusion, not its configured path.
+        confirm: (token, identity) =>
+          leaseConfig.storageAttachment === "exclusive-reattach" && storageAuthority
+            ? storageAuthority.confirm(token, identity)
+            : Promise.resolve(false),
+        ...drains,
+        provisionNew: async (token, identity) => {
+          if (!storageAuthority?.provisionNew)
+            throw new Error("new account storage authority unavailable")
+          await storageAuthority.provisionNew(token, identity)
+        },
+      },
+    )
+  const replicaLease = createReplicaLeaseManager(replicaRepository, replicaStorage, leaseConfig)
+  const localOwnership = createAccountCliOwnership({
+    ...ownershipConfig,
+    generation: (id) => replicaLease.handle(id),
+  })
+  const ownership: typeof localOwnership = {
+    ...localOwnership,
+    ownerLaunch(id) {
+      const generation = replicaLease.handle(id)
+      const owner = localOwnership.ownerLaunch(id)
+      const cancel = () => owner.cancel()
+      generation.signal.addEventListener("abort", cancel, { once: true })
+      void owner.exited
+        .finally(() => generation.signal.removeEventListener("abort", cancel))
+        .catch(() => {})
+      return {
+        ...owner,
+        spawn(input) {
+          generation.assert()
+          return owner.spawn(input)
+        },
+        async prepare() {
+          generation.assert()
+          await owner.prepare()
+          generation.assert()
+        },
+        assertReady() {
+          generation.assert()
+          owner.assertReady()
+        },
+        activate() {
+          generation.assert()
+          owner.activate()
+        },
+      }
+    },
+    async withMetadataOwner(id, task) {
+      const generation = replicaLease.handle(id)
+      return localOwnership.withMetadataOwner(id, async () => {
+        generation.assert()
+        const result = await task()
+        generation.assert()
+        return result
+      })
+    },
+    async provisionAccount(input) {
+      // First allocation acquires its lease and persistent storage before native provisioning.
+      const handle = await replicaLease.ensure(input.id, true)
+      if (!handle) throw new Error("new account storage ownership unavailable")
+      handle.assert()
+      const path = await localOwnership.provisionAccount(input)
+      handle.assert()
+      return path
+    },
+    revokeDeletedAccount(input) {
+      replicaLease.handle(input.id).assert()
+      return localOwnership.revokeDeletedAccount(input)
+    },
+    cleanupDeletedAccount(input) {
+      replicaLease.handle(input.id).assert()
+      return localOwnership.cleanupDeletedAccount(input)
+    },
+    isRevoked: (id) => !replicaLease.eligible(id) || (localOwnership.isRevoked?.(id) ?? false),
+    closeAdmission() {
+      replicaLease.closeAdmission()
+      localOwnership.closeAdmission()
+    },
+    async stop() {
+      await replicaLease.stop(() => localOwnership.stop())
+      await localStorage?.stop()
+    },
+  }
   const configDirs = {
     ...rawConfigDirs,
     provision: (id: string) =>
@@ -51,7 +178,11 @@ export function createCliResources(
     // one: neither the reaper nor an operator survey has anything to make of them.
     list: async () =>
       (await rawConfigDirs.list()).filter(
-        (entry) => entry.name !== ".ownership" && entry.name !== WORKSPACE_DIR,
+        (entry) =>
+          entry.name !== ".ownership" &&
+          entry.name !== WORKSPACE_DIR &&
+          entry.name !== ".replica-storage-identity" &&
+          entry.name !== ".replica-local-lock",
       ),
     remove: async (id: string) => {
       const account = { id, configDir: rawConfigDirs.pathFor(id) }
@@ -101,6 +232,9 @@ export function createCliResources(
   })
 
   return {
+    replicaLease,
+    replicaStorage,
+    replicaRepository,
     sdkConcurrency,
     rawConfigDirs,
     ownershipConfig,

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import {
@@ -37,6 +37,79 @@ function deferred() {
   })
   return { promise, resolve }
 }
+
+test.skipIf(process.platform !== "linux")(
+  "native stale generation refuses admission without an owner marker",
+  async () => {
+    const { root, id, configDir, config } = await fixture()
+    const state = join(root, ".ownership", id)
+    await mkdir(join(state, "owners"), { recursive: true, mode: 0o700 })
+    const incarnation = randomUUID()
+    await writeFile(join(state, "generation"), `${incarnation} 2\n`, { mode: 0o600 })
+    const owner = createOwnerLaunch(config, id, false, {
+      accountId: id,
+      owner: incarnation,
+      generation: 1n,
+      signal: new AbortController().signal,
+      valid: () => true,
+      assert() {},
+      remainingMs: () => 1000,
+    })
+    try {
+      owner.spawn({
+        command: "/bin/echo",
+        args: ["forbidden"],
+        cwd: configDir,
+        env: { CLAUDE_CONFIG_DIR: configDir },
+        signal: new AbortController().signal,
+      })
+      await expect(owner.ready).rejects.toThrow()
+      await owner.exited.catch(() => {})
+      expect(await readdir(join(state, "owners"))).toEqual([])
+    } finally {
+      owner.cancel()
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+)
+
+test.skipIf(process.platform !== "linux")(
+  "generation loss between preparation and activation refuses launch",
+  async () => {
+    const { root, id, configDir, config } = await fixture()
+    let valid = true
+    const owner = createOwnerLaunch(config, id, false, {
+      accountId: id,
+      owner: randomUUID(),
+      generation: 1n,
+      signal: new AbortController().signal,
+      valid: () => valid,
+      assert() {
+        if (!valid) throw new Error("lost generation")
+      },
+      remainingMs: () => 1000,
+    })
+    try {
+      owner.spawn({
+        command: "/bin/echo",
+        args: ["forbidden"],
+        cwd: configDir,
+        env: { CLAUDE_CONFIG_DIR: configDir },
+        signal: new AbortController().signal,
+      })
+      await owner.ready
+      await owner.prepare()
+      valid = false
+      expect(() => owner.activate()).toThrow("lost generation")
+      // Activation itself must retire the prepared guardian, without caller cancellation.
+      await owner.exited
+      expect(await readdir(join(root, ".ownership", id, "owners"))).toEqual([])
+    } finally {
+      owner.cancel()
+      await rm(root, { recursive: true, force: true })
+    }
+  },
+)
 
 test.skipIf(process.platform !== "linux")(
   "foreign deletion while R waits refuses activation before consuming start authority",
