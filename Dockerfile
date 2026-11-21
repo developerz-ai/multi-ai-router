@@ -206,7 +206,7 @@ LABEL org.opencontainers.image.title="multi-ai-router" \
       org.opencontainers.image.url="https://github.com/developerz-ai/multi-ai-router" \
       org.opencontainers.image.documentation="https://github.com/developerz-ai/multi-ai-router/blob/main/README.md" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="2.72.1" \
+      org.opencontainers.image.version="2.73.0" \
       org.opencontainers.image.revision="${ROUTER_REVISION}"
 
 # ---- PID 1 ----
@@ -262,6 +262,9 @@ RUN claude --version
 # want Claude subscription accounts at all (in which case the volume is never
 # written to and can be safely ignored).
 ENV CLAUDE_CONFIG_ROOT=/data/claude
+# Persistence is not exclusive attachment. The native owner helper above fences local children,
+# not remote hosts. Cross-node handoff needs a deployment-supplied attachment helper and storage
+# that excludes the previous writer; neither this VOLUME nor local flock grants that authority.
 RUN mkdir -p /data/claude && chown -R bun:bun /data && chmod 700 /data/claude
 VOLUME ["/data/claude"]
 

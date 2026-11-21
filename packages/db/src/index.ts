@@ -43,6 +43,11 @@ export { credentialFingerprint } from "./repositories/account-recovery-common"
 export { createRecoveryRepository } from "./repositories/account-recovery-repository"
 export type { RecoveryRepository } from "./repositories/account-recovery-types"
 export type {
+  AccountReplicaLeaseRepository,
+  ReplicaLeaseToken,
+} from "./repositories/account-replica-lease-repository"
+export { createAccountReplicaLeaseRepository } from "./repositories/account-replica-lease-repository"
+export type {
   AccountListFilter,
   AccountRepository,
   AccountRepositoryOptions,
@@ -144,10 +149,7 @@ export type {
   ScheduledTaskRepository,
 } from "./repositories/scheduled-task-repository"
 export { createScheduledTaskRepository } from "./repositories/scheduled-task-repository"
-export type {
-  SessionRepository,
-  UpsertSessionInput,
-} from "./repositories/session-repository"
+export type { SessionRepository, UpsertSessionInput } from "./repositories/session-repository"
 export { createSessionRepository } from "./repositories/session-repository"
 export type { UsageBatchInsert, UsageBatchResult } from "./repositories/usage-batch-mutation"
 export {
@@ -218,6 +220,7 @@ export type { SchedulerLockPoolHandle, SchedulerLockPoolOptions } from "./schedu
 export { createSchedulerLockPool } from "./scheduler-lock"
 export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
 export { accountRecoveries } from "./schema/account-recoveries"
+export type { AccountReplicaLeaseRow, ReplicaLeaseState } from "./schema/account-replica-leases"
 export type {
   AccountRow,
   ModelAliasMap,
@@ -267,11 +270,7 @@ export {
 export * as schema from "./schema/index"
 export type { ModelCatalogRow, NewModelCatalogRow } from "./schema/model-catalog"
 export { modelCatalog } from "./schema/model-catalog"
-export type {
-  NewOauthStateRow,
-  OauthStateInitiator,
-  OauthStateRow,
-} from "./schema/oauth-states"
+export type { NewOauthStateRow, OauthStateInitiator, OauthStateRow } from "./schema/oauth-states"
 export { oauthStates } from "./schema/oauth-states"
 export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"
 export { poolMembers, pools } from "./schema/pools"
