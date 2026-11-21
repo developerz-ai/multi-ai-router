@@ -53,6 +53,38 @@ static void signal_children(int signal, int maximum) {
 #include "config-owner-protocol.h"
 int main(int argc, char **argv) {
   if (argc < 4 || !uuid(argv[3])) return 64;
+  if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return 70;
+  if (!strcmp(argv[1], "storage-local")) {
+    int root = open_root(argv[2]);
+    if (root < 0) return 70;
+    int lock = openat(root, ".replica-local-lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
+    struct stat state;
+    /* Same lock-file authority as the account state lock below: ours, unshared, mode 0600. */
+    if (lock < 0 || fstat(lock, &state) || !S_ISREG(state.st_mode) ||
+        state.st_uid != geteuid() || state.st_nlink != 1 || (state.st_mode & 077) ||
+        flock(lock, LOCK_EX | LOCK_NB)) return 75;
+    if (write(3, "R", 1) != 1) return 70;
+    /* Local persistence only. This lock is not remote storage exclusion. */
+    char byte;
+    while (read(4, &byte, 1) < 0 && errno == EINTR) {}
+    close(lock);
+    close(root);
+    return 0;
+  }
+  int operation_fenced = !strcmp(argv[1], "provision-fenced") ||
+      !strcmp(argv[1], "revoke-fenced") || !strcmp(argv[1], "cleanup-fenced");
+  int launch_fenced = !strcmp(argv[1], "run-fenced") || !strcmp(argv[1], "hold-fenced");
+  if (operation_fenced) {
+    if (argc < 7 || configure_lease(argv + 4)) return 75;
+    /* Kernel deadline survives a paused JavaScript parent and blocked filesystem calls. */
+    timer_t watchdog;
+    struct sigevent event = {.sigev_notify = SIGEV_SIGNAL, .sigev_signo = SIGKILL};
+    struct itimerspec expiry = {.it_value = {.tv_sec = lease_deadline / 1000,
+        .tv_nsec = (lease_deadline % 1000) * 1000000L}};
+    if (timer_create(CLOCK_MONOTONIC, &event, &watchdog) ||
+        timer_settime(watchdog, TIMER_ABSTIME, &expiry, NULL)) return 70;
+  }
+  if (launch_fenced && (argc < 14 || configure_lease(argv + 10))) return 75;
   int root = open_root(argv[2]);
   if (root < 0) return 70;
   int namespace = directory(root, ".ownership");
@@ -69,12 +101,13 @@ int main(int argc, char **argv) {
       lock_stat.st_nlink != 1 || (lock_stat.st_mode & 077))
     return 70;
   if (lock_exclusive(lock) < 0) return 75;
-  if (!strcmp(argv[1], "revoke")) {
+  if (adopt_generation(state)) return 75;
+  if (!strcmp(argv[1], "revoke") || !strcmp(argv[1], "revoke-fenced")) {
     int exists = present(state, "deleted");
     if (exists < 0) return 70;
     return exists || write_marker(state, "deleted") == 0 ? 0 : 70;
   }
-  if (!strcmp(argv[1], "provision")) {
+  if (!strcmp(argv[1], "provision") || !strcmp(argv[1], "provision-fenced")) {
     int deleted = present(state, "deleted");
     if (deleted < 0) return 70;
     if (deleted) return 73;
@@ -87,9 +120,10 @@ int main(int argc, char **argv) {
     close(target);
     return 0;
   }
-  if (!strcmp(argv[1], "cleanup")) {
-    if (argc != 6 || present(state, "deleted") != 1) return 70;
-    int entries = number(argv[4]), depth = number(argv[5]);
+  if (!strcmp(argv[1], "cleanup") || !strcmp(argv[1], "cleanup-fenced")) {
+    int offset = operation_fenced ? 7 : 4;
+    if (argc != offset + 2 || present(state, "deleted") != 1) return 70;
+    int entries = number(argv[offset]), depth = number(argv[offset + 1]);
     if (entries < 0 || depth < 0) return 64;
     int count = count_owners(owners, 1);
     if (count < 0) return 70;
@@ -101,7 +135,7 @@ int main(int argc, char **argv) {
     if (result) return result;
     return unlinkat(root, argv[3], AT_REMOVEDIR) == 0 && fsync(root) == 0 ? 0 : 70;
   }
-  if ((strcmp(argv[1], "run") && strcmp(argv[1], "hold")) || argc < 11 || !uuid(argv[4])) return 64;
+  if ((!launch_fenced && strcmp(argv[1], "run") && strcmp(argv[1], "hold")) || argc < 11 || !uuid(argv[4])) return 64;
   int maximum = number(argv[5]), grace = number(argv[6]), poll_ms = number(argv[7]),
       max_children = number(argv[8]), admission = number(argv[9]);
   if (maximum < 0 || grace < 0 || poll_ms < 0 || max_children < 0 || admission < 0) return 64;
@@ -124,21 +158,23 @@ int main(int argc, char **argv) {
   if (sigaction(SIGTERM, &sa, NULL) || sigaction(SIGINT, &sa, NULL) ||
       sigaction(SIGUSR2, &sa, NULL))
     return 70;
+  if (!lease_live()) return 75;
   if (write_marker(owners, argv[4])) return 70;
   int gate = prepare_activation(state, owners, argv[4], lock, admission);
   if (gate) return gate;
   if (present(state, "deleted") != 0) return retire_owner(owners, argv[4], lock, 73);
-  if (!strcmp(argv[1], "hold")) {
+  if (!strcmp(argv[1], "hold") || !strcmp(argv[1], "hold-fenced")) {
     if (write(3, "B", 1) != 1 || flock(lock, LOCK_UN) < 0) return 70;
     int released = await_metadata_release();
     return released ? 70 : retire_owner(owners, argv[4], lock, 0);
   }
-  close(4);
+  if (!fenced) close(4);
   /* Revocation after readiness does not erase this registered owner's lifetime. */
   pid_t child = fork();
   if (child < 0) return 70;
   if (child == 0) {
     close(3);
+    close(4);
     close(lock);
     close(owners);
     close(state);
@@ -148,14 +184,24 @@ int main(int argc, char **argv) {
     /* The child keeps the guardian's cwd — the Account's own directory (login) or the shared
        neutral workspace (inference) — never the config directory: the CLI advertises its cwd to
        the model, whose tools run on the client. The TS fence admits exactly those two. */
-    execvp(argv[10], argv + 10);
+    int command = launch_fenced ? 13 : 10;
+    if (!lease_live()) _exit(75);
+    execvp(argv[command], argv + command);
     _exit(127);
   }
-  if (write(3, "B", 1) != 1 || flock(lock, LOCK_UN) < 0) return 70;
+  if (write(3, "B", 1) != 1 || flock(lock, LOCK_UN) < 0) requested = SIGUSR2;
   int primary = 0, status;
   long long deadline = -1;
   int killing = 0;
   for (;;) {
+    if (fenced) {
+      /* Drain a bounded control burst so renewal framing does not cost one poll per byte. */
+      for (int bytes = 0; bytes < 512; bytes++) {
+        if (receive_control(0) != 0) { requested = SIGUSR2; break; }
+        struct pollfd input = {.fd = 4, .events = POLLIN};
+        if (poll(&input, 1, 0) <= 0) break;
+      }
+    }
     if (requested) {
       if (requested == SIGUSR2) killing = 1;
       if (deadline < 0) {
@@ -175,7 +221,12 @@ int main(int argc, char **argv) {
     if (now < 0) return 70;
     if (deadline >= 0 && now >= deadline) killing = 1;
     if (killing) signal_children(SIGKILL, max_children);
-    struct timespec delay = {.tv_sec = poll_ms / 1000, .tv_nsec = (poll_ms % 1000) * 1000000L};
+    int wait_ms = poll_ms;
+    if (fenced && !killing) {
+      long long remaining = lease_deadline - milliseconds();
+      if (remaining < wait_ms) wait_ms = remaining > 0 ? (int)remaining : 0;
+    }
+    struct timespec delay = {.tv_sec = wait_ms / 1000, .tv_nsec = (wait_ms % 1000) * 1000000L};
     nanosleep(&delay, NULL);
   }
   return retire_owner(owners, argv[4], lock,

@@ -44,6 +44,11 @@ export { credentialFingerprint } from "./repositories/account-recovery-common"
 export { createRecoveryRepository } from "./repositories/account-recovery-repository"
 export type { RecoveryRepository } from "./repositories/account-recovery-types"
 export type {
+  AccountReplicaLeaseRepository,
+  ReplicaLeaseToken,
+} from "./repositories/account-replica-lease-repository"
+export { createAccountReplicaLeaseRepository } from "./repositories/account-replica-lease-repository"
+export type {
   AccountListFilter,
   AccountRepository,
   AccountRepositoryOptions,
@@ -217,6 +222,7 @@ export { createSchedulerLockPool } from "./scheduler-lock"
 export { type AccountBreakerRow, accountBreakers } from "./schema/account-breakers"
 export type { RecoveryReason, RecoveryRow, RecoveryState } from "./schema/account-recoveries"
 export { accountRecoveries } from "./schema/account-recoveries"
+export type { AccountReplicaLeaseRow, ReplicaLeaseState } from "./schema/account-replica-leases"
 export type {
   AccountRow,
   ModelAliasMap,
@@ -225,7 +231,6 @@ export type {
 } from "./schema/accounts"
 export { accounts } from "./schema/accounts"
 export type { AdminCredentialRow, NewAdminCredentialRow } from "./schema/admin-credentials"
-// --- tables -----------------------------------------------------------------
 export { adminCredentials } from "./schema/admin-credentials"
 export type { AdminSessionRow, NewAdminSessionRow } from "./schema/admin-sessions"
 export { adminSessions } from "./schema/admin-sessions"
@@ -248,7 +253,6 @@ export type {
 } from "./schema/audit-events"
 export { AUDIT_ACTOR_KINDS, auditEvents } from "./schema/audit-events"
 export type { CostBasis, UsageOutcome } from "./schema/enums"
-// --- enums ------------------------------------------------------------------
 export {
   accountStatus,
   costBasis,
@@ -261,16 +265,10 @@ export {
   USAGE_OUTCOME_SUCCESS,
   utilizationSource,
 } from "./schema/enums"
-// The whole schema as one namespace, for `drizzle(sql, { schema })` and for
-// query builders that need a table this barrel does not name individually.
 export * as schema from "./schema/index"
 export type { ModelCatalogRow, NewModelCatalogRow } from "./schema/model-catalog"
 export { modelCatalog } from "./schema/model-catalog"
-export type {
-  NewOauthStateRow,
-  OauthStateInitiator,
-  OauthStateRow,
-} from "./schema/oauth-states"
+export type { NewOauthStateRow, OauthStateInitiator, OauthStateRow } from "./schema/oauth-states"
 export { oauthStates } from "./schema/oauth-states"
 export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"
 export { poolMembers, pools } from "./schema/pools"

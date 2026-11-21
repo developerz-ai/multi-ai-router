@@ -252,8 +252,12 @@ test.skipIf(process.platform !== "linux")(
         name: "UpstreamAdmissionRefused",
         message: "credential metadata owner exit uncertain",
       })
-      await owners.revokeDeletedAccount({ id, configDir })
-      expect(await owners.cleanupDeletedAccount({ id, configDir })).toBe("deferred")
+      await expect(owners.revokeDeletedAccount({ id, configDir })).rejects.toThrow(
+        "credential owner retirement uncertain",
+      )
+      await expect(owners.cleanupDeletedAccount({ id, configDir })).rejects.toThrow(
+        "credential owner retirement uncertain",
+      )
       expect((await readdir(join(config.root, ".ownership", id, "owners"))).length).toBe(1)
     } finally {
       finish.resolve()

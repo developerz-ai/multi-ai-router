@@ -113,6 +113,8 @@ export const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
 export const DEFAULT_RESPONSE_OBSERVATION_MAX_BYTES = 65_536
 
 export interface DispatcherDeps {
+  /** Warm replica ownership predicate. Subscription accounts only; never performs I/O. */
+  readonly accountEligible?: (accountId: string) => boolean
   /**
    * Seals encrypted reasoning a translated response hands the client, per selected account.
    * Omitted, no seal is offered and a translator carries no reasoning across turns.

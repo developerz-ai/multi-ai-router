@@ -6,6 +6,137 @@ purge, quota floor) are also shipped — in-process jittered timers, one `pg_try
 task, last run and outcome recorded to `ScheduledTaskRun` — and the retention windows below are what
 they sweep against.
 
+## Account ownership and storage handoff
+
+Account ownership is not general multi-replica support. Continue to deploy **one replica**
+until shared routing health, rate limits, pending login flows and in-flight session coordination
+are addressed. The ownership contract below does not constitute live two-replica deployment proof.
+
+Migration `0054` adds a Postgres TTL ownership row per account, with a process-unique owner
+incarnation, monotonic bigint fencing generation, persistent storage identity and lifecycle state.
+Acquisition, renewal and release use database time and compare the owner and generation.
+A stale renewal or release cannot modify a successor. Generations must not be converted to
+JavaScript numbers or reset when ownership is released.
+
+Lease TTL, renewal cadence and safety margin are configuration, not request-time SQL.
+Renew early enough to leave time for guardian termination before expiry. Local admission uses a
+conservative monotonic deadline established **before** the acquire or renewal request starts:
+a delayed response cannot grant extra local lifetime, and wall-clock jumps cannot extend it.
+Database outages stop renewal; reaching the local deadline fails closed, including cached
+fast-mode credentials. Warm request admission consults local readiness only.
+
+Ownership environment settings (all names start with `CLAUDE_OWNERSHIP_`):
+
+| Suffix | Default | Accepted values |
+|---|---|---|
+| `LEASE_TTL_MS` | `30000` | Integer milliseconds, 100 through 300000 |
+| `HEARTBEAT_MS` | `5000` | Integer milliseconds, 1 through 100000 |
+| `SAFETY_MARGIN_MS` | `2000` | Integer milliseconds, 1 through 60000 |
+| `RECONCILE_BATCH_SIZE` | `64` | Integer, 1 through 1024 |
+| `STORAGE_ATTACHMENT` | `local` | `local` or `exclusive-reattach` |
+| `STORAGE_IDENTITY` | Unset | At most 256 characters |
+| `ATTACHMENT_HELPER_PATH` | Unset | Absolute path |
+
+`LEASE_TTL_MS` must exceed three `HEARTBEAT_MS` intervals plus `SAFETY_MARGIN_MS`.
+`exclusive-reattach` requires both `STORAGE_IDENTITY` and `ATTACHMENT_HELPER_PATH`.
+`local` refuses either setting: its identity is generated and persisted on the original volume,
+not supplied through configuration. Preserve `.replica-storage-identity` across restarts.
+Configuration alone does not prove attachment: runtime must verify exclusive attachment before
+serving. Neither shared RWX storage nor a path string fences a paused host; `local` does not
+provide cross-node takeover. The local lock file itself is validated by the helper before it is
+trusted: a regular file owned by the router uid, mode `0600`, `nlink` 1. A symlinked, hardlinked
+or group/world-readable lock is refused, because any of those lets a second writer share it.
+
+Routing omits subscription candidates not ready on this process, within the existing pool and
+key-scope intersection. It neither forwards internally nor substitutes a model. Unbound requests
+may retry another eligible account before upstream bytes are sent; ownership unavailability is a
+retryable service-unavailable condition, not billing exhaustion. Bound foreign-owner sessions
+fail explicitly rather than silently starting a fresh session. Never retry after streaming begins.
+
+**A TTL alone cannot fence a paused host or detach a volume.** Acquisition is not serving
+readiness: storage identity must match, exclusive attachment must be confirmed, and local native
+guardian fencing must be active. Cross-node takeover requires externally enforced exclusive
+storage attachment that fences the former host. Arbitrary independent local disks and RWX NFS
+do not satisfy this contract. A matching path string is not attachment evidence.
+
+Graceful handoff stops admission, drains account operations and streams, terminates and reaps
+children, then releases ownership only after drain is confirmed. Invalidate old-generation
+credential and session caches. Detach and re-attach the **same persistent account storage**;
+preserve credentials and transcripts, never copy live credentials or create an empty replacement.
+After a crash, TTL expiry permits acquisition, not immediate serving: exclusive re-attachment and
+guardian readiness still gate admission. Missing or mismatched storage, unknown child exits or
+uncertain drain stay unavailable for operator recovery, never guessed safe from age or PID.
+
+### Attachment authority and directory allocation
+
+The image includes `/usr/local/libexec/router-cli-owner`, selected by
+`CLAUDE_OWNERSHIP_HELPER_PATH`, for native directory supervision. It does **not** include a
+deployment storage authority. `CLAUDE_OWNERSHIP_ATTACHMENT_HELPER_PATH` selects a separate,
+deployment-owned executable in `exclusive-reattach` mode; production must construct its adapter
+from that configuration. A configured executable, a matching identity marker, the image's `VOLUME`
+and local `flock` are not evidence that a remote writer has been fenced.
+
+The attachment authority must bind confirmation to the account UUID, process incarnation,
+decimal bigint fencing generation and assigned storage identity. Confirmation succeeds only
+after the storage system has excluded the former writer, not merely requested a detach. It must
+refuse a stale generation. Failed execution, malformed confirmation or unconfirmed attachment
+leaves the account unavailable. Do not emit credentials in helper input, output or diagnostics.
+Local guardian retirement and metadata drain remain runtime responsibilities, not claims a
+storage executable can satisfy by returning success.
+
+The runtime adapter boundary is `ExclusiveStorageAttachment`:
+
+- `confirm(token, identity): Promise<boolean>` confirms exclusive attachment for that exact token.
+- `provisionNew(token, identity): Promise<void>` allocates only with persistent proof that this
+  account has never been assigned storage. It is mandatory for first provisioning.
+- `retireLocalOwners(accountId): Promise<void>` completes guardian and child retirement.
+- `drainMetadata(accountId): Promise<void>` completes filesystem callbacks, including expired
+  generations. Rejection must remain a failed barrier, not be ignored on the next attempt.
+
+The executable runs without arguments or inherited environment. It receives one newline-terminated
+JSON object on stdin, with `version: 1`, `operation` (`confirm` or `allocate`), `root`, `accountId`,
+`owner`, `generation` (a decimal string) and `identity`. Within
+`CLAUDE_OWNERSHIP_OPERATION_TIMEOUT_MS` (default 15000), it must exit zero and emit a single JSON
+receipt of at most 2048 bytes on stdout. The receipt echoes every input field except `root` and
+adds `exclusive: true`. Diagnostics on stdout invalidate the receipt; stderr is discarded.
+Timeout, failed execution and mismatched receipts refuse attachment. No credentials belong in
+either stream. See [the receipt example](07-security.md#subscription-storage-ownership).
+
+Storage validates confirmation before attachment work and again afterwards. First allocation
+runs `allocate` before confirmation and attachment validation. A successful receipt is trusted
+only because the deployment authority actually enforces writer exclusion, not because it can
+echo the input. No successful exit alone substitutes for token-bound attachment confirmation.
+
+Directory allocation is separate from attachment. For an account with no persistent allocation
+history, acquire a lease first, then allocate its account directory and non-secret
+`.storage-identity` marker under the configured root, then validate attachment and activate local
+ownership. Do not require a ready directory before this first provision. Allocation must be
+idempotent and fenced; absence on the current disk is not proof that an account is new.
+Once assigned, retain the same persistent directory and credentials across release and expiry.
+The identity marker must match the configured identity exactly; symlink substitution or a
+missing assigned directory is an error, not an invitation to create an empty replacement.
+
+`local` is the default single-node mode, with persistent local allocation and native guardian
+drain. It must remain usable without an external attachment service, but never authorizes a
+different host to take over that storage. Preserve its allocation authority across restarts.
+
+### Cold reattachment procedure
+
+1. Stop admission on the old owner. Drain requests, maintenance and metadata callbacks, terminate
+   and reap guardians and descendants, then release the matching generation only on confirmed drain.
+2. After a killed owner, wait for database TTL expiry before successor acquisition. Expired or
+   failed local lease entries may reconcile again; a retained failed entry must not park an account
+   permanently. Uncertain local drain remains fenced rather than being cleared by a retry.
+3. Have the deployment storage system exclude the former host and attach the **assigned**
+   persistent storage to the successor. Do not copy live credentials or initialize replacement data.
+4. Validate identity and directory anchoring, confirm attachment for the successor generation,
+   drain any previous local callbacks and guardians, then activate native fencing and readiness.
+   Invalidate old-generation credentials and session caches before serving.
+
+If any step is uncertain, leave admission closed and recover through the storage operator.
+This procedure specifies the ownership seam, not proof of a live two-replica deployment or a
+solution for the remaining distributed routing, login and session state.
+
 ## Optional deployment pool roster
 
 `POOL_ROSTER_PATH` is optional: unset or blank disables loading without filesystem access.
@@ -406,7 +537,7 @@ Two operational consequences:
 
 | | |
 |---|---|
-| **One replica, not a horizontal fleet** | Before work, each scheduled task takes its Postgres advisory lock; exactly one replica runs a given sweep and the others skip. Durable account breaker clocks, half-open probe holds and the existing Postgres recovery generations/single-use permits cover cooldown persistence, probe admission and designated recovery admission. Admin login budgets are also shared. This does **not** make multiple router replicas safe: deployment remains **one replica** until subscription ownership and CLI login/refresh coordination, node-local per-Account `CLAUDE_CONFIG_DIR` state, SDK in-flight session ownership/bindings, per-key rate-limit windows and pending login/OAuth device flows are resolved. Warm caches, local accounting/model holds and password concurrency remain per-process. Durable recovery admission is not a substitute for subscription/session ownership. |
+| **One replica, not a horizontal fleet** | Before doing work, each background task takes a Postgres advisory lock named for that task; exactly one replica runs a given sweep and the others skip. Account ownership adds a separate fenced TTL lease, while durable account breaker clocks, half-open probe holds and existing Postgres recovery generations/single-use permits cover cooldown persistence, probe admission and designated recovery admission. This is not general multi-replica safety. Continue running **one replica**: warm caches, key/session bindings, per-key rate-limit windows and pending login/OAuth device-flow state remain per-process. Admin login budgets are shared in Postgres, but password concurrency remains per-process. A horizontal fleet still requires shared per-key rate limits, durable pending login/device flows and shared SDK in-flight session coordination. Account storage additionally requires the exclusive attachment contract above. |
 | **Every run is recorded** | Task, start, finish, outcome, and items processed land in a `ScheduledTaskRun` row, surfaced in the admin UI. That record is how you tell a task that is idle from one that is wedged — see Troubleshooting. |
 
 ### Breaker propagation is conditional, not immediate

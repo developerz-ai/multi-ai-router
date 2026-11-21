@@ -18,6 +18,7 @@ import { createRequestAccounting, type RequestAccounting } from "./request-accou
 import { requestLifetime } from "./request-lifetime"
 import { requestSelector } from "./request-select"
 import { requestTerminalObserver } from "./request-terminal"
+import { requestTranslation } from "./request-translation"
 import { createRotationCounters } from "./rotation"
 import { ROUTER_ATTEMPTS_HEADER, reconnectHeaders, withHeaders } from "./router-headers"
 import { createRuntime } from "./runtime"
@@ -144,6 +145,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
 
     // Scope intersection, filtering, and policy — one pure call over an injected snapshot.
     const select = requestSelector({
+      accountEligible: deps.accountEligible,
       catalog: deps.recovery?.catalog ?? deps.catalog,
       health: deps.health,
       recovery: deps.recovery,
@@ -158,15 +160,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       },
     })
 
-    // Injected clock: identical recorded bodies convert to identical bytes.
-    const translation = {
-      created: Math.floor(startedAt.getTime() / 1000),
-      model,
-      fallbackId: input.requestId,
-      defaultMaxTokens: options.translation?.defaultMaxTokens,
-      maximumPendingBytes: options.translation?.maximumPendingBytes,
-      thinkingDefaultModels: options.translation?.thinkingDefaultModels,
-    }
+    const translation = requestTranslation(startedAt, model, input.requestId, options.translation)
     // `warn`: the caller was answered without something it sent (06-protocol-translation.md).
     const translated = createTranslatedRequestBody(
       body.bytes,
