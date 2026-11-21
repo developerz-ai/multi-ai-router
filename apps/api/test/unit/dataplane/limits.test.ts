@@ -192,3 +192,56 @@ describe("revocation and eviction", () => {
     expect(DEFAULT_RATE_LIMIT_MAX_KEYS).toBeGreaterThan(0)
   })
 })
+
+describe("independent replicas", () => {
+  /**
+   * Each process builds its own limiter (`composition/request-services.ts`), so the ceiling stored
+   * on a key is admitted once per replica: N replicas admit up to N times the ceiling. That is the
+   * documented trade (docs/KEYS.md, docs/idea/04-api-keys-and-access.md) — a shared counter would
+   * put Postgres on the request path. Two independent instances here are two replicas; no I/O.
+   */
+  test("two replicas admit twice the ceiling for the same key at the same instant", () => {
+    const replicaA = createRateLimiter()
+    const replicaB = createRateLimiter()
+    const now = clock().now().getTime()
+    const k = key({ rateLimitRequests: 3, rateLimitWindowSeconds: 60 })
+
+    const charge = (replica: ReturnType<typeof createRateLimiter>) =>
+      Array.from({ length: 3 }, () => replica.check(k, now))
+
+    expect([...charge(replicaA), ...charge(replicaB)].every((decision) => decision.allowed)).toBe(
+      true,
+    )
+    expect(replicaA.size).toBe(1)
+    expect(replicaB.size).toBe(1)
+
+    // Only the request beyond each replica's own ceiling is refused. A single shared counter
+    // would have refused the fourth of these six requests.
+    const refusedA = replicaA.check(k, now)
+    const refusedB = replicaB.check(k, now)
+    expect(refusedA.allowed).toBe(false)
+    expect(refusedB.allowed).toBe(false)
+    if (!refusedA.allowed && !refusedB.allowed) {
+      expect(refusedA.resetsAt.getTime()).toBe(refusedB.resetsAt.getTime())
+    }
+  })
+
+  test("forgetting the key on one replica leaves the other replica's window spent", () => {
+    const replicaA = createRateLimiter()
+    const replicaB = createRateLimiter()
+    const now = clock().now().getTime()
+    const k = key({ rateLimitRequests: 1, rateLimitWindowSeconds: 60 })
+
+    expect(replicaA.check(k, now).allowed).toBe(true)
+    expect(replicaB.check(k, now).allowed).toBe(true)
+    expect(replicaA.check(k, now).allowed).toBe(false)
+    expect(replicaB.check(k, now).allowed).toBe(false)
+
+    // Revocation/eviction is local: replica A starts clean, replica B still knows the charges.
+    replicaA.forget(k.id)
+    expect(replicaA.size).toBe(0)
+    expect(replicaB.size).toBe(1)
+    expect(replicaA.check(k, now).allowed).toBe(true)
+    expect(replicaB.check(k, now).allowed).toBe(false)
+  })
+})
