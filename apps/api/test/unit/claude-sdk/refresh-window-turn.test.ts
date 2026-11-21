@@ -11,13 +11,14 @@ import {
   createCredentialFreshness,
 } from "../../../src/providers/claude-sdk/credential-freshness"
 import type { CredentialMetadata } from "../../../src/providers/claude-sdk/credential-metadata"
+import { CredentialRefreshLeaseUnavailable } from "../../../src/providers/claude-sdk/ownership-errors"
 import { sdkQueryStream, sdkTurn } from "./fixtures"
 
 /**
  * The real invoker against the real refresh-window gate (101 findings 05.1 / 10.10 and 05.5).
  *
  * Prod fingerprint (10.10): at every access-token expiry the first request inside the CLI's refresh
- * lead logged "claude credential refresh did not land; proceeding anyway" with `waitedMs` ≈ 20 000
+ * lead logged a warning with `waitedMs` ≈ 20 000 and admitted a caller that should have refused
  * — it was waiting on its own claim, re-asked once its slot was granted. The second half is the
  * busy-session retry: the first attempt's late epilogue must not release the retry's claim.
  */
@@ -49,22 +50,33 @@ const EXPIRING: CredentialMetadata = {
   hasTokens: true,
 }
 
-function gate() {
+function gate(
+  refreshLock?: CredentialFreshnessDeps["refreshLock"],
+  read: () => CredentialMetadata = () => EXPIRING,
+  sleep?: CredentialFreshnessDeps["sleep"],
+) {
+  // Existing turn tests own the window explicitly; give them a real, stateful lease unless a test
+  // injects one shared with another router instance. A no-op release would leave the lease held
+  // forever and turn the next admission into a cap-timeout.
+  const lock = refreshLock ?? sharedLease().lock
   let clock = NOW_MS
   const sleeps: number[] = []
   const warnings: string[] = []
   const deps: CredentialFreshnessDeps = {
-    reader: { read: async () => EXPIRING },
+    reader: { read: async () => read() },
+    refreshLock: lock,
     configDirs: { pathFor: (id) => `/data/claude/${id}` },
     skewMs: 300_000,
     coldMarginMs: 600_000,
     maxWaitMs: 20_000,
     pollMs: 250,
     now: () => new Date(clock),
-    sleep: async (ms) => {
-      sleeps.push(ms)
-      clock += ms
-    },
+    sleep:
+      sleep ??
+      (async (ms) => {
+        sleeps.push(ms)
+        clock += ms
+      }),
     logger: {
       warn: (message: string) => warnings.push(message),
       info: () => {},
@@ -95,6 +107,144 @@ function drainPrompt(prompt: AsyncIterable<unknown>): void {
 
 const never = new AbortController().signal
 
+/**
+ * Two router instances, one account, one cross-replica lease. The lock fake counts every lease
+ * grant; each grant is the one admission allowed to spend the rotating refresh token. A refresh
+ * exchange is counted at the CLI spawn, so exactly one claim must mean exactly one exchange.
+ */
+function sharedLease() {
+  let held = false
+  let claims = 0
+  let releases = 0
+  return {
+    get claims() {
+      return claims
+    },
+    get releases() {
+      return releases
+    },
+    lock: {
+      tryAcquire: async () => {
+        if (held) return { acquired: false as const, reason: "busy" as const }
+        held = true
+        claims += 1
+        return {
+          acquired: true as const,
+          lease: {
+            release: async () => {
+              if (!held) return
+              held = false
+              releases += 1
+            },
+          },
+        }
+      },
+    } satisfies NonNullable<CredentialFreshnessDeps["refreshLock"]>,
+  }
+}
+
+describe("concurrent refresh turns on one account across two router instances", () => {
+  test("produces one refresh exchange when the second replica reacquires after the first releases", async () => {
+    const lease = sharedLease()
+    let metadata = EXPIRING
+    const a = gate(lease.lock, () => metadata)
+    let parked = (): void => {}
+    const parkedBehindOwner = new Promise<void>((resolve) => {
+      parked = resolve
+    })
+    let resumeAfterRelease = (): void => {}
+    const leaseReleased = new Promise<void>((resolve) => {
+      resumeAfterRelease = resolve
+    })
+    // Replica B must remain parked behind A's real shared lease until A's controlled refresh has
+    // updated the one metadata file both replicas read. An instant clock fake would run B to its cap.
+    const b = gate(
+      lease.lock,
+      () => metadata,
+      async () => {
+        parked()
+        await leaseReleased
+      },
+    )
+    let releaseRefresh = (): void => {}
+    const refreshComplete = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    let exchanges = 0
+    let queries = 0
+    let refreshStarted = (): void => {}
+    const refreshStartedPromise = new Promise<void>((resolve) => {
+      refreshStarted = resolve
+    })
+    const runQuery: SdkQueryFn = ({ prompt }) => {
+      queries += 1
+      drainPrompt(prompt)
+      if (metadata.accessTokenExpiresAt?.getTime() === EXPIRING.accessTokenExpiresAt?.getTime()) {
+        exchanges += 1
+        refreshStarted()
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "system", subtype: "init", session_id: "sess_1" }
+            await refreshComplete
+            for (const event of ONE_TURN) yield event
+            yield { type: "result", subtype: "success" }
+          },
+        }
+      }
+      return sdkQueryStream({ turns: [ONE_TURN] })
+    }
+    const invokeA = createSdkInvoker({
+      concurrency: createSdkConcurrency({ global: 4, perAccount: 2 }),
+      freshness: a.freshness,
+      runQuery,
+      resolveCli: () => CLI,
+    })
+    const invokeB = createSdkInvoker({
+      concurrency: createSdkConcurrency({ global: 4, perAccount: 2 }),
+      freshness: b.freshness,
+      runQuery,
+      resolveCli: () => CLI,
+    })
+    const request = {
+      accountId: ACCOUNT,
+      configDir: CONFIG_DIR,
+      model: "claude-opus-5",
+      body: body({}),
+      signal: never,
+      session: { kind: "fresh" as const, reason: "no-session" as const },
+    }
+
+    // A owns the shared lease and reaches its controlled refresh. B reads the same stale metadata,
+    // loses the same lease, and parks rather than progressing to its own refresh exchange.
+    const first = invokeA(request)
+    await refreshStartedPromise
+    const second = invokeB(request)
+    await parkedBehindOwner
+
+    expect(exchanges).toBe(1)
+    expect(queries).toBe(1)
+
+    // This is the CLI's durable write: it lands before A's stream ends and its lease is released.
+    // B then reacquires the shared lease, sees the fresh expiry, and may run a normal turn without
+    // spending the rotating refresh token a second time.
+    metadata = { ...EXPIRING, accessTokenExpiresAt: new Date(NOW_MS + 8 * 3_600_000) }
+    releaseRefresh()
+    const firstResponse = await Promise.allSettled([first])
+    resumeAfterRelease()
+    const secondResponse = await Promise.allSettled([second])
+    const statuses = [...firstResponse, ...secondResponse].map((result) =>
+      result.status === "fulfilled" ? result.value.status : "rejected",
+    )
+    expect(statuses).toEqual([200, 200])
+    // B reacquired after A released, so this covers the path the prior permanently-busy fake hid.
+    expect(lease.claims).toBe(2)
+    expect(exchanges).toBe(1)
+    expect(queries).toBe(2)
+    expect(b.warnings).toEqual([])
+    expect(lease.releases).toBe(2)
+  })
+})
+
 describe("a turn that starts inside the refresh window", () => {
   test("owns the window and spawns with no wait and no 'did not land' warn", async () => {
     const { freshness, sleeps, warnings } = gate()
@@ -123,7 +273,7 @@ describe("a turn that starts inside the refresh window", () => {
     expect(response.status).toBe(200)
     expect(launched).toHaveLength(1)
     expect(sleeps).toEqual([])
-    expect(warnings).not.toContain("claude credential refresh did not land; proceeding anyway")
+    expect(warnings).toEqual([])
   })
 
   test("a second caller still waits behind the owner: the window keeps exactly one owner", async () => {
@@ -132,7 +282,9 @@ describe("a turn that starts inside the refresh window", () => {
     const recheck = await freshness.ensureFresh(ACCOUNT, never, owner)
     expect(sleeps).toEqual([])
 
-    await freshness.ensureFresh(ACCOUNT, never)
+    await expect(freshness.ensureFresh(ACCOUNT, never)).rejects.toThrow(
+      /refresh did not land|lease unavailable/,
+    )
     expect(sleeps.length).toBeGreaterThan(0)
     recheck.release()
     owner.release()
@@ -144,8 +296,11 @@ describe("a turn that starts inside the refresh window", () => {
     owner.release()
     const next = await freshness.ensureFresh(ACCOUNT, never, owner)
     expect(sleeps).toEqual([])
-    // It owns afresh, so a third caller now waits on it.
-    await freshness.ensureFresh(ACCOUNT, never)
+    // It owns afresh, so a third caller waits on its lease and then refuses rather than being
+    // admitted on the strength of the local entry alone.
+    await expect(freshness.ensureFresh(ACCOUNT, never)).rejects.toThrow(
+      /refresh did not land|lease unavailable/,
+    )
     expect(sleeps.length).toBeGreaterThan(0)
     next.release()
   })
@@ -212,11 +367,13 @@ describe("a busy-session retry keeps its own claim", () => {
     closeFirst()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    // A newcomer must still find the retry owning the window and wait behind it.
+    // A newcomer must still find the retry owning the window, wait behind its lease and then
+    // refuse: it is never admitted on the strength of a local entry alone.
     const before = sleeps.length
-    const newcomer = await freshness.ensureFresh(ACCOUNT, never)
+    await expect(freshness.ensureFresh(ACCOUNT, never)).rejects.toBeInstanceOf(
+      CredentialRefreshLeaseUnavailable,
+    )
     expect(sleeps.length).toBeGreaterThan(before)
-    newcomer.release()
 
     finishRetry()
     await response.text()

@@ -3,7 +3,10 @@ import type { Logger } from "../../logging/logger"
 import { abortableSleep, throwIfAborted } from "./abort"
 import type { AccountConfigDirs } from "./config-dir"
 import type { CredentialMetadata, CredentialMetadataReader } from "./credential-metadata"
-import { CredentialMetadataOwnershipUnavailable } from "./ownership-errors"
+import {
+  CredentialMetadataOwnershipUnavailable,
+  CredentialRefreshLeaseUnavailable,
+} from "./ownership-errors"
 import { createRefreshWindow } from "./refresh-window"
 
 /** The sentence an abort with a non-Error reason carries out of the wait. */
@@ -42,8 +45,9 @@ const ABANDONED = "the credential refresh wait was abandoned"
  * ({@link CredentialRefreshClaim}): the first caller across the line is not delayed at all — it
  * owns the window, and its idempotent `release()` is what the spawning turn calls when it ends, so
  * ownership lives exactly as long as the process that holds it. Everyone else waits until the
- * credential file shows the new token, capped by {@link CredentialFreshnessDeps.maxWaitMs} and
- * then let through with a no-op claim regardless. One unreleased holder admits exactly one owner;
+ * credential file shows the new token, capped by {@link CredentialFreshnessDeps.maxWaitMs}; at the
+ * cap the wait refuses with {@link CredentialRefreshLeaseUnavailable} and admits nobody. One
+ * unreleased holder admits exactly one owner;
  * takeover is restricted to released or older-than-cap entries — and, when
  * {@link CredentialFreshnessDeps.refreshLock} is wired, only while the cross-replica lease can be
  * won. A holder that was taken over from and never released stays on the record beside the
@@ -63,11 +67,11 @@ const ABANDONED = "the credential refresh wait was abandoned"
  * prevent. It sits on the Agent-SDK path, which CLAUDE.md non-negotiable 8 names as the labelled
  * exception to the overhead budget, and it is followed by spawning a ~245 MB binary.
  *
- * **Credential reads fail open.** Ordinary credential failures of `ensureFresh` — an unreadable file, a stalled winner, a
- * refresh that never lands — ends in the caller proceeding. An unreadable file makes `wouldRefresh`
- * answer `false`: a probe cannot rotate a token the CLI cannot read either. Lease capacity and
- * lock errors fail open the same way, with a `warn` — the caller proceeds on its local entry alone.
- * Ownership admission failure rejects both methods before any CLI can start.
+ * **Credential reads fail closed.** An unreadable file, a stalled winner, a refresh that never
+ * lands, or a lease that cannot be won rejects `ensureFresh` with an ownership or admission error;
+ * no caller proceeds on the credential file or a local entry alone. `wouldRefresh` rejects on an
+ * unreadable file too: a probe cannot rotate a token the CLI cannot read either. Only a genuinely
+ * unknown timestamp (a file with no token) is treated as fresh.
  *
  * **Metadata, never the token** (CLAUDE.md non-negotiables 1 and 13). This module reads two instants
  * and a boolean through {@link CredentialMetadataReader}, whose return type has no field that could
@@ -102,9 +106,10 @@ export interface CredentialFreshness {
    * immediately when the Account's access token is not near expiry, which is the overwhelmingly
    * common case.
    *
-   * Never rejects for a credential reason — a caller that cannot be helped is let through. It
-   * rejects when filesystem ownership is unavailable or `signal` aborts, carrying the signal's own
-   * reason so the caller classifies the abort exactly as it classifies every other one.
+   * Rejects, fail-closed, when the credential cannot be read, the cross-replica lease cannot be
+   * won or filesystem ownership is unavailable. It rejects when `signal` aborts, carrying the
+   * signal's own reason so the caller classifies the abort exactly as every other one. Only a
+   * genuinely unknown timestamp (a file with no token) is answered with a no-op claim.
    *
    * `held` makes the call re-entrant: a caller re-asking the window with its own earlier claim in
    * hand (the invoker's recheck once its slot is granted) is answered with a no-op claim at once
@@ -122,7 +127,8 @@ export interface CredentialFreshness {
    * is written. `true` inside {@link CredentialFreshnessDeps.coldMarginMs} of expiry, or past it.
    *
    * `false` for an Account with no tokens (nothing to rotate), an expiry the file never carried
-   * (the CLI would not refresh on unknown either), or a file that cannot be read. Rejects if filesystem ownership is unavailable.
+   * (the CLI would not refresh on unknown either). Rejects if the file cannot be read or filesystem
+   * ownership is unavailable.
    */
   wouldRefresh(accountId: string): Promise<boolean>
 }
@@ -143,7 +149,7 @@ export interface CredentialFreshnessDeps {
    * env boundary enforces — the CLI refreshes inside its own lead whether we like it or not.
    */
   readonly coldMarginMs: number
-  /** The cap on a waiter's patience (`CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS`). Then it proceeds. */
+  /** The cap on a waiter's patience (`CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS`). Then it refuses. */
   readonly maxWaitMs: number
   /** How often a waiter re-reads the credential file (`CLAUDE_SDK_CREDENTIAL_REFRESH_POLL_MS`). */
   readonly pollMs: number
@@ -154,7 +160,8 @@ export interface CredentialFreshnessDeps {
    * The cross-replica half of the window: the per-account credential-refresh advisory lock
    * (`CredentialRefreshLock.tryAcquire`) the OAuth refresher already holds around its own token
    * exchange, so an SDK turn on one replica and a refresher on another cannot hold one credential's
-   * window at once. Optional — a deployment that wires none coordinates locally only.
+   * window at once. Required for any refresh admission: without a lease no replica may spend the
+   * rotating token, so a deployment that wires none admits nothing.
    */
   readonly refreshLock?: Pick<CredentialRefreshLock, "tryAcquire">
   readonly logger?: Logger
@@ -166,10 +173,33 @@ const NO_OP: CredentialRefreshClaim = { release: () => {} }
 /** What one Account's window looks like right now. `null` expiry is "unknown", never "fresh". */
 type Freshness = "fresh" | "refreshing" | "no-credential"
 
+/**
+ * An unreadable credential or an unwinnable lease is a refusal, not freshness. Wraps everything
+ * except the ownership refusals their own layers already raise, so no error path here can be
+ * mistaken for a clean, unowned, credential-file bypass.
+ */
 export function createCredentialFreshness(deps: CredentialFreshnessDeps): CredentialFreshness {
   const sleep =
     deps.sleep ?? ((ms: number, signal: AbortSignal) => abortableSleep(ms, signal, ABANDONED))
   const window = createRefreshWindow(deps)
+
+  /**
+   * An unreadable credential or an unwinnable lease is a refusal, not freshness. Every error on a
+   * classify or admission path lands here, so none can be mistaken for a clean, unowned bypass.
+   */
+  const refuse = (accountId: string, error: unknown): never => {
+    deps.logger?.warn("claude credential freshness ownership unavailable", {
+      accountId,
+      reason: error instanceof Error ? error.message : String(error),
+    })
+    if (
+      error instanceof CredentialMetadataOwnershipUnavailable ||
+      error instanceof CredentialRefreshLeaseUnavailable
+    ) {
+      throw error
+    }
+    throw new CredentialMetadataOwnershipUnavailable()
+  }
 
   const classify = async (accountId: string): Promise<Freshness> => {
     const metadata = await deps.reader.read(deps.configDirs.pathFor(accountId))
@@ -189,12 +219,7 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
       try {
         metadata = await deps.reader.read(deps.configDirs.pathFor(accountId))
       } catch (error) {
-        if (error instanceof CredentialMetadataOwnershipUnavailable) throw error
-        deps.logger?.warn("claude credential freshness unreadable", {
-          accountId,
-          reason: error instanceof Error ? error.message : String(error),
-        })
-        return false
+        return refuse(accountId, error)
       }
       if (!metadata.hasTokens) return false
       const expiresAt = metadata.accessTokenExpiresAt
@@ -211,14 +236,8 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
       try {
         state = await classify(accountId)
       } catch (error) {
-        if (error instanceof CredentialMetadataOwnershipUnavailable) throw error
-        // Unknown, not blocked. The message names a path or an errno at most, and goes through the
-        // redactor like every other field.
-        deps.logger?.warn("claude credential freshness unreadable", {
-          accountId,
-          reason: error instanceof Error ? error.message : String(error),
-        })
-        return NO_OP
+        // An unreadable file is an unownable credential, never a free pass through the window.
+        return refuse(accountId, error)
       }
 
       if (state !== "refreshing") return NO_OP
@@ -238,26 +257,33 @@ export function createCredentialFreshness(deps: CredentialFreshnessDeps): Creden
 
         const waitedMs = deps.now().getTime() - startedAt
         if (waitedMs >= deps.maxWaitMs) {
-          // Fail open, loudly. Either the winner is wedged or the CLI did not refresh when we
-          // expected it to; both are worth an operator's attention, neither is worth an outage.
-          // The entry is left exactly as it stands: erasing one we do not own is the takeover race
-          // — a second refresher straight in while the first may still be mid-refresh.
-          deps.logger?.warn("claude credential refresh did not land; proceeding anyway", {
+          // The window was never won: the refresh did not land and no lease is held here. Never a
+          // no-op claim — that is the credential-file bypass this gate exists to prevent. The
+          // holder's entry is left exactly as it stands: erasing one we do not own is the takeover
+          // race, a second refresher straight in while the first may still be mid-refresh.
+          deps.logger?.warn("claude credential refresh did not land; refusing admission", {
             accountId,
             waitedMs,
           })
-          return NO_OP
+          throw new CredentialRefreshLeaseUnavailable(
+            `claude credential refresh did not land for ${accountId}`,
+          )
         }
         let next: Freshness
         try {
           next = await classify(accountId)
         } catch (error) {
-          if (error instanceof CredentialMetadataOwnershipUnavailable) throw error
-          return NO_OP
+          // A read failure on the poll path is as unownable as one on the initial classify.
+          return refuse(accountId, error)
         }
         if (next !== "refreshing") {
           deps.logger?.info("claude credential refresh observed", { accountId, waitedMs })
-          return NO_OP
+          // The file says the window closed, but the owner may still be inside its CLI turn and
+          // holding the lease. Re-check ownership: a changed file alone never grants a local claim
+          // (#101 holder identity, now lease-backed). If the lease is still held, loop back into
+          // the wait rather than admitting a local-only claim or failing the call.
+          const reclaimed = await window.recheckLease(accountId, signal)
+          if (reclaimed !== null) return reclaimed
         }
       }
     },
