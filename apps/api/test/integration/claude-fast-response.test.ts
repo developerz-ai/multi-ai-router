@@ -69,6 +69,30 @@ test("composition fences fast credentials by selected Account directory and meta
         accountUuid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       },
     ]
+    // Keep the composition test offline while exercising both generation checks around reads.
+    const owned = new Set(fixtures.map(({ id }) => id))
+    const leaseSpy = spyOn(cli.replicaLease, "handle").mockImplementation((id) => {
+      const assert = () => {
+        if (!owned.has(id)) throw new UpstreamAdmissionRefused()
+      }
+      assert()
+      return {
+        accountId: id,
+        owner: "33333333-3333-4333-8333-333333333333",
+        generation: 1n,
+        signal: new AbortController().signal,
+        valid: () => owned.has(id),
+        assert,
+        remainingMs: () => 30_000,
+      }
+    })
+    const eligibleSpy = spyOn(cli.replicaLease, "eligible").mockImplementation((id) =>
+      owned.has(id),
+    )
+    restore.push(
+      () => leaseSpy.mockRestore(),
+      () => eligibleSpy.mockRestore(),
+    )
     const expiresAt = now().getTime() + 3_600_000
     for (const fixture of fixtures) {
       const dir = cli.configDirs.pathFor(fixture.id)
@@ -164,6 +188,14 @@ test("composition fences fast credentials by selected Account directory and meta
       expect(ownerIds).toEqual(fixtures.slice(0, index + 1).map((entry) => entry.id))
       expect(activeOwner).toBeUndefined()
     }
+    for (const selected of fixtures) {
+      owned.delete(selected.id)
+      await expect(
+        options.credential(selected.id, cli.configDirs.pathFor(selected.id)),
+      ).rejects.toThrow(UpstreamAdmissionRefused)
+    }
+    expect(ownerSpy).toHaveBeenCalledTimes(fixtures.length)
+    expect(readerSpy).toHaveBeenCalledTimes(fixtures.length)
   } finally {
     for (const undo of restore.reverse()) undo()
     await Promise.all(cleanup.reverse().map((close) => close()))

@@ -3,6 +3,7 @@ import type { Env } from "../config/env"
 import type { Logger } from "../logging/logger"
 import type { RouterMetrics } from "../observability"
 import type { SdkQuotaStore } from "../providers"
+import type { ExclusiveStorageAttachment } from "../providers/claude-sdk/replica-storage"
 import type { Scheduler } from "../scheduler"
 import type { RoutingCatalogStore } from "../services/catalog"
 import type { PriceBook } from "../services/cost"
@@ -26,6 +27,8 @@ export interface RuntimeDeps {
   /** This pool's backends in `pg_stat_activity`, read off the scrape path (12.18). */
   readonly dbOpenConnections?: () => Promise<number>
   readonly logger: Logger
+  /** Optional override. Production constructs the configured attachment helper or local guardian. */
+  readonly storageAttachment?: ExclusiveStorageAttachment
 }
 
 export interface Runtime {

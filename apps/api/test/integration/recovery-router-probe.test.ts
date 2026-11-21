@@ -75,7 +75,10 @@ async function routerProbeFixture(
     label: "router recovery probe integration",
     provider: options.provider ?? "zai",
     ...(options.provider === "anthropic-oauth"
-      ? { configDir: "/nonexistent/router-probe" }
+      ? // Unique per run: `config_dir` is unique, and a fixture path reused across runs makes the
+        // insert collide with a row a previous aborted run left behind, which is not the failure
+        // this test is about.
+        { configDir: `/nonexistent/router-probe-${crypto.randomUUID()}` }
       : { authMaterial: cipher.encrypt("fixture-key") }),
     ...(options.supportedModels === undefined ? {} : { supportedModels: options.supportedModels }),
   })

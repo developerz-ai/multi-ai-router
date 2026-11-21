@@ -157,8 +157,9 @@ walkthrough:
 
 `CLAUDE_CONFIG_DIR` tells the `claude` CLI where *its own state and credentials* live. Point two
 subprocesses at two directories and you have two accounts in one container with no shared state.
-**That is the entire mechanism.** The router never reads, decrypts, refreshes, or attaches a
-subscription token; it sets one environment variable.
+Directory isolation is the foundation, with the ownership lifecycle below fencing every access.
+The SDK and CLI own login and refresh. Fast mode may read and attach the selected account's
+access token under that ownership fence; it never independently rotates refresh tokens.
 
 | Lives in an Account's config dir | Notes |
 |---|---|
@@ -168,19 +169,20 @@ subscription token; it sets one environment variable.
 
 ### Where the directory comes from
 
-`<CLAUDE_CONFIG_ROOT>/<accountId>`, minted and created by the router when the Account row is
-created — `apps/api/src/providers/claude-sdk/config-dir.ts`. The operator never types a path and
-neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, and it defaults to
-`/data/claude` on the persistent volume.
+`<CLAUDE_CONFIG_ROOT>/<accountId>`, assigned by the router and allocated only after acquiring the
+account's lease. `apps/api/src/providers/claude-sdk/config-dir.ts` defines the layout. The operator
+never types an account path and neither write body has a field for one; `CLAUDE_CONFIG_ROOT`
+defaults to `/data/claude` on the persistent volume. The storage authority must distinguish first
+allocation from lost assigned storage before any directory is created.
 
 | Decision | Why |
 |---|---|
 | Keyed on Account **id**, never `label` | A label is the operator's disambiguator between five near-identical subscriptions and is renameable. Keying on it would mean a rename orphans a logged-in directory and hands the Account a fresh, logged-out one. The id is the row's identity for its whole life |
 | Router-assigned, not operator-supplied | Every path an operator could type is either this one or a mistake, and one mistake is unrecoverable — see the `$HOME/.claude` trap below. A root at or under the CLI's own config directory is refused at boot for the same reason |
 | Created `0700` | The contents are cleartext OAuth credentials the CLI owns. `mkdir` applies its mode only to what it creates and the umask can clear bits from it, so the mode is re-asserted on every provision — a directory left behind with looser permissions is tightened, not trusted |
-| Created **before** the row, removed **before** the row | A row naming a directory that does not exist is a login that cannot happen, so provisioning comes first and an insert that never lands takes its directory back. Deletion is the mirror: credentials outliving their Account is the worse half of the failure, while a row whose subscription is logged out is visible and fixable by re-login |
+| Lease before first allocation, readiness afterwards | Acquisition must not depend on the directory that first allocation creates. Persistent allocation history prevents an absent assigned directory from being recreated empty. Removal waits for fenced operations and native writers to drain |
 | Removal names `<root>/<id>`, not the stored path | Bounded by construction. A path this router did not mint is not this router's to `rm -rf` |
-| A directory no Account claims is reaped | The ordinary delete takes the directory with the row, but a crash between provisioning and the insert cannot. What is left is cleartext OAuth credentials nothing will ever rotate, revoke, or notice — so `config_dir_reap` sweeps them. See below |
+| A directory no Account claims is reaped under ownership | Interrupted deletion can leave cleartext OAuth credentials behind. `config_dir_reap` requires fenced authority before removing an orphan; it never treats a foreign owner's directory as locally abandoned. See below |
 | Unique index on `accounts.config_dir` | Two Accounts sharing a directory is exactly the cross-contamination isolation exists to prevent, so it is a write the database refuses rather than an invariant code has to remember |
 
 ### Traps, all load-bearing
@@ -196,6 +198,66 @@ neither write body has a field for one; `CLAUDE_CONFIG_ROOT` is the only knob, a
 | **The CLI's scratchpad block advertises a router-host path** | The injected "# Scratchpad Directory" context block names the subprocess cwd — a **router** path (since #296 the shared neutral `workspace/`, before it the Account's `CLAUDE_CONFIG_DIR`, which also leaked the Account id) — to a model whose tools execute on the *client*. `CLAUDE_CODE_SESSION_KIND=bg` (forced with the override above) suppresses it; the CLI's other `bg` effects are TUI rendering or `CLAUDE_JOB_DIR`-gated (Meridian #627/#628, audited against the bundled CLI). Known cost: a `bg` session registers as a running background agent, so a concurrent resume is refused — recovered by the busy-session fork retry (§9) |
 | **The CLI compacts a resumed session behind the client** | Auto-compact is on by default in the bundled CLI and summarises the transcript a `resume` continues, so the model's context silently diverges from the history the client holds and resends. `DISABLE_AUTO_COMPACT=1` is forced with the overrides above (`env.ts`); a full context fails as the upstream's prompt-too-long, which the client compacts and resends. `DISABLE_COMPACT` stays unset so a client's own `/compact` still runs (developerz.ai plan 101 slice 09, R8) |
 | **Root** | The SDK refuses permission-skipping as root unless `IS_SANDBOX=1` (`query.ts:335`). Prefer a real UID |
+
+### Replica ownership over local directory ownership
+
+The per-account Postgres TTL lease is an outer fence over existing native `flock` directory
+ownership, not a replacement for it. Each acquisition carries a process-unique incarnation,
+monotonic bigint generation, storage identity and lifecycle state. Database-time compare-and-set
+renew/release operations cannot affect a successor. Local admission uses conservative monotonic
+deadlines measured before renewal starts, without SQL on the warm request path.
+
+Every account operation requires ownership: provisioning, login, status and model probes,
+metadata reads, SDK inference, warm fast-mode inference, refresh/keepalive, revocation, reaping
+and directory sweeps. SDK/CLI still exclusively owns subscription login and token refresh.
+Neither the refresh-coalescing gate's fail-open policy nor a cached fast-mode token bypasses this
+outer fence. A non-owner must not launch a CLI or mutate the directory. Check ownership again
+after preparation and before upstream start; loss during a stream terminates it, never retries
+onto a different account after bytes have been sent.
+
+Native supervision must enforce expiry and control-channel loss independently of JavaScript
+timers, terminate and reap descendants, and reject stale tokens without leaving an owner marker.
+Uncertain drain remains fenced. The existing named tool allowlist, `settingSources: []` and
+inherited-environment stripping remain mandatory for every SDK launch.
+
+Ownership is not readiness. Serving requires the same persistent account storage, verified
+exclusive attachment and local guardian fencing. A TTL cannot fence a paused host: cross-node
+takeover needs storage-enforced exclusion of the old host. Independent local disks, empty
+replacement directories, copied live credentials and arbitrary RWX NFS are unsupported.
+Close admission before drain. Await operations, streams and every metadata callback, including
+callbacks started by an expired generation; terminate and reap native guardians and children
+before releasing the matching lease. Drain is a completion barrier, not an abort request or a
+timer elapsing. A rejected or uncertain drain prevents release and successor readiness.
+Invalidate generation-bound caches, then re-attach the same storage. Missing identity,
+attachment or confirmed drain fails closed.
+
+All these paths share one writer fence: SDK turns, fast-mode credential reads and inference,
+login and CLI-owned refresh, metadata probes, keepalive, transcript retention and directory
+maintenance. A generation captured before an await must still be current at activation and at
+filesystem use. Stale activation or cleanup cannot leave an owner marker or executable child.
+Losing the outer lease closes admission even if a local lock or cached credential remains valid.
+
+Initial provisioning is a distinct leased operation: acquire before creating the first persistent
+directory, then validate storage and publish readiness. It cannot require an already-ready lease
+whose attachment itself requires that directory. Only persistent allocation authority may declare
+an account new; a missing previously assigned directory must never be silently replaced.
+The deployment attachment adapter must actually be constructed in production, not only supplied
+by tests. Local single-node allocation remains supported without granting remote takeover;
+cross-node attachment requires storage-enforced exclusion, never just a helper path or local flock.
+
+SDK transcripts are node-local files on that storage, not made portable by a database binding.
+Omit nonlocal subscription candidates; a session bound to a foreign owner must fail explicitly,
+never silently cold-start. Re-attachment preserves credentials and transcripts but does not make
+in-flight session coordination shared. The overall single-replica deployment constraint remains;
+see [account ownership and storage handoff](09-deployment.md#account-ownership-and-storage-handoff).
+
+The lifecycle descriptions below apply only under that ownership fence. A foreign owner's
+account is omitted from background login-status, refresh and keepalive work, credential metadata
+reads, transcript retention and directory reaping; an explicit operation refuses rather than
+touching its files. Session carry needs authority over both source and target storage. Its
+ordinary missing-transcript fallback is not permission to read a foreign owner's transcript or
+silently restart a session bound to that owner. Cold reattachment retains the original files,
+not a copy of live credentials or a newly initialized transcript directory.
 
 ### Credential lifecycle per Account
 

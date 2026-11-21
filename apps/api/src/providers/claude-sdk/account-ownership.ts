@@ -1,44 +1,76 @@
-import type { ChildProcess } from "node:child_process"
+import { type ChildProcess, spawn } from "node:child_process"
 import { join } from "node:path"
 import { UpstreamAdmissionRefused } from "../upstream-admission"
+import type { AccountCliOwnership, AccountOwnershipConfig } from "./account-ownership-types"
 import { WORKSPACE_DIR } from "./config-dir"
 import { makeAnchoredDirectory, makeAnchoredRoot } from "./config-dir-fs"
 import type { OwnerLaunchFactory } from "./owned-query"
 import { CredentialOwnerLaunchFailed } from "./owner-helper"
-import { createOwnerLaunch, type OwnerLaunch, type OwnerLaunchConfig } from "./owner-launch"
-
+import { createOwnerLaunch, type OwnerLaunch } from "./owner-launch"
 import { type OwnershipOperationDependencies, ownershipOperation } from "./ownership-operation"
 
-export interface AccountOwnershipConfig extends OwnerLaunchConfig {
-  readonly cleanupMaximumEntries: number
-  readonly cleanupMaximumDepth: number
-  readonly operationTimeoutMs: number
-  readonly shutdownDrainMs: number
-}
-export interface AccountCliOwnership {
-  readonly ownerLaunch: OwnerLaunchFactory
-  provisionAccount(input: { id: string; configDir: string }): Promise<string>
-  revokeDeletedAccount(input: { id: string; configDir: string | null }): Promise<void>
-  cleanupDeletedAccount(input: {
-    id: string
-    configDir: string | null
-  }): Promise<"removed" | "deferred" | "not_applicable">
-  withMetadataOwner<T>(accountId: string, task: () => Promise<T>): Promise<T>
-  /**
-   * Whether this process revoked the Account's directory. Revocation is permanent (the tombstone
-   * forbids reprovision), so a cache of anything read under the Account's fence — the fast
-   * transport's credential (`claude-fast/credential-cache.ts`) — must refuse once this is true.
-   */
-  isRevoked?(accountId: string): boolean
-  closeAdmission(): void
-  stop(): Promise<void>
-}
+export type { AccountCliOwnership, AccountOwnershipConfig } from "./account-ownership-types"
 export function createAccountCliOwnership(
   config: AccountOwnershipConfig,
   operationDependencies?: OwnershipOperationDependencies,
 ): AccountCliOwnership {
-  const operation = (config: AccountOwnershipConfig, mode: string, id: string, args: string[]) =>
-    ownershipOperation(config, mode, id, args, operationDependencies)
+  const operations = new Set<Promise<unknown>>()
+  const callbacks = new Map<string, Set<Promise<unknown>>>()
+  const failedRetirements = new Set<string>()
+  let uncertain = false
+  const operation = async (
+    config: AccountOwnershipConfig,
+    mode: string,
+    id: string,
+    args: string[],
+  ) => {
+    if (failedRetirements.has(id)) throw new Error("credential owner retirement uncertain")
+    const generation = config.generation?.(id)
+    generation?.assert()
+    const result = ownershipOperation(config, mode, id, args, {
+      schedule:
+        operationDependencies?.schedule ??
+        ((callback, delay) => {
+          const timer = setTimeout(callback, delay)
+          return () => clearTimeout(timer)
+        }),
+      spawn(command, argv) {
+        generation?.assert()
+        const child = operationDependencies
+          ? operationDependencies.spawn(command, argv)
+          : spawn(command, argv, { stdio: "ignore" })
+        const cancel = () => {
+          child.kill("SIGKILL")
+        }
+        generation?.signal.addEventListener("abort", cancel, { once: true })
+        const retired = new Promise<void>((resolve, reject) => {
+          child.once("exit", () => resolve())
+          child.once("error", () => {
+            uncertain = true
+            failedRetirements.add(id)
+            reject(new Error("ownership operation exit uncertain"))
+          })
+        })
+        operations.add(retired)
+        const pending = callbacks.get(id) ?? new Set<Promise<unknown>>()
+        callbacks.set(id, pending)
+        pending.add(retired)
+        void retired
+          .finally(() => {
+            operations.delete(retired)
+            pending.delete(retired)
+            if (!pending.size) callbacks.delete(id)
+            generation?.signal.removeEventListener("abort", cancel)
+          })
+          .catch(() => {})
+        if (generation?.signal.aborted) cancel()
+        return child
+      },
+    })
+    const code = await result
+    generation?.assert()
+    return code
+  }
   let closed = false
   const live = new Map<string, Set<OwnerLaunch>>()
   const scopes = new Set<OwnerLaunch>()
@@ -46,9 +78,18 @@ export function createAccountCliOwnership(
   const revoked = new Set<string>()
   const managedOwner = (id: string, metadataOwner = false): OwnerLaunch => {
     if (closed) throw new Error("credential owner admission is closed")
-    const scope = createOwnerLaunch(config, id, metadataOwner)
+    if (failedRetirements.has(id)) throw new Error("credential owner retirement uncertain")
+    const generation = config.generation?.(id)
+    generation?.assert()
+    const scope = createOwnerLaunch(config, id, metadataOwner, generation)
     scopes.add(scope)
-    void scope.exited.finally(() => scopes.delete(scope)).catch(() => {})
+    void scope.exited.then(
+      () => scopes.delete(scope),
+      () => {
+        uncertain = true
+        failedRetirements.add(id)
+      },
+    )
     return {
       ...scope,
       spawn(input) {
@@ -58,7 +99,7 @@ export function createAccountCliOwnership(
         live.set(id, entries)
         entries.add(scope)
         void scope.exited
-          .finally(() => {
+          .then(() => {
             entries.delete(scope)
             if (!entries.size) live.delete(id)
           })
@@ -79,13 +120,33 @@ export function createAccountCliOwnership(
   return {
     ownerLaunch,
     closeAdmission,
+    async retireLocalOwners(id) {
+      if (failedRetirements.has(id)) throw new Error("credential owner retirement uncertain")
+      const owners = [...(live.get(id) ?? [])]
+      for (const owner of owners) if (!metadata.has(owner)) owner.cancel()
+      await Promise.all(owners.filter((owner) => !metadata.has(owner)).map((owner) => owner.exited))
+    },
+    async drainMetadata(id) {
+      await Promise.all([...(callbacks.get(id) ?? [])])
+      await Promise.all(
+        [...(live.get(id) ?? [])]
+          .filter((owner) => metadata.has(owner))
+          .map((owner) => owner.exited),
+      )
+      if (failedRetirements.has(id)) throw new Error("credential metadata retirement uncertain")
+    },
     async provisionAccount({ id, configDir }) {
       if (closed) throw new Error("credential owner admission is closed")
+      if (failedRetirements.has(id)) throw new Error("credential owner retirement uncertain")
+      const generation = config.generation?.(id)
+      generation?.assert()
       validate(id, configDir)
       await makeAnchoredRoot(config.root, 0o700)
+      generation?.assert()
       // The neutral inference workspace, beside the account directories (`options.ts`, #296):
       // anchored, before any subprocess needs it as its working directory.
       await makeAnchoredDirectory(join(config.root, WORKSPACE_DIR), 0o700)
+      generation?.assert()
       if (closed) throw new Error("credential owner admission is closed")
       if ((await operation(config, "provision", id, [])) !== 0)
         throw new Error("credential directory provision unavailable or retired")
@@ -96,7 +157,15 @@ export function createAccountCliOwnership(
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         const settled = await Promise.race([
-          Promise.allSettled([...scopes].map((scope) => scope.exited)),
+          Promise.allSettled(
+            [...scopes]
+              .map((scope) => scope.exited)
+              .concat(
+                [...operations].map(async (operation) => {
+                  await operation
+                }),
+              ),
+          ),
           new Promise<never>((_, reject) => {
             timer = setTimeout(
               () =>
@@ -107,14 +176,15 @@ export function createAccountCliOwnership(
             )
           }),
         ])
-        if (settled.some((result) => result.status === "rejected"))
+        if (uncertain || settled.some((result) => result.status === "rejected"))
           throw new Error("credential owner shutdown uncertain")
       } finally {
         clearTimeout(timer)
       }
     },
-    isRevoked: (id) => revoked.has(id),
+    isRevoked: (id) => revoked.has(id) || failedRetirements.has(id),
     async revokeDeletedAccount({ id, configDir }) {
+      config.generation?.(id).assert()
       validate(id, configDir)
       // Before the operation: a revoke that fails half-way still must not keep serving a cache.
       revoked.add(id)
@@ -123,6 +193,7 @@ export function createAccountCliOwnership(
         throw new Error("credential directory revocation unavailable")
     },
     async cleanupDeletedAccount({ id, configDir }) {
+      config.generation?.(id).assert()
       validate(id, configDir)
       if (configDir === null) return "not_applicable"
       const result = await operation(config, "cleanup", id, [
@@ -132,13 +203,14 @@ export function createAccountCliOwnership(
       return result === 0 ? "removed" : "deferred"
     },
     async withMetadataOwner(id, task) {
+      const generation = config.generation?.(id)
+      generation?.assert()
       let owner: OwnerLaunch
       try {
         owner = managedOwner(id, true)
       } catch {
         throw new UpstreamAdmissionRefused("credential metadata owner unavailable")
       }
-      // Track the underlying scope by equality-independent cancellation ownership below.
       let child: ChildProcess
       try {
         child = owner.spawn({
@@ -179,7 +251,21 @@ export function createAccountCliOwnership(
           owner.cancel()
           throw new UpstreamAdmissionRefused("credential metadata owner unavailable")
         }
-        return await task()
+        generation?.assert()
+        const work = Promise.resolve().then(task)
+        operations.add(work)
+        const pending = callbacks.get(id) ?? new Set<Promise<unknown>>()
+        callbacks.set(id, pending)
+        pending.add(work)
+        try {
+          const result = await work
+          generation?.assert()
+          return result
+        } finally {
+          operations.delete(work)
+          pending.delete(work)
+          if (!pending.size) callbacks.delete(id)
+        }
       } finally {
         owner.release()
         child.stdin?.end()
@@ -199,10 +285,9 @@ export function createAccountCliOwnership(
 }
 
 async function confirmMetadataRetirement(childExit: Promise<void>, ownerExit: Promise<void>) {
-  try {
-    await childExit
-    await ownerExit
-  } catch {
+  // Observe both: child exit can precede recording the guardian's uncertain retirement.
+  const results = await Promise.allSettled([childExit, ownerExit])
+  if (results.some((result) => result.status === "rejected")) {
     throw new UpstreamAdmissionRefused("credential metadata owner exit uncertain")
   }
 }

@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
+import { stat } from "node:fs/promises"
 import { ownedQuery } from "../../../src/providers/claude-sdk/owned-query"
 import type { OwnerLaunch } from "../../../src/providers/claude-sdk/owner-launch"
+import { nativeGuardian } from "./native-guardian-fixture"
 
 function deferred() {
   let resolve = () => {}
@@ -137,3 +139,93 @@ test("durable background eligibility is reread after a delayed guardian prepare 
   await expect(pending).rejects.toThrow("account changed during ownership wait")
   expect(events).toEqual(["prepare", "background", "cancel"])
 })
+
+test.skipIf(process.platform !== "linux")(
+  "native stale generation refuses without creating an owner marker",
+  async () => {
+    const f = await nativeGuardian("run-fenced", 2000, "3")
+    try {
+      expect(await f.exited).toBe(75)
+      expect(await f.markers()).toEqual([])
+    } finally {
+      await f.dispose()
+    }
+  },
+)
+
+for (const frame of [
+  "partial",
+  "malformed",
+  "oversized",
+  "foreign",
+  "stale",
+  "unbounded",
+] as const) {
+  test.skipIf(process.platform !== "linux")(
+    `native ${frame} renewal cannot extend preparation authority`,
+    async () => {
+      const f = await nativeGuardian()
+      try {
+        await f.registered()
+        const next = f.deadline + 30_000n
+        const frames = {
+          partial: `U ${f.owner} 2 ${next}`,
+          malformed: `U ${f.owner} 2 nope\n`,
+          oversized: `U${"x".repeat(256)}\n`,
+          foreign: `U ${crypto.randomUUID()} 2 ${next}\n`,
+          stale: `U ${f.owner} 1 ${next}\n`,
+          unbounded: `U ${f.owner} 2 ${f.deadline + 600_000n}\n`,
+        }
+        f.control.write(frames[frame])
+        expect(await f.exited).toBe(75)
+        expect(await f.markers()).toEqual([])
+      } finally {
+        await f.dispose()
+      }
+    },
+  )
+}
+
+for (const stage of ["registered", "prepared", "executing", "eof"] as const) {
+  test.skipIf(process.platform !== "linux")(
+    `native lease termination during ${stage} retires only after descendants exit`,
+    async () => {
+      const f = await nativeGuardian("run-fenced", stage === "eof" ? 30_000 : 800)
+      try {
+        await f.registered()
+        if (stage !== "registered") await f.prepare()
+        let descendant: number | undefined
+        if (stage === "executing" || stage === "eof") {
+          await f.activate()
+          descendant = await f.descendant()
+          await stat(`/proc/${descendant}`)
+        }
+        if (stage === "eof") f.control.end()
+        expect(await f.exited).not.toBe(0)
+        expect(await f.markers()).toEqual([])
+        if (descendant !== undefined) await expect(stat(`/proc/${descendant}`)).rejects.toThrow()
+      } finally {
+        await f.dispose()
+      }
+    },
+  )
+}
+
+for (const reason of ["expiry", "eof"] as const) {
+  test.skipIf(process.platform !== "linux")(
+    `native metadata ${reason} retains uncertain ownership marker`,
+    async () => {
+      const f = await nativeGuardian("hold-fenced", reason === "eof" ? 30_000 : 800)
+      try {
+        await f.registered()
+        await f.prepare()
+        await f.activate()
+        if (reason === "eof") f.control.end()
+        expect(await f.exited).toBe(70)
+        expect(await f.markers()).toEqual([f.marker])
+      } finally {
+        await f.dispose()
+      }
+    },
+  )
+}
