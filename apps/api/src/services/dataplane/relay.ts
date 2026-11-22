@@ -1,5 +1,5 @@
 import { clientHeaders } from "./egress/headers"
-import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
+import { observeCancellation, relayCancellationError } from "./relay-cancellation"
 
 /**
  * Stream relay. **This is the hard requirement, not a preference.**
@@ -84,12 +84,18 @@ export function relayResponse(
       settle(error ?? new Error("response stream cancelled"))
     })
 
-  return new Response(
-    observeCancellation(passthrough.readable, () => settle(new ClientCancelledError())),
-    {
-      status: upstream.status,
-      statusText: upstream.statusText,
-      headers,
-    },
-  )
+  /**
+   * This callback fires for a downstream cancel, which is a genuine client cancel **unless the
+   * router aborted the same signal**. Which one it is comes from the signal's reason, never from
+   * an unconditional constant: the shared predicate in `relay-cancellation.ts` owns that decision,
+   * so a router-caused abort reports its own class and only a real `AbortError` reads as
+   * `client_cancelled`.
+   */
+  const cancelled = (): void => settle(relayCancellationError(signal))
+
+  return new Response(observeCancellation(passthrough.readable, cancelled), {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  })
 }

@@ -2,7 +2,7 @@ import type { SseEvent, TranslationContext, TranslationPair } from "../translate
 import { createSseParser, encodeSseEvent } from "../translate"
 import { clientHeaders } from "./egress/headers"
 import type { RelayObserver } from "./relay"
-import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
+import { observeCancellation, relayCancellationError } from "./relay-cancellation"
 import { type CostReport, stampUsageFrame, usageFrameIndex } from "./relay-cost"
 import { collected, guard, parsed, translatedBody } from "./relay-translate-body"
 import { type HeldRefusalFacts, holdTranslated } from "./relay-translate-held"
@@ -274,7 +274,12 @@ function translatedStream(
       settle(error ?? new Error("response stream cancelled"))
     })
 
-  return observeCancellation(transform.readable, () => settle(new ClientCancelledError()))
+  // A cancelled translated stream settles from its signal's reason, like every other relay: a
+  // router-caused abort on this path records its own error class, not `client_cancelled`. The
+  // `pipeTo` catch above already forwards a real failure; this callback only covers the cancel.
+  const cancelled = (): void => settle(relayCancellationError(input.signal))
+
+  return observeCancellation(transform.readable, cancelled)
 }
 
 function render(events: readonly SseEvent[]): string {

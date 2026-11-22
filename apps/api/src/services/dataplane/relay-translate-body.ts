@@ -1,7 +1,7 @@
 import { collectResponsesStream } from "../translate"
 import { TranslationStreamError } from "../translate/shared/stream-error"
 import { readRelayBody } from "./relay-body-read"
-import { ClientCancelledError, observeCancellation } from "./relay-cancellation"
+import { observeCancellation, relayCancellationError } from "./relay-cancellation"
 import { stampUsageBody } from "./relay-cost"
 import type { TranslatedRelayInput } from "./relay-translate"
 
@@ -104,7 +104,11 @@ export function translatedBody(
     },
   })
   return observeCancellation(body, () => {
-    const error = new ClientCancelledError()
+    // Same decision as every other relay: the reason decides. A router-caused abort of a collected
+    // body records its own class; only a real `AbortError` reads as a client cancel. The internal
+    // controller is aborted with that classified error so the in-flight upstream read stops with
+    // the true reason rather than a fabricated client cancel.
+    const error = relayCancellationError(input.signal)
     fail(error)
     cancelled.abort(error)
   })
