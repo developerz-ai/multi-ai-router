@@ -739,6 +739,18 @@ describe("the checks the router owns", () => {
     expect(h.login.handles[0]?.submitted).toEqual([])
   })
 
+  test("expiry clears the local handle and its durable claim without another request", async () => {
+    const h = harness({ ttlMinutes: 0 })
+    const id = await h.account()
+    await h.connect.begin(id, "connect")
+
+    await tick()
+
+    expect(h.login.handles[0]?.stats.cancels).toBe(1)
+    expect(h.claims.rows.has(id)).toBe(false)
+    expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
+  })
+
   test("a malformed paste never reaches the CLI", async () => {
     const h = harness()
     const id = await h.account()
@@ -787,13 +799,18 @@ describe("the checks the router owns", () => {
     expect(h.login.handles[0]?.stats.cancels).toBe(1)
   })
 
-  test("shutdown leaves no subprocess behind", async () => {
+  test("shutdown releases local logins and their durable claims", async () => {
     const h = harness()
-    await h.connect.begin(await h.account(), "connect")
-    await h.connect.begin(await h.account(), "connect")
+    const first = await h.account()
+    const second = await h.account()
+    await h.connect.begin(first, "connect")
+    await h.connect.begin(second, "connect")
 
-    h.connect.stop()
+    await h.connect.stop()
     expect(h.login.handles.map((handle) => handle.stats.cancels)).toEqual([1, 1])
+    await tick()
+    expect(h.claims.rows.size).toBe(0)
+    expect(failure(await h.connect.complete(first, PASTE)).code).toBe("no_pending_login")
   })
 })
 

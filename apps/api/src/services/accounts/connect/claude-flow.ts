@@ -24,8 +24,6 @@ const AUTHORIZATION_SUPERSEDED = "the account changed during the login — start
 
 export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectService {
   const pending = createPendingLogins()
-  // Claims that back a live local pending login. Cleared wherever that login is released; the
-  // expiry timer lives inside `pending`, so this map follows its lifecycle without changing it.
   const pendingClaims = new Map<string, PendingClaudeLoginToken>()
   const held = new Map<string, PendingLogin>()
   const turns = createAccountTurns()
@@ -39,9 +37,19 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
       log?.warn("claude login claim could not be cleared", { accountId, error: String(error) })
     })
   }
+  const releaseClaim = (accountId: string): void => {
+    const claim = pendingClaims.get(accountId)
+    if (claim === undefined) return
+    pendingClaims.delete(accountId)
+    clearClaim(accountId, claim)
+  }
   const hold = (accountId: string, login: PendingLogin): void => {
     held.set(accountId, login)
-    pending.hold(accountId, login, ttlMs)
+    pending.hold(accountId, login, ttlMs, () => {
+      if (held.get(accountId) !== login) return
+      held.delete(accountId)
+      releaseClaim(accountId)
+    })
   }
   const release = (accountId: string): PendingLogin | undefined => {
     held.delete(accountId)
@@ -86,11 +94,7 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
       )
 
     release(accountId)?.handle.cancel()
-    const oldClaim = pendingClaims.get(accountId)
-    if (oldClaim !== undefined) {
-      pendingClaims.delete(accountId)
-      clearClaim(accountId, oldClaim)
-    }
+    releaseClaim(accountId)
 
     // The durable claim fences a paste landing on another replica. Write it before any CLI
     // subprocess exists so a refused claim never starts one; it holds no code or credential.
@@ -151,24 +155,19 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
     if (record.expiresAt.getTime() <= deps.now().getTime()) {
       record.handle.cancel()
       discard(accountId)
-      const expiredClaim = token(accountId)
-      if (expiredClaim !== undefined) clearClaim(accountId, expiredClaim)
-      pendingClaims.delete(accountId)
+      releaseClaim(accountId)
       return invalid("the login window has elapsed — start a new connect", "login_expired")
     }
     // A stale token must not clear a claim just written by the owning replica's new login.
     const foreign = await refuseForeignPaste(deps, accountId, claims, ownerOf, token, foreignOwner)
     if (foreign !== undefined) return foreign
-    const claim = await findClaim(accountId)
     const parsed = parsePastedCode(pasted)
     if (parsed === null) return invalid("paste must be code#state from the CLI", "malformed_paste")
     if (!timingSafeEqualStrings(record.handle.state, parsed.state)) {
       // The state is one-shot: a wrong paste burns this login rather than leaving it retryable.
       record.handle.cancel()
-      const wrongClaim = token(accountId)
-      if (wrongClaim !== undefined) clearClaim(accountId, wrongClaim)
+      releaseClaim(accountId)
       discard(accountId)
-      pendingClaims.delete(accountId)
       return invalid("the pasted state does not match this login", "state_mismatch")
     }
 
@@ -223,9 +222,8 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
     const repaired = settled.repaired
     // The completed login is consumed only now: a failed submit or missing credential keeps
     // the pending login so the operator can retry with the same state.
-    if (claim !== undefined) clearClaim(accountId, claim)
+    releaseClaim(accountId)
     release(accountId)
-    pendingClaims.delete(accountId)
     log?.info("claude login completed", {
       accountId,
       mode: record.mode,
@@ -256,12 +254,9 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
   const cancel = async (accountId: string) => {
     const account = await subscription(accountId)
     if (!account.ok) return account
-    const claimToken = token(accountId)
-    if (claimToken !== undefined && localOwner() === claimToken.owner)
-      clearClaim(accountId, claimToken)
+    if (localOwner() === token(accountId)?.owner) releaseClaim(accountId)
     const found = release(accountId)
     found?.handle.cancel()
-    pendingClaims.delete(accountId)
     if (found !== undefined) log?.info("claude login cancelled", { accountId })
     return ok({ accountId, cancelled: found !== undefined })
   }
@@ -269,6 +264,11 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
   const clearAllClaims = (): void => {
     for (const [accountId, claim] of pendingClaims) clearClaim(accountId, claim)
     pendingClaims.clear()
+  }
+  const stopPending = (): void => {
+    clearAllClaims()
+    pending.stop()
+    held.clear()
   }
 
   return {
@@ -280,20 +280,16 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
       turns.take(accountId, () => lifetime.run(accountId, () => complete(accountId, pasted))),
     cancel: (accountId) => turns.take(accountId, () => cancel(accountId)),
     closeAdmission: () => {
-      clearAllClaims()
-      pending.stop()
+      stopPending()
       lifetime.closeAdmission()
     },
     revoke: (accountId) => {
-      const claimToken = token(accountId)
-      if (claimToken !== undefined) clearClaim(accountId, claimToken)
+      releaseClaim(accountId)
       discard(accountId)
-      pendingClaims.delete(accountId)
       lifetime.revoke(accountId)
     },
     stop: () => {
-      clearAllClaims()
-      pending.stop()
+      stopPending()
       return lifetime.stop()
     },
   }
