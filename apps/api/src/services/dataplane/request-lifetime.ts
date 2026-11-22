@@ -61,6 +61,20 @@ export function requestLifetime(
       if (unavailable) throw new RequestAdmissionUnavailableError()
       if (abandoned) throw new RouterShutdownError()
     },
+    /**
+     * Read the inbound signal only, and only for equality.
+     *
+     * This tests `input.request`, never the composed signal at `:45-50`: the lease signal is added
+     * to a **new** `Request`, so a `RouterShutdownError` cannot arrive here, and a shutdown is
+     * settled by the abandon callback above instead. What lands here is whatever the runtime
+     * aborted the inbound request with, which is the client's own column (a downstream disconnect,
+     * or the listener reaping a vanished socket on its idle clock); that is why an unrecognised
+     * reason is flattened rather than passed through, and `caller-cancellation.test.ts` pins a
+     * plain `Error` from the caller as `client_cancelled` / `499`. Every settle that can see a
+     * **router** reason classifies it through `relay-cancellation.ts` instead; if a router cause is
+     * ever wired onto the inbound signal, this line must go through `cancellationError` too, never
+     * a constant.
+     */
     fail(error: unknown) {
       const failure =
         input.request.signal.aborted && error === input.request.signal.reason

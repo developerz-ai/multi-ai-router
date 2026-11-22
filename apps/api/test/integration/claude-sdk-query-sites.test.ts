@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { join, relative } from "node:path"
+import { walkFiles } from "../support/source-tree"
 
 /**
  * Security regression gate, beside `claude-sdk-security.test.ts` (CLAUDE.md non-negotiable 2;
@@ -30,12 +31,10 @@ const PERMITTED_VALUE_IMPORTS = [
 /** The helpers that set `settingSources: []`, the empty tool set and the deny-all gate. */
 const ISOLATION = /\b(isolatedOptions|createQueryLaunch)\(/
 
+// One shared walk: it follows a symlink that is a real file or directory, and stops at one that
+// names a directory it has already walked, so a link to its own ancestor cannot recurse forever.
 function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    const path = join(dir, entry)
-    if (statSync(path).isDirectory()) return sourceFiles(path)
-    return /\.(ts|tsx|js|mjs|cjs)$/.test(entry) ? [path] : []
-  })
+  return walkFiles(dir, (path) => /\.(ts|tsx|js|mjs|cjs)$/.test(path))
 }
 
 const files = sourceFiles(SRC).map((path) => ({

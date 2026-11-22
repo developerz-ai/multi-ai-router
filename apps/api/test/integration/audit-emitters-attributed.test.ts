@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { readdirSync, readFileSync, statSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import { Hono } from "hono"
 import { adminAuth } from "../../src/middleware/adminAuth"
@@ -26,6 +26,7 @@ import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
 import { createMemoryStore } from "../support/memory-store"
 import { silentLogger } from "../support/silent-logger"
+import { walkFiles } from "../support/source-tree"
 import { testSupportedModelsWriter } from "../support/supported-models-writer"
 
 /**
@@ -170,12 +171,10 @@ const EMITTERS: Record<string, readonly Entry[]> = {
 
 const SRC = join(import.meta.dir, "../../src")
 
+// One shared walk: it follows a symlink that is a real file or directory, and stops at one that
+// names a directory it has already walked, so a link to its own ancestor cannot recurse forever.
 function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name)
-    if (statSync(path).isDirectory()) return sourceFiles(path)
-    return path.endsWith(".ts") ? [path] : []
-  })
+  return walkFiles(dir, (path) => path.endsWith(".ts"))
 }
 
 /** Every `AUDIT_KINDS.<key>` reference outside the file that defines them. */

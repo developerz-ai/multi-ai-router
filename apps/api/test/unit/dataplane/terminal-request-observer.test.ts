@@ -81,7 +81,10 @@ for (const terminal of ["protocol", "transport", "caller", "shutdown"] as const)
       )
       stream.close()
     } else if (terminal === "transport") stream.error(new Error("offline stream failure"))
-    else if (terminal === "caller") caller.abort(new Error("caller ended response"))
+    else if (terminal === "caller")
+      // A genuine downstream disconnect arrives as a `DOMException` named `AbortError`
+      // (`relay-cancellation.ts`); any other reason is a router abort with its own class.
+      caller.abort(new DOMException("caller ended response", "AbortError"))
     else await registry.stop()
     await drained
     expect(samples).toHaveLength(1)

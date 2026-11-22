@@ -11,7 +11,7 @@ import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { withReasoningSeal } from "./reasoning-seal-context"
 import { attemptCost, attemptRecord } from "./records"
 import { relayResponse } from "./relay"
-import { ClientCancelledError } from "./relay-cancellation"
+import { cancellationError } from "./relay-cancellation"
 import { type CostReport, usageCostFields } from "./relay-cost"
 import { costRequested, restampingPair } from "./relay-cost-optin"
 import { endsWithRouterError } from "./relay-stream-end"
@@ -79,13 +79,14 @@ export function relaySuccess(
   let firstByteAt: number | undefined
   let relayedBytes = 0
   let settled = false
+  /**
+   * The settle that wins the abort race — registered at `:170`, before the relay exists, so the
+   * relays' own cancellation callbacks are shadowed whenever the signal aborted first. Its whole
+   * job is to classify: the reason is the cause, and filing anything but a genuine client abort as
+   * a client cancellation would blame the client for a router-made abort.
+   */
   const requestAborted = () =>
-    settle(
-      relayedBytes > 0,
-      ctx.request?.signal.reason instanceof RouterShutdownError
-        ? ctx.request.signal.reason
-        : new ClientCancelledError(),
-    )
+    settle(relayedBytes > 0, cancellationError(ctx.request?.signal.reason))
   const settle = (streamed: boolean, error?: unknown, eof = false): void => {
     if (settled) return
     settled = true
