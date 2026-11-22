@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import type {
+  PendingClaudeLoginRepository,
+  PendingClaudeLoginToken,
+  ReplicaLeaseToken,
+} from "@multi-ai-router/db"
+import type {
   ClaudeCliLogin,
   ClaudeLoginHandle,
   CredentialGuard,
@@ -144,7 +149,53 @@ function fakeCredentials(state: CredentialState = "compact"): CredentialGuard {
   return { settle: async () => state }
 }
 
+interface FakeClaims extends PendingClaudeLoginRepository {
+  readonly clears: PendingClaudeLoginToken[]
+  readonly rows: Map<string, PendingClaudeLoginToken & { expiresAt: Date; updatedAt: Date }>
+}
+
+/**
+ * The repository's fenced writes, kept as behaviour rather than a preloaded stub: a stale
+ * generation must not be able to claim or clear a newer row.
+ */
+function fakeClaims(now: () => Date = () => new Date()): FakeClaims {
+  const rows = new Map<string, PendingClaudeLoginToken & { expiresAt: Date; updatedAt: Date }>()
+  const clears: PendingClaudeLoginToken[] = []
+  return {
+    rows,
+    clears,
+    claim: async (token, expiresAt) => {
+      const held = rows.get(token.accountId)
+      if (held && held.generation > token.generation) return false
+      rows.set(token.accountId, { ...token, expiresAt, updatedAt: new Date() })
+      return true
+    },
+    find: async (accountId) => {
+      const held = rows.get(accountId)
+      if (held === undefined) return undefined
+      if (held.expiresAt.getTime() <= now().getTime()) {
+        rows.delete(accountId)
+        return undefined
+      }
+      return held
+    },
+    clear: async (token) => {
+      const held = rows.get(token.accountId)
+      if (held === undefined || held.owner !== token.owner || held.generation !== token.generation)
+        return false
+      clears.push({ ...token })
+      rows.delete(token.accountId)
+      return true
+    },
+  }
+}
+
+const OWNER = "11111111-1111-4111-8111-111111111111"
+const OTHER_OWNER = "22222222-2222-4222-8222-222222222222"
+const LEASE: ReplicaLeaseToken = { accountId: "account", owner: OWNER, generation: 1n }
+
 interface Harness {
+  readonly claims: FakeClaims
   readonly connect: ClaudeConnectService
   readonly login: FakeLogin
   readonly store: MemoryStore
@@ -153,13 +204,25 @@ interface Harness {
   readonly health: HealthStore
   /** How many times a completed login asked for the warm catalog to be re-read. */
   readonly catalogRefreshes: { count: number }
+  /** How many times the credential file was touched: zero on a refusal. */
+  readonly credentialSettles: { count: number }
   /** The admin read exactly as the console sees it: the live health verdict overlaid on the row. */
   readonly read: AccountsService
   account(provider?: "anthropic-oauth" | "openrouter"): Promise<string>
 }
 
 function harness(
-  options: { login?: FakeLogin; credentials?: CredentialGuard; ttlMinutes?: number } = {},
+  options: {
+    login?: FakeLogin
+    credentials?: CredentialGuard
+    ttlMinutes?: number
+    /** `null` means no lease token: a replica that does not own this account. Mutable: one store can serve two requests. */
+    lease?: ReplicaLeaseToken | null | { current: ReplicaLeaseToken | null }
+    owner?: string | { current: string }
+    claims?: FakeClaims
+    /** Reuse the first replica's account row so a paste really lands on a second instance. */
+    accountId?: string
+  } = {},
 ): Harness {
   const health = createHealthStore()
   const catalogRefreshes = { count: 0 }
@@ -181,11 +244,34 @@ function harness(
     now: () => clock.now,
   })
 
+  const claims = options.claims ?? fakeClaims(() => clock.now)
+  const credentialSettles = { count: 0 }
+  const credentials: CredentialGuard = {
+    settle: async (configDir) => {
+      credentialSettles.count += 1
+      return (options.credentials ?? fakeCredentials()).settle(configDir)
+    },
+  }
+  const leaseRef: { current: ReplicaLeaseToken | null } =
+    options.lease === undefined
+      ? { current: LEASE }
+      : options.lease !== null && "current" in options.lease
+        ? options.lease
+        : { current: options.lease }
+  const startedWithLease = { current: options.lease !== null }
+  const owner = options.owner ?? OWNER
   const connect = createClaudeConnectService({
     accounts: store.accounts,
+    claims,
+    owner: () => (typeof owner === "string" ? owner : owner.current),
+    leaseToken: (id) =>
+      leaseRef.current === null ? undefined : { ...leaseRef.current, accountId: id },
+    get allowUnleasedBegin() {
+      return startedWithLease.current
+    },
     configDirs: configDirs.dirs,
     login,
-    credentials: options.credentials ?? fakeCredentials(),
+    credentials,
     audit,
     pendingLoginMinutes: options.ttlMinutes ?? 10,
     now: () => clock.now,
@@ -247,6 +333,7 @@ function harness(
   })
 
   return {
+    claims,
     connect,
     login,
     store,
@@ -254,8 +341,10 @@ function harness(
     clock,
     health,
     catalogRefreshes,
+    credentialSettles,
     read,
     account: async (provider = "anthropic-oauth") => {
+      if (options.accountId !== undefined) return options.accountId
       const created = await accounts.create({
         label: `${provider}-1`,
         provider,
@@ -287,6 +376,19 @@ describe("starting a login", () => {
     expect(started.value.capture).toBe("paste")
     expect(started.value.expiresAt).toBe("2026-07-25T09:10:00.000Z")
     expect(h.configDirs.present.has(`/data/claude/${id}`)).toBe(true)
+    expect(h.claims.rows.get(id)).toMatchObject({ owner: OWNER, generation: 1n })
+    expect(h.claims.rows.get(id)?.expiresAt.toISOString()).toBe("2026-07-25T09:10:00.000Z")
+  })
+
+  test("a replica without a live lease token neither provisions nor spawns", async () => {
+    const h = harness({ lease: null })
+    const id = await h.account()
+
+    const reason = failure(await h.connect.begin(id, "connect"))
+    expect(reason.code).toBe("login_owned_by_another_replica")
+    expect(h.login.calls.starts).toBe(0)
+    expect(h.claims.rows.size).toBe(0)
+    expect(h.credentialSettles.count).toBe(0)
   })
 
   test("the window comes from config, not a constant", async () => {
@@ -340,6 +442,7 @@ describe("starting a login", () => {
 
     expect(failure(await h.connect.begin(id, "connect")).code).toBe("claude_login_unbound_state")
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
+    expect(h.claims.rows.size).toBe(0)
   })
 })
 
@@ -354,6 +457,32 @@ describe("pasting the code back", () => {
 
     expect(done.value).toEqual({ accountId: id, mode: "connect", connected: true, repaired: false })
     expect(h.login.handles[0]?.submitted).toEqual([PASTE])
+    expect(h.claims.rows.size).toBe(0)
+    await tick()
+    expect(h.claims.clears).toMatchObject([{ owner: OWNER, generation: 1n }])
+  })
+
+  test("a claim left by an older generation cannot be completed or cleared", async () => {
+    const lease = { current: LEASE as ReplicaLeaseToken | null }
+    const h = harness({ lease })
+    const id = await h.account()
+    await h.claims.claim(
+      { accountId: id, owner: OTHER_OWNER, generation: 2n },
+      new Date(NOW.getTime() + 600_000),
+    )
+
+    // A begin from this replica cannot overwrite the newer generation's row.
+    const reason = failure(await h.connect.begin(id, "connect"))
+    expect(reason.code).toBe("login_owned_by_another_replica")
+    expect(h.claims.rows.get(id)).toMatchObject({
+      accountId: id,
+      owner: OTHER_OWNER,
+      generation: 2n,
+    })
+    await tick()
+    expect(h.claims.clears).toEqual([])
+    expect(h.credentialSettles.count).toBe(0)
+    expect(h.login.calls.starts).toBe(0)
   })
 
   test("a reconnect is the same call, audited as a repair rather than a first login", async () => {
@@ -485,6 +614,88 @@ describe("pasting the code back", () => {
 
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("claude_login_login_rejected")
   })
+
+  test("a paste on another replica is refused before the CLI or credentials are touched", async () => {
+    const lease = { current: LEASE as ReplicaLeaseToken | null }
+    const replica = { current: OWNER }
+    const h = harness({ lease, owner: replica })
+    const id = await h.account()
+    await h.connect.begin(id, "connect")
+    const claim = h.claims.rows.get(id)
+    expect(claim).toMatchObject({ owner: OWNER, generation: 1n })
+
+    // The same Postgres row, now served by replica B with its own live lease and UUID.
+    lease.current = { accountId: id, owner: OTHER_OWNER, generation: 9n }
+    replica.current = OTHER_OWNER
+
+    const reason = failure(await h.connect.complete(id, PASTE))
+    expect(reason.code).toBe("login_owned_by_another_replica")
+    expect(reason.message).toContain("paste on that instance or start a new login")
+    expect(h.login.handles[0]?.submitted).toEqual([])
+    expect(h.credentialSettles.count).toBe(0)
+    expect(h.claims.rows.has(id)).toBe(true)
+  })
+
+  test("a paste with no local lease is refused before the CLI or credentials are touched", async () => {
+    const lease = { current: LEASE as ReplicaLeaseToken | null }
+    const h = harness({ lease })
+    const id = await h.account()
+    await h.connect.begin(id, "connect")
+
+    lease.current = null
+    expect(failure(await h.connect.complete(id, PASTE)).code).toBe("login_owned_by_another_replica")
+    expect(h.login.handles[0]?.submitted).toEqual([])
+    expect(h.credentialSettles.count).toBe(0)
+  })
+
+  test("a stale generation on this replica cannot complete or clear another replica's claim", async () => {
+    const lease = { current: LEASE as ReplicaLeaseToken | null }
+    const h = harness({ lease })
+    const id = await h.account()
+    await h.claims.claim(
+      { accountId: id, owner: OTHER_OWNER, generation: 2n },
+      new Date(NOW.getTime() + 600_000),
+    )
+
+    const reason = failure(await h.connect.complete(id, PASTE))
+    expect(reason.code).toBe("login_owned_by_another_replica")
+    expect(h.login.handles[0]?.submitted ?? []).toEqual([])
+    expect(h.credentialSettles.count).toBe(0)
+    expect(h.claims.rows.get(id)).toMatchObject({
+      accountId: id,
+      owner: OTHER_OWNER,
+      generation: 2n,
+    })
+    await tick()
+    expect(h.claims.clears).toEqual([])
+  })
+
+  test("an expired claim is gone, so a paste finds no pending login", async () => {
+    const claims = fakeClaims()
+    const h = harness({ claims, ttlMinutes: 1 })
+    const id = await h.account()
+    await h.connect.begin(id, "connect")
+
+    h.clock.now = new Date(NOW.getTime() + 60_000)
+    expect(failure(await h.connect.complete(id, PASTE)).code).toBe("login_expired")
+    expect(await claims.find(id)).toBeUndefined()
+    expect(h.credentialSettles.count).toBe(0)
+  })
+
+  test("cancel clears the durable claim and leaves no pending row", async () => {
+    const claims = fakeClaims()
+    const h = harness({ claims })
+    const id = await h.account()
+    await h.connect.begin(id, "connect")
+    expect(claims.rows.has(id)).toBe(true)
+
+    const cancelled = await h.connect.cancel(id)
+    if (!cancelled.ok) throw new Error(cancelled.failure.message)
+    expect(await claims.find(id)).toBeUndefined()
+    await tick()
+    expect(claims.clears).toMatchObject([{ owner: OWNER, generation: 1n }])
+    expect(h.credentialSettles.count).toBe(0)
+  })
 })
 
 describe("the checks the router owns", () => {
@@ -526,6 +737,18 @@ describe("the checks the router owns", () => {
     expect(failure(await h.connect.complete(id, PASTE)).code).toBe("login_expired")
     expect(h.login.handles[0]?.stats.cancels).toBe(1)
     expect(h.login.handles[0]?.submitted).toEqual([])
+  })
+
+  test("expiry clears the local handle and its durable claim without another request", async () => {
+    const h = harness({ ttlMinutes: 0 })
+    const id = await h.account()
+    await h.connect.begin(id, "connect")
+
+    await tick()
+
+    expect(h.login.handles[0]?.stats.cancels).toBe(1)
+    expect(h.claims.rows.has(id)).toBe(false)
+    expect(failure(await h.connect.complete(id, PASTE)).code).toBe("no_pending_login")
   })
 
   test("a malformed paste never reaches the CLI", async () => {
@@ -576,13 +799,18 @@ describe("the checks the router owns", () => {
     expect(h.login.handles[0]?.stats.cancels).toBe(1)
   })
 
-  test("shutdown leaves no subprocess behind", async () => {
+  test("shutdown releases local logins and their durable claims", async () => {
     const h = harness()
-    await h.connect.begin(await h.account(), "connect")
-    await h.connect.begin(await h.account(), "connect")
+    const first = await h.account()
+    const second = await h.account()
+    await h.connect.begin(first, "connect")
+    await h.connect.begin(second, "connect")
 
-    h.connect.stop()
+    await h.connect.stop()
     expect(h.login.handles.map((handle) => handle.stats.cancels)).toEqual([1, 1])
+    await tick()
+    expect(h.claims.rows.size).toBe(0)
+    expect(failure(await h.connect.complete(first, PASTE)).code).toBe("no_pending_login")
   })
 })
 

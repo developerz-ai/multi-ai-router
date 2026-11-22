@@ -1,5 +1,6 @@
 import {
   createAdminMutationRepository,
+  createPendingClaudeLoginRepository,
   createUsageHistoryRepository,
   createUsageReadRepository,
   createUsageRecentRepository,
@@ -57,11 +58,16 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
     deps
   const audit = createAuditRecorder(deps.auditEvents, logger)
   const mutations = createAdminMutationRepository(deps.database)
+  const pendingClaudeLogins = createPendingClaudeLoginRepository(deps.database)
 
   // Both halves of running the `claude` binary against an account's directory, and every login flow
   // behind the one service the admin plane mounts.
   const cli = claudeCliFromEnv({
     ownership: deps.ownership,
+    // Shared Postgres state: the replica that receives the paste may not be the one that began it.
+    pendingClaims: pendingClaudeLogins,
+    leaseOwner: () => deps.replicaLease.owner,
+    leaseToken: (accountId) => deps.replicaLease.token(accountId),
     accounts,
     configDirs,
     audit,
