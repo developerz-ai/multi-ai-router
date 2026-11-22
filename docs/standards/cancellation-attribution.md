@@ -35,14 +35,16 @@ Verified in this checkout against the repaired tree:
   other reason as `new ClientCancelledError()`. That one-branch test is the defect: a router-caused
   reason that was not a shutdown was recorded as a client cancellation.
 - **The repair classifies from the reason, in one place.**
-  `apps/api/src/services/dataplane/relay-cancellation.ts:21-28` exports `cancellationError(reason)`
-  and `relayCancellationError(signal)`: a real error whose `name` is not `"AbortError"` is kept as
-  the settlement error, and only an `AbortError` (or no reason) becomes a `ClientCancelledError`.
+  `apps/api/src/services/dataplane/relay-cancellation.ts:24-50` exports `cancellationError(reason)`
+  and `relayCancellationError(signal)`. The helper preserves only its closed router allowlist:
+  `RouterError`, `RouterShutdownError` and an `Error` named `TimeoutError`. An `AbortError`, no
+  reason or an unknown reason, including a plain `Error`, becomes a `ClientCancelledError`; that
+  fallback prevents a caller-side runtime disconnect from striking an account's breaker.
   `chain-relay.ts:89` (the bare reason a listener already holds), `relay.ts:94`,
   `relay-translate.ts:280` and `relay-translate-body.ts:111` all settle through it, so no cancel
   callback constructs `ClientCancelledError` unconditionally. `isRouterAbort` stays private to that
-  module (`relay-cancellation.ts:38-40`): a second copy of the `instanceof Error` /
-  `name !== "AbortError"` test is the regression.
+  module (`relay-cancellation.ts:46-51`): a second copy of the allowlist or an error-name test is
+  the regression.
 - **A genuine client abort must stay a cancellation.** A downstream disconnect arrives as a
   `DOMException` named `AbortError`; the helper maps it to `ClientCancelledError`, and
   `apps/api/src/services/dataplane/relay-terminal.ts:91-97` records `client_error` /
@@ -113,17 +115,18 @@ verified production cause.
 
 ## Preventive rule
 
-**Classify from the abort reason, never from the fact that an abort happened.** `instanceof` one
-class is not a classification: a settle that tests a single reason and files the rest under a
-default records the default, not the cause. Read `signal.reason`, and let one shared helper own the
-`AbortError` test so the client/router boundary is defined in one file.
+**Classify from the abort reason, never from the fact that an abort happened.** Read
+`signal.reason`, and let one shared helper own the closed router allowlist: `RouterError`,
+`RouterShutdownError` and `TimeoutError`. `AbortError`, no reason and every unknown reason fall back
+to `ClientCancelledError`; do not preserve an arbitrary non-`AbortError`, because a caller-side
+runtime disconnect may use a plain `Error` and must not strike the account's breaker.
 
 **Never attribute a router-initiated abort to the client.** A relay settles the row with the real
-error class of the abort (`upstream_timeout` for a deadline, `router_shutdown` for a lease), and
-only a verified client disconnect settles `client_cancelled`. Byte passthrough and stream semantics
-are untouched by the classification: it lives in the settle callback, not in the bytes forwarded.
-Never hide a cancellation to make a metric look better, and never relabel an abandoned terminal
-downstream; fix it at its source.
+error class of an allowlisted router cause (`upstream_timeout` for a deadline, `router_shutdown` for
+a lease). A reason outside that allowlist is not evidence against an account and settles
+`client_cancelled`. Byte passthrough and stream semantics are untouched by the classification: it
+lives in the settle callback, not in the bytes forwarded. Never hide a cancellation to make a metric
+look better, and never relabel an abandoned terminal downstream; fix it at its source.
 
 **Assert both directions.** When adding or changing an abort path, assert that a router-caused
 reason records its own error class, **and** that a real client disconnect still records
