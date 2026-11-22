@@ -649,6 +649,35 @@ describe("a fleet-wide claim on the turn", () => {
     expect(releases).toBe(1)
   })
 
+  test("a failed SDK lease release still releases the conversation lease", async () => {
+    let acquires = 0
+    let conversationReleases = 0
+    const lock: SessionClaimLock = {
+      async tryAcquire() {
+        acquires += 1
+        const lease = acquires
+        return {
+          acquired: true,
+          value: {
+            async release() {
+              if (lease === 2) throw new Error("SDK lease release failed")
+              conversationReleases += 1
+            },
+          },
+        }
+      },
+    }
+    const { store, resolve } = lockedStore(lock, () => {})
+    turn(store, opening, "sess_1")
+
+    const held = resolve()
+    expect((await held.prepare()).plan).toMatchObject({ kind: "resume", sdkSessionId: "sess_1" })
+    held.release()
+    await Promise.resolve()
+
+    expect(conversationReleases).toBe(1)
+  })
+
   test("a refusal on another replica emits an explicit structured log line", async () => {
     const lines: Record<string, unknown>[] = []
     const env = parseEnv({

@@ -91,8 +91,11 @@ export function claimSessionTurnDurable(
         }
         durable = {
           release: async () => {
-            await sdk.value.release()
-            await conversation.value.release()
+            try {
+              await sdk.value.release()
+            } finally {
+              await conversation.value.release()
+            }
           },
         }
         prepared = true
