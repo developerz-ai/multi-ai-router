@@ -295,3 +295,4 @@ export type {
   UsageRequestTerminalInsert,
   UsageRequestTerminalRow,
 } from "./schema/usage-request-terminals"
+export * from "./session-advisory-claim-pool"

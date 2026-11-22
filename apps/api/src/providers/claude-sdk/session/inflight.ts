@@ -21,7 +21,7 @@
  * What it costs is exactly one cold prompt cache on a request the user never sees, which is the
  * cheapest thing in this whole design to spend.
  *
- * Three properties worth stating because each one is a decision:
+ * Properties worth stating because each one is a decision:
  *
  * - **Concurrency, not rate limiting.** A claim lives for one turn and is released the moment the
  *   subprocess is finished with. Sequential turns of a conversation — the normal case — never meet
@@ -29,19 +29,50 @@
  * - **Never a process singleton.** Per-runtime and per session key, like the quota store and the
  *   health store. A module-level map would let one runtime's turns detach another's inside a single
  *   process, and every test would start dirty.
- * - **Per replica, and that is honest rather than complete.** Two replicas cannot see each other's
- *   claims. This deployment runs one by design (its admin sessions and per-key limits are already
- *   per-process), and the CLI's own refusal — `claude-sdk:session-busy`, recovered as an in-place
- *   fork — remains the backstop for a collision this map cannot see.
+ * - **Durable across replicas.** This is the fast local path; `./inflight-durable` wraps it with
+ *   a Postgres advisory lease that fences a session claimed on another replica.
+ *
+ * The two gates are deliberately separate: `acquire` stays synchronous because
+ * `SessionStore.resolve` and all of its callers are synchronous, while the durable lease is
+ * awaited in `SessionTurn.prepare` before the CLI launch.
  */
 
 import { scopedKey } from "./fingerprint"
+
+/**
+ * Why a claim was not granted. `local-busy` is the existing same-replica one-shot collision;
+ * `durable-busy` means another replica owns the turn; `unavailable` means the durable lock itself
+ * could not admit us (capacity, abort or shutdown), so running would be a silent cold start.
+ */
+export type SessionClaimRefusal = "local-busy" | "durable-busy" | "unavailable"
 
 /** A held claim on one session key. Releasing twice is a no-op; releasing is never optional. */
 export interface SessionClaim {
   /** False when another turn already owns the key — this turn must detach. */
   readonly held: boolean
+  /** Set only when `held` is false: why this turn cannot own the conversation. */
+  readonly refused?: SessionClaimRefusal
   release(): void
+}
+
+/** A durable lease on an advisory-lock key. `release` is async and idempotent. */
+export interface SessionClaimLease {
+  release(): Promise<void>
+}
+
+/**
+ * The fleet-wide claim gate. Structural rather than tied to the db package so unit tests can
+ * supply a two-instance fake; in production the SDK claim pool implements it. Keys are derived
+ * with `advisoryLockKey` by the caller, so all replicas agree on them.
+ */
+export interface SessionClaimLock {
+  tryAcquire(
+    key: number,
+    signal: AbortSignal,
+  ): Promise<
+    | { readonly acquired: true; readonly value: SessionClaimLease }
+    | { readonly acquired: false; readonly reason: "busy" | "capacity" | "aborted" }
+  >
 }
 
 export interface SessionClaims {
@@ -56,14 +87,30 @@ export interface SessionClaims {
   readonly size: number
 }
 
+/**
+ * Derive the key space for a durable claim from the same scoped strings the local gate uses.
+ * Account and SDK session id are both in scope: two accounts never contend on one session, and a
+ * conversation and its SDK session cannot be claimed independently.
+ */
+export function sessionClaimKeys(key: string, accountId: string, sdkSessionId: string | null) {
+  return {
+    conversation: scopedKey("session", key),
+    ...(sdkSessionId === null ? {} : { sdk: scopedKey("sdk", scopedKey(accountId, sdkSessionId)) }),
+  }
+}
+
 /** Claims actual SDK sessions, never unrelated conversations sharing an opening fingerprint. */
 export function claimSessionTurn(
   claims: SessionClaims,
   key: string,
   accountId: string,
   sdkSessionId: string | null,
-): SessionClaim & { own(sdkSessionId: string): boolean } {
-  const direct = claims.acquire(scopedKey("session", key))
+): SessionClaim & {
+  readonly keys: { conversation: string; sdk?: string }
+  own(sdkSessionId: string): boolean
+} {
+  const keys = sessionClaimKeys(key, accountId, sdkSessionId)
+  const direct = claims.acquire(keys.conversation)
   const sdkClaims = new Map<string, SessionClaim>()
   let released = false
   const own = (id: string): boolean => {
@@ -80,12 +127,19 @@ export function claimSessionTurn(
     direct.release()
     for (const claim of sdkClaims.values()) claim.release()
   }
-  const held = direct.held && (sdkSessionId === null || own(sdkSessionId))
+  const sdkHeld = sdkSessionId === null || own(sdkSessionId)
+  const held = direct.held && sdkHeld
   if (!held) release()
-  return { held, own, release }
+  return {
+    held,
+    ...(held ? {} : { refused: "local-busy" as const }),
+    keys,
+    own,
+    release,
+  }
 }
 
-const REFUSED: SessionClaim = { held: false, release: () => {} }
+const REFUSED: SessionClaim = { held: false, refused: "local-busy", release: () => {} }
 
 export function createSessionClaims(): SessionClaims {
   const claimed = new Set<string>()

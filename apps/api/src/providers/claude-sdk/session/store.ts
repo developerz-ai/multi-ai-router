@@ -5,10 +5,11 @@ import { createSessionCache, type SessionCache, type SessionCacheOptions } from 
 import { readConversation } from "./conversation"
 import { createSessionDeletionFence } from "./deletion-fence"
 import { scopedKey, sessionFingerprint } from "./fingerprint"
-import { claimSessionTurn, createSessionClaims, type SessionClaims } from "./inflight"
+import { createSessionClaims, type SessionClaimLock, type SessionClaims } from "./inflight"
+import { claimSessionTurnDurable } from "./inflight-durable"
 import { hashMessages } from "./lineage"
 import { carriedPlan, type FreshReason, resolveLineage, type SessionPlan } from "./plan"
-import { heldTurn, type SessionTurn, unrecordedTurn } from "./turn"
+import { type HeldTurnContext, heldTurn, type SessionTurn, unrecordedTurn } from "./turn"
 import { createSessionWrites } from "./writes"
 
 export type { SessionTurn, TurnOutcome } from "./turn"
@@ -61,6 +62,13 @@ export interface SessionStoreDeps {
    * accounted for in the log.
    */
   readonly onCarrySkipped?: (skip: SessionCarrySkip) => void
+  /**
+   * The fleet-wide session-claim gate. Absent, the local in-process gate still holds, but a resume
+   * landing on another replica is silently allowed to cold start. Composition supplies the pool.
+   */
+  readonly claimLock?: SessionClaimLock
+  /** Explicit report of a durable refusal, for the structured log line. */
+  readonly onClaimRefused?: HeldTurnContext["onRefused"]
 }
 
 /** Why a turn off its bound Account never tried to carry: a lineage verdict, or carrying is off. */
@@ -211,11 +219,12 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
         session?.carryFrom === undefined
           ? resolved
           : carriedPlan(resolved, session.carryFrom, session.lineage.assistantUuids)
-      const claim = claimSessionTurn(
+      const claim = claimSessionTurnDurable(
         claims,
         key,
         input.accountId,
         candidate.kind === "fresh" ? null : candidate.sdkSessionId,
+        deps.claimLock,
       )
       const plan: SessionPlan = claim.held ? candidate : { kind: "fresh", reason: "session-busy" }
       const carryFrom = session?.carryFrom
@@ -251,6 +260,7 @@ export function createSessionStore(deps: SessionStoreDeps): SessionStore {
           hashes: hashMessages(conversation.messages),
           storedUuids: session?.lineage.assistantUuids ?? [],
           claim,
+          onRefused: deps.onClaimRefused,
           lease: fence.hold(input.accountId),
           prior: direct ?? null,
           carry: async (fromAccountId, sdkSessionId) => {

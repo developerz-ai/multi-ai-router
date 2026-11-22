@@ -21,7 +21,7 @@ export function assembleRuntimeLifecycle(
   scheduler: Scheduler,
 ) {
   const { logger } = deps
-  const { schedulerLock, refreshLock } = repositories
+  const { schedulerLock, refreshLock, sdkSessionClaimLock } = repositories
   const {
     catalog,
     prices,
@@ -172,6 +172,7 @@ export function assembleRuntimeLifecycle(
       [
         { name: "scheduler-lock-pool", run: () => schedulerLock.close() },
         { name: "refresh-lock-pool", run: () => refreshLock.close() },
+        { name: "sdk-session-claim-lock-pool", run: () => sdkSessionClaimLock.close() },
       ],
       [
         { name: "usage-writer", run: () => usage.stop() },

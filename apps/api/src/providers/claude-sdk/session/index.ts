@@ -17,8 +17,16 @@ export type { ConversationView, LineageMessage, LineageRole } from "./conversati
 export { FIRST_USER_TEXT_LIMIT, readConversation } from "./conversation"
 export type { FingerprintSeed } from "./fingerprint"
 export { scopedKey, sessionFingerprint } from "./fingerprint"
-export type { SessionClaim, SessionClaims } from "./inflight"
-export { createSessionClaims } from "./inflight"
+export type {
+  SessionClaim,
+  SessionClaimLease,
+  SessionClaimLock,
+  SessionClaimRefusal,
+  SessionClaims,
+} from "./inflight"
+export { createSessionClaims, sessionClaimKeys } from "./inflight"
+export type { DurableSessionClaim } from "./inflight-durable"
+export { claimSessionTurnDurable } from "./inflight-durable"
 export type { LineageClass, LineageOverlap } from "./lineage"
 export { classifyLineage, hashMessages } from "./lineage"
 export type { FreshReason, ResolveLineageInput, SessionPlan } from "./plan"
@@ -38,3 +46,4 @@ export {
   DEFAULT_SESSION_CACHE_NEGATIVE_TTL_MS,
   DEFAULT_SESSION_CACHE_TTL_MS,
 } from "./store"
+export type { HeldTurnContext } from "./turn"

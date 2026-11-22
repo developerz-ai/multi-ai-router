@@ -2,7 +2,13 @@ import { describeError } from "@multi-ai-router/core"
 import type { SessionRepository } from "@multi-ai-router/db"
 import type { Env } from "../../config/env"
 import type { Logger } from "../../logging/logger"
-import { createSessionStore, PROVIDER_REGISTRY, type SessionStore } from "../../providers"
+import {
+  createSessionStore,
+  PROVIDER_REGISTRY,
+  type SessionClaimLock,
+  type SessionClaimRefusal,
+  type SessionStore,
+} from "../../providers"
 import type { SessionCarrier } from "../../providers/claude-sdk/session-carry"
 import type { KeyScopeSnapshot, SessionBinding } from "../routing"
 import type { RoutingCatalog } from "./types"
@@ -97,6 +103,10 @@ export interface SessionStoreEnvDeps {
   readonly now: () => Date
   /** Wired only when `CLAUDE_SDK_SESSION_CARRY` is on; see `SessionStoreDeps.carrier`. */
   readonly carrier?: SessionCarrier
+  /** Fleet-wide session-claim gate; absent, only the local in-process gate is active. */
+  readonly claimLock?: SessionClaimLock
+  /** A durable refusal is logged explicitly, never allowed to pass as a quiet cold start. */
+  readonly onClaimRefused?: (refusal: SessionClaimRefusal) => void
 }
 
 /**
@@ -117,6 +127,16 @@ export function sessionStoreFromEnv(deps: SessionStoreEnvDeps): SessionStore {
       negativeTtlMs: dataPlane.sessionCacheNegativeTtlSeconds * 1_000,
     },
     ...(deps.carrier === undefined ? {} : { carrier: deps.carrier }),
+    ...(deps.claimLock === undefined ? {} : { claimLock: deps.claimLock }),
+    onClaimRefused: (refusal) => {
+      // An id and an enum only. A refused session claim must leave a structured trace: without it,
+      // a cross-replica collision looks exactly like an ordinary cold start.
+      deps.logger.warn("durable session claim refused; the turn starts fresh", {
+        component: "dataplane",
+        reason: refusal,
+      })
+      deps.onClaimRefused?.(refusal)
+    },
     onCarry: (outcome) => {
       const fields = {
         component: "dataplane",

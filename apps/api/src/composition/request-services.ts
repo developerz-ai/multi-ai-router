@@ -73,6 +73,9 @@ export function createRequestServices(
     logger,
     now,
     ...(cli.sessionCarrier === undefined ? {} : { carrier: cli.sessionCarrier }),
+    // Without the fleet-wide gate each replica's local claim is invisible to the others: a resume
+    // landing off its owner would quietly start a cold session. The refusal is logged by the store.
+    claimLock: repositories.sdkSessionClaimLock,
   })
   let backgroundAdmissionOpen = true
   const backgroundAdmission = {

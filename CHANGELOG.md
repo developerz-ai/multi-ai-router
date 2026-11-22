@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Claude SDK session claims are durable across replicas, not per replica. `SessionTurn.prepare` awaits an advisory lease on the conversation key (and the account-scoped SDK session key on a resume) before launching the CLI; a lease held by another replica or a lock outage is an explicit refusal, logged with its reason and mapped to `fresh:session-busy`, never a silent cold start. The dedicated SDK session-claim advisory-lock pool uses its own pinned lock class, distinct from scheduler and credential-refresh locks, and closes on shutdown. Its connection budget reuses `SCHEDULER_LOCK_POOL_MAX_CONNECTIONS`.
+
 ### Fixed
 
 - The Claude credential refresh window now fails closed under the cross-replica ownership lease: a non-owner replica never performs a second rotating-token refresh. No lock wired, a throwing lock, a busy or capacity-limited lease, an aborted or timed-out wait, a stale holder and unusable ownership state all wait or refuse before any `query()` starts, never granting a local claim; a refusal is one `CredentialRefreshLeaseUnavailable`, an admission-refused attempt that is not retried onto another account and never becomes a `2xx` (ultimately `NoHealthyAccountError`, `503`). Two guarantees hold across two router instances sharing one lease: a replica that does not own the account cannot admit a refresh, and concurrent refresh turns produce exactly one refresh-token exchange per account. The owner-preparation and host-tool regression gates are unchanged.
