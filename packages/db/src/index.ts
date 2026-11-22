@@ -127,6 +127,11 @@ export type {
   ObservedQuotaWindowWrite,
 } from "./repositories/observed-quota-window"
 export type {
+  PendingClaudeLoginRepository,
+  PendingClaudeLoginToken,
+} from "./repositories/pending-claude-login-repository"
+export { createPendingClaudeLoginRepository } from "./repositories/pending-claude-login-repository"
+export type {
   CreatePoolInput,
   PoolMemberInput,
   PoolRepository,
@@ -266,16 +271,15 @@ export {
   utilizationSource,
 } from "./schema/enums"
 export * as schema from "./schema/index"
-export type { ModelCatalogRow, NewModelCatalogRow } from "./schema/model-catalog"
-export { modelCatalog } from "./schema/model-catalog"
+export { type ModelCatalogRow, modelCatalog, type NewModelCatalogRow } from "./schema/model-catalog"
 export type { NewOauthStateRow, OauthStateInitiator, OauthStateRow } from "./schema/oauth-states"
 export { oauthStates } from "./schema/oauth-states"
+export type { PendingClaudeLoginRow } from "./schema/pending-claude-logins"
 export type { NewPoolMemberRow, NewPoolRow, PoolMemberRow, PoolRow } from "./schema/pools"
 export { poolMembers, pools } from "./schema/pools"
 export type { NewPriceOverrideRow, PriceOverrideRow } from "./schema/price-overrides"
 export { priceOverrides } from "./schema/price-overrides"
-export type { NewQuotaWindowRow, QuotaWindowRow } from "./schema/quota-windows"
-export { quotaWindows } from "./schema/quota-windows"
+export { type NewQuotaWindowRow, type QuotaWindowRow, quotaWindows } from "./schema/quota-windows"
 export type { NewScheduledTaskRunRow, ScheduledTaskRunRow } from "./schema/scheduled-task-runs"
 export { scheduledTaskRuns } from "./schema/scheduled-task-runs"
 export type {
@@ -285,12 +289,9 @@ export type {
   SessionRow,
 } from "./schema/sessions"
 export { sessions } from "./schema/sessions"
-export type { NewUsageDailyRow, UsageDailyRow } from "./schema/usage-daily"
-export { usageDaily } from "./schema/usage-daily"
-export type { NewUsageRecordRow, UsageRecordRow } from "./schema/usage-records"
-export { usageRecords } from "./schema/usage-records"
-export type { NewUsageReportRow, UsageReportRow } from "./schema/usage-reports"
-export { usageReports } from "./schema/usage-reports"
+export { type NewUsageDailyRow, type UsageDailyRow, usageDaily } from "./schema/usage-daily"
+export { type NewUsageRecordRow, type UsageRecordRow, usageRecords } from "./schema/usage-records"
+export { type NewUsageReportRow, type UsageReportRow, usageReports } from "./schema/usage-reports"
 export type {
   UsageRequestTerminalInsert,
   UsageRequestTerminalRow,

@@ -24,7 +24,7 @@ export interface PendingLogin {
 
 export interface PendingLogins {
   /** Registers a login and arms its expiry, discarding whatever was pending for the account. */
-  hold(accountId: string, login: PendingLogin, ttlMs: number): void
+  hold(accountId: string, login: PendingLogin, ttlMs: number, onExpired: () => void): void
   /** Removes a pending login without terminating it — the caller is about to complete it. */
   release(accountId: string): PendingLogin | undefined
   /** Removes and terminates a pending login. */
@@ -56,11 +56,18 @@ export function createPendingLogins(): PendingLogins {
   }
 
   return {
-    hold: (accountId, login, ttlMs) => {
+    hold: (accountId, login, ttlMs, onExpired) => {
       discard(accountId)
-      const timer = setTimeout(() => discard(accountId), ttlMs)
+      let held: Held
+      const timer = setTimeout(() => {
+        // An expiry belongs to the registration that armed it, never a replacement login.
+        if (pending.get(accountId) !== held) return
+        discard(accountId)
+        onExpired()
+      }, ttlMs)
       timer.unref?.()
-      pending.set(accountId, { ...login, timer })
+      held = { ...login, timer }
+      pending.set(accountId, held)
     },
     release,
     discard,

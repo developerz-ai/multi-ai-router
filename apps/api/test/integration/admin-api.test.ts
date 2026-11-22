@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import type {
+  PendingClaudeLoginRepository,
+  PendingClaudeLoginRow,
+  PendingClaudeLoginToken,
+} from "@multi-ai-router/db"
 import { Hono, type MiddlewareHandler } from "hono"
 import { createLogger } from "../../src/logging/logger"
 import type { AdminAuthEnv } from "../../src/middleware/adminAuth"
@@ -28,6 +33,7 @@ import {
   createTestNowService,
   OAUTH_CALLBACK_PATH,
 } from "../../src/services/accounts"
+import type { ClaudeConnectDeps } from "../../src/services/accounts/connect/claude"
 import { createAuditRecorder } from "../../src/services/admin"
 import type { OIDCFlow } from "../../src/services/admin-auth/oidc/flow"
 import { createAdminAuthService } from "../../src/services/admin-auth/service"
@@ -70,7 +76,31 @@ interface HarnessOptions {
   readonly testNowFetch?: FetchLike
   /** The upstream "Discover models" reads its listing from. Same default, same reason. */
   readonly discoverFetch?: FetchLike
+  /** Replica-fenced pending-login claims; tests that burn state supply an empty one. */
+  readonly claims?: Pick<PendingClaudeLoginRepository, "claim" | "find" | "clear">
 }
+
+const CLAUDE_CONNECT_REPLICA = "11111111-1111-4111-8111-111111111111"
+const claudeConnectLeaseDeps = {
+  claims: {
+    claim: async (_token: PendingClaudeLoginToken, _expiresAt: Date) => true,
+    find: async (accountId) =>
+      ({
+        accountId,
+        owner: CLAUDE_CONNECT_REPLICA,
+        generation: 1n,
+        expiresAt: new Date(),
+        updatedAt: new Date(),
+      }) satisfies PendingClaudeLoginRow,
+    clear: async (_token: PendingClaudeLoginToken) => true,
+  } satisfies Pick<PendingClaudeLoginRepository, "claim" | "find" | "clear">,
+  owner: () => CLAUDE_CONNECT_REPLICA,
+  leaseToken: (accountId: string) => ({
+    accountId,
+    owner: CLAUDE_CONNECT_REPLICA,
+    generation: 1n,
+  }),
+} satisfies Pick<ClaudeConnectDeps, "claims" | "owner" | "leaseToken">
 
 function harness(
   guard: MiddlewareHandler<AdminAuthEnv> = stubSession(),
@@ -86,6 +116,7 @@ function harness(
 
   const app = new Hono<AppEnv>()
   const logLines: string[] = []
+
   // `debug` so a login failure's `logger.warn(...)` line is captured too — the token-leak
   // assertions need every line the router would actually write, not just what an operator sees.
   const logger = createLogger({ level: "debug", write: (line) => logLines.push(line) })
@@ -111,6 +142,8 @@ function harness(
     accounts: store.accounts,
     claude: createClaudeConnectService({
       accounts: store.accounts,
+      ...claudeConnectLeaseDeps,
+      ...(options.claims === undefined ? {} : { claims: options.claims }),
       configDirs: configDirs.dirs,
       ...accountDeletionFixture(configDirs.dirs),
       login,
@@ -1258,7 +1291,17 @@ describe("connecting a Claude subscription", () => {
   })
 
   test("a state is one-shot: reusing it after it is burned is rejected", async () => {
-    const { app } = harness()
+    const claims = new Map<string, PendingClaudeLoginRow>()
+    const { app } = harness(stubSession(), {
+      claims: {
+        claim: async (token, expiresAt) => {
+          claims.set(token.accountId, { ...token, expiresAt, updatedAt: NOW })
+          return true
+        },
+        find: async (accountId) => claims.get(accountId),
+        clear: async (token) => claims.delete(token.accountId),
+      } satisfies Pick<PendingClaudeLoginRepository, "claim" | "find" | "clear">,
+    })
     const account = await newClaudeAccount(app, "claude-1")
     const started = await call(app, "POST", `${ADMIN_ACCOUNTS_BASE_PATH}/${account.id}/connect`)
     const state = stateOf(started.body)
@@ -1272,6 +1315,7 @@ describe("connecting a Claude subscription", () => {
         pasted: `ac_wrong#not-${state}`,
       },
     )
+
     expect(wrong.status).toBe(400)
     expect((wrong.body as { error: { code: string } }).error.code).toBe("state_mismatch")
 

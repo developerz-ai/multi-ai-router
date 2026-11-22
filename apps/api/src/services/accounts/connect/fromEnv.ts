@@ -1,5 +1,10 @@
 import { basename, join } from "node:path"
-import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
+import type {
+  AccountRepository,
+  OauthStateRepository,
+  PendingClaudeLoginRepository,
+  ReplicaLeaseToken,
+} from "@multi-ai-router/db"
 import type { Env } from "../../../config/env"
 import type { Logger } from "../../../logging/logger"
 import { createCliProbe, resolveClaudeCli } from "../../../providers"
@@ -54,6 +59,10 @@ export interface ClaudeCliStack {
 
 export interface ClaudeCliFromEnvDeps {
   readonly ownership?: { manager: AccountCliOwnership; config: OwnerLaunchConfig }
+  /** The shared claim must survive a paste landing on a different replica. */
+  readonly pendingClaims: PendingClaudeLoginRepository
+  readonly leaseOwner: () => string
+  readonly leaseToken: (accountId: string) => ReplicaLeaseToken | undefined
   readonly accounts: Pick<
     AccountRepository,
     | "findById"
@@ -138,6 +147,9 @@ export function claudeCliFromEnv(deps: ClaudeCliFromEnvDeps): ClaudeCliStack {
     connect: createClaudeConnectService({
       shutdownDrainMs: deps.env.background?.shutdownDrainMs ?? 15_000,
       accounts: deps.accounts,
+      claims: deps.pendingClaims,
+      owner: deps.leaseOwner,
+      leaseToken: deps.leaseToken,
       configDirs: deps.configDirs,
       login,
       credentials:

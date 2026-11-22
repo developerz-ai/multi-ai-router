@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { PendingClaudeLoginToken } from "@multi-ai-router/db"
 import { type AppDeps, createApp } from "../../src/app"
 import { createLogger } from "../../src/logging/logger"
 import {
@@ -508,6 +509,17 @@ describe("the full app, mounted end to end", () => {
           accounts: store.accounts,
           claude: createClaudeConnectService({
             accounts: store.accounts,
+            claims: {
+              claim: async (_token: PendingClaudeLoginToken, _expiresAt: Date) => true,
+              find: async () => undefined,
+              clear: async (_token: PendingClaudeLoginToken) => true,
+            },
+            owner: () => "11111111-1111-4111-8111-111111111111",
+            leaseToken: (accountId) => ({
+              accountId,
+              owner: "11111111-1111-4111-8111-111111111111",
+              generation: 1n,
+            }),
             configDirs: configDirs.dirs,
             login: { start: unreached },
             credentials: { settle: async () => "compact" },
