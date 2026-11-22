@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A standalone credential-history record at [docs/idea/12-public-hygiene.md](docs/idea/12-public-hygiene.md) replaces the disposition drafted in PR #420, which was closed unmerged. It records issue #404's actual outcome (closed `not_planned`, no merged decision), applies the pull-request-refs principle to the historical local admin credential, and cites issue #405 and the completed audit and change legs for treating the value as compromised and changing the confirmed use sites. The run_4bef328a60cf41d9ad3170afe7fb9d39 platform log was unavailable and is named as such. No rotation, ref purge or history rewrite was performed here. The credential is named by a stable placeholder only.
+
 ### Fixed
 
 - The Claude credential refresh window now fails closed under the cross-replica ownership lease: a non-owner replica never performs a second rotating-token refresh. No lock wired, a throwing lock, a busy or capacity-limited lease, an aborted or timed-out wait, a stale holder and unusable ownership state all wait or refuse before any `query()` starts, never granting a local claim; a refusal is one `CredentialRefreshLeaseUnavailable`, an admission-refused attempt that is not retried onto another account and never becomes a `2xx` (ultimately `NoHealthyAccountError`, `503`). Two guarantees hold across two router instances sharing one lease: a replica that does not own the account cannot admit a refresh, and concurrent refresh turns produce exactly one refresh-token exchange per account. The owner-preparation and host-tool regression gates are unchanged.
