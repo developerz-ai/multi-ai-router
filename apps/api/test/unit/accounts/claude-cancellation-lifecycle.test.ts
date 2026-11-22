@@ -1,9 +1,24 @@
 import { expect, test } from "bun:test"
-import { createClaudeConnectService } from "../../../src/services/accounts/connect/claude"
+import type { PendingClaudeLoginRepository, PendingClaudeLoginToken } from "@multi-ai-router/db"
+import {
+  type ClaudeConnectDeps,
+  createClaudeConnectService,
+} from "../../../src/services/accounts/connect/claude"
 import { createAccountsService } from "../../../src/services/accounts/service"
 import { createMemoryConfigDirs } from "../../support/config-dirs"
 import { createMemoryStore } from "../../support/memory-store"
 import { testSupportedModelsWriter } from "../../support/supported-models-writer"
+
+const OWNER = "11111111-1111-4111-8111-111111111111"
+const claudeConnectLeaseDeps = {
+  claims: {
+    claim: async (_token: PendingClaudeLoginToken, _expiresAt: Date) => true,
+    find: async () => undefined,
+    clear: async (_token: PendingClaudeLoginToken) => true,
+  } satisfies Pick<PendingClaudeLoginRepository, "claim" | "find" | "clear">,
+  owner: () => OWNER,
+  leaseToken: (accountId: string) => ({ accountId, owner: OWNER, generation: 1n }),
+} satisfies Pick<ClaudeConnectDeps, "claims" | "owner" | "leaseToken">
 
 function deferred() {
   let release!: () => void
@@ -32,6 +47,7 @@ test("deletion cancels a login before its URL and preserves the directory until 
   let ownerAlive = true
   const connect = createClaudeConnectService({
     accounts: store.accounts,
+    ...claudeConnectLeaseDeps,
     configDirs: config.dirs,
     credentials: { settle: async () => "compact" },
     pendingLoginMinutes: 1,
@@ -119,6 +135,7 @@ test("stored config path mismatch refuses before provisioning or login launch", 
   let starts = 0
   const connect = createClaudeConnectService({
     accounts: store.accounts,
+    ...claudeConnectLeaseDeps,
     configDirs: config.dirs,
     credentials: { settle: async () => "compact" },
     pendingLoginMinutes: 1,
@@ -154,6 +171,7 @@ test("metadata settle returning after the shutdown deadline cannot begin a late 
   let audits = 0
   const connect = createClaudeConnectService({
     accounts: store.accounts,
+    ...claudeConnectLeaseDeps,
     configDirs: config.dirs,
     pendingLoginMinutes: 1,
     shutdownDrainMs: 5,

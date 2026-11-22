@@ -393,6 +393,13 @@
       "when": 1795246679222,
       "tag": "0055_burly_the_hand",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1795246679223,
+      "tag": "0056_pending_claude_logins",
+      "breakpoints": true
     }
   ]
 }

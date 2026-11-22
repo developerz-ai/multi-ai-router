@@ -62,6 +62,7 @@ export function createRuntime(deps: RuntimeDeps): Runtime {
   const { services: admin, refresher } = createAdminPlane({
     backgroundStartGuard,
     ownership: { manager: ownership, config: ownershipConfig },
+    replicaLease: cli.replicaLease,
     accountDeletionCommitted: async (id) => {
       health.reset(id)
       const results = await Promise.allSettled([

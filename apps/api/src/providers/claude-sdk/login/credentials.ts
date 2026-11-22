@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -42,11 +43,12 @@ export interface CredentialFs {
   /** The file's contents, or null when it does not exist. */
   read(path: string): Promise<string | null>
   /**
-   * Writes `contents` to a sibling temp file at `mode` and renames it over `path`.
+   * Writes `contents` to a unique sibling temp file at `mode` and renames it over `path`.
    *
    * Rename because the alternative is a torn write: a crash midway through overwriting a working
    * login leaves a truncated file, and a truncated credential file is an Account that has to be
-   * connected again by a human.
+   * connected again by a human. The temp name is unique per call so two concurrent repairs in one
+   * directory cannot rename each other's staged bytes.
    */
   replace(path: string, contents: string, mode: number): Promise<void>
 }
@@ -99,19 +101,22 @@ function minify(contents: string): string | null {
   }
 }
 
-const nodeCredentialFs: CredentialFs = {
+export const nodeCredentialFs: CredentialFs = {
   read: async (path) => {
     const file = Bun.file(path)
     return (await file.exists()) ? file.text() : null
   },
   replace: async (path, contents, mode) => {
-    const staged = `${path}.tmp`
-    await writeFile(staged, contents, { mode })
+    // A UUID, not a fixed `.tmp`: concurrent settles in the same config directory must stage
+    // independently, and a leftover from a previous failure must never be renamed into place.
+    const staged = `${path}.${randomUUID()}.tmp`
     try {
+      await writeFile(staged, contents, { mode })
       await rename(staged, path)
-    } catch (error) {
+    } finally {
+      // Covers a rejected write as well as a rejected rename. On success the staged path is gone,
+      // so this is a no-op; `force` keeps cleanup from masking the original failure.
       await rm(staged, { force: true })
-      throw error
     }
   },
 }

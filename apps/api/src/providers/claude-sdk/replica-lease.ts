@@ -174,6 +174,11 @@ export function createReplicaLeaseManager(
     ensure,
     renew,
     eligible: (id: string) => entries.get(id)?.handle.valid() ?? false,
+    /** Non-throwing counterpart to `handle`: a caller gating a login needs absence, not an exception. */
+    token(id: string) {
+      const handle = entries.get(id)?.handle
+      return handle?.valid() ? handle : undefined
+    },
     handle(id: string) {
       const handle = entries.get(id)?.handle
       if (!handle?.valid())

@@ -108,8 +108,12 @@ const EMITTERS: Record<string, readonly Entry[]> = {
     { via: "task", task: "credential_keepalive" },
     { via: "task", task: "login_lifetime_watch" },
   ],
-  "services/accounts/connect/claude.ts:accountConnected": [{ via: "guarded", group: ACCOUNTS }],
-  "services/accounts/connect/claude.ts:accountReauthorized": [{ via: "guarded", group: ACCOUNTS }],
+  "services/accounts/connect/claude-flow.ts:accountConnected": [
+    { via: "guarded", group: ACCOUNTS },
+  ],
+  "services/accounts/connect/claude-flow.ts:accountReauthorized": [
+    { via: "guarded", group: ACCOUNTS },
+  ],
   // Paste capture and the device poll arrive on guarded routes; the redirect on the unguarded
   // callback. Each runs as the connect's starter where its state row names one.
   "services/accounts/connect/oauth-exchange.ts:accountConnected": [

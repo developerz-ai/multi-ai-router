@@ -23,6 +23,7 @@ import type {
 import type { AccountCliOwnership } from "../providers/claude-sdk/account-ownership"
 import type { AccountConfigDirs } from "../providers/claude-sdk/config-dir"
 import type { OwnerLaunchConfig } from "../providers/claude-sdk/owner-launch"
+import type { ReplicaLeaseManager } from "../providers/claude-sdk/replica-lease"
 import type { CredentialRefresher } from "../services/accounts"
 import type { createBackgroundStartGuard } from "../services/accounts/background-admission"
 import type { CoherenceHooks } from "../services/admin"
@@ -36,6 +37,11 @@ import type { AdminServices } from "../types"
 
 export interface AdminPlaneDeps {
   readonly ownership: { manager: AccountCliOwnership; config: OwnerLaunchConfig }
+  /**
+   * A Claude login is claimed in shared Postgres and fenced by this lease token: the replica that
+   * receives the paste may not be the one that began it.
+   */
+  readonly replicaLease: Pick<ReplicaLeaseManager, "owner" | "token">
   readonly backgroundStartGuard: (
     expected: Parameters<typeof createBackgroundStartGuard>[1],
     signal?: AbortSignal,
