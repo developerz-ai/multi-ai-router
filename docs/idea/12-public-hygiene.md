@@ -56,20 +56,20 @@ rewrite was not performed.
 - In pull-request refs created from those commits, for the reason above.
 
 The value becomes unreadable through history only when every reachable copy is made unavailable,
-including the pull-request refs, the archive tags and any forks that took them, or when the
-credential's meaning is changed so an old value no longer authenticates anything. Changing the
-credential's meaning is what the completed change leg did. A main-only rewrite retaining
-pull-request refs cannot claim that result, so none is claimed here.
+including the pull-request refs, the archive tags and any forks that took them. Changing the
+credential's meaning instead invalidates the old value for authentication; it does not remove or
+make unreadable any historical copy. A main-only rewrite retaining pull-request refs cannot claim
+removal of historical exposure, so none is claimed here.
 
 ## Compromise and completed change
 
-The credential was treated as compromised. The evidence is the completed audit leg of this goal,
-which located the commits and every use site without reproducing the value, and the completed
-change leg, which changed the confirmed sites outside the throwaway seeded development database
-and recorded them on issue #405 with the date. The audit found the throwaway seed use confined to
-that database and left it alone; no surviving local admin console instance was found still
-authenticating with the historical value. Those operations are cited as done, not repeated here:
-no credential was regenerated, no instance was reconfigured, no ref was purged and no history was
-rewritten in producing this record.
+The credential was treated as compromised. The completed audit leg located the commits and every
+use site without reproducing the value. The completed change leg invalidated the confirmed
+authentication use sites outside the throwaway seeded development database and recorded them on
+issue #405 with the date. The audit found the throwaway seed use confined to that database and
+left it alone; no surviving local admin console instance was found still authenticating with the
+historical value. This is an invalidation record only, not a historical-exposure removal record:
+the historical copies above remain readable. No credential was regenerated, no instance was
+reconfigured, no ref was purged and no history was rewritten in producing this record.
 
 Related: [00-overview.md](00-overview.md), [07-security.md](07-security.md).
