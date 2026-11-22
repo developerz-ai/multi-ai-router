@@ -132,6 +132,8 @@ export type {
   ResolveTurnInput,
   SessionCache,
   SessionCacheOptions,
+  SessionClaimLock,
+  SessionClaimRefusal,
   SessionEntry,
   SessionPlan,
   SessionStore,

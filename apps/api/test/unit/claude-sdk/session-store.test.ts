@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { createSessionStore, type SessionStore } from "../../../src/providers"
+import { parseEnv } from "../../../src/config/env"
+import { createLogger } from "../../../src/logging/logger"
+import {
+  createSessionStore,
+  type SessionClaimLock,
+  type SessionClaimRefusal,
+  type SessionStore,
+} from "../../../src/providers"
+import { sessionStoreFromEnv } from "../../../src/services/dataplane"
 import { type MemorySessions, memorySessions, messagesBody, ticker } from "./fixtures"
 
 /**
@@ -21,6 +29,36 @@ function storeWith(repository: MemorySessions, clock = ticker()): SessionStore {
     now: () => NOW,
     cache: { maxEntries: 16, ttlMs: 1_000, negativeTtlMs: 100, now: clock.now },
   })
+}
+
+/** A fake fleet-wide gate: one held key per lock instance, no database. */
+function fakeClaimLock() {
+  const held = new Set<number>()
+  const releases = new Map<number, number>()
+  const count = (key: number) => releases.get(key) ?? 0
+  const lock: SessionClaimLock = {
+    async tryAcquire(key) {
+      if (held.has(key)) return { acquired: false, reason: "busy" }
+      held.add(key)
+      let released = false
+      return {
+        acquired: true,
+        value: {
+          async release() {
+            if (released) return
+            released = true
+            held.delete(key)
+            releases.set(key, count(key) + 1)
+          },
+        },
+      }
+    },
+  }
+  return {
+    lock,
+    held,
+    releases,
+  }
 }
 
 const opening = messagesBody([{ role: "user", text: "hello" }])
@@ -518,5 +556,174 @@ describe("a second turn arriving while the first is still running", () => {
       body: messagesBody([{ role: "user", text: "a different question entirely" }]),
     })
     expect(other.plan).toEqual({ kind: "fresh", reason: "no-session" })
+  })
+})
+
+describe("a fleet-wide claim on the turn", () => {
+  function lockedStore(
+    lock: SessionClaimLock,
+    onRefused: (r: SessionClaimRefusal) => void,
+    repository = memorySessions(),
+  ) {
+    const store = createSessionStore({
+      repository,
+      now: () => NOW,
+      cache: { maxEntries: 16, ttlMs: 1_000, negativeTtlMs: 100 },
+      claimLock: lock,
+      onClaimRefused: onRefused,
+    })
+    const resolve = () =>
+      store.resolve({
+        apiKeyId: "key-1",
+        sessionKey: "conv-1",
+        keySource: "header",
+        accountId: "acct-1",
+        body: grown,
+      })
+    return { store, resolve }
+  }
+
+  test("a held claim resumes, and releasing it twice frees the lease exactly once", async () => {
+    const fake = fakeClaimLock()
+    const refusals: SessionClaimRefusal[] = []
+    const { store, resolve } = lockedStore(fake.lock, (r) => refusals.push(r))
+    turn(store, opening, "sess_1")
+
+    const held = resolve()
+    const prepared = await held.prepare()
+    expect(prepared.plan).toMatchObject({ kind: "resume", sdkSessionId: "sess_1" })
+    expect(fake.held.size).toBeGreaterThan(0)
+
+    held.release()
+    held.release()
+    await Promise.resolve()
+    expect(fake.held.size).toBe(0)
+    expect([...fake.releases.values()].reduce((a, b) => a + b, 0)).toBe(fake.releases.size)
+    expect(refusals).toEqual([])
+  })
+
+  test("a busy claim is refused with held:false, reported, and never resumes silently", async () => {
+    const fake = fakeClaimLock()
+    const refusals: SessionClaimRefusal[] = []
+    // The second replica has its own local claims. Both see the same row, so only the shared
+    // advisory gate can tell it that the first replica still holds the conversation.
+    const rows = memorySessions()
+    const first = lockedStore(fake.lock, (r) => refusals.push(r), rows)
+    turn(first.store, opening, "sess_1")
+    const onFirst = first.resolve()
+    const preparedFirst = await onFirst.prepare()
+    expect(preparedFirst.plan).toMatchObject({ kind: "resume", sdkSessionId: "sess_1" })
+
+    const replicaB = lockedStore(fake.lock, (r) => refusals.push(r), rows)
+    const second = replicaB.resolve()
+    const preparedSecond = await second.prepare()
+    expect(preparedSecond.plan).toEqual({ kind: "fresh", reason: "session-busy" })
+    expect(refusals).toContain("durable-busy")
+    second.release()
+    onFirst.release()
+  })
+
+  test("a failed SDK lease acquisition releases the conversation lease", async () => {
+    let acquires = 0
+    let releases = 0
+    const lock: SessionClaimLock = {
+      async tryAcquire() {
+        acquires += 1
+        if (acquires === 2) throw new Error("SDK lease unavailable")
+        return {
+          acquired: true,
+          value: {
+            async release() {
+              releases += 1
+            },
+          },
+        }
+      },
+    }
+    const { store, resolve } = lockedStore(lock, () => {})
+    turn(store, opening, "sess_1")
+
+    const prepared = await resolve().prepare()
+
+    expect(prepared.plan).toEqual({ kind: "fresh", reason: "session-busy" })
+    expect(releases).toBe(1)
+  })
+
+  test("a failed SDK lease release still releases the conversation lease", async () => {
+    let acquires = 0
+    let conversationReleases = 0
+    const lock: SessionClaimLock = {
+      async tryAcquire() {
+        acquires += 1
+        const lease = acquires
+        return {
+          acquired: true,
+          value: {
+            async release() {
+              if (lease === 2) throw new Error("SDK lease release failed")
+              conversationReleases += 1
+            },
+          },
+        }
+      },
+    }
+    const { store, resolve } = lockedStore(lock, () => {})
+    turn(store, opening, "sess_1")
+
+    const held = resolve()
+    expect((await held.prepare()).plan).toMatchObject({ kind: "resume", sdkSessionId: "sess_1" })
+    held.release()
+    await Promise.resolve()
+
+    expect(conversationReleases).toBe(1)
+  })
+
+  test("a refusal on another replica emits an explicit structured log line", async () => {
+    const lines: Record<string, unknown>[] = []
+    const env = parseEnv({
+      DATABASE_URL: "postgres://router:router@postgres:5432/router",
+      ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+      ADMIN_OIDC_CLIENT_ID: "multi-ai-router-test",
+      ADMIN_OIDC_REDIRECT_URI: "https://router.test/api/admin/auth/oidc/callback",
+      ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
+      ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+    })
+    const rows = memorySessions()
+    const lock = fakeClaimLock()
+    const firstStore = sessionStoreFromEnv({
+      env,
+      repository: rows,
+      claimLock: lock.lock,
+      logger: createLogger({ level: "info", write: (line) => lines.push(JSON.parse(line)) }),
+      now: () => NOW,
+    })
+    const secondStore = sessionStoreFromEnv({
+      env,
+      repository: rows,
+      claimLock: lock.lock,
+      logger: createLogger({ level: "info", write: (line) => lines.push(JSON.parse(line)) }),
+      now: () => NOW,
+    })
+    const input = { apiKeyId: "key-1", sessionKey: "conv-1", keySource: "header" as const }
+    // Seed the binding as the request path does: remember writes the row, binding reads it back.
+    const seed = firstStore.resolve({ ...input, accountId: "acct-1", body: opening })
+    seed.remember("sess_1", "uuid-1")
+    seed.release()
+    await firstStore.binding("key-1", "conv-1")
+    const first = firstStore.resolve({ ...input, accountId: "acct-1", body: grown })
+    expect((await first.prepare()).plan).toMatchObject({ kind: "resume", sdkSessionId: "sess_1" })
+    await secondStore.binding("key-1", "conv-1")
+
+    const refused = secondStore.resolve({ ...input, accountId: "acct-1", body: grown })
+    expect((await refused.prepare()).plan).toEqual({ kind: "fresh", reason: "session-busy" })
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        msg: "durable session claim refused; the turn starts fresh",
+        reason: "durable-busy",
+      }),
+    ])
+    refused.release()
+    first.release()
   })
 })

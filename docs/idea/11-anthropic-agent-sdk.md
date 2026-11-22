@@ -714,9 +714,15 @@ the durable lineage and the next real turn would resume from it. A hidden one-sh
 conversation and must not advance it. The cost of detaching is one cold prompt cache on a request
 the user never sees.
 
-Per replica, and honestly so: two replicas cannot see each other's claims. This deployment runs one
-by design, and the CLI's own refusal — now matched in both its spellings — remains the backstop for
-a collision the map cannot see.
+The claim is now **durable across replicas**. `claimSessionTurnDurable` (`session/inflight.ts`) wraps
+the synchronous local gate with an advisory lease held on the conversation key (and, for a resume,
+the account-scoped SDK session key). `SessionTurn.prepare` awaits that lease before any CLI launch.
+A lease already held on another replica is a refusal (`durable-busy`), reported as a structured log
+line, and maps to the same explicit `fresh:session-busy` plan; a lock outage is `unavailable` and
+refuses too. Nothing ever degrades into a quiet cold start. The dedicated SDK session-claim lock
+class is distinct from the scheduler and credential-refresh classes; its pool is constructed in
+composition and closed on shutdown. The CLI's own refusal — now matched in both its spellings —
+stays the backstop for a collision the lease cannot see.
 
 ### Lineage classification
 

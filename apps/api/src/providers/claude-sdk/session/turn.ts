@@ -1,5 +1,7 @@
 import type { SessionLineageState, SessionRepository } from "@multi-ai-router/db"
 import type { SessionCache, SessionEntry } from "./cache"
+import type { SessionClaimRefusal } from "./inflight"
+import type { DurableSessionClaim } from "./inflight-durable"
 import { nextLineage } from "./lineage"
 import type { SessionPlan } from "./plan"
 
@@ -19,8 +21,13 @@ export interface SessionTurn {
    * Resolves to the turn to run — this one, or a **fresh** one when the carry could not happen, so
    * the launch never resumes an id this Account has never seen. Never rejects. A turn with nothing
    * to carry resolves to itself at once.
+   *
+   * Also awaits the durable session claim before the CLI launch. A refusal maps to a `session-busy`
+   * plan (never a quiet cold resume) and is reported through `onRefused`.
+   *
+   * @param signal aborts a pending advisory-lock acquisition, never a held lease.
    */
-  prepare(): Promise<SessionTurn>
+  prepare(signal?: AbortSignal): Promise<SessionTurn>
   /**
    * What the SDK told us, once it says it. Fire-and-forget: the cache is updated synchronously so
    * the next turn on this replica resumes even if the row is still in flight.
@@ -63,6 +70,11 @@ export function unrecordedTurn(plan: SessionPlan, release: () => void): SessionT
 
 /** Everything a held turn needs to write its outcome back, fixed when the turn was resolved. */
 export interface HeldTurnContext {
+  /**
+   * An explicit report of a durable claim refusal: ids and the reason only, never a transcript.
+   * A refused claim must never be a silent cold start.
+   */
+  readonly onRefused?: (refusal: SessionClaimRefusal) => void
   readonly cache: SessionCache
   readonly write: (key: string, input: Parameters<SessionRepository["upsert"]>[0]) => void
   readonly now: () => Date
@@ -75,7 +87,7 @@ export interface HeldTurnContext {
   readonly hashes: readonly string[]
   /** The stored lineage's assistant uuids, before this turn's plan narrows them. */
   readonly storedUuids: SessionLineageState["assistantUuids"]
-  readonly claim: { own(sdkSessionId: string): boolean; release(): void }
+  readonly claim: DurableSessionClaim
   readonly lease: { valid(): boolean; release(): void }
   /** The binding this session key held when the turn was resolved, to restore if it fails. */
   readonly prior: SessionEntry | null
@@ -105,7 +117,21 @@ export function heldTurn(ctx: HeldTurnContext, plan: SessionPlan): SessionTurn {
   const turn: SessionTurn = {
     plan,
     release,
-    async prepare() {
+    async prepare(signal) {
+      // Take the fleet-wide lease before any CLI launch, including a fresh plan. A refused claim
+      // is a `session-busy` plan and an explicit log line, not an invisible cold start.
+      const held = await ctx.claim.prepare(signal)
+      if (!held || !ctx.claim.held) {
+        const refusal = ctx.claim.refused ?? "unavailable"
+        ctx.onRefused?.(refusal)
+        // The local claim was held when this turn was resolved, but the fleet-wide gate refused it.
+        // This is a detached turn: it must release the local claim and deletion fence, but never
+        // record its fresh SDK id over the shared conversation binding.
+        return unrecordedTurn({ kind: "fresh", reason: "session-busy" }, () => {
+          ctx.claim.release()
+          ctx.lease.release()
+        })
+      }
       if (plan.kind === "fresh" || plan.carryFrom === undefined) return turn
       const moved = (await ctx.carry?.(plan.carryFrom, plan.sdkSessionId)) ?? false
       // Same claim and lease: the conversation is still this turn's, only the plan changed.

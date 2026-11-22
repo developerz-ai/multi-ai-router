@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Claude SDK session claims are durable across replicas, not per replica. `SessionTurn.prepare` awaits an advisory lease on the conversation key (and the account-scoped SDK session key on a resume) before launching the CLI; a lease held by another replica or a lock outage is an explicit refusal, logged with its reason and mapped to `fresh:session-busy`, never a silent cold start. The dedicated SDK session-claim advisory-lock pool uses its own pinned lock class, distinct from scheduler and credential-refresh locks, and closes on shutdown. Its connection budget reuses `SCHEDULER_LOCK_POOL_MAX_CONNECTIONS`.
+
 ### Added
 
 - A standalone credential-history record at [docs/idea/12-public-hygiene.md](docs/idea/12-public-hygiene.md) replaces the disposition drafted in PR #420, which was closed unmerged. It records issue #404's actual outcome (closed `not_planned`, no merged decision), applies the pull-request-refs principle to the historical local admin credential, and cites issue #405 and the completed audit and change legs for treating the value as compromised and changing the confirmed use sites. The run_4bef328a60cf41d9ad3170afe7fb9d39 platform log was unavailable and is named as such. No rotation, ref purge or history rewrite was performed here. The credential is named by a stable placeholder only.

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { DEFAULT_OPENAI_CHAT_CEILING } from "@multi-ai-router/core"
 import type { SessionRow } from "@multi-ai-router/db"
-import { createSessionStore, type SessionStore } from "../../../src/providers"
+import {
+  createSessionStore,
+  type SessionClaimLock,
+  type SessionStore,
+} from "../../../src/providers"
 import { claudeSdkDriver } from "../../../src/providers/claude-sdk/driver"
 import {
   type AttemptOutcome,
@@ -69,11 +73,45 @@ function body(turns: number): Uint8Array {
   return new TextEncoder().encode(JSON.stringify({ messages }))
 }
 
-function storeAndContext(): { readonly store: SessionStore; readonly session: SdkSessionContext } {
-  const rows = new Map<string, SessionRow>()
+/** A shared fake advisory-lock pool: two instances, one key space, one lease per key. */
+function sharedClaimPool() {
+  const leases = new Map<number, Promise<void>>()
+  const pool: SessionClaimLock = {
+    tryAcquire(key, signal) {
+      if (signal.aborted || leases.has(key)) {
+        const reason = signal.aborted ? "aborted" : "busy"
+        return Promise.resolve({ acquired: false as const, reason })
+      }
+      let release!: () => void
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      leases.set(key, released)
+      return Promise.resolve({
+        acquired: true as const,
+        value: {
+          release: () => {
+            if (leases.get(key) !== released) return Promise.resolve()
+            leases.delete(key)
+            release()
+            return Promise.resolve()
+          },
+        },
+      })
+    },
+  }
+  return pool
+}
+
+function storeAndContext(
+  claimLock?: SessionClaimLock,
+  rows = new Map<string, SessionRow>(),
+): { readonly store: SessionStore; readonly session: SdkSessionContext } {
+  // The real repository keys rows by (apiKeyId, session key), not by the session key alone.
+  const rowKey = (apiKeyId: string, key: string) => `${apiKeyId}::${key}`
   const store = createSessionStore({
     repository: {
-      findByKey: () => Promise.resolve(undefined),
+      findByKey: (apiKeyId, key) => Promise.resolve(rows.get(rowKey(apiKeyId, key))),
       clearAccount: () => Promise.resolve(0),
       upsert: (input) => {
         const row: SessionRow = {
@@ -87,11 +125,12 @@ function storeAndContext(): { readonly store: SessionStore; readonly session: Sd
           lastUsedAt: input.lastUsedAt,
           createdAt: input.lastUsedAt,
         }
-        rows.set(input.key, row)
+        rows.set(rowKey(input.apiKeyId, input.key), row)
         return Promise.resolve(row)
       },
     },
     now: () => NOW,
+    ...(claimLock === undefined ? {} : { claimLock }),
   })
   return {
     store,
@@ -239,6 +278,50 @@ describe("the claim is released by the answer itself", () => {
 
     // Not `fresh:session-busy`: the abandoned turn released the conversation on its way out.
     expect(plans.at(-1)).toBe("resume:sdk-1")
+  })
+
+  test("one account holds one turn at a time even though each replica has its own store", async () => {
+    // Both replicas share one fake advisory pool but have separate in-memory stores and separate
+    // local claims. Only the durable lease can see the other replica's running turn.
+    const pool = sharedClaimPool()
+    // Shared rows model the one Postgres database both replicas read; local claims and caches stay
+    // per replica, which is exactly why a fleet-wide lease is needed.
+    const rows = new Map<string, SessionRow>()
+    const replicaA = storeAndContext(pool, rows)
+    const replicaB = storeAndContext(pool, rows)
+    const plansA: string[] = []
+    const plansB: string[] = []
+
+    // Establish the binding on replica A.
+    const first = streamingAttempt(replicaA.session, 1, "sdk-1", plansA)
+    first.close()
+    await drain(await first.outcome)
+
+    // A's turn starts and is still running when B receives the same conversation. B reads the
+    // binding from the shared row store, exactly as the request path's `sessionBindings` does.
+    const onA = streamingAttempt(replicaA.session, 3, "sdk-1", plansA)
+    const running = await onA.outcome
+    await replicaB.store.binding("key-1", "conv-1")
+    const onB = streamingAttempt(replicaB.session, 3, "sdk-throwaway", plansB)
+    onB.close()
+    await drain(await onB.outcome)
+
+    // B never resumes the session A is holding. Its plan must be explicitly detached, not a cold
+    // start that looks like an ordinary first turn.
+    expect(plansB).toEqual(["fresh:session-busy"])
+
+    onA.close()
+    await drain(running)
+
+    // Once A finishes, B can resume normally. A fresh store over the same rows models the cache
+    // missing the binding again; the durable lease, unlike the in-process cache, is fleet-wide.
+    const laterReplica = storeAndContext(pool, rows)
+    await laterReplica.store.binding("key-1", "conv-1")
+    const after = streamingAttempt(laterReplica.session, 4, "sdk-1", plansB)
+    after.close()
+    await drain(await after.outcome)
+    // The detached turn never records its throwaway SDK id into the shared conversation binding.
+    expect(plansB.at(-1)).toBe("resume:sdk-1")
   })
 
   test("a failed attempt releases before the chain resolves its next one", async () => {

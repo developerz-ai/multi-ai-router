@@ -11,6 +11,7 @@ import {
   createPriceOverrideRepository,
   createScheduledTaskRepository,
   createSchedulerLockPool,
+  createSdkSessionClaimLockPool,
   createSessionRepository,
   createUsageHistoryRepository,
   createUsageRecordRepository,
@@ -21,6 +22,8 @@ import type { RuntimeDeps } from "./runtime-types"
 export interface RuntimeRepositories {
   readonly refreshLock: ReturnType<typeof createCredentialRefreshLockPool>
   readonly schedulerLock: ReturnType<typeof createSchedulerLockPool>
+  /** Fleet-wide SDK session-claim gate. One turn at a time per conversation across replicas. */
+  readonly sdkSessionClaimLock: ReturnType<typeof createSdkSessionClaimLockPool>
   readonly accounts: ReturnType<typeof createAccountRepository>
   readonly keys: ReturnType<typeof createApiKeyRepository>
   readonly keyTombstones: ReturnType<typeof createApiKeyTombstoneRepository>
@@ -47,6 +50,18 @@ export function createRuntimeRepositories(deps: RuntimeDeps): RuntimeRepositorie
   })
   const schedulerLock = createSchedulerLockPool({
     url: env.databaseUrl,
+    maxConnections: env.scheduler.lockPoolMaxConnections,
+    connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
+    closeTimeoutSeconds: env.databasePool.closeTimeoutSeconds,
+  })
+  // The pool reserves a connection per held turn and is shut down with the other pools. Its keys
+  // come from the same FNV derivation as `advisoryLockKey`, so every replica contends identically.
+  // A resume holds two advisory leases at once (conversation plus account-scoped SDK key), so it
+  // needs at least two sessions; the pool clamps the scheduler budget to that minimum.
+  const sdkSessionClaimLock = createSdkSessionClaimLockPool({
+    url: env.databaseUrl,
+    // Bounded: a claim is at most two reserved connections, and this pool must never starve the
+    // main DB. The scheduler's default of one is not enough for a resume.
     maxConnections: env.scheduler.lockPoolMaxConnections,
     connectTimeoutSeconds: env.databasePool.connectTimeoutSeconds,
     closeTimeoutSeconds: env.databasePool.closeTimeoutSeconds,
@@ -82,6 +97,7 @@ export function createRuntimeRepositories(deps: RuntimeDeps): RuntimeRepositorie
   return {
     refreshLock,
     schedulerLock,
+    sdkSessionClaimLock,
     accounts,
     keys,
     keyTombstones,
