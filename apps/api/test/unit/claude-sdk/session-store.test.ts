@@ -623,6 +623,32 @@ describe("a fleet-wide claim on the turn", () => {
     onFirst.release()
   })
 
+  test("a failed SDK lease acquisition releases the conversation lease", async () => {
+    let acquires = 0
+    let releases = 0
+    const lock: SessionClaimLock = {
+      async tryAcquire() {
+        acquires += 1
+        if (acquires === 2) throw new Error("SDK lease unavailable")
+        return {
+          acquired: true,
+          value: {
+            async release() {
+              releases += 1
+            },
+          },
+        }
+      },
+    }
+    const { store, resolve } = lockedStore(lock, () => {})
+    turn(store, opening, "sess_1")
+
+    const prepared = await resolve().prepare()
+
+    expect(prepared.plan).toEqual({ kind: "fresh", reason: "session-busy" })
+    expect(releases).toBe(1)
+  })
+
   test("a refusal on another replica emits an explicit structured log line", async () => {
     const lines: Record<string, unknown>[] = []
     const env = parseEnv({

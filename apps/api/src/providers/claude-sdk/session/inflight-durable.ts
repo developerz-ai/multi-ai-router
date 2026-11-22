@@ -82,8 +82,9 @@ export function claimSessionTurnDurable(
           prepared = true
           return true
         }
-        const sdk = await lock.tryAcquire(advisoryId(sdkKey), controller.signal)
+        // From this point, a failed SDK-key acquisition must release the conversation lease too.
         durable = conversation.value
+        const sdk = await lock.tryAcquire(advisoryId(sdkKey), controller.signal)
         if (!sdk.acquired) {
           refused = sdk.reason === "busy" ? "durable-busy" : "unavailable"
           return false

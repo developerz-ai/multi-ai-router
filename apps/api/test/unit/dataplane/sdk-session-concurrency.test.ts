@@ -320,7 +320,8 @@ describe("the claim is released by the answer itself", () => {
     const after = streamingAttempt(laterReplica.session, 4, "sdk-1", plansB)
     after.close()
     await drain(await after.outcome)
-    expect(plansB.at(-1)).toBe("resume:sdk-throwaway")
+    // The detached turn never records its throwaway SDK id into the shared conversation binding.
+    expect(plansB.at(-1)).toBe("resume:sdk-1")
   })
 
   test("a failed attempt releases before the chain resolves its next one", async () => {

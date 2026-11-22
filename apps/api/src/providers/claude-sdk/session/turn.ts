@@ -124,7 +124,13 @@ export function heldTurn(ctx: HeldTurnContext, plan: SessionPlan): SessionTurn {
       if (!held || !ctx.claim.held) {
         const refusal = ctx.claim.refused ?? "unavailable"
         ctx.onRefused?.(refusal)
-        return heldTurn(ctx, { kind: "fresh", reason: "session-busy" })
+        // The local claim was held when this turn was resolved, but the fleet-wide gate refused it.
+        // This is a detached turn: it must release the local claim and deletion fence, but never
+        // record its fresh SDK id over the shared conversation binding.
+        return unrecordedTurn({ kind: "fresh", reason: "session-busy" }, () => {
+          ctx.claim.release()
+          ctx.lease.release()
+        })
       }
       if (plan.kind === "fresh" || plan.carryFrom === undefined) return turn
       const moved = (await ctx.carry?.(plan.carryFrom, plan.sdkSessionId)) ?? false
