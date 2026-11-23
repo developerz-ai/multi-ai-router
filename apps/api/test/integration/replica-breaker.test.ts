@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { isRouterError } from "@multi-ai-router/core"
 import {
   accounts,
+  type BreakerObservation,
   createAccountBreakerRepository,
   createCatalogSnapshotRepository,
   createRecoveryRepository,
@@ -19,6 +20,7 @@ import { createDispatcher } from "../../src/services/dataplane"
 import { createBreakerWriter } from "../../src/services/dataplane/breaker-writer"
 import { createHealthStore } from "../../src/services/dataplane/health"
 import { accountHealthFacts } from "../../src/services/dataplane/health-observation"
+import type { BreakerState } from "../../src/services/routing"
 import { globalRecoveryFixture } from "./global-recovery-fixture"
 
 const fixture = usageHistoryFixture()
@@ -222,6 +224,81 @@ describe.skipIf(!url)("replica breaker propagation", () => {
       expect(fresh.stateOf(account.id).breaker.status).toBe(parked)
     }
     await Promise.all([writerA.stop(), writerB.stop()])
+  })
+
+  test("a probe's 200 recovers the account although its hold and reading were flushed first", async () => {
+    // Prod 2026-11-23, 2.76.0: a 200 every ~35 s, `recovery-admission-refused` in between, forever.
+    const account = await createAccountRepository(fixture.db()).create({
+      provider: "zai",
+      label: "probe-success",
+    })
+    const snapshots = createCatalogSnapshotRepository(fixture.db())
+    const published = new Map<BreakerObservation, BreakerState>()
+    const writer = createBreakerWriter({
+      repository: createAccountBreakerRepository(fixture.db()),
+      logger: createLogger({ level: "error", write: () => undefined }),
+      flushIntervalMs: 60_000,
+      shutdownDrainMs: 1000,
+      acknowledge: (input, row) => {
+        const breaker = published.get(input)
+        if (breaker !== undefined) health.acknowledgeBreaker(input.accountId, breaker, row)
+      },
+    })
+    const health = createHealthStore({
+      probeHoldMs: 30_000,
+      jitter: () => 0,
+      onBreaker: (accountId, breaker, observed) => {
+        const input = {
+          accountId,
+          expected: observed,
+          observedRevision: observed.breaker?.revision ?? 0,
+          ...breaker,
+          cooldownSource: breaker.cooldownSource ?? ("unknown" as const),
+        }
+        published.set(input, breaker)
+        writer.record(input)
+      },
+      onProbeHold: (accountId, heldUntil, observed) =>
+        writer.recordProbeHold({ accountId, expected: observed, probeHeldUntil: heldUntil }),
+    })
+    const refresh = async () => {
+      const row = (await loadCatalog(snapshots)).accounts.find(({ id }) => id === account.id)
+      if (row === undefined) throw new Error("fixture account absent")
+      health.reconcile(account.id, accountHealthFacts(row))
+      return accountHealthFacts(row)
+    }
+    const now = new Date()
+    const deadline = new Date(now.getTime() + 60_000)
+    const observed = health.captureAttempt(account.id, await refresh())
+    const refused = { kind: "rate-limited", resetsAt: deadline, message: "stub 429" } as const
+    health.recordFailure(
+      account.id,
+      { ...refused, resetSource: "provider-reported" },
+      now,
+      undefined,
+      observed,
+    )
+    await writer.flush()
+    const facts = await refresh()
+    expect(health.stateOf(account.id).breaker.status).toBe("cooling_down")
+
+    const after = new Date(deadline.getTime() + 1)
+    const observation = health.captureAttempt(account.id, facts)
+    const admission = health.admitProbe(account.id, after)
+    expect(admission.admitted).toBe(true)
+    await writer.flush()
+    await refresh()
+    const reading = { limited: false, resetSource: "unknown", windows: [] } as const
+    health.applyRateLimit(account.id, reading, after, observation)
+    await writer.flush()
+    health.recordSuccess(account.id, observation)
+    health.releaseProbe(account.id, admission.token)
+    await writer.flush()
+    await refresh()
+
+    expect(health.stateOf(account.id).breaker.status).toBe("active")
+    expect((await refresh()).breaker).toMatchObject({ status: "active", cooldownUntil: null })
+    await writer.stop()
   })
 
   test("independent stores hydrate a flushed restriction and restart retains the deadline", async () => {
