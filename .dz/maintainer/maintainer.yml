@@ -92,6 +92,11 @@ schedules:
     days: [mon]
     hours_utc: [8]
     brief_file: .dz/briefs/improve.md
+  # Daily: free tiers move daily, and the router serves `free` in the order this one keeps.
+  - name: free-providers
+    days: [mon, tue, wed, thu, fri, sat, sun]
+    hours_utc: [6]
+    brief_file: .dz/briefs/free-providers.md
 
 # devops: first-tier security advisories (KEV, NVD, GitHub, OSV, EPSS) are read against
 # the versions this repo runs, and a fix is filed at once when one is in a vulnerable

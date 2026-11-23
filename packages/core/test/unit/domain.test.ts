@@ -89,6 +89,8 @@ const enums = [
       "mistral",
       "together",
       "cerebras",
+      "kilo",
+      "nvidia",
       "opencode-go",
       "opencode-oauth",
       "ollama",

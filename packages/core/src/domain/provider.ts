@@ -25,6 +25,8 @@ export const ProviderId = z.enum([
   "mistral",
   "together",
   "cerebras",
+  "kilo",
+  "nvidia",
   "opencode-go",
   "opencode-oauth",
   "ollama",
@@ -40,7 +42,8 @@ export type ProviderId = z.infer<typeof ProviderId>
  *
  * `none` is the local-endpoint case (`ollama`): the upstream authenticates nobody, so a credential
  * is **optional** rather than absent — supply one and it is presented as a bearer token, for the
- * same endpoint put behind a reverse proxy or a hosted surface that does check. It is the only
+ * same endpoint put behind a reverse proxy or a hosted surface that does check. A public gateway
+ * whose free models take no key (`kilo`) is the same case with a pinned address. It is the only
  * `AuthKind` under which an Account may hold no credential at all and still be routable; every
  * other provider's missing credential is a misconfiguration refused at write time.
  */

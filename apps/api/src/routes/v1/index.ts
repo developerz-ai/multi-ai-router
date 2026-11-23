@@ -11,15 +11,17 @@ import type {
   RouterKeyVerifier,
   RoutingCatalog,
   UpstreamOperation,
+  VerifiedKey,
 } from "../../services/dataplane"
 import {
   catalogListing,
+  freeListing,
   providerListing,
   reachableModel,
   reachableModels,
 } from "../../services/dataplane"
-import type { ModelCatalogStore } from "../../services/models"
-import { renderCatalog, renderProviders } from "./catalog"
+import { FREE_MODEL_RANKING, type ModelCatalogStore } from "../../services/models"
+import { renderCatalog, renderFreeModels, renderProviders } from "./catalog"
 import { renderModel, renderModels } from "./models"
 
 /**
@@ -35,6 +37,7 @@ import { renderModel, renderModels } from "./models"
  * | `POST /v1/embeddings` | OpenAI | embed |
  * | `GET /v1/models` | the models reachable by the presenting key | — |
  * | `GET /v1/models/:id` | one model, `404` if the presenting key cannot reach it | — |
+ * | `GET /v1/free-models` | the reachable models that cost nothing, smartest first | — |
  *
  * **Both OpenAI paths are first-class, and that is not redundancy.** `/v1/responses` is where new
  * clients are going; `/v1/chat/completions` is what the installed base sends today. Neither is
@@ -160,20 +163,23 @@ export function dataPlaneRoutes(deps: DataPlaneRoutesDeps): Hono<RouterKeyEnv> {
     return renderModel(c, model, at)
   })
 
+  const listCatalog = (key: VerifiedKey) => {
+    const { models, prices } = deps
+    if (models === undefined || prices === undefined) return []
+    return catalogListing(
+      { catalog: deps.catalog, health: deps.health, models, prices },
+      key,
+      now(),
+    )
+  }
+
   // This router's own listings. Same key, same scope intersection, richer answer — see `catalog.ts`
   // for why they are separate paths rather than more fields on `/v1/models`.
-  routes.get("/v1/catalog", guard, (c) => {
-    const { models, prices } = deps
-    if (models === undefined || prices === undefined) return renderCatalog(c, [])
-    return renderCatalog(
-      c,
-      catalogListing(
-        { catalog: deps.catalog, health: deps.health, models, prices },
-        c.get("routerKey"),
-        now(),
-      ),
-    )
-  })
+  routes.get("/v1/catalog", guard, (c) => renderCatalog(c, listCatalog(c.get("routerKey"))))
+
+  routes.get("/v1/free-models", guard, (c) =>
+    renderFreeModels(c, freeListing(listCatalog(c.get("routerKey")), FREE_MODEL_RANKING)),
+  )
 
   routes.get("/v1/providers", guard, (c) =>
     renderProviders(

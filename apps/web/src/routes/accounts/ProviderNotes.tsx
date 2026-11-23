@@ -44,7 +44,20 @@ export function ProviderNotes(props: ProviderNotesProps) {
         </div>
       </Show>
 
-      <Show when={props.provider?.authKind === "none"}>
+      <Show when={props.provider?.freeTier}>
+        {(tier) => (
+          <div class={styles.providerNote}>
+            <p>
+              <strong>Free tier.</strong> {tier().note} (read {tier().verifiedAt}){" "}
+              <a href={tier().url} rel="noreferrer" target="_blank">
+                {tier().access === "keyless" ? "Limits" : "Get a key"}
+              </a>
+            </p>
+          </div>
+        )}
+      </Show>
+
+      <Show when={props.provider?.authKind === "none" && props.provider.requiresBaseUrl}>
         <div class={styles.providerNote}>
           <p>
             A local endpoint: it authenticates nobody, so the credential below is optional. Give it

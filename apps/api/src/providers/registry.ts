@@ -7,9 +7,11 @@ import { cerebrasDriver } from "./drivers/cerebras"
 import { deepSeekDriver } from "./drivers/deepseek"
 import { geminiDriver } from "./drivers/gemini"
 import { groqDriver } from "./drivers/groq"
+import { kiloDriver } from "./drivers/kilo"
 import { kimiDriver } from "./drivers/kimi"
 import { miniMaxDriver } from "./drivers/minimax"
 import { mistralDriver } from "./drivers/mistral"
+import { nvidiaDriver } from "./drivers/nvidia"
 import { ollamaDriver } from "./drivers/ollama"
 import { openAiApiDriver } from "./drivers/openai-api"
 import { openAiCompatibleDriver } from "./drivers/openai-compatible"
@@ -79,6 +81,10 @@ export const PROVIDER_REGISTRY: Readonly<Record<ProviderId, ProviderSupport>> = 
   mistral: http(mistralDriver),
   together: http(togetherDriver),
   cerebras: http(cerebrasDriver),
+  // Two free lanes, pinned for the same reason: a gateway whose free models need no credential, and
+  // a hosted catalog whose developer key costs nothing.
+  kilo: http(kiloDriver),
+  nvidia: http(nvidiaDriver),
   // A flat-fee plan behind an API key: one key per team member, three wire surfaces, and an endpoint
   // that refuses any request not naming its conversation (`ProviderSurface.sessionHeader`).
   "opencode-go": http(opencodeGoDriver),

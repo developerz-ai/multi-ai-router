@@ -1,5 +1,7 @@
 import { createHttpDriver } from "../driver"
+import { FREE_PRESETS } from "../free-presets"
 import { parseCompatibleRateLimit } from "../rate-limit/compatible-body"
+import type { ProviderDriver } from "../types"
 import { genericCreditsRule, reportedQuotaResetRule } from "./compatible-rules"
 
 /**
@@ -7,9 +9,11 @@ import { genericCreditsRule, reportedQuotaResetRule } from "./compatible-rules"
  * speaks OpenAI Chat Completions. No pinned endpoint: the Account's own base URL is the only
  * address it has, and an Account without one cannot be addressed at all.
  */
-export const openAiCompatibleDriver = createHttpDriver({
+const driver = createHttpDriver({
   id: "openai-compatible",
   surfaces: [{ dialect: "openai-chat", baseUrl: null }],
   parseRateLimit: parseCompatibleRateLimit,
   rules: [reportedQuotaResetRule, genericCreditsRule],
 })
+
+export const openAiCompatibleDriver: ProviderDriver = { ...driver, freePresets: FREE_PRESETS }

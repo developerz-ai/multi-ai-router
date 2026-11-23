@@ -1,10 +1,13 @@
 import { NoHealthyAccountError } from "@multi-ai-router/core"
+import { FREE_MODEL_RANKING } from "../models"
 import {
+  type RoutingSnapshot,
   type SelectionOptions,
   type SelectionRequest,
   type SelectionResult,
   selectAccounts,
 } from "../routing"
+import { isFreeRequest, selectFree } from "./free-select"
 import type { HealthStore } from "./health"
 import type { RecoveryAccess } from "./recovery-access"
 import { hintRecoveryRejections } from "./recovery-hints"
@@ -36,7 +39,11 @@ export function requestSelector(deps: {
         .map((account) => account.id),
     )
     const request = { ...deps.request, rotationCounter: rotation.current(null) }
-    const original = selectAccounts(snapshot, request, deps.selection)
+    const choose = (from: RoutingSnapshot, asked: SelectionRequest) =>
+      isFreeRequest(from, asked.model)
+        ? selectFree(from, asked, deps.selection, FREE_MODEL_RANKING)
+        : selectAccounts(from, asked, deps.selection)
+    const original = choose(snapshot, request)
     const bound = deps.request.binding?.accountId
     if (bound !== undefined && foreign.has(bound))
       return {
@@ -52,13 +59,12 @@ export function requestSelector(deps: {
     let selection =
       foreign.size === 0
         ? original
-        : selectAccounts(
+        : choose(
             {
               ...snapshot,
               accounts: snapshot.accounts.filter((account) => !foreign.has(account.id)),
             },
             { ...deps.request, rotationCounter: rotation.current(null) },
-            deps.selection,
           )
     // Keep catalog scope/model facts when omission leaves no local candidate.
     if (!selection.ok && foreign.size > 0)

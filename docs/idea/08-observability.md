@@ -154,8 +154,8 @@ reads as a promise. Every rule names the module that owns it.
 The shipped set is the twelve wired vendor tables answering for fourteen providers:
 `anthropic-api` and `anthropic-oauth` share the Anthropic table, `openai-api` and `openai-oauth`
 share the OpenAI one, and `gemini`, `zai`, `kimi`, `minimax`, `groq`, `deepseek`, `xai`, `mistral`,
-`together` and `cerebras` each have their own. **Four providers ship no price on purpose** —
-[below](#the-four-providers-that-ship-no-price).
+`together` and `cerebras` each have their own. **Some providers ship no price on purpose** —
+[below](#the-providers-that-ship-no-price).
 
 Kimi coding identities are reference-only: they carry a verified API-equivalent reference for
 subscription attribution and do not establish metered USD Extra Usage charges, so a metered coding
@@ -173,7 +173,7 @@ a source whose page was not re-read keeps `verifiedAt: null` with its inherited 
 rather than a verification nobody made. A model no published price was found for stays unpriced
 rather than approximated from a sibling model.
 
-### The four providers that ship no price
+### The providers that ship no price
 
 Absent from the table and staying absent, because for each of them a shipped number would be a
 fiction rather than a stale fact. Their attempts report `costBasis: "unknown"`, and the operator's
@@ -182,6 +182,7 @@ own override is the way to price them.
 | Provider | Why no shipped rate |
 |---|---|
 | `openrouter` | The price is whichever upstream it routed to, decided per request. One table would price every route as one. The lookup already runs on the upstream model after the alias map, so a vendor-prefixed name (`openai/gpt-6-luna`) is not borrowed from another provider's table either: that would book OpenRouter's fee-bearing price as the vendor's list price. Until the router reads the cost OpenRouter itself reports, an override per routed model is the way to price it |
+| `kilo`, `nvidia` | Their free models cost nothing and neither publishes a card for them; a funded Kilo key is billed per route. An operator who wants a hard zero in the reports sets a price override |
 | `ollama` | The operator's own hardware. There is no per-token price to state, and `0` would claim electricity is free rather than that nobody billed for tokens |
 | `openai-compatible` / `anthropic-compatible` | The operator's own contract with whatever sits behind the base URL they supplied. Only they know the rate — which is what overrides are for |
 

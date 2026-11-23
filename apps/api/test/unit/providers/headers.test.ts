@@ -105,6 +105,8 @@ describe("OpenAI-dialect drivers", () => {
     "mistral",
     "together",
     "cerebras",
+    "kilo",
+    "nvidia",
     "opencode-go",
     "ollama",
     "openai-compatible",

@@ -2,8 +2,8 @@ import type { ModelReasoning } from "@multi-ai-router/core"
 import type { Context } from "hono"
 import type { RouterKeyEnv } from "../../middleware/routerKeyAuth"
 import type { RateCard } from "../../services/cost"
-import type { CatalogModel, CatalogProvider } from "../../services/dataplane"
-import { CONTEXT_TABLE_AS_OF } from "../../services/models"
+import type { CatalogModel, CatalogProvider, FreeModel } from "../../services/dataplane"
+import { CONTEXT_TABLE_AS_OF, FREE_RANKING_AS_OF } from "../../services/models"
 
 /**
  * `GET /v1/catalog` and `GET /v1/providers` — this router's **own** listings.
@@ -118,6 +118,23 @@ export function renderProviders(
         reset_source: entry.resetSource,
       })),
     })),
+  })
+}
+
+/** Smartest first; `rank` restates the order for a reader that re-sorts. */
+export function renderFreeModels(c: Context<RouterKeyEnv>, models: readonly FreeModel[]): Response {
+  return c.json({
+    object: "list",
+    data: models.map((model, at) => ({
+      id: model.id,
+      rank: at + 1,
+      intelligence_index: model.intelligenceIndex,
+      ranked: model.ranked,
+      providers: model.providers,
+      context_length: model.contextTokens,
+      max_output_tokens: model.maxOutputTokens,
+    })),
+    ranking_as_of: FREE_RANKING_AS_OF,
   })
 }
 

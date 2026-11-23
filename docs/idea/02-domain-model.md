@@ -53,9 +53,9 @@ for it. Adding one is a code change; see [03-providers.md](03-providers.md).
 
 | Field | Type | Notes |
 |---|---|---|
-| `id` | enum | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `ollama`, `openai-compatible`, `anthropic-compatible` |
+| `id` | enum | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `kilo`, `nvidia`, `ollama`, `openai-compatible`, `anthropic-compatible` |
 | `dialect` | enum | Native wire protocol the driver speaks; drives passthrough vs. translation |
-| `authKind` | enum | `oauth` (refreshable), `api-key` (valid until revoked upstream), or `none` (a local endpoint that authenticates nobody — the credential is optional, and its **absence** is what this value permits) |
+| `authKind` | enum | `oauth` (refreshable), `api-key` (valid until revoked upstream), or `none` (an upstream that takes requests with none: a local endpoint, or Kilo's free models — the credential is optional, and its **absence** is what this value permits) |
 | `constants` | code | Endpoints, client id, scopes, required headers — pinned in one file per provider |
 
 ## Account

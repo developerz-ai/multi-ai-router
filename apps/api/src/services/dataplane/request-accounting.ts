@@ -112,6 +112,8 @@ export function createRequestAccounting(
       winnerSelected = true
     },
     recordTerminal(event: UsageRecord) {
+      // A later leg's answer (`chain-legs.ts`) outranks the failure an earlier one selected.
+      if (winnerSelected) winner = event
       record(event)
       finalize(event)
     },

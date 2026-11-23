@@ -11,6 +11,7 @@ import type {
   RoutingPolicy,
   UtilizationSource,
 } from "@multi-ai-router/core"
+import type { FreePreset, ProviderFreeTier } from "./free-tier"
 
 // The wire shapes of `/api/admin/**`, declared **here** rather than imported
 // from `apps/api`. The SPA is a separate deployable that talks HTTP; importing
@@ -272,14 +273,14 @@ export interface ProviderDescriptor {
    * authorization, so the one-shot `state` has a row to bind to.
    */
   readonly connectFlow: ProviderConnectFlow | null
-  /** The OAuth flow also offers a device-code sign-in. Absent on an older API: read as false. */
-  readonly deviceSignIn?: boolean
+  readonly deviceSignIn?: boolean // also offers a device-code sign-in; absent: an older API, false
   readonly providerPreferences?: boolean // takes `providerPreferences`; absent: an older API, false
+  readonly freeTier?: ProviderFreeTier | null // absent: an older API
+  readonly freePresets?: readonly FreePreset[] // absent: an older API
   readonly creatable: boolean
   readonly reason: string | null
 }
 
-/** `GET /providers` is the one list endpoint that wraps its array. */
 export interface ProviderListResponse {
   readonly providers: readonly ProviderDescriptor[]
 }
@@ -289,8 +290,7 @@ export interface SessionView {
   readonly username: string
   readonly csrfToken: string
   readonly issuedAt: string
-  /** Null for a session with no expiry — a static `ADMIN_API_TOKEN`, which the console never uses. */
-  readonly expiresAt: string | null
+  readonly expiresAt: string | null // null: a static `ADMIN_API_TOKEN`, never used by the console
 }
 
 /** What every `DELETE` answers with. */

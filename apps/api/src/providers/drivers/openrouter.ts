@@ -191,6 +191,12 @@ export const openRouterDriver: ProviderDriver = {
   // would make this router's listing mostly a stale copy of someone else's. The discover button
   // still asks it whenever an operator wants the answer.
   catalogSweep: "manual",
+  freeTier: {
+    access: "free-key",
+    url: "https://openrouter.ai/workspaces/default/keys",
+    note: "Models ending in :free cost nothing: 20 requests a minute, 50 a day, or 1,000 a day once the workspace has bought $10 of credit. The allowance is the workspace's, so a second key adds nothing.",
+    verifiedAt: "2026-11-23",
+  },
   // The key's own spend cap and its next reset (`openrouter-key.ts`).
   quotaRead: openRouterKeyRead,
 }

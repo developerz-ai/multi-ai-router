@@ -19,6 +19,8 @@ const PINNED: ReadonlyArray<readonly [ProviderId, string]> = [
   ["mistral", "https://api.mistral.ai/v1"],
   ["together", "https://api.together.ai/v1"],
   ["cerebras", "https://api.cerebras.ai/v1"],
+  ["kilo", "https://api.kilo.ai/api/gateway"],
+  ["nvidia", "https://integrate.api.nvidia.com/v1"],
   ["opencode-go", "https://opencode.ai/inference/go/openai/v1"],
 ]
 

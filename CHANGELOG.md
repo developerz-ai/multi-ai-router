@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.75.0] — 2026-11-23
+
 ### Changed
 
 - Claude SDK session claims are durable across replicas, not per replica. `SessionTurn.prepare` awaits an advisory lease on the conversation key (and the account-scoped SDK session key on a resume) before launching the CLI; a lease held by another replica or a lock outage is an explicit refusal, logged with its reason and mapped to `fresh:session-busy`, never a silent cold start. The dedicated SDK session-claim advisory-lock pool uses its own pinned lock class, distinct from scheduler and credential-refresh locks, and closes on shutdown. Its connection budget reuses `SCHEDULER_LOCK_POOL_MAX_CONNECTIONS`.
 
 ### Added
 
+- Free models, smartest first. Two providers are pinned: `kilo` (the Kilo gateway, whose free models need no credential) and `nvidia` (NVIDIA NIM on a free developer key), migration 0057. `GET /v1/free-models` lists what the presenting key reaches for nothing in the shipped ranking's order, and the model name `free` is served in that order: every account that gives the smartest model away, then the next model, until one answers. Never a billed model, and no other name is ever moved onto a free one. A driver states its free tier (`freeTier`) and the console's add form shows it with a link to the key page. The ranking and the notes are re-judged daily by `.dz/briefs/free-providers.md`. Spec: `docs/idea/03-providers.md`, `docs/idea/05-routing-and-failover.md`.
 - A standalone credential-history record at [docs/idea/12-public-hygiene.md](docs/idea/12-public-hygiene.md) replaces the disposition drafted in PR #420, which was closed unmerged. It records issue #404's actual outcome (closed `not_planned`, no merged decision), applies the pull-request-refs principle to the historical local admin credential, and cites issue #405 and the completed audit and change legs for treating the value as compromised and changing the confirmed use sites. The run_4bef328a60cf41d9ad3170afe7fb9d39 platform log was unavailable and is named as such. No rotation, ref purge or history rewrite was performed here. The credential is named by a stable placeholder only.
 
 ### Fixed
@@ -23,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A verified, resettable OpenRouter key cap now answers the client with a clock wall (`429 quota_exhausted`, `reset_at` and `retry_after_s` from the provider's reset, no top-up instruction) instead of a `402 credits-exhausted` error. Genuinely drained balances keep the top-up wording; missing, stale, estimated or past reset evidence invents no timestamp.
 - A relay that aborted for an allowlisted router reason is no longer recorded as a client cancellation. The settle that wins the abort race (`chain-relay.ts:88-89`) tested a single class and filed every other reason as `ClientCancelledError`, which `request-accounting.ts` then marked `abandoned`; it now reads `ctx.request.signal.reason` through one shared classifier (`relay-cancellation.ts`: `cancellationError`, `relayCancellationError`, `isRouterAbort`). The classifier preserves only `RouterError`, `RouterShutdownError` and an error named `TimeoutError`; `AbortError`, no reason and unknown reasons, including a plain `Error` from a caller-side runtime disconnect, become `ClientCancelledError` so they cannot strike the account's breaker. All four settle call sites classify through it: the chain settle, `relay.ts`, `relay-translate.ts` and `relay-translate-body.ts`. The attribution rule in `request-accounting.ts` is unchanged. Spec: `docs/standards/cancellation-attribution.md`, which records the signal wiring that rules out the earlier deadline-`TimeoutError` reading and keeps the remaining production link labelled a hypothesis. Regression: `apps/api/test/unit/dataplane/router-abort-classification.test.ts`.
 
-## [2.73.0]
+## 2.73.0 (never tagged; first released in [v2.75.0](https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.75.0))
 
 ### Added
 
@@ -2437,4 +2440,4 @@ your tooling config.
 [2.70.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.70.1
 [2.71.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.71.0
 [2.72.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.0
-[2.73.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.73.0
+[2.75.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.75.0
