@@ -6,7 +6,7 @@ import type { ProviderId } from "@multi-ai-router/core"
  *
  * A table rather than a computed score, because the judgement has no formula: an intelligence index
  * says nothing about a model whose host refuses most requests, and half the rows have no index. It
- * is re-ranked weekly by `.dz/briefs/free-providers.md`, which owns the order and cites its evidence.
+ * is re-ranked daily by `.dz/briefs/free-providers.md`, which owns the order and cites its evidence.
  *
  * A row says where a model is free **by id**: the same weights are free under one provider's id and
  * billed under another's, so an id is listed only for a provider that never bills it. That is why
@@ -31,36 +31,20 @@ const both = (id: string): FreeModelRow["ids"] => ({ openrouter: [id], kilo: [id
 
 /**
  * Provenance: index v5.0.1 as read by mvalentsev/awesome-free-ai-coding, 2026-11-23; ids from each
- * provider's own `GET /models` that day. `openai-compatible` ids are the presets' (`free-presets.ts`), spelled `…-free` or
- * `…:free` there; DeepSeek V4.1 Flash and Hy4 Flash are placed by the paid traffic this router gives them.
+ * provider's own `GET /models` that day, and every `nvidia` and `openai-compatible` id answered a
+ * forced tool call with a real key. The `openai-compatible` ids are Token Harbor's
+ * (`free-presets.ts`); a preset nobody has called with a key is offered but not ranked.
+ * Left out on that evidence: AIHubMix (ten calls ever, then a `200` whose text is a refusal), and
+ * NVIDIA's `minimax-m3.1-flash` and `glm-5.3-flash` (no answer in 90 s, three tries).
+ * DeepSeek V4.1 Flash is placed by the paid traffic this router gives it.
  * Unscored rows are placed on this router's own success rate over the 14 days to 2026-11-23: ERNIE
  * 88%, Particle 63%, Ling 16%, which is why Ling is last despite the largest window.
  */
 export const FREE_MODEL_RANKING: readonly FreeModelRow[] = [
   {
-    name: "glm-5.3",
-    intelligenceIndex: 31.7,
-    ids: { "openai-compatible": ["coding-glm-5.3-free"] },
-  },
-  {
     name: "deepseek-v4.1-flash",
     intelligenceIndex: null,
-    ids: {
-      "openai-compatible": ["deepseek-v4.1-flash:free", "deepseek/deepseek-v4.1-flash-free"],
-    },
-  },
-  {
-    name: "mimo-v2.6-pro",
-    intelligenceIndex: 29.9,
-    ids: { "openai-compatible": ["xiaomi-mimo-v2.6-pro-free"] },
-  },
-  {
-    name: "minimax-m3.1-flash",
-    intelligenceIndex: 29.1,
-    ids: {
-      nvidia: ["minimaxai/minimax-m3.1-flash"],
-      "openai-compatible": ["minimax-m3.1-flash:free"],
-    },
+    ids: { "openai-compatible": ["deepseek-v4.1-flash:free"] },
   },
   {
     name: "step-5-preview",
@@ -68,22 +52,9 @@ export const FREE_MODEL_RANKING: readonly FreeModelRow[] = [
     ids: { nvidia: ["stepfun-ai/step-5-preview"] },
   },
   {
-    name: "glm-5.3-flash",
-    intelligenceIndex: 27.8,
-    ids: {
-      nvidia: ["z-ai/glm-5.3-flash"],
-      "openai-compatible": ["coding-glm-5.3-flash-free", "z-ai/glm-5.3-flash-free"],
-    },
-  },
-  {
     name: "mimo-v2.6-flash",
     intelligenceIndex: 26.7,
-    ids: { "openai-compatible": ["xiaomi-mimo-v2.6-flash-free", "mimo-v2.6-flash:free"] },
-  },
-  {
-    name: "hy4-flash",
-    intelligenceIndex: null,
-    ids: { "openai-compatible": ["tencent/hy4-flash:free"] },
+    ids: { "openai-compatible": ["mimo-v2.6-flash:free"] },
   },
   {
     name: "nemotron-3.5-super-vl",
@@ -91,7 +62,6 @@ export const FREE_MODEL_RANKING: readonly FreeModelRow[] = [
     ids: {
       ...both("nvidia/nemotron-3.5-super-vl:free"),
       nvidia: ["nvidia/nemotron-3.5-super-vl-120b-a12b"],
-      "openai-compatible": ["nemotron-3.5-super-vl-free"],
     },
   },
   {
@@ -100,7 +70,6 @@ export const FREE_MODEL_RANKING: readonly FreeModelRow[] = [
     ids: {
       ...both("nvidia/nemotron-3-ultra-550b-a55b:free"),
       nvidia: ["nvidia/nemotron-3-ultra-550b-a55b"],
-      "openai-compatible": ["nemotron-3-ultra-550b-a55b-free"],
     },
   },
   {
@@ -121,7 +90,6 @@ export const FREE_MODEL_RANKING: readonly FreeModelRow[] = [
     ids: {
       ...both("nvidia/nemotron-3.5-lightning:free"),
       nvidia: ["nvidia/nemotron-3.5-lightning-30b-a3b"],
-      "openai-compatible": ["nemotron-3.5-lightning-free"],
     },
   },
   { name: "particle-1", intelligenceIndex: null, ids: both("particle-ai/particle-1:free") },

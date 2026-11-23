@@ -777,7 +777,7 @@ Two lanes are pinned because they cost nothing, and a third was already here:
 | `nvidia` | free developer key | about 40 requests a minute and 10,000 a day, varying by model. Terms: development, not serving end users |
 | `openrouter` | any key | `:free` ids: 20 requests a minute; 50 a day, or 1,000 once the workspace has bought $10 |
 
-Anything else that gives tokens away over the OpenAI wire (AIHubMix, Requesty, Cloudflare Workers AI) is an
+Anything else that gives tokens away over the OpenAI wire (Token Harbor, Requesty, Cloudflare Workers AI) is an
 `openai-compatible` account with its base URL and key.
 
 **The free tier is a driver fact.** `ProviderDriver.freeTier` states how the tier is reached, where the key comes

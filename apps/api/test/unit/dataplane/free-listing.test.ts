@@ -32,10 +32,10 @@ describe("the free listing", () => {
       ids([
         model("inclusionai/ling-3.2-flash:free", ["kilo"], 1_048_576),
         model("nvidia/nemotron-3.5-super-vl:free", ["kilo", "openrouter"], 1_000_000),
-        model("minimaxai/minimax-m3.1-flash", ["nvidia"], 200_000),
+        model("stepfun-ai/step-5-preview", ["nvidia"], 200_000),
       ]),
     ).toEqual([
-      "minimaxai/minimax-m3.1-flash",
+      "stepfun-ai/step-5-preview",
       "nvidia/nemotron-3.5-super-vl:free",
       "inclusionai/ling-3.2-flash:free",
     ])

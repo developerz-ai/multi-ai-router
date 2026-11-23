@@ -23,31 +23,17 @@ export interface FreePreset {
 /**
  * Provenance: each base URL answered, and each allowance was read off the vendor page that
  * mvalentsev/awesome-free-ai-coding probes, 2026-11-23. Left out: an identity document or a card to
- * sign up, terms that forbid calls from a server, silent model substitution, and anonymous lanes.
+ * sign up, terms that forbid calls from a server, silent model substitution, anonymous lanes, and AIHubMix,
+ * which answers a spent account `200` with the refusal as the message.
  */
 export const FREE_PRESETS: readonly FreePreset[] = [
-  {
-    id: "aihubmix",
-    name: "AIHubMix",
-    baseUrl: "https://aihubmix.com/v1",
-    keyUrl: "https://console.aihubmix.com/workspaces/default/keys",
-    models: [
-      "coding-glm-5.3-free",
-      "xiaomi-mimo-v2.6-pro-free",
-      "coding-glm-5.3-flash-free",
-      "xiaomi-mimo-v2.6-flash-free",
-      "coding-kimi-k3-free",
-    ],
-    note: "5 requests a minute, 100 a day and 1M tokens a day per model. May ask for a top-up after the first calls.",
-    kind: "standing",
-  },
   {
     id: "token-harbor",
     name: "Token Harbor",
     baseUrl: "https://tokenharbor.ai/v1",
     keyUrl: "https://tokenharbor.ai/dashboard/api-keys",
     models: ["deepseek-v4.1-flash:free", "mimo-v2.6-flash:free"],
-    note: "60 requests a minute, 1,800 an hour, under an unpublished weekly allowance.",
+    note: "60 requests a minute, 1,800 an hour, under an unpublished weekly allowance. Turn free models on in its dashboard first.",
     kind: "standing",
   },
   {
@@ -87,7 +73,7 @@ export const FREE_PRESETS: readonly FreePreset[] = [
     baseUrl: "https://router.requesty.ai/v1",
     keyUrl: "https://app.requesty.ai/api-keys",
     models: ["nvidia/nemotron-3-ultra-550b-a55b", "novita/ling-3.1-flash", "google/gemma-4-31b-it"],
-    note: "200 requests a day. Free ids carry no suffix: keep no credit on the account.",
+    note: "200 requests a day, one at a time without a balance. Free ids carry no suffix: keep no credit on the account.",
     kind: "standing",
   },
   {
@@ -145,7 +131,7 @@ export const FREE_PRESETS: readonly FreePreset[] = [
       "deepseek-ai/DeepSeek-V4-Flash-0731",
       "MiniMaxAI/MiniMax-M2.7",
     ],
-    note: "100M tokens once, for a username. A new key answers 402 until tokens are allocated to it.",
+    note: "100M tokens once, for a username. A new key answers 402 until tokens are allocated to it, and paid accounts are admitted first: busy on 2026-11-23.",
     kind: "trial",
   },
   {

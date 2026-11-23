@@ -14,7 +14,7 @@ import { bearer, CRYPTOR, harness, post, settle } from "./harness"
 const SUPER = "nvidia/nemotron-3.5-super-vl:free"
 const ULTRA = "nvidia/nemotron-3-ultra-550b-a55b:free"
 const PARTICLE = "particle-ai/particle-1:free"
-const M3 = "minimaxai/minimax-m3.1-flash"
+const STEP5 = "stepfun-ai/step-5-preview"
 
 const seat = (
   id: string,
@@ -98,15 +98,15 @@ describe("model `free`", () => {
 
   test("the smartest model is asked first, wherever its account sits in the pool", async () => {
     const { app, upstream } = harness({
-      accounts: [seat("kilo", "kilo", [SUPER]), seat("nim", "nvidia", [M3])],
+      accounts: [seat("kilo", "kilo", [SUPER]), seat("nim", "nvidia", [STEP5])],
       pools: [pool("kilo", "nim")],
       scope: "pools",
       poolIds: ["free"],
-      responses: [answer(M3)],
+      responses: [answer(STEP5)],
     })
 
     expect((await app.request("/v1/chat/completions", chat("free"))).status).toBe(200)
-    expect(asked(upstream.calls)).toEqual([["nim", M3]])
+    expect(asked(upstream.calls)).toEqual([["nim", STEP5]])
   })
 
   test("a held model is skipped by the next request, and its account still serves the rest", async () => {
@@ -230,7 +230,7 @@ describe("GET /v1/free-models", () => {
       accounts: [
         seat("kilo", "kilo", [PARTICLE, SUPER]),
         seat("or", "openrouter", ["deepseek/deepseek-v4.1-flash", SUPER]),
-        seat("nim", "nvidia", [M3]),
+        seat("nim", "nvidia", [STEP5]),
       ],
       responses: [answer("x")],
       models: { describe: () => null, modelsOf: () => [] },
@@ -243,7 +243,7 @@ describe("GET /v1/free-models", () => {
     }
 
     expect(body.data.map(({ id, rank }) => [rank, id])).toEqual([
-      [1, M3],
+      [1, STEP5],
       [2, SUPER],
       [3, PARTICLE],
     ])

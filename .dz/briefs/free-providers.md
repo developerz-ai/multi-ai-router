@@ -33,6 +33,7 @@ Then the vendors, which decide: `https://openrouter.ai/api/v1/models`,
 | Is it still listed, and still free? | the vendor's own listing today. Gone or repriced: remove the id now, whatever its rank |
 | Is it smarter than the row above? | a published index or benchmark, its version and date named in the PR. Two sources disagreeing is no move |
 | Does it answer? | Kilo, keyless: one forced tool call and one JSON answer a model, at most **3 calls a model and 60 a day** |
+| Is the answer an answer? | read the text. A `200` whose message is a refusal or a top-up request is not free, and the service is removed from the ranking and the presets |
 | Does anyone get through? | a row most requests fail on ranks below every row that answers, whatever its score |
 | May it be called from a server? | the vendor's terms. "Only inside our client" or "evaluation only" is not listed |
 
