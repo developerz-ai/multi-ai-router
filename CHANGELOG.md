@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.76.1] — 2026-11-23
+
+### Fixed
+
+- A cooled account that answers its recovery probe comes back. Since the breaker became durable (#481), a limiter reading that changed nothing was still published, and a probe's own hold moved the breaker revision. Either one made that probe's success look stale, so it was dropped: the account served one request per hold and the router answered `429` for the rest. Production, 2026-11-23: a Claude account answered `200` every ~35 s for five minutes and never left `cooling_down`. An unmoved verdict is no longer published, and a hold no longer moves the revision. No migration.
+
 ## [2.76.0] — 2026-11-23
 
 ### Added
@@ -2448,3 +2454,4 @@ your tooling config.
 [2.72.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.0
 [2.75.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.75.0
 [2.76.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.0
+[2.76.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.1

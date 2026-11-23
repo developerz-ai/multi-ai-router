@@ -274,6 +274,38 @@ describe.skipIf(!url)("durable account breaker", () => {
     ).toBeUndefined()
   })
 
+  test("a probe's own hold never fences its success", async () => {
+    const account = await seed()
+    const repository = createAccountBreakerRepository(fixture.db())
+    const cooling = await repository.observe({
+      accountId: account.id,
+      expected: account,
+      observedRevision: 0,
+      status: "cooling_down",
+      cooldownUntil: new Date(Date.now() + 60000),
+      cooldownSource: "estimated",
+      consecutiveFailures: 9,
+    })
+    if (cooling === undefined) throw new Error("expected cooling breaker")
+    const hold = { accountId: account.id, expected: account }
+    const taken = await repository.setProbeHold({
+      ...hold,
+      probeHeldUntil: new Date(Date.now() + 30000),
+    })
+    expect(taken?.revision).toBe(cooling.revision)
+    const released = await repository.setProbeHold({ ...hold, probeHeldUntil: null })
+    expect(released?.revision).toBe(cooling.revision)
+    const healthy = await repository.observe({
+      accountId: account.id,
+      expected: account,
+      observedRevision: cooling.revision,
+      status: "active",
+      cooldownSource: "unknown",
+      consecutiveFailures: 0,
+    })
+    expect(healthy).toMatchObject({ status: "active", cooldownUntil: null, consecutiveFailures: 0 })
+  })
+
   test("lifecycle, credential and recovery epochs fence queued observations; parked status stays parked", async () => {
     const account = await seed()
     const repository = createAccountBreakerRepository(fixture.db())

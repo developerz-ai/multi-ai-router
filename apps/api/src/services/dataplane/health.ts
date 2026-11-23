@@ -204,16 +204,14 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
 
     applyRateLimit(accountId, signal, now, observation) {
       if (signal === null || !observations.accepts(accountId, observation)) return
-      const folded = foldRateLimit(
-        read(accountId),
-        signal,
-        now,
-        breakerOptions(),
-        planReadingMaxAgeMs,
-      )
-      if (folded.breaker !== read(accountId).breaker) observations.advanceVerdict(accountId)
+      const held = read(accountId)
+      const folded = foldRateLimit(held, signal, now, breakerOptions(), planReadingMaxAgeMs)
       states.set(accountId, folded)
-      publish(accountId, folded.breaker, observation)
+      // Republishing an unmoved verdict bumps the revision that fences this response's own success.
+      if (folded.breaker !== held.breaker) {
+        observations.advanceVerdict(accountId)
+        publish(accountId, folded.breaker, observation)
+      }
       if (signal.quotaWindows !== undefined) {
         if (observation !== undefined)
           acceptedQuota.set(

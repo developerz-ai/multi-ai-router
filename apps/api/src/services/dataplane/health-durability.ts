@@ -1,10 +1,11 @@
 import { type AccountBreakerRow, credentialFingerprint } from "@multi-ai-router/db"
 import type { BreakerState } from "../routing"
 import type { AccountHealthState } from "./health"
-import type {
-  createHealthObservations,
-  HealthAccountFacts,
-  HealthObservation,
+import {
+  type createHealthObservations,
+  type HealthAccountFacts,
+  type HealthObservation,
+  sameAccountFacts,
 } from "./health-observation"
 import type { HealthStoreOptions } from "./health-options"
 import { recoverHealth } from "./health-recovery"
@@ -19,6 +20,19 @@ export function createHealthDurability(
 ) {
   const dirty = new Map<string, BreakerState>()
   const factsById = new Map<string, HealthAccountFacts>()
+  /**
+   * A hold another replica took is honoured here; a release it published clears this replica's copy.
+   * A probe in flight *here* is the newest fact and wins until it publishes or finishes.
+   */
+  const installHold = (accountId: string, row: AccountBreakerRow | undefined) => {
+    const durableHold = row?.probeHeldUntil ?? null
+    const current = read(accountId)
+    const local = probeInFlight(accountId) ? current.probeHeldUntil : null
+    const next =
+      durableHold === null || (local !== null && local > durableHold) ? local : durableHold
+    if ((current.probeHeldUntil?.getTime() ?? null) !== (next?.getTime() ?? null))
+      install(accountId, { ...current, probeHeldUntil: next })
+  }
   const durability = {
     publish(id: string, breaker: BreakerState, observation?: HealthObservation) {
       if (observation === undefined) return
@@ -52,10 +66,19 @@ export function createHealthDurability(
       durability.reconcile(id, next)
     },
     reconcile(accountId: string, facts: HealthAccountFacts) {
-      // A hold-only change still bumps the row revision, so `sameAccountFacts` reports it as `none`
-      // rather than `null`; `null` really is nothing to install.
+      // A hold is not a verdict: it never moves the revision a success is fenced on, so it is
+      // compared on its own.
+      const known = factsById.get(accountId)
       const kind = observations.reconcile(accountId, facts)
-      if (kind === null) return
+      if (kind === null) {
+        // Same verdict. Only a hold taken or dropped elsewhere is news; older facts are nothing.
+        if (known === undefined || !sameAccountFacts(known, facts)) return
+        const heldBefore = known.breaker?.probeHeldUntil?.getTime() ?? null
+        if (heldBefore === (facts.breaker?.probeHeldUntil?.getTime() ?? null)) return
+        factsById.set(accountId, facts)
+        installHold(accountId, facts.breaker)
+        return
+      }
       factsById.set(accountId, facts)
       const previous = read(accountId)
       let recovered = recoverHealth(previous, kind === "none" ? null : kind, facts)
@@ -90,16 +113,7 @@ export function createHealthDurability(
         }
       }
       if (recovered !== previous) install(accountId, recovered)
-      // A hold another replica took is honoured here; a release it published clears this replica's
-      // copy. A probe in flight *here* is the newest fact and wins until it publishes or finishes.
-      const durableHold = row?.probeHeldUntil ?? null
-      const current = read(accountId)
-      const local = probeInFlight(accountId) ? current.probeHeldUntil : null
-      const next =
-        durableHold === null || (local !== null && local > durableHold) ? local : durableHold
-      if ((current.probeHeldUntil?.getTime() ?? null) !== (next?.getTime() ?? null)) {
-        install(accountId, { ...current, probeHeldUntil: next })
-      }
+      installHold(accountId, row)
     },
     captureAttempt(accountId: string, facts: HealthAccountFacts) {
       if (!factsById.has(accountId)) durability.reconcile(accountId, facts)

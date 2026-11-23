@@ -154,7 +154,11 @@ export function createAccountBreakerRepository(db: DatabaseExecutor): AccountBre
           .returning()
         return row
       }),
-    /** Touches only the hold, so a probe taking or dropping one can never regress the clock. */
+    /**
+     * Touches only the hold, so a probe taking or dropping one can never regress the clock. The
+     * revision stays put: it fences a probe's success against a newer *verdict*, and a probe's own
+     * hold moving it made every such success stale (prod 2026-11-23).
+     */
     setProbeHold: (input) =>
       db.transaction(async (tx) => {
         const account = await lockAccount(tx, input.accountId)
@@ -190,7 +194,7 @@ export function createAccountBreakerRepository(db: DatabaseExecutor): AccountBre
         if (next?.getTime() === held?.getTime()) return previous
         const [row] = await tx
           .update(accountBreakers)
-          .set({ probeHeldUntil: next, revision: previous.revision + 1 })
+          .set({ probeHeldUntil: next })
           .where(
             and(
               eq(accountBreakers.accountId, input.accountId),
