@@ -201,7 +201,7 @@ export function createRequestServices(
     cipher,
     timeoutMs: env.failover.upstreamTimeoutMs,
     maxResponseBytes: env.modelListingMaxBytes,
-    fetch: (request) => fetch(request),
+    fetch: (request, init) => fetch(request, init),
     subscription: {
       lister: sdkModelLister,
       timeoutMs: env.failover.upstreamTimeoutMs,

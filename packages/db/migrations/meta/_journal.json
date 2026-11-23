@@ -407,6 +407,13 @@
       "when": 1795465155355,
       "tag": "0057_free_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1795466944089,
+      "tag": "0058_account_egress_proxy",
+      "breakpoints": true
     }
   ]
 }

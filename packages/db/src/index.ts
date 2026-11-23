@@ -232,6 +232,7 @@ export type {
   AccountRow,
   ModelAliasMap,
   NewAccountRow,
+  StoredEgressProxy,
   SupportedModelList,
 } from "./schema/accounts"
 export { accounts } from "./schema/accounts"

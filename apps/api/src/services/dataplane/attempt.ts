@@ -13,6 +13,7 @@ import {
 import type { AttemptInput, UpstreamError } from "./attempt-types"
 import { accountCredential } from "./egress/credential"
 import { privateHeaderValues, upstreamHeaders } from "./egress/headers"
+import { egressProxyUrl, throughProxy } from "./egress/proxy"
 import {
   classifiableBody,
   DEFAULT_UPSTREAM_ERROR_MAX_BYTES,
@@ -91,6 +92,7 @@ export const SUCCESS_WALL_ERROR_CLASS = "success_wall"
 export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
   const { plan } = input
   const credential = accountCredential(plan.account, input.cipher, plan.driver.authKind)
+  const proxy = egressProxyUrl(plan.account, input.cipher)
   const driverHeaders = plan.driver.buildHeaders(plan.account.driver, credential)
   const headers = upstreamHeaders(input.clientHeaders, driverHeaders)
   if (input.accept !== undefined) headers.set("accept", input.accept)
@@ -117,7 +119,9 @@ export async function runAttempt(input: AttemptInput): Promise<AttemptOutcome> {
     request.signal.throwIfAborted()
     input.beforeUpstreamStart?.()
     input.onUpstreamStarted?.()
-    response = await input.fetch(request)
+    response = await (proxy === undefined
+      ? input.fetch(request)
+      : throughProxy(input.fetch, request, proxy))
     deadline?.headersArrived()
   } catch (error) {
     deadline?.release()

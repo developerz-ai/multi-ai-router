@@ -141,7 +141,7 @@ const CONFIRMATION_REQUIRED =
 export function createTestNowService(deps: TestNowServiceDeps): TestNowService {
   const lastChecked = new Map<string, Date>()
   const cooldownMs = deps.cooldownSeconds * 1_000
-  const call = deps.fetch ?? ((request: Request) => fetch(request))
+  const call = deps.fetch ?? ((request, init) => fetch(request, init))
 
   const refused = (accountId: string, previous: Date): TestNowResult => ({
     accountId,

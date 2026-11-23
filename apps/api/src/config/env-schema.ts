@@ -233,6 +233,8 @@ export const ENV_FIELDS = {
   // binding and starts the conversation fresh on another eligible account. Enum, not a number —
   // the drift guard's zero rule does not apply.
   ROUTING_BOUND_ACCOUNT_COOLING_DOWN: z.enum(["fail", "rebind"]).optional(),
+  WEBSHARE_API_KEY: nonEmpty.optional(),
+  WEBSHARE_TIMEOUT_MS: atLeastOne.optional(),
   UPSTREAM_TIMEOUT_MS: atLeastOne.optional(),
   UPSTREAM_ERROR_MAX_BYTES: atLeastOne
     .refine((value) => value <= 33_554_432, "must be at most 33554432")

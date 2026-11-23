@@ -47,6 +47,7 @@ function view(overrides: Partial<AccountView> = {}): AccountView {
     supportedModels: null,
     windowTokenLimits: null,
     providerPreferences: null,
+    egressProxy: null,
     weight: 1,
     priority: 0,
     billing: "subscription",
@@ -88,6 +89,7 @@ function serviceOf(views: readonly AccountView[]): AccountsService {
 function privateRow(view: AccountView): AccountRow {
   return accountRow({
     ...view,
+    egressProxy: null,
     authMaterial: null,
     tokenExpiresAt: null,
     lastUsedAt: null,

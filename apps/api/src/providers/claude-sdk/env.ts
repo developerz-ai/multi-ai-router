@@ -83,6 +83,7 @@ export const STRIPPED_ENV_NAMES: readonly string[] = Object.freeze([
   "METRICS_TOKEN",
   "SENTRY_DSN",
   "USAGE_REPORT_DISCORD_WEBHOOK_URL",
+  "WEBSHARE_API_KEY",
   "CLOUD_ML_REGION",
   "ANTHROPIC_VERTEX_PROJECT_ID",
 ])

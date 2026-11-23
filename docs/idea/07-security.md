@@ -217,6 +217,7 @@ field; the implementation is the compact string above and it is what the code do
 | `TRUST_PROXY` | When set, `X-Forwarded-For` / `X-Forwarded-Proto` are honored for client IP (rate limiting, throttling, audit) and scheme. Off by default — an untrusted forwarded header is a rate-limit bypass. The client IP is the entry `TRUST_PROXY_HOPS` (default 1) from the **right** of `X-Forwarded-For` — the one our own proxies appended — never the leftmost, which an appending proxy leaves client-chosen; a header with fewer entries falls back to the socket peer (`services/admin-auth/clientIp.ts`) |
 | Cookies | `httpOnly` + `SameSite=Strict` always; `Secure` + `__Host-` by default, dropped together only under `SESSION_COOKIE_INSECURE` for a plain-HTTP LAN install (warned at boot — see [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie)). No cookie on data-plane routes |
 | Upstream | TLS to the pinned base URLs in [03-providers.md](03-providers.md). No plaintext upstream, no proxy-through of client-supplied upstream URLs |
+| Egress proxy | `accounts.egress_proxy` holds one proxy URL per Account, sealed with `ENCRYPTION_KEY` like `auth_material`. Views, audit rows and errors carry `host:port` only, and a proxy failure is reported with a fixed message because a fetch error can quote the URL. `WEBSHARE_API_KEY` is an operator secret, stripped from every subprocess |
 
 ## Outbound webhook URLs (Discord delivery, #229)
 

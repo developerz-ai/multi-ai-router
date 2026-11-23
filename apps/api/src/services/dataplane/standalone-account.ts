@@ -29,5 +29,6 @@ export function routableStandIn(
     healthRecoveryVersion: account.healthRecoveryVersion,
     authRecoveryVersion: account.authRecoveryVersion,
     configDir: account.configDir,
+    ...(account.egressProxy == null ? {} : { egressProxy: account.egressProxy.sealed }),
   }
 }

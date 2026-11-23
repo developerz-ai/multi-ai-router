@@ -125,6 +125,10 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
   return {
     ...claudeLogin,
     usageReport: usageReport.usageReport,
+    webshare: {
+      apiKey: raw.WEBSHARE_API_KEY ?? null,
+      timeoutMs: raw.WEBSHARE_TIMEOUT_MS ?? 10_000,
+    },
     ...readRecoveryEnv(raw),
     ...readUsageReadEnv(raw),
     ...readAdminBodiesEnv(raw),

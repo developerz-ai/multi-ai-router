@@ -90,7 +90,7 @@ export interface DiscoverModelsServiceDeps {
 export function createDiscoverModelsService(
   deps: DiscoverModelsServiceDeps,
 ): DiscoverModelsService {
-  const call = deps.fetch ?? ((request: Request) => fetch(request))
+  const call = deps.fetch ?? ((request, init) => fetch(request, init))
 
   return {
     discover: async (accountId) => {

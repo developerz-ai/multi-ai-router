@@ -155,6 +155,7 @@ export function createAccountRepository(
           ...(patch.providerPreferences === undefined
             ? {}
             : { providerPreferences: patch.providerPreferences }),
+          ...(patch.egressProxy === undefined ? {} : { egressProxy: patch.egressProxy }),
           ...(patch.weight === undefined ? {} : { weight: patch.weight }),
           ...(patch.priority === undefined ? {} : { priority: patch.priority }),
           ...(patch.billing === undefined ? {} : { billing: patch.billing }),

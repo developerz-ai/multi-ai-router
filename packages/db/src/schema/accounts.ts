@@ -44,6 +44,15 @@ export interface SupportedModelRemoval {
 }
 
 /**
+ * An account's static egress proxy. `address` is `host:port`, the only part any endpoint or log
+ * names; `sealed` is the whole proxy URL, userinfo included, under AES-256-GCM like `auth_material`.
+ */
+export interface StoredEgressProxy {
+  readonly address: string
+  readonly sealed: string
+}
+
+/**
  * One credential to one provider. Many accounts per provider is the normal case
  * — five Claude subscriptions side by side is the point of the product — so
  * nothing here may key on `provider` alone. `label` is the human disambiguator.
@@ -194,6 +203,9 @@ export const accounts = pgTable(
      * NULL means none: the body goes as before.
      */
     providerPreferences: jsonb("provider_preferences").$type<ProviderPreferences>(),
+
+    /** The HTTP proxy every call for this account leaves through. NULL means a direct connection. */
+    egressProxy: jsonb("egress_proxy").$type<StoredEgressProxy>(),
 
     /** Bias for the `weighted` policy. */
     weight: integer("weight").notNull().default(DEFAULT_ACCOUNT_WEIGHT),
