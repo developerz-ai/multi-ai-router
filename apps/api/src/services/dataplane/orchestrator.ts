@@ -47,7 +47,7 @@ import { emptyChainOutcome } from "./unservable-scope"
 
 export function createDispatcher(deps: DispatcherDeps): Dispatcher {
   const clock = deps.clock ?? SYSTEM_CLOCK
-  const call = deps.fetch ?? ((request: Request) => fetch(request))
+  const call = deps.fetch ?? ((request, init) => fetch(request, init))
   const options = deps.options ?? {}
   const bindings = sessionBindings(
     deps.catalog,

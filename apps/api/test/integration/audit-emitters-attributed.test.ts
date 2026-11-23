@@ -68,6 +68,9 @@ const ACCOUNTS = "routes/admin/accounts.ts"
 
 /** `<file under src/>:<AUDIT_KINDS key>` → how that write is attributed. */
 const EMITTERS: Record<string, readonly Entry[]> = {
+  "services/accounts/egress-proxy.ts:accountUpdated": [
+    { via: "guarded", group: "routes/admin/egress.ts" },
+  ],
   "services/accounts/service.ts:accountCreated": [
     { via: "guarded", group: ACCOUNTS, driven: true },
   ],

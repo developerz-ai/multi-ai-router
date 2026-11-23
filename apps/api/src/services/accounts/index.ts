@@ -54,6 +54,8 @@ export type {
   DiscoverModelsServiceDeps,
 } from "./discover-models"
 export { createDiscoverModelsService } from "./discover-models"
+export type { EgressProxyList, EgressProxyService } from "./egress-proxy"
+export { createEgressProxyService, setEgressProxyBody } from "./egress-proxy"
 export { type LiveHealthDeps, liveHealthCheck } from "./live-health"
 export type { AccountModelsService, SupportedModelsView } from "./models-service"
 export { createAccountModelsService } from "./models-service"

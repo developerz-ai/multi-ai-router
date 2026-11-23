@@ -40,6 +40,8 @@ export interface RoutableAccount {
   readonly authMaterial: string | null
   /** Claude subscription accounts only: the isolated `CLAUDE_CONFIG_DIR`. */
   readonly configDir: string | null
+  /** The sealed proxy URL every call for this account leaves through. Absent: direct. */
+  readonly egressProxy?: string
 }
 
 export interface RoutingCatalog {
@@ -63,7 +65,11 @@ export function accountLookup(
 }
 
 /** The upstream call, injected so a test needs no network and no live provider. */
-export type FetchLike = (request: Request) => Promise<Response>
+export type FetchLike = (
+  request: Request,
+  /** Present only for an Account with an egress proxy. */
+  init?: { readonly proxy: string },
+) => Promise<Response>
 
 /** The ingress dialect a data-plane route speaks. Fixed per path, never sniffed from a body. */
 export type IngressDialect = Dialect

@@ -32,6 +32,7 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
       "supportedModelsRemoved",
       "windowTokenLimits",
       "providerPreferences",
+      "egressProxy",
       "weight",
       "priority",
       "createdAt",

@@ -179,6 +179,7 @@ function toRoutableAccount(
     billing: row.billing,
     authMaterial: row.authMaterial,
     configDir: row.configDir,
+    ...(row.egressProxy == null ? {} : { egressProxy: row.egressProxy.sealed }),
   }
 }
 

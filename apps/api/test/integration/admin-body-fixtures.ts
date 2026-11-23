@@ -16,6 +16,7 @@ export function authService() {
 export function adminFixture(auth: AdminServices["auth"]): AdminServices {
   return {
     auth,
+    egressProxies: { list: unexpected, set: unexpected, clear: unexpected },
     accounts: {
       list: unexpected,
       get: unexpected,

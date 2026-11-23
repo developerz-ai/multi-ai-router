@@ -1,7 +1,7 @@
 import type { AccountBilling, Dialect, QuotaWindowKind } from "@multi-ai-router/core"
 import { createEffect, createSignal, on, Show } from "solid-js"
 import { Button } from "../../components/Button"
-import { Field, SelectField, TextField } from "../../components/Field"
+import { SelectField, TextField } from "../../components/Field"
 import { Modal } from "../../components/Modal"
 import {
   formatModelAliases,
@@ -16,7 +16,9 @@ import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
 import { DIALECT_HINT, dialectChoices, providerCredentialNote } from "../../lib/provider-display"
 import styles from "./AccountEditDialog.module.scss"
 import { BillingFields } from "./BillingFields"
+import { EgressProxyPanel } from "./EgressProxyPanel"
 import { LoginLifetimeSummary } from "./LoginLifetimeSummary"
+import { ModelAliasesField } from "./ModelAliasesField"
 import {
   formatPreferences,
   ProviderPreferencesField,
@@ -101,12 +103,6 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
 
   const rotatable = () => (props.provider?.connectFlow ?? null) === null
   const credentialOptional = () => props.provider?.authKind === "none"
-
-  /** Refused before the request, in the operator's own line numbers rather than as a 400. */
-  const aliasError = () => {
-    const parsed = parseModelAliases(aliases())
-    return parsed.ok ? null : parsed.error
-  }
 
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
@@ -240,32 +236,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
           value={billing()}
         />
 
-        <Field
-          hint="One per line, requested = upstream. The left side is what a client sends, the right is the name that goes upstream — the only rename the router is allowed to make."
-          label="Model aliases"
-        >
-          {(ids) => (
-            <textarea
-              aria-describedby={ids.describedBy}
-              autocomplete="off"
-              class={styles.aliases}
-              id={ids.id}
-              onInput={(event) => setAliases(event.currentTarget.value)}
-              placeholder="claude-sonnet-5-5 = glm-4.6"
-              rows={3}
-              spellcheck={false}
-              value={aliases()}
-            />
-          )}
-        </Field>
-
-        <Show when={aliasError()}>
-          {(message) => (
-            <p class={styles.blocked} role="status">
-              {message()}
-            </p>
-          )}
-        </Show>
+        <ModelAliasesField onInput={setAliases} value={aliases()} />
 
         <ProviderPreferencesField
           onInput={setPreferences}
@@ -287,6 +258,8 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
           transport={props.provider?.transport}
           values={ceilings()}
         />
+
+        <EgressProxyPanel account={props.account} shown={rotatable()} />
 
         <Show when={props.error !== undefined && props.error !== null}>
           <p class={styles.error} role="alert">

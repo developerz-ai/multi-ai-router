@@ -7,7 +7,12 @@ import type {
   QuotaWindowState,
   WindowTokenLimits,
 } from "@multi-ai-router/core"
-import type { AccountRow, ModelAliasMap, SupportedModelList } from "../schema/accounts"
+import type {
+  AccountRow,
+  ModelAliasMap,
+  StoredEgressProxy,
+  SupportedModelList,
+} from "../schema/accounts"
 import type { QuotaWindowRow } from "../schema/quota-windows"
 import type { AddedAccountRepositoryMethods } from "./account-lifecycle-types"
 import type { SupportedModelsMethods } from "./account-supported-models"
@@ -214,6 +219,7 @@ export interface UpdateAccountInput {
   // under a row lock, so no field-wise patch can drop an id its caller never named.
   readonly windowTokenLimits?: WindowTokenLimits | null
   readonly providerPreferences?: ProviderPreferences | null
+  readonly egressProxy?: StoredEgressProxy | null
   readonly weight?: number
   readonly priority?: number
   readonly billing?: AccountBilling

@@ -11,6 +11,7 @@ import {
   createClaudeConnectService,
   createConnectService,
   createDeviceConnectService,
+  createEgressProxyService,
   createOAuthConnectService,
   createRecheckService,
   type DiscoverModelsService,
@@ -404,6 +405,14 @@ describe("the full app, mounted end to end", () => {
           } satisfies OIDCFlow,
           config: {},
           now: () => now().getTime(),
+        }),
+        egressProxies: createEgressProxyService({
+          accounts: store.accounts,
+          cipher: adminCipher,
+          audit,
+          now,
+          coherence: { refreshCatalog: async () => {} },
+          webshare: { apiKey: null, timeoutMs: 1000 },
         }),
         accounts: createAccountsService({
           accounts: store.accounts,

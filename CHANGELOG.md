@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.76.0] — 2026-11-23
+
+### Added
+
+- One static egress proxy per Account (migration 0058), set in the account editor as an `http(s)` proxy URL or chosen from your own Webshare proxies when `WEBSHARE_API_KEY` is set. Every HTTP call for the Account uses it; a proxy that fails is a connection failure on that Account and is never bypassed. Stored sealed, shown as `host:port`. Providers that sign in are refused one. The router does not rotate addresses. Spec: `docs/idea/03-providers.md#egress-proxy`.
+
 ## [2.75.0] — 2026-11-23
 
 ### Changed
@@ -2441,3 +2447,4 @@ your tooling config.
 [2.71.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.71.0
 [2.72.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.72.0
 [2.75.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.75.0
+[2.76.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.0

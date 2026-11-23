@@ -250,6 +250,8 @@ export interface Env {
   readonly claudeLogin: ClaudeLoginConfig
   /** When the weekly usage report is due — `config/usage-report.ts`. */
   readonly usageReport: UsageReportConfig
+  /** Webshare, the one proxy vendor the console can list. A null key turns the listing off. */
+  readonly webshare: { readonly apiKey: string | null; readonly timeoutMs: number }
   readonly oauthRefresh: OAuthRefreshConfig
   readonly translation: TranslationConfig
 }

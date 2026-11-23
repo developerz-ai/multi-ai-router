@@ -4,6 +4,7 @@ import type {
   AccountsService,
   ConnectService,
   DiscoverModelsService,
+  EgressProxyService,
   RecheckService,
   TestNowService,
 } from "./services/accounts"
@@ -45,6 +46,7 @@ export interface AppEnv {
 export interface AdminServices {
   readonly auth: AdminAuthService
   readonly accounts: AccountsService
+  readonly egressProxies: EgressProxyService
   readonly pools: PoolsService
   /** The `pool_reap` task's deletion: an empty pool, and the keys it leaves reaching nothing. */
   readonly poolReaper: PoolReaper

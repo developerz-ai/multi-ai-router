@@ -12,6 +12,7 @@ import { requestLogger } from "./middleware/logger"
 import { requestId } from "./middleware/requestId"
 import { ADMIN_ACCOUNTS_BASE_PATH, adminAccountRoutes } from "./routes/admin/accounts"
 import { ADMIN_AUTH_BASE_PATH, adminAuthRoutes } from "./routes/admin/auth"
+import { ADMIN_EGRESS_BASE_PATH, adminEgressRoutes } from "./routes/admin/egress"
 import { ADMIN_KEYS_BASE_PATH, adminKeyRoutes } from "./routes/admin/keys"
 import { oauthCallbackRoutes } from "./routes/admin/oauth-callback"
 import { ADMIN_POOLS_BASE_PATH, adminPoolRoutes } from "./routes/admin/pools"
@@ -242,6 +243,14 @@ function mountAdmin(app: Hono<AppEnv>, admin: AdminServices, options: AdminMount
       service: admin.usage,
       reports: admin.usageReports,
       delivery: admin.usageReportDelivery,
+    }),
+  )
+  app.route(
+    ADMIN_EGRESS_BASE_PATH,
+    adminEgressRoutes({
+      maximumJsonBytes: adminBodies.maximumJsonBytes,
+      guard,
+      service: admin.egressProxies,
     }),
   )
   app.route(ADMIN_PROVIDERS_BASE_PATH, adminProviderRoutes({ guard }))

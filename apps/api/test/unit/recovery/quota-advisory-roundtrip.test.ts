@@ -42,6 +42,7 @@ function accountRow(): AccountRow {
     supportedModelsRemoved: null,
     windowTokenLimits: null,
     providerPreferences: null,
+    egressProxy: null,
     weight: 1,
     priority: 0,
     createdAt: NOW,

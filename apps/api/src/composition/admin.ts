@@ -13,6 +13,7 @@ import {
   connectFromEnv,
   createAccountsService,
   createCredentialPark,
+  createEgressProxyService,
   createRecheckService,
   createTestNowService,
   liveHealthCheck,
@@ -225,6 +226,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       // request path, `withAvailability` answers a read with what the router currently observes
       // rather than with the row the operator last wrote.
       accounts: decoratedAccounts,
+      egressProxies: createEgressProxyService({ ...deps, audit, webshare: env.webshare }),
       pools: createPoolsService({
         pools: deps.pools,
         accounts,

@@ -53,6 +53,8 @@ export interface AccountView {
   readonly windowTokenLimits: WindowTokenLimits | null
   /** OpenRouter `provider` routing preferences merged into this account's requests. Null: none. */
   readonly providerPreferences: ProviderPreferences | null
+  /** `host:port` of the account's egress proxy; its credentials are in no view. Null: direct. */
+  readonly egressProxy: string | null
   readonly weight: number
   readonly priority: number
   /**
@@ -127,6 +129,7 @@ export function toAccountView(row: AccountRow): AccountView {
     supportedModels: row.supportedModels,
     windowTokenLimits: row.windowTokenLimits ?? null,
     providerPreferences: row.providerPreferences ?? null,
+    egressProxy: row.egressProxy?.address ?? null,
     weight: row.weight,
     priority: row.priority,
     billing: row.billing,

@@ -82,6 +82,7 @@ export function createMemoryStore(): MemoryStore {
           lastUsedAt: null,
           windowTokenLimits: input.windowTokenLimits ?? null,
           providerPreferences: input.providerPreferences ?? null,
+          egressProxy: null,
           baseUrl: input.baseUrl ?? null,
           dialect: input.dialect ?? null,
           modelAliases: input.modelAliases ?? null,

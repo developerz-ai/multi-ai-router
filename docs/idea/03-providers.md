@@ -1023,3 +1023,21 @@ The [wire record](../research/opencode-wire.md) separates live MITM observations
 inspection: device initiation and pending polls were captured; Big Pickle and DeepSeek free
 calls, including the selected signed-in account, returned the upstream free limit. Successful
 fresh login, refresh, inference and tool/cache behavior still require a live canary.
+
+## Egress proxy
+
+An operator may give one Account one HTTP proxy: a corporate egress, an address a vendor allow-lists,
+a region. Account → **Edit** → **Egress proxy**: an `http(s)://user:password@host:port` URL, or one of
+your own Webshare proxies when `WEBSHARE_API_KEY` is set (`services/accounts/webshare.ts`, the only file
+that knows Webshare).
+
+- **Static.** An Account keeps the proxy it was given. The router does not rotate addresses and does
+  not pick one per request.
+- **Whole.** Every HTTP call for the Account passes `runAttempt`, so inference, listings, quota reads
+  and tests all use it. Providers that sign in (`anthropic-oauth`, `openai-oauth`) are refused one:
+  their login and refresh calls leave by another path, and half an Account behind a proxy is one seen
+  from two addresses.
+- **Never around it.** A proxy that fails, or answers `407`, is a connection failure on that Account.
+  The request moves to another Account.
+- What a vendor's terms say about addresses is between the operator and the vendor. A key's allowance is
+  counted on the key, so a proxy adds no tokens to it.

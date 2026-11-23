@@ -41,8 +41,7 @@ export interface AccountView {
   readonly modelAliases: Readonly<Record<string, string>> | null
   /**
    * Upstream-side model ids, as declared. `null` is *unknown*, which the router reads as "accepts
-   * any model name" — never as "serves nothing". What a client may actually ask for is this list
-   * seen through the alias map, which is what `GET /v1/models` publishes.
+   * any model name" — never "serves nothing". `GET /v1/models` publishes it through the alias map.
    */
   readonly supportedModels: readonly string[] | null
   /**
@@ -52,6 +51,7 @@ export interface AccountView {
    */
   readonly windowTokenLimits: Readonly<Partial<Record<QuotaWindowKind, number>>> | null
   readonly providerPreferences?: Readonly<Record<string, unknown>> | null // OpenRouter `provider`
+  readonly egressProxy?: string | null // `host:port`, never its credentials; absent: an older API
   readonly weight: number
   readonly priority: number
   /**

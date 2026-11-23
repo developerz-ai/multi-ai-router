@@ -237,6 +237,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
             supportedModelsRemoved: null,
             windowTokenLimits: null,
             providerPreferences: null,
+            egressProxy: null,
             billing: "subscription",
             weight: 1,
             priority: 0,
