@@ -55,8 +55,10 @@ admin UI, in usage breakdowns, and in logs; the credential itself never appears 
 | `mistral` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.mistral.ai/v1` | **Error body has no `error` wrapper** — `{object:"error", message, type, param, code}` at the top level. Keys on `type` (four published categories) and never on `code`, which is a numeric string the docs describe as symbolic. |
 | `together` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.together.ai/v1` | Namespaced model ids, so an alias map is usually required. **`403` means the prompt exceeded the context length, not a rejected credential**, and `503` is the platform's capacity rather than this account's budget. |
 | `cerebras` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://api.cerebras.ai/v1` | Shares Mistral's unwrapped error envelope. A spent free-tier **day** is a `429`, not a billing state — it refills on a clock. |
+| `kilo` | **none** — a credential is optional, as for `ollama`, but the endpoint is pinned and public | OpenAI Chat Completions | `https://api.kilo.ai/api/gateway` | Free models with no key, under OpenRouter's own `…:free` ids. See [Free models](#free-models). |
+| `nvidia` | API key, `Authorization: Bearer` | OpenAI Chat Completions | `https://integrate.api.nvidia.com/v1` | NVIDIA's hosted NIM endpoints: open-weight models on a free developer key. See [Free models](#free-models). |
 | `opencode-go` | API key, `Authorization: Bearer` | OpenAI Chat Completions, Anthropic Messages, or OpenAI Responses — the Account picks | `https://opencode.ai/inference/go/openai/v1` (`/anthropic` for that surface) | OpenCode's flat-fee Go plan, one **personal** key per team member. Requires `x-opencode-session` on every request and states `user-agent: developerz.ai` — see [below](#opencode-go--a-flat-fee-plan-that-requires-the-conversation-named). |
-| `ollama` | **none** — a credential is optional, and sent as `Authorization: Bearer` when there is one | OpenAI Chat Completions | operator-supplied | A local or self-hosted Ollama. The only provider whose Account may hold **no credential at all**. No pinned endpoint on purpose: Ollama's own default is `http://localhost:11434`, and in a container that address is the *router*. |
+| `ollama` | **none** — a credential is optional, and sent as `Authorization: Bearer` when there is one | OpenAI Chat Completions | operator-supplied | A local or self-hosted Ollama. With `kilo`, one of two providers whose Account may hold **no credential at all**. No pinned endpoint on purpose: Ollama's own default is `http://localhost:11434`, and in a container that address is the *router*. |
 | `openai-compatible` | API key | OpenAI Chat Completions | operator-supplied | Escape hatch. Any vLLM / LiteLLM / vendor endpoint that speaks OpenAI and takes a key. |
 | `anthropic-compatible` | API key | Anthropic Messages | operator-supplied | Escape hatch for Anthropic-shaped endpoints. |
 
@@ -184,7 +186,7 @@ absent or stubbed into something that looks like it works:
 
 | Transport | Ids | Meaning |
 |---|---|---|
-| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `opencode-go`, `ollama`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
+| `http` | `anthropic-api`, `openai-api`, `openai-oauth`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `kilo`, `nvidia`, `opencode-go`, `ollama`, `openai-compatible`, `anthropic-compatible` | A driver in `providers/drivers/`, satisfying the interface above |
 | `agent-sdk` | `anthropic-oauth` | Served by `query()`. Its own driver interface in `providers/claude-sdk/driver.ts`, not a `ProviderDriver`: there is no base URL to resolve, no headers to build, and failures arrive as strings |
 | `unimplemented` | *(none today)* | Where an id declared in `packages/core` ahead of its driver lands. Selecting one is a configuration error, refused by name before any upstream call. Kept rather than deleted because that is the whole point of a total registry — the alternative is a new id compiling into a half-wired provider |
 
@@ -690,6 +692,8 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `deepseek` | HTTP `402`; on `402`/`400`, message **starts** `insufficient balance` | The one vendor here that answers a spent balance with the status that means it. The wording rule exists for the relayed case and to record a signal better than `http-status:402` |
 | `together` | HTTP `402` — a monthly spending cap | Documented and unambiguous. What is *not* documented is the status a zero prepaid balance returns, and Together is fully prepaid, so the shared wording rule stands behind the status |
 | `cerebras` | HTTP `402`, and nothing else | Cerebras' error page lists statuses only. A spent free-tier **day**, by contrast, is a `429` — clock-recoverable, never `exhausted` |
+| `kilo` | the shared wording rule; a paid id without a funded key is `401 PAID_MODEL_AUTH_REQUIRED`, which is `model-unsupported` | Read as `auth` it would park a keyless Account, which nobody can re-authorize, over one mistyped model |
+| `nvidia` | the shared wording rule, behind the `429` throttle guard | No published billing status. `404` and `410` are about the model, so the next account gets its turn |
 | `opencode-go` | HTTP `402`; message matches `insufficient account funds`. A team-owned key the Go plan does not cover — `403` *"Go Teams covers workspace members, not service accounts…"* / *"This API key belongs to the team…"* — is `credits-exhausted` (`opencode-go:plan-not-entitled`) | Observed live on a key with no pay-as-you-go balance. **Unobserved:** what a spent plan window answers with Extra Usage on and no balance; if it is this `402`, a clock-recoverable window lands in `exhausted`. The entitlement `403` was `auth`, whose `credential-rejected` re-test spends a live client request: one seat failed a real request about every 4 h with a `502` (prod 2026-11-09/10, sweep 101, 10.7). The key is valid and only a human changes the plan, so it parks `exhausted` and is re-tested only by the bounded background re-check |
 | `xai`, `mistral` | one shared wording rule, behind a guard that reads any `429` as a cooldown | Neither publishes a status for a depleted balance or a spend-suspended workspace. Encoding a guess is how a healthy account gets parked at `402`, so neither driver encodes one; the shared phrasing is the whole of it, and the signal it records says so |
 | `ollama` | the same shared wording rule, behind the `429` throttle guard | A local endpoint has no balance to drain, so nothing here is Ollama's own vocabulary — but a hosted or proxied surface reached through this id can refuse one, and its limits are hourly and daily. The throttle guard leads so a spent hour can never read as a dead balance |
@@ -763,6 +767,40 @@ Rules:
 - Aliasing is a name swap only. It never rewrites the body — that is
   [06-protocol-translation.md](06-protocol-translation.md)'s job.
 
+## Free models
+
+Two lanes are pinned because they cost nothing, and a third was already here:
+
+| Provider | Account | What limits it (read 2026-11-23) |
+|---|---|---|
+| `kilo` | no credential | 200 free requests an hour per address. A signed-in key is counted per account |
+| `nvidia` | free developer key | about 40 requests a minute and 10,000 a day, varying by model. Terms: development, not serving end users |
+| `openrouter` | any key | `:free` ids: 20 requests a minute; 50 a day, or 1,000 once the workspace has bought $10 |
+
+Anything else that gives tokens away over the OpenAI wire (Token Harbor, Requesty, Cloudflare Workers AI) is an
+`openai-compatible` account with its base URL and key.
+
+**The free tier is a driver fact.** `ProviderDriver.freeTier` states how the tier is reached, where the key comes
+from, the published allowance and the day it was read; `GET /api/admin/providers` carries it and the console's
+add form shows it. Nothing in routing or cost reads it: the upstream's own `429` is what enforces a limit.
+
+**A throttle holds one model, an allowance holds the account.** The free hosts throttle per model far more often
+than they refuse a caller, so Kilo's relayed `rate-limited upstream` and every NVIDIA `429` hold only the model
+they were for (`modelScoped`), and the account keeps serving the rest. Kilo's hourly allowance is the opposite:
+`Rate limit exceeded for free models` names the caller, states no reset, and cools the account on an estimated
+five-minute re-test.
+
+**The ranking.** `FREE_MODEL_RANKING` (`services/models/free-ranking.ts`) orders free models smartest first and
+says by id where each is free. It is judged daily by `.dz/briefs/free-providers.md` and shipped in the image, so
+no request depends on somebody else's list. An id is listed only under a provider that never bills it: `groq` and
+`gemini` are absent because the same id is billed on a paid plan. `GET /v1/free-models` lists what the presenting
+key reaches for nothing, in that order; a name some in-scope account would bill is left out, because the router
+may send it there.
+
+**The model name `free`** is served in the same order: the smartest free model in scope, on every account that
+gives it away, then the next model, until one answers. It is an opt-in name, like `openrouter/free`. The full rule
+is in [05-routing-and-failover.md](05-routing-and-failover.md#the-model-name-free).
+
 ## `ollama` — a local endpoint, and the credential that is not required
 
 Every other provider here is a key. Ollama, on the machine an operator already owns, is not: it
@@ -829,7 +867,8 @@ spelling), labels the row `upstream`, and falls back to the shipped table (`serv
 | `openai-api`, `zai`, `minimax` | `GET /models` | none (verified live) — shipped table | shipped table |
 | `kimi`, `deepseek`, `xai` | `GET /models` | any spelling above if stated (not verified live), else shipped table | same |
 | `opencode-go` | `GET /models` | `limit.context` (verified live) | `limit.output` (verified live) |
-| `cerebras`, `ollama`, `anthropic-compatible` | `GET /models` | whatever spelling above the endpoint uses, else `null` | same |
+| `kilo` | `GET /models`, free text models only (`isFree`) | `top_provider.context_length`, else `context_length` | `top_provider.max_completion_tokens` |
+| `cerebras`, `nvidia`, `ollama`, `anthropic-compatible` | `GET /models` | whatever spelling above the endpoint uses, else `null` | same |
 
 `opencode-go` also states thinking modes, kept on the same row (`ListedModel.reasoning`, optional, so
 no other driver changes). `GET /v1/models` publishes them as `reasoning` on both wire shapes, an extra

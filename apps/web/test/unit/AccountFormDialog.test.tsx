@@ -42,6 +42,17 @@ const COMPATIBLE: ProviderDescriptor = {
   nativeDialect: "openai-chat",
   supportedDialects: ["openai-chat"],
   requiresBaseUrl: true,
+  freePresets: [
+    {
+      id: "free-one",
+      name: "Free One",
+      baseUrl: "https://free-one.test/v1",
+      keyUrl: "https://free-one.test/keys",
+      models: ["a:free", "b:free"],
+      note: "100 a day.",
+      kind: "standing",
+    },
+  ],
 }
 
 const OAUTH: ProviderDescriptor = { ...API_KEY, id: "openai-oauth", connectFlow: "oauth" }
@@ -115,6 +126,20 @@ describe("AccountFormDialog across a provider change", () => {
       pickProvider("zai")
       submit()
       expect(submitted[0]?.baseUrl).toBeUndefined()
+    })
+  })
+
+  test("a free service fills the address and the free ids, and neither follows a provider change", () => {
+    withMount(({ submitted }) => {
+      pickProvider("openai-compatible")
+      selectOption(control<HTMLSelectElement>("Free service"), "free-one")
+      submit()
+      expect(submitted[0]?.baseUrl).toBe("https://free-one.test/v1")
+      expect(submitted[0]?.supportedModels).toEqual(["a:free", "b:free"])
+      pickProvider("zai")
+      submit()
+      expect(submitted[1]?.baseUrl).toBeUndefined()
+      expect(submitted[1]?.supportedModels).toBeUndefined()
     })
   })
 

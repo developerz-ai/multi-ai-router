@@ -5,6 +5,7 @@ import { admitRoutingModel, refuseEncodedBody } from "./body/preflight"
 import { DEFAULT_SESSION_HEADERS, resolveSessionKey } from "./body/session"
 import { readTrackedRequestBody } from "./body-progress"
 import { runChain } from "./chain"
+import { walkLegs } from "./chain-legs"
 import { preflightRefusal } from "./chain-preparation"
 import { countTokensEstimateResponse } from "./count-estimate"
 import type { Dispatcher, DispatcherDeps, DispatchInput } from "./dispatcher-config"
@@ -55,7 +56,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       ? undefined
       : { elapsed: clock.elapsed, onWait: deps.onBindingWait },
   )
-  // The runtime fields every request shares, built once per dispatcher.
+  // Request-invariant runtime fields, built once per dispatcher.
   const shared = sharedRuntimeInput(deps, options, clock, call)
   // Per pool, per replica, in memory — the caller-owned half of `round-robin` (`rotation.ts`).
   const rotation = createRotationCounters()
@@ -127,9 +128,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       record: accounting.record,
       recordTerminal: accounting.recordTerminal,
       selectTerminal: accounting.selectTerminal,
-      // Two different ids on purpose: the correlation id is router-owned and joins this
-      // request's attempts, while the client's own id is a trace label a caller may repeat or
-      // forge. Using the latter as the join key would merge two clients' chains.
+      // Two ids on purpose: the correlation id is router-owned and joins this request's attempts;
+      // the client's own id is a label it may repeat or forge, and would merge two chains.
       correlationId: input.identity.correlationId,
       requestId: input.requestId,
       clientRequestId: input.identity.clientRequestId,
@@ -223,25 +223,31 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       // A restart is stamped by the chain, which alone knows if it carried (`chain-success.ts`).
       const response = await recovery.chain(
         () =>
-          runChain({
-            modelMetadata: deps.modelMetadata,
-            runtime,
-            plan: plan.servable,
-            request: input.request,
-            bodyBytes: body.bytes,
-            modelSpan: body.fields.modelSpan,
-            streamRequested: body.fields.stream,
-            translation,
-            translated,
-            failover,
-            ...(decidedBinding.state === "invalidated"
-              ? { bindingRefused: decidedBinding.reason }
-              : {}),
-            log,
-            ...(options.log?.reasonMaxChars === undefined
-              ? {}
-              : { reasonMaxChars: options.log.reasonMaxChars }),
-          }),
+          walkLegs(
+            plan.servable,
+            (leg) =>
+              runChain({
+                modelMetadata: deps.modelMetadata,
+                runtime,
+                plan: leg,
+                request: input.request,
+                bodyBytes: body.bytes,
+                modelSpan: body.fields.modelSpan,
+                streamRequested: body.fields.stream,
+                translation,
+                translated,
+                failover,
+                ...(decidedBinding.state === "invalidated"
+                  ? { bindingRefused: decidedBinding.reason }
+                  : {}),
+                log,
+                ...(options.log?.reasonMaxChars === undefined
+                  ? {}
+                  : { reasonMaxChars: options.log.reasonMaxChars }),
+              }),
+            select,
+            input.request.signal,
+          ),
         fail,
         plan.servable.map((entry) => entry.account.id),
       )

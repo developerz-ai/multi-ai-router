@@ -23,6 +23,8 @@ const HTTP_PROVIDERS = [
   "mistral",
   "together",
   "cerebras",
+  "kilo",
+  "nvidia",
   "opencode-go",
   "opencode-oauth",
   "ollama",
@@ -33,8 +35,8 @@ const HTTP_PROVIDERS = [
 /** Every HTTP provider is a key except the ChatGPT/Codex subscription, which is a refreshed token. */
 const OAUTH_PROVIDERS: readonly string[] = ["openai-oauth", "opencode-oauth"]
 
-/** …and the local endpoint, which authenticates nobody. */
-const NO_AUTH_PROVIDERS: readonly string[] = ["ollama"]
+/** …and the two that take requests with none: the local endpoint, and a gateway with free models. */
+const NO_AUTH_PROVIDERS: readonly string[] = ["kilo", "ollama"]
 
 function expectedAuthKind(id: string): AuthKind {
   if (OAUTH_PROVIDERS.includes(id)) return "oauth"
@@ -133,7 +135,7 @@ describe("PROVIDER_REGISTRY", () => {
       (driver) => driver.id,
     )
 
-    expect(anonymous).toEqual(["ollama"])
+    expect(anonymous).toEqual(["kilo", "ollama"])
   })
 
   test("every registered driver declares a dialect the translation layer knows", () => {

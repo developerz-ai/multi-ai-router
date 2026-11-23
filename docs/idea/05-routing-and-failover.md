@@ -271,6 +271,29 @@ from the same function rather than restated — see
 timer: an operator types it, or presses **Discover models**, and a catalog that refreshed itself
 would move traffic off an account the moment a provider retired one name.
 
+### The model name `free`
+
+The one name the router resolves to several models, and only because the client asked for that: **`free`** is
+"whatever costs nothing, best first". Every other name is one model.
+
+- **Order.** The shipped ranking ([03](03-providers.md#free-models)), smartest first. For each ranked id, one
+  ordinary selection: scope, health, per-model holds and the pool's policy, over the accounts whose provider
+  gives that id away. The results are concatenated, so a pool's order decides between accounts and the ranking
+  decides between models.
+- **Never billed.** An account is a candidate for an id only if the ranking says its provider never bills it, no
+  alias of the account renames it, and the account declares models or has a provider family (an account that
+  accepts every name is no evidence that it carries this one). When every free model has failed, the client gets that
+  failure; nothing paid is tried.
+- **Legs.** "Each attempt is a distinct account" is the chain's rule, and one account offers several free models. So
+  the plan is cut into consecutive **legs** of distinct accounts (`dataplane/chain-legs.ts`), each an ordinary chain. A
+  plan with no repeat, which is every request naming a real model, is one leg and behaves as it always did.
+  Before a later leg the selection runs again, so an account an earlier leg cooled is not asked again.
+- **When it stops.** At the first answer; when the client leaves; when the last leg fails, whose failure the client
+  hears; or when two legs refused the request for its own content (`400`, `413`, `422`). Two rather than one,
+  because another model may take what the first could not. Once bytes are on the wire nothing is retried.
+- **On the record.** Every attempt's row has `model: "free"` and the id tried in `upstream_model`.
+- **An operator's alias wins.** If an account in the snapshot aliases `free`, the name is theirs and routes as any alias.
+
 ## The six load-balancing policies
 
 **This is the centerpiece.** A Pool exists so that N accounts of the same kind behave like one

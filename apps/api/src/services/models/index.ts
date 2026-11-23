@@ -13,6 +13,8 @@
  */
 
 export { catalogEntry } from "./entries"
+export type { FreeModelRow } from "./free-ranking"
+export { FREE_MODEL_RANKING, FREE_RANKING_AS_OF, ownsFreeId } from "./free-ranking"
 export type { ListedModel } from "./listable"
 export { listableModels, mergeResolution } from "./listable"
 export type {

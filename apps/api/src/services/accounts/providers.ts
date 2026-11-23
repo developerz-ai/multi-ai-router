@@ -7,6 +7,8 @@ import {
 } from "@multi-ai-router/core"
 import type { ProviderDriver } from "../../providers"
 import { PROVIDER_REGISTRY } from "../../providers"
+import type { FreePreset } from "../../providers/free-presets"
+import type { ProviderFreeTier } from "../../providers/free-tier"
 
 /**
  * The provider registry, described for the console.
@@ -76,6 +78,10 @@ export interface ProviderDescriptor {
    * standing `providerPreferences` (`ProviderSurface.providerPreferences`). Asked of the driver.
    */
   readonly providerPreferences: boolean
+  /** What the provider gives away, off its driver; `null` where nothing is free. */
+  readonly freeTier: ProviderFreeTier | null
+  /** Free services reached through this provider, for the add form to fill itself from. */
+  readonly freePresets: readonly FreePreset[]
   /** False means an account cannot be created for it — the console greys the option out. */
   readonly creatable: boolean
   /** Why an unimplemented or SDK-served provider is what it is. Verbatim from the registry. */
@@ -106,6 +112,8 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       connectFlow: driver.oauth === undefined ? null : "oauth",
       deviceSignIn: driver.oauth?.device !== undefined,
       providerPreferences: acceptsProviderPreferences(driver),
+      freeTier: driver.freeTier ?? null,
+      freePresets: driver.freePresets ?? [],
       creatable: true,
       reason: null,
     }
@@ -128,6 +136,8 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
       connectFlow: "claude-cli",
       deviceSignIn: false,
       providerPreferences: false,
+      freeTier: null,
+      freePresets: [],
       creatable: true,
       reason: support.reason,
     }
@@ -145,6 +155,8 @@ export function describeProvider(id: ProviderId): ProviderDescriptor {
     connectFlow: null,
     deviceSignIn: false,
     providerPreferences: false,
+    freeTier: null,
+    freePresets: [],
     creatable: false,
     reason: support.reason,
   }

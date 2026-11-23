@@ -199,6 +199,12 @@ they arrive, so your own parse of them is where a malformed call shows.
 
 ---
 
+### Free models
+
+`GET /v1/free-models` lists the models your key reaches for nothing, smartest first. Name one of them, or send
+`"model": "free"` and the router walks that list for you: the smartest free model that answers. Any other model
+name is served as that model and nothing else. What to add, and what each needs: [free.md](free.md).
+
 ## Errors, retries and timeouts
 
 The router walks every eligible account before it answers with an error. A failure that reaches

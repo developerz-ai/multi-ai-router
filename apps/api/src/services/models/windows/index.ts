@@ -30,6 +30,7 @@ import { ZAI_WINDOWS } from "./zai"
  *   on a surface this router does not call), so a Gemini model is `null` until a table is added.
  * - `groq`, `together`, `cerebras` — the same: these hosts publish `context_window` /
  *   `context_length` beside each model they serve.
+ * - `kilo` — its listing states `context_length`; `nvidia` states no size and no table is verified.
  * - `openrouter` — states `context_length` per model, and is not swept at all besides.
  * - `ollama`, `openai-compatible`, `anthropic-compatible` — whatever the operator pointed them at.
  *   A shipped window for an endpoint this router has never seen would be a fiction, not a fact.

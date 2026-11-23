@@ -118,6 +118,7 @@ export {
   type TranslateEgress,
   type TransportDecision,
 } from "./egress/mode"
+export { type FreeModel, freeListing } from "./free-listing"
 export {
   type AccountHealthState,
   breakerOptionsFor,

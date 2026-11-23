@@ -41,6 +41,7 @@ leftmost one that applies.
 | `POST /v1/embeddings` | OpenAI, dialect-neutral (`openai-chat` for the error shape) | embed — below |
 | `GET /v1/models` | union of models reachable by the presenting key — [04-api-keys-and-access.md](04-api-keys-and-access.md) | — |
 | `GET /v1/models/:id` | one model; `404` if the presenting key cannot reach it | — |
+| `GET /v1/free-models` | the reachable models that cost nothing, smartest first ([03](03-providers.md#free-models)) | — |
 | `GET /v1/catalog` | the same models, with context window, price, and pooling depth — this router's own shape | — |
 | `GET /v1/providers` | the upstreams the presenting key can reach, how many accounts of each can serve now, and each one's live status counts | — |
 

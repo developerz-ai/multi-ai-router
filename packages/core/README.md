@@ -75,7 +75,7 @@ Each is a Zod schema and its inferred type under one name.
 
 | Export | Members |
 |---|---|
-| `ProviderId` | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `ollama`, `openai-compatible`, `anthropic-compatible` |
+| `ProviderId` | `anthropic-oauth`, `anthropic-api`, `openai-oauth`, `openai-api`, `openrouter`, `zai`, `kimi`, `minimax`, `gemini`, `groq`, `deepseek`, `xai`, `mistral`, `together`, `cerebras`, `kilo`, `nvidia`, `ollama`, `openai-compatible`, `anthropic-compatible` |
 | `AuthKind` | `oauth` · `api-key` · `none` (a local endpoint that authenticates nobody; the credential is optional) |
 | `AccountStatus` | `active` · `disabled` · `cooling_down` · `exhausted` · `needs_reauth` |
 | `RoutingPolicy` | `sticky` · `round-robin` · `weighted` · `least-used` · `priority-failover` · `quota-aware` (+ `DEFAULT_ROUTING_POLICY`) |

@@ -14,6 +14,8 @@ import type {
   RateLimitSignal,
   ResponseObservationDescriptor,
 } from "./failure-types"
+import type { FreePreset } from "./free-presets"
+import type { ProviderFreeTier } from "./free-tier"
 import type { ProviderModelListing } from "./model-listing"
 import type { ProviderOAuthFlow } from "./oauth-types"
 import type { ProviderQuotaRead } from "./quota-read"
@@ -112,6 +114,10 @@ export interface ProviderDriver {
    * reason: their exchange belongs to the `claude` CLI (non-negotiable 1).
    */
   readonly oauth?: ProviderOAuthFlow
+  /** What this provider gives away, for the console (`free-tier.ts`). Absent: nothing is free. */
+  readonly freeTier?: ProviderFreeTier
+  /** Free services an Account of this provider can be pointed at (`free-presets.ts`). */
+  readonly freePresets?: readonly FreePreset[]
   /** A non-stock model listing (`model-listing.ts`). Absent: `{data: [{id}]}` at `/models`. */
   readonly modelListing?: ProviderModelListing
   /** A plan-usage endpoint read off the request path (`quota-read.ts`). Absent: nothing to read. */

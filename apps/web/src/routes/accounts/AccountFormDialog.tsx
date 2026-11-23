@@ -6,11 +6,13 @@ import { Modal } from "../../components/Modal"
 import { parseModelList } from "../../lib/account-models"
 import type { CreateAccountInput } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
+import type { FreePreset } from "../../lib/api/free-tier"
 import { findProvider } from "../../lib/api/providers"
 import type { ProviderDescriptor } from "../../lib/api/types"
 import { BILLING_OPTIONS, billingConsequence } from "../../lib/billing"
 import { DIALECT_HINT, dialectChoices, providerDisplayName } from "../../lib/provider-display"
 import styles from "./AccountFormDialog.module.scss"
+import { FreePresetField } from "./FreePresetField"
 import { ProviderNotes } from "./ProviderNotes"
 
 export interface AccountFormDialogProps {
@@ -68,6 +70,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
     setBaseUrl("")
     setDialect("")
     setBilling("")
+    setSupportedModels("")
   }
 
   // A field the next provider hides still submits. A base URL typed for a compatible endpoint
@@ -85,7 +88,6 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
         if (open) return
         setLabel("")
         setProviderId("")
-        setSupportedModels("")
         clearProviderFields()
       },
       { defer: true },
@@ -183,12 +185,20 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
 
         <ProviderNotes provider={selected()} />
 
+        <FreePresetField
+          onChoose={(preset) => {
+            setBaseUrl(preset?.baseUrl ?? "")
+            setSupportedModels(preset?.models.join(", ") ?? "")
+          }}
+          presets={selected()?.freePresets ?? NO_PRESETS}
+        />
+
         <Show when={selected() !== undefined && selected()?.connectFlow === null}>
           <TextField
             autocomplete="off"
             hint={
               credentialOptional()
-                ? "Optional — this endpoint authenticates nobody. Fill it in only if you put something in front of it that does. Encrypted at rest and never returned by any endpoint, in any form."
+                ? "Optional — this upstream answers without one. Fill it in only if you hold a key for it, or put something in front of it that checks. Encrypted at rest and never returned by any endpoint, in any form."
                 : "Encrypted at rest and never returned by any endpoint, in any form."
             }
             label={credentialOptional() ? "Credential (optional)" : "Credential"}
@@ -261,6 +271,9 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
   )
 }
 
+/** One identity, or a provider change between two that have none would reset the field. */
+const NO_PRESETS: readonly FreePreset[] = []
+
 /**
  * Which providers take a login is read off the descriptor, never listed here — a provider that
  * grows an OAuth flow becomes connectable the day its driver file lands, with nothing to change
@@ -269,5 +282,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
 function providerOptionLabel(provider: ProviderDescriptor): string {
   const name = `${providerDisplayName(provider.id)} (${provider.id})`
   if (!provider.creatable) return `${name} — not implemented`
-  return provider.connectFlow === null ? name : `${name} — connect after adding`
+  if (provider.connectFlow !== null) return `${name} — connect after adding`
+  const free = provider.freeTier?.access
+  return free === undefined ? name : `${name} — free${free === "keyless" ? ", no key" : " tier"}`
 }
