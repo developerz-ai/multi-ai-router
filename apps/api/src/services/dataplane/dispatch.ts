@@ -37,6 +37,9 @@ export function dispatch(
       quota: runtime.quota,
       now: runtime.clock.now,
       timeoutMs: runtime.timeoutMs,
+      ...(ctx.streamRequested === true && runtime.sdkStreamDeadlines !== undefined
+        ? { stream: runtime.sdkStreamDeadlines }
+        : {}),
       signal: ctx.request.signal,
       // The planner only ever replays in place after `stale-session`, so this attempt already
       // knows the SDK disowned the resumed id — the lineage plan must not offer it again.
@@ -77,6 +80,7 @@ export function dispatch(
       ? { conversationId: conversationId(runtime.apiKeyId, runtime.sessionKey) }
       : {}),
     ...(streamDeadlines === undefined ? {} : { stream: streamDeadlines }),
+    ...(runtime.silentHold === undefined ? {} : { silentHold: runtime.silentHold }),
   })
 }
 

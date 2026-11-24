@@ -87,7 +87,7 @@ describe("router abort classification at the relay", () => {
     expect(new TextDecoder().decode(first.value)).toBe("first")
     controller.abort(deadline)
     // Drain the reader so its cancellation observer fires and settles the relay.
-    await reader.cancel()
+    await reader.cancel().catch(() => {})
 
     expect(errors).toHaveLength(1)
     expect(errors[0]).toBe(deadline)
@@ -113,7 +113,7 @@ describe("router abort classification at the relay", () => {
     expect(new TextDecoder().decode((await reader.read()).value)).toBe("first")
 
     controller.abort(clientGone())
-    await reader.cancel()
+    await reader.cancel().catch(() => {})
 
     expect(errors).toHaveLength(1)
     expect(errors[0]).toBeInstanceOf(ClientCancelledError)
@@ -136,7 +136,7 @@ describe("router abort classification at the relay", () => {
     chunks.push(decoder.decode((await reader.read()).value))
     expect(chunks).toEqual(["alpha", "beta"])
     controller.abort(timeout())
-    await reader.cancel()
+    await reader.cancel().catch(() => {})
     expect(chunks).toEqual(["alpha", "beta"])
   })
 })
@@ -285,7 +285,7 @@ describe("the translated relays classify their cancel callback", () => {
     if (response.body === null) throw new Error("missing response")
     const reader = response.body.getReader()
     abort.abort(reason)
-    await reader.cancel()
+    await reader.cancel().catch(() => {})
     await Promise.resolve()
     return errors
   }
@@ -311,7 +311,7 @@ describe("the translated relays classify their cancel callback", () => {
     if (response.body === null) throw new Error("missing response")
     const reader = response.body.getReader()
     abort.abort(reason)
-    await reader.cancel()
+    await reader.cancel().catch(() => {})
     await Promise.resolve()
     return errors
   }

@@ -1,9 +1,11 @@
 import type { SseEvent, TranslationContext, TranslationPair } from "../translate"
-import { createSseParser, encodeSseEvent } from "../translate"
+import { createSseParser, encodeSseEvent, truncatedStreamEvent } from "../translate"
 import { clientHeaders } from "./egress/headers"
 import type { RelayObserver } from "./relay"
-import { observeCancellation, relayCancellationError } from "./relay-cancellation"
 import { type CostReport, stampUsageFrame, usageFrameIndex } from "./relay-cost"
+import { pumpBody } from "./relay-pump"
+import type { LastWords } from "./relay-stream-end"
+import { UpstreamTruncatedError } from "./relay-terminal"
 import { collected, guard, parsed, translatedBody } from "./relay-translate-body"
 import { type HeldRefusalFacts, holdTranslated } from "./relay-translate-held"
 
@@ -44,10 +46,8 @@ import { type HeldRefusalFacts, holdTranslated } from "./relay-translate-held"
  * the socket closed under it at 11.9 s, while `/v1/messages` — the byte relay, no translation —
  * carried 20,469 bytes of the same answer and was still streaming at 22 s.
  *
- * That cost whole agent turns, and it read as everything except what it was: the teardown aborts the
- * request, the subprocess dies mid-thinking, and the renderer then reports a turn that ended with a
- * `thinking` block open (`sdk turn ended mid-answer`). The *symptom* was upstream-shaped; the cause
- * was here.
+ * That cost whole agent turns, and read as everything else: the teardown aborts the request, the
+ * subprocess dies mid-thinking, and the renderer reports `sdk turn ended mid-answer`.
  *
  * So a chunk that produces nothing for the client still keeps the connection alive, if it has been
  * quiet long enough. It is a comment, so it cannot be mistaken for content in any dialect; it does
@@ -109,6 +109,8 @@ export interface TranslatedRelayInput {
    * client-dialect events to a streaming client, unconverted SSE to a non-streaming one.
    */
   readonly upstreamStreams?: boolean
+  /** Ends a stream that breaks after its first byte (`relay-stream-end.ts`). */
+  readonly lastWords?: LastWords
   /** States the attempt's cost on the response's usage. Absent, usage is left as translated. */
   readonly cost?: CostReport
 }
@@ -168,19 +170,24 @@ function translatedStream(
   /** When the client last had bytes. Seeded at the start, so the first quiet window is measured. */
   let lastWrite = now()
 
-  const keepalive = (controller: TransformStreamDefaultController<Uint8Array>): void => {
-    if (comments.length === 0) return
-    let out = ""
-    for (const text of comments) out += `:${text}\n\n`
-    comments = []
-    const chunk = encoder.encode(out)
+  /** Bytes that are not content: they keep the wire alive or end it, and are no first byte. */
+  const aside = (controller: ReadableStreamDefaultController<Uint8Array>, text: string): void => {
+    const chunk = encoder.encode(text)
     controller.enqueue(chunk)
     bytes += chunk.length
     guard(() => observer.onWireBytes?.(bytes))
     lastWrite = now()
   }
 
-  const write = (controller: TransformStreamDefaultController<Uint8Array>, text: string): void => {
+  const keepalive = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
+    if (comments.length === 0) return
+    let out = ""
+    for (const text of comments) out += `:${text}\n\n`
+    comments = []
+    aside(controller, out)
+  }
+
+  const write = (controller: ReadableStreamDefaultController<Uint8Array>, text: string): void => {
     if (text.length === 0) return
     const chunk = encoder.encode(text)
     // Enqueue first; the observer work below still precedes the reader's next microtask.
@@ -197,18 +204,14 @@ function translatedStream(
    * The upstream is sending and the client is getting nothing. Says so, in the one way that cannot
    * be read as content: an SSE comment carries no event and no data, only a byte.
    */
-  const heartbeat = (controller: TransformStreamDefaultController<Uint8Array>): void => {
+  const heartbeat = (controller: ReadableStreamDefaultController<Uint8Array>): void => {
     if (now() - lastWrite < keepaliveMs) return
-    const chunk = encoder.encode(":\n\n")
-    controller.enqueue(chunk)
-    bytes += chunk.length
-    guard(() => observer.onWireBytes?.(bytes))
-    lastWrite = now()
+    aside(controller, ":\n\n")
   }
 
   /** `observe` shows the upstream chunk to the observer; the usage frame needs that done first. */
   const emit = (
-    controller: TransformStreamDefaultController<Uint8Array>,
+    controller: ReadableStreamDefaultController<Uint8Array>,
     events: readonly SseEvent[],
     observe: () => void,
   ): void => {
@@ -233,53 +236,61 @@ function translatedStream(
     else guard(() => observer.onError?.(error, bytes))
   }
 
-  const transform = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      const events = parser.push(chunk).flatMap((frame) => translator.push(frame))
-      // A frame past its ceiling: the parser stops, and the stream ends with its typed error.
-      const overflow = parser.failure()
-      if (overflow !== null) {
-        settle(overflow)
-        controller.error(overflow)
-        return
-      }
-      keepalive(controller)
-      // Before the write, so a chunk that *does* produce output resets the clock through `write`
-      // rather than sending a comment it did not need.
-      if (events.length === 0) heartbeat(controller)
-      let observed = false
-      const observe = (): void => {
-        if (observed) return
-        observed = true
-        // The upstream's own bytes, so token counting reads the numbers the provider stated.
-        guard(() => observer.onChunk?.(chunk))
-      }
-      emit(controller, events, observe)
-      observe()
-      const failure = translator.translationFailure?.()
-      if (failure != null) settle(failure)
+  return pumpBody(
+    upstream,
+    {
+      chunk(chunk, controller) {
+        const before = bytes
+        const events: SseEvent[] = []
+        for (const frame of parser.push(chunk)) events.push(...translator.push(frame))
+        // A frame past its ceiling: the parser stops, and the stream ends with its typed error.
+        const overflow = parser.failure()
+        if (overflow !== null) throw overflow
+        keepalive(controller)
+        // Before the write, so a chunk that *does* produce output resets the clock through `write`
+        // rather than sending a comment it did not need.
+        if (events.length === 0) heartbeat(controller)
+        let observed = false
+        const observe = (): void => {
+          if (observed) return
+          observed = true
+          // The upstream's own bytes, so token counting reads the numbers the provider stated.
+          guard(() => observer.onChunk?.(chunk))
+        }
+        emit(controller, events, observe)
+        observe()
+        const failure = translator.translationFailure?.()
+        if (failure != null) settle(failure)
+        return bytes !== before
+      },
+      end(controller) {
+        // A frame the upstream never terminated is still a frame; the translator decides whether the
+        // stream earned a terminator, and ends a truncated one with a single router error event.
+        const trailing: SseEvent[] = []
+        for (const frame of parser.flush()) trailing.push(...translator.push(frame))
+        emit(controller, [...trailing, ...translator.flush()], () => {})
+        const failure = translator.translationFailure?.()
+        // Not one event for the client: a `200` over silence reads as an answer nobody can parse.
+        const silent = !contentWritten && failure == null
+        if (silent) {
+          const { ingress } = input.pair
+          aside(controller, render([truncatedStreamEvent(ingress, input.context.fallbackId)]))
+        }
+        settle(
+          failure ??
+            (silent || translator.truncated?.() === true
+              ? new UpstreamTruncatedError()
+              : undefined),
+        )
+      },
+      failed: (error) => settle(error ?? new Error("response stream cancelled")),
+      // A cancelled translated stream settles from its signal's reason, like every other relay: a
+      // router-caused abort on this path records its own error class, not `client_cancelled`.
+      cancelled: settle,
+      ...(input.lastWords === undefined ? {} : { lastWords: input.lastWords }),
     },
-    flush(controller) {
-      // A frame the upstream never terminated is still a frame; the translator decides whether the
-      // stream earned a terminator, and emits nothing at all when it was truncated.
-      const trailing = parser.flush().flatMap((frame) => translator.push(frame))
-      emit(controller, [...trailing, ...translator.flush()], () => {})
-      settle(translator.translationFailure?.() ?? undefined)
-    },
-  })
-
-  upstream
-    .pipeTo(transform.writable, input.signal === undefined ? {} : { signal: input.signal })
-    .catch((error: unknown) => {
-      settle(error ?? new Error("response stream cancelled"))
-    })
-
-  // A cancelled translated stream settles from its signal's reason, like every other relay: a
-  // router-caused abort on this path records its own error class, not `client_cancelled`. The
-  // `pipeTo` catch above already forwards a real failure; this callback only covers the cancel.
-  const cancelled = (): void => settle(relayCancellationError(input.signal))
-
-  return observeCancellation(transform.readable, cancelled)
+    input.signal,
+  )
 }
 
 function render(events: readonly SseEvent[]): string {

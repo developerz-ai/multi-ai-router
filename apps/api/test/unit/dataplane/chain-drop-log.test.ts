@@ -20,6 +20,7 @@ function chain(
   options: {
     readonly halfOpen?: boolean
     readonly health?: HealthStore
+    readonly awaitsPermit?: () => boolean
     readonly beforeUpstreamStart?: () => void
     readonly invokeSdk?: RuntimeInput["invokeSdk"]
   } = {},
@@ -39,8 +40,10 @@ function chain(
     },
   }).child({ requestId: "req-1" })
   let started = false
+  let bodies = 0
   const attempt: RecoveryAttempt = {
     designated: true,
+    ...(options.awaitsPermit === undefined ? {} : { awaitsPermit: options.awaitsPermit }),
     started: () => started,
     beforeUpstreamStart: () => {
       options.beforeUpstreamStart?.()
@@ -88,14 +91,17 @@ function chain(
       clientStreams: () => false,
       promptCacheKey: () => undefined,
       surfaceDropped: () => [],
-      bodyFor: () => body,
+      bodyFor: () => {
+        bodies += 1
+        return body
+      },
     },
     failover: undefined,
     log,
   }
   const drops = () =>
     lines.filter((line) => line.msg === "candidate dropped without an upstream attempt")
-  return { run: () => runChain(context), drops }
+  return { run: () => runChain(context), drops, bodies: () => bodies }
 }
 
 test("a recovery admission refusal leaves an info line naming the account and reason", async () => {
@@ -148,4 +154,42 @@ test("an SDK preparation failure leaves an info line with only a class, never a 
   expect(typeof drop?.errorClass).toBe("string")
   expect(Object.keys(drop ?? {})).not.toContain("error")
   expect(f.drops()).toHaveLength(1)
+})
+
+test("a candidate with no permit is dropped before its body is built, and named once per request", async () => {
+  // A request waiting out a recovery polls the chain every 250 ms. Each poll built the body and
+  // prepared the whole turn to be refused at the start guard: 120-165 ms of work per 429, 20 lines.
+  let launches = 0
+  const f = chain(subscriptionAccount("a"), {
+    awaitsPermit: () => true,
+    invokeSdk: async () => {
+      launches += 1
+      throw new Error("must not launch")
+    },
+  })
+  await expect(f.run()).rejects.toMatchObject({ status: 429 })
+  await expect(f.run()).rejects.toMatchObject({ status: 429 })
+
+  expect(launches).toBe(0)
+  expect(f.bodies()).toBe(0)
+  expect(f.drops()).toHaveLength(1)
+})
+
+test("the drop is asked per poll: a permit that arrived is used", async () => {
+  let waiting = true
+  let launches = 0
+  const f = chain(subscriptionAccount("a"), {
+    awaitsPermit: () => waiting,
+    invokeSdk: async (input) => {
+      launches += 1
+      input.beforeUpstreamStart?.()
+      input.onUpstreamStarted?.()
+      return Response.json({}, { status: 503 })
+    },
+  })
+  await expect(f.run()).rejects.toMatchObject({ status: 429 })
+  waiting = false
+  await f.run().catch(() => undefined)
+
+  expect(launches).toBe(1)
 })

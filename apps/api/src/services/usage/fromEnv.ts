@@ -186,9 +186,12 @@ export function createUsageRecorderFromEnv(deps: UsageRecorderFromEnvDeps): Usag
 /**
  * SQLSTATE classes that say the database, not the batch, is the problem: connection exceptions
  * (`08`), operator intervention such as a shutdown or failover (`57P`), insufficient resources
- * (`53`), and the two concurrency aborts a retry resolves (`40001`, `40P01`).
+ * (`53`), the two concurrency aborts a retry resolves (`40001`, `40P01`), and the two clocks the
+ * pool sets on every statement — `lock_timeout` (`55P03`) and `statement_timeout` (`57014`). An
+ * admission waits on the usage-history lock, so a long holder times out every batch alike; read
+ * as "possibly this batch", the second refusal bisected it and discarded each row in turn.
  */
-const TRANSIENT_SQLSTATE = /^(08|57P|53)|^40001$|^40P01$/
+const TRANSIENT_SQLSTATE = /^(08|57P|53)|^40001$|^40P01$|^55P03$|^57014$/
 /** postgres.js / Node connection-level codes, and the DNS failure a restarting pod produced. */
 const TRANSIENT_CODES = new Set([
   "CONNECTION_CLOSED",

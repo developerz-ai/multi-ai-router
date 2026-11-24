@@ -197,13 +197,14 @@ describe("anthropic ingress against a Codex account", () => {
       }),
     ])
     const { app } = harness({ accounts: [codexAccount()], responses: [() => slow.response] })
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const res = await app.request(
       "/v1/messages",
       post(JSON.stringify({ ...ANTHROPIC, stream: true }), bearer()),
     )
     if (res.body === null) throw new Error("missing body")
     const reader = res.body.getReader()
-    slow.release(0)
     let seen = ""
     while (!seen.includes("early")) {
       const { value, done } = await reader.read()

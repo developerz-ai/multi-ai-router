@@ -72,6 +72,21 @@ export function createReplicaLeaseManager(
     if (now() >= entry.deadline) entry.abort.abort()
     return !entry.abort.signal.aborted
   }
+  /**
+   * Ends authority at the deadline, not at the next thing to ask: in-flight fetches hold only the
+   * signal, and a heartbeat that fails or hangs asks nothing. One timer per entry; a renewal only
+   * moves the deadline, so firing early re-arms. Every end of the entry aborts, which clears it.
+   */
+  const watchDeadline = (entry: Entry) => {
+    let deadline: ReturnType<typeof setTimeout>
+    const check = () => {
+      if (!valid(entry)) return
+      deadline = setTimeout(check, Math.max(1, Math.ceil(entry.deadline - lastClock)))
+      deadline.unref?.()
+    }
+    entry.abort.signal.addEventListener("abort", () => clearTimeout(deadline), { once: true })
+    check()
+  }
   async function acquire(
     id: string,
     provision = false,
@@ -112,6 +127,7 @@ export function createReplicaLeaseManager(
       abort.abort()
       return undefined
     }
+    watchDeadline(entry)
     try {
       if (provision && row.storageIdentity === null) {
         if (!storage.provisionNew) throw new Error("new account storage authority unavailable")
@@ -151,7 +167,11 @@ export function createReplicaLeaseManager(
         if (!accepted || !valid(entry)) entry.abort.abort()
         else entry.deadline = started + config.ttlMs - safetyMarginMs
       } catch {
-        entry.abort.abort()
+        // An error says nothing about who holds the row. The deadline this replica already earned
+        // stands and is what ends its authority; the next beat renews or the clock aborts. Only an
+        // answered refusal ends it early. Cutting here failed every stream of the Account over one
+        // dropped query, then waited out a row this same owner still held.
+        valid(entry)
       }
     }
   }

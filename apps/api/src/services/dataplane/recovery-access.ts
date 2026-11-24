@@ -18,6 +18,11 @@ import type { RoutableAccount, RoutingCatalog } from "./types"
 
 export interface RecoveryAttempt {
   readonly designated: boolean
+  /**
+   * A designated attempt with no permit here: its start guard would refuse it. Asked before the body
+   * is built, so a request polling for a permit does not prepare a whole upstream turn per poll.
+   */
+  awaitsPermit?(): boolean
   started(): boolean
   readonly beforeUpstreamStart?: UpstreamStartGuard
   finish(state: "succeeded" | "failed" | "uncertain"): void
@@ -74,7 +79,9 @@ export function createRecoveryAccess(deps: {
       accounts: () =>
         deps.catalog.accounts().map((account) => {
           const recovery = account.snapshot.recovery
-          if (recovery === undefined) return account
+          // Only a gating generation reads the two members below; a settled one keeps the row's
+          // identity, which is what `overlayMemo` (snapshot.ts) is keyed on.
+          if (recovery === undefined || !recoveryIsGated(account.snapshot)) return account
           const available = deps.capabilities.available(account.id)
           const deadline = Math.max(
             deps.now().getTime() + deps.retryAfterMs,
@@ -133,7 +140,8 @@ export function createRecoveryAccess(deps: {
             if (
               live.status !== "active" ||
               recoveryIsGated(live) ||
-              findSpentWindow(live, deps.now(), quotaSpentThreshold) !== null
+              findSpentWindow(live, deps.now(), quotaSpentThreshold, candidate.upstreamModel) !==
+                null
             )
               throw new UpstreamAdmissionRefused()
             started = true
@@ -145,6 +153,9 @@ export function createRecoveryAccess(deps: {
       let consumed: RecoveryCapability | undefined
       return {
         designated: true,
+        awaitsPermit: () =>
+          recovery === undefined ||
+          deps.capabilities.available(account.id)?.generation !== recovery.generation,
         started: () => consumed !== undefined,
         beforeUpstreamStart: Object.assign(
           () => {
@@ -170,6 +181,7 @@ export function createRecoveryAccess(deps: {
                 },
                 now,
                 quotaSpentThreshold,
+                candidate.upstreamModel,
               )
             )
               throw new UpstreamAdmissionRefused()

@@ -32,6 +32,41 @@ import type { RecoveryProbeSend } from "../../src/services/dataplane/recovery-pr
 const databaseUrl = process.env.DATABASE_URL ?? ""
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/**
+ * The file's clocks, scaled from production's so fifteen boots of the real components cost seconds,
+ * not a quarter of a minute. What each proves is a ratio, and the ratios are kept:
+ *
+ * - `OUTCOME_BOUND_MS` (`RECOVERY_MAXIMUM_OUTCOME_MS`) is several times any wait a test spends with
+ *   a permit `issued` and a tick still to come, so only a deliberate {@link pastBounds} expires one.
+ * - `GRACE_MS` (`RECOVERY_REQUEST_WAIT_MS`) is four times `INSIDE_GRACE_MS`, the instant a test
+ *   asserts the router has not sent yet, and `PAST_GRACE_MS` is well past it.
+ * - `QUIET_MS` is how long "nothing was sent" is watched for where the send, were it coming, is a
+ *   microtask-and-a-stub away: every positive counterpart in this file lands within a few ms.
+ *
+ * A wait for something that **does** happen never sleeps a guess: it polls {@link until}.
+ */
+const OUTCOME_BOUND_MS = 300
+const GRACE_MS = 200
+const INSIDE_GRACE_MS = 50
+const PAST_GRACE_MS = GRACE_MS + 100
+const QUIET_MS = 100
+
+/** Resolves as soon as `condition` holds; fails the test, naming what never came, after `withinMs`. */
+async function until(what: string, condition: () => boolean, withinMs = 3_000): Promise<void> {
+  const deadline = Date.now() + withinMs
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
+    await sleep(5)
+  }
+}
+
+/** Idempotent, and the same schema every time: applied once for the file, not once per fixture. */
+let migrated: Promise<unknown> | undefined
+const migrate = () => {
+  migrated ??= runMigrations({ url: databaseUrl, migrationsFolder: defaultMigrationsFolder() })
+  return migrated
+}
+
 function completion(): Response {
   return new Response(
     JSON.stringify({
@@ -67,7 +102,7 @@ async function routerProbeFixture(
     supportedModels?: string[]
   } = {},
 ) {
-  await runMigrations({ url: databaseUrl, migrationsFolder: defaultMigrationsFolder() })
+  await migrate()
   const handle = createDatabase({ url: databaseUrl, maxConnections: 4 })
   const accounts = createAccountRepository(handle.db)
   const cipher = createCredentialCipher({ key: new Uint8Array(32).fill(7) })
@@ -100,7 +135,7 @@ async function routerProbeFixture(
     keys: keysReaching(options.reach ?? "all"),
     reachTtlMs: 1000,
     config: readRecoveryEnv({
-      RECOVERY_MAXIMUM_OUTCOME_MS: 1_000,
+      RECOVERY_MAXIMUM_OUTCOME_MS: OUTCOME_BOUND_MS,
       RECOVERY_REQUEST_WAIT_MS: options.graceMs ?? 0,
       ...(options.cooldownMs === undefined ? {} : { RECOVERY_COOLDOWN_MS: options.cooldownMs }),
     }).recovery,
@@ -109,6 +144,14 @@ async function routerProbeFixture(
     probeModels: { zai: "glm-4.6", "anthropic-oauth": "claude-haiku-4-5-20251001" },
   })
   await catalog.refresh()
+  // Every verdict a probe or a client request hands the coordinator, counted where it arrives.
+  let verdicts = 0
+  const { coordinator } = components
+  const recordOutcome = coordinator.recordOutcome.bind(coordinator)
+  coordinator.recordOutcome = (outcome) => {
+    verdicts++
+    return recordOutcome(outcome)
+  }
   const audits: unknown[] = []
   // No `sdkProbe`: a Claude subscription here is an account the transport cannot test.
   const testNow = createTestNowService({
@@ -128,7 +171,9 @@ async function routerProbeFixture(
   const recheck = createRecheckService({
     accounts,
     recovery: components.repository,
-    cooldownSeconds: 1,
+    // The re-check's generation carries this as its `nextAllowedAt`: the same span as the outcome
+    // bound, so `pastBounds` is past both and an expired permit is reopenable when it says so.
+    cooldownSeconds: OUTCOME_BOUND_MS / 1_000,
     audit: { record: async () => {} },
     refreshCatalog: () => catalog.refreshAfterMutation(),
     onRecoveryRequested: (id) => components?.coordinator.demand(id),
@@ -150,7 +195,7 @@ async function routerProbeFixture(
     rateLimitWindowSeconds: null,
     expiresAt: null,
   }
-  const dispatch = () =>
+  const dispatch = (extra: { stream?: boolean } = {}) =>
     dispatcher
       .dispatch({
         ingress: "openai-chat",
@@ -158,7 +203,11 @@ async function routerProbeFixture(
         requestId: crypto.randomUUID(),
         request: new Request("https://router.test/v1/chat/completions", {
           method: "POST",
-          body: JSON.stringify({ model: "glm-4.6", messages: [{ role: "user", content: "ping" }] }),
+          body: JSON.stringify({
+            model: "glm-4.6",
+            messages: [{ role: "user", content: "ping" }],
+            ...extra,
+          }),
         }),
       })
       .catch((error) => {
@@ -184,6 +233,7 @@ async function routerProbeFixture(
     attach,
     lines,
     audits,
+    verdicts: () => verdicts,
     async close() {
       await components?.coordinator.stop()
       await accounts.delete(account.id)
@@ -200,9 +250,24 @@ async function openPermit(f: Awaited<ReturnType<typeof routerProbeFixture>>) {
   expect((await f.recovery())?.state).toBe("issued")
 }
 
-/** Wait past the 1 s outcome bound and the 1 s re-check cooldown, then let the coordinator settle. */
+/**
+ * Wait past the outcome bound and the re-check cooldown (the generation's `nextAllowedAt`), then let
+ * the coordinator settle. Both are judged on Postgres's clock, and the expiry sweep runs at most
+ * once per coordinator interval (250 ms), so the wait clears all three with room.
+ */
 async function pastBounds(f: Awaited<ReturnType<typeof routerProbeFixture>>) {
-  await sleep(1_200)
+  await sleep(OUTCOME_BOUND_MS + 100)
+  await f.components.coordinator.tick()
+}
+
+/**
+ * The probe's verdict has been handed to the coordinator: one tick now writes it. Counted at the
+ * coordinator's own door (`fixture.verdicts`) rather than slept for, and never found by ticking in
+ * a loop — a tick that ran before the verdict was queued would only wait, but one
+ * that ran past the outcome bound would expire the permit this is waiting on.
+ */
+async function probeSettled(f: Awaited<ReturnType<typeof routerProbeFixture>>) {
+  await until("the router's probe to hand in its verdict", () => f.verdicts() > 0)
   await f.components.coordinator.tick()
 }
 
@@ -225,7 +290,10 @@ test.skipIf(!databaseUrl)(
     try {
       await openPermit(f)
       // No client request, ever. Without the router's probe, this permit is past the outcome bound
-      // by now and settles uncertain (the prod fingerprint).
+      // by now and settles uncertain (the prod fingerprint). The verdict is waited for rather than
+      // assumed to fit inside the bound: on a stalled runner it can land after it, and the tick
+      // below would then expire the permit for a reason this test is not about.
+      await until("the router's probe to hand in its verdict", () => f.verdicts() > 0)
       await pastBounds(f)
       await f.components.coordinator.tick()
       expect((await f.recovery())?.state).toBe("succeeded")
@@ -250,15 +318,17 @@ test.skipIf(!databaseUrl)("the router waits out a non-zero grace before it probe
       starts++
       return completion()
     },
-    { graceMs: 300 },
+    { graceMs: GRACE_MS },
   )
   try {
+    const opened = Date.now()
     await openPermit(f)
-    await sleep(100)
+    await sleep(INSIDE_GRACE_MS)
     expect(starts).toBe(0)
-    await sleep(400)
-    expect(starts).toBe(1)
-    await f.components.coordinator.tick()
+    await until("the probe the grace was holding back", () => starts === 1)
+    // Sent because the grace ran out, not ahead of it.
+    expect(Date.now() - opened).toBeGreaterThanOrEqual(GRACE_MS)
+    await probeSettled(f)
     expect((await f.recovery())?.state).toBe("succeeded")
   } finally {
     await f.close()
@@ -283,10 +353,9 @@ test.skipIf(!databaseUrl)(
       expect((await f.recovery())?.state).toBe("uncertain")
       expect(starts).toBe(0)
       f.attach()
-      // One tick reopens it (its 1s nextAllowedAt has passed), issues the permit and offers it.
+      // One tick reopens it (its nextAllowedAt has passed), issues the permit and offers it.
       await f.components.coordinator.tick()
-      await sleep(200)
-      await f.components.coordinator.tick()
+      await probeSettled(f)
       expect(starts).toBe(1)
       expect((await f.recovery())?.state).toBe("succeeded")
     } finally {
@@ -313,7 +382,7 @@ test.skipIf(!databaseUrl)(
       expect((await f.recovery())?.state).toBe("uncertain")
       f.attach()
       await f.components.coordinator.tick()
-      await sleep(200)
+      await sleep(QUIET_MS)
       await f.components.coordinator.tick()
       expect(starts).toBe(0)
       expect((await f.recovery())?.state).toBe("uncertain")
@@ -341,15 +410,14 @@ test.skipIf(!databaseUrl)(
     )
     try {
       await openPermit(f)
-      await sleep(200)
-      await f.components.coordinator.tick()
+      await probeSettled(f)
       expect((await f.recovery())?.state).toBe("failed")
       expect(starts).toBe(1)
       const until = f.health.stateOf(f.account.id).breaker.cooldownUntil
       expect(until === undefined ? 0 : until.getTime()).toBeGreaterThan(Date.now())
       for (let i = 0; i < 5; i++) {
         await f.components.coordinator.tick()
-        await sleep(100)
+        await sleep(QUIET_MS / 5)
       }
       // No new generation either: the breaker's clock keeps the account out of the reopen sweep,
       // and the permit's own start guard would refuse a send under it anyway.
@@ -372,7 +440,10 @@ const limitedFor = (ms: number) => ({
 test.skipIf(!databaseUrl)(
   "a success is recorded before the probe's rate-limit reading, as on the client path",
   async () => {
-    const f = await routerProbeFixture(async () => completion(), { attach: false, graceMs: 300 })
+    const f = await routerProbeFixture(async () => completion(), {
+      attach: false,
+      graceMs: GRACE_MS,
+    })
     try {
       // The provider served the probe and reported its window now spent. Folded first, the
       // reading advances the verdict, the success is refused as stale, and the reset trips on top
@@ -387,7 +458,12 @@ test.skipIf(!databaseUrl)(
       f.health.recordFailure(f.account.id, strike, new Date())
       f.health.recordFailure(f.account.id, strike, new Date())
       expect(f.health.stateOf(f.account.id).breaker.consecutiveFailures).toBe(2)
-      await sleep(500)
+      await until("the probe's verdict", () => f.verdicts() > 0)
+      // The reading is folded by the probe's caller right after the verdict.
+      await until(
+        "the probe's rate-limit reading",
+        () => f.health.stateOf(f.account.id).breaker.status === "cooling_down",
+      )
       const breaker = f.health.stateOf(f.account.id).breaker
       expect(breaker.status).toBe("cooling_down")
       expect(breaker.consecutiveFailures).toBe(1)
@@ -409,7 +485,9 @@ test.skipIf(!databaseUrl)(
         return { kind: "answered", ok: false, failureKind: "credits-exhausted", message: "402" }
       })
       await openPermit(f)
-      await sleep(200)
+      await until("the probe's verdict", () => f.verdicts() > 0)
+      // The reading is folded after the verdict; it must not turn a drained balance into a cooldown.
+      await sleep(QUIET_MS / 5)
       expect(f.health.stateOf(f.account.id).breaker.status).toBe("exhausted")
     } finally {
       await f.close()
@@ -427,14 +505,14 @@ test.skipIf(!databaseUrl)(
         starts++
         return completion()
       },
-      { graceMs: 300 },
+      { graceMs: GRACE_MS },
     )
     try {
       await openPermit(f)
       const response = await f.dispatch()
       expect(response.status).toBe(200)
       expect(starts).toBe(1)
-      await sleep(500)
+      await sleep(PAST_GRACE_MS)
       expect(starts).toBe(1)
     } finally {
       await f.close()
@@ -455,14 +533,12 @@ test.skipIf(!databaseUrl)(
     })
     try {
       await openPermit(f)
-      await sleep(100)
-      expect(starts).toBe(1)
+      await until("the router's probe to be on the wire", () => starts === 1)
       const response = await f.dispatch()
       expect(response.status).toBe(429)
       expect(starts).toBe(1)
       release.resolve()
-      await sleep(100)
-      await f.components.coordinator.tick()
+      await probeSettled(f)
       expect((await f.recovery())?.state).toBe("succeeded")
     } finally {
       release.resolve()
@@ -481,12 +557,12 @@ test.skipIf(!databaseUrl)(
         starts++
         return completion()
       },
-      { graceMs: 300 },
+      { graceMs: GRACE_MS },
     )
     try {
       await openPermit(f)
       f.components.closeIssuance()
-      await sleep(500)
+      await sleep(PAST_GRACE_MS)
       expect(starts).toBe(0)
     } finally {
       await f.close()
@@ -510,8 +586,7 @@ test.skipIf(!databaseUrl)(
       const pressed = await f.testNow.test(f.account.id, { model: "glm-4.6" })
       expect(pressed.ok && pressed.value.tested).toBe(true)
       await openPermit(f)
-      await sleep(200)
-      await f.components.coordinator.tick()
+      await probeSettled(f)
       expect(starts).toBe(2)
       expect((await f.recovery())?.state).toBe("succeeded")
       expect(f.audits).toEqual([
@@ -538,14 +613,13 @@ test.skipIf(!databaseUrl)(
     )
     try {
       await openPermit(f)
-      await sleep(200)
       const refusals = () =>
         f.lines.filter((line) => line.includes("router recovery probe cannot reach this account"))
-      expect(refusals()).toHaveLength(1)
+      await until("the probe to say it cannot reach the account", () => refusals().length === 1)
       await pastBounds(f)
       expect((await f.recovery())?.state).toBe("uncertain")
       await f.components.coordinator.tick()
-      await sleep(200)
+      await sleep(QUIET_MS)
       await f.components.coordinator.tick()
       expect((await f.recovery())?.state).toBe("uncertain")
       expect(refusals()).toHaveLength(1)
@@ -579,8 +653,7 @@ test.skipIf(!databaseUrl)(
       )
       try {
         await openPermit(f)
-        await sleep(200)
-        await f.components.coordinator.tick()
+        await probeSettled(f)
         expect(models).toEqual([expected])
         expect((await f.recovery())?.state).toBe("succeeded")
       } finally {
@@ -605,8 +678,7 @@ test.skipIf(!databaseUrl)(
     })
     try {
       await openPermit(f)
-      await sleep(200)
-      await f.components.coordinator.tick()
+      await probeSettled(f)
       expect(starts).toBe(1)
       expect((await f.recovery())?.state).toBe("uncertain")
       const breaker = f.health.stateOf(f.account.id).breaker
@@ -620,7 +692,7 @@ test.skipIf(!databaseUrl)(
       // Not re-probed on every reopen with a model already refused.
       await pastBounds(f)
       await f.components.coordinator.tick()
-      await sleep(200)
+      await sleep(QUIET_MS)
       await f.components.coordinator.tick()
       expect(starts).toBe(1)
       expect(refusals()).toHaveLength(1)
@@ -650,14 +722,13 @@ test.skipIf(!databaseUrl)(
     )
     try {
       await openPermit(f)
-      await sleep(200)
-      await f.components.coordinator.tick()
+      await probeSettled(f)
       expect((await f.recovery())?.state).toBe("uncertain")
       // The first client request finds the account gated and files the automatic request.
       expect((await f.dispatch()).status).toBe(429)
       await f.components.coordinator.tick()
       expect((await f.recovery())?.state).toBe("issued")
-      await sleep(200)
+      await sleep(QUIET_MS)
       // The router does not race the client for it: this account's probe was refused.
       expect(starts).toBe(1)
       expect((await f.dispatch()).status).toBe(200)
@@ -665,6 +736,128 @@ test.skipIf(!databaseUrl)(
       await f.components.coordinator.tick()
       expect((await f.recovery())?.state).toBe("succeeded")
     } finally {
+      await f.close()
+    }
+  },
+  20_000,
+)
+
+/**
+ * The opening of an Anthropic message stream through its first text delta. The fixture's `zai`
+ * account answers on its Anthropic surface, so this is what the upstream sends and the client reads
+ * it translated to `chat.completion.chunk`.
+ */
+function firstContentFrames(text: string): Uint8Array {
+  const events: readonly [string, unknown][] = [
+    [
+      "message_start",
+      {
+        type: "message_start",
+        message: {
+          id: "fixture",
+          type: "message",
+          role: "assistant",
+          model: "glm-4.6",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 1, output_tokens: 0 },
+        },
+      },
+    ],
+    [
+      "content_block_start",
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    ],
+    [
+      "content_block_delta",
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    ],
+  ]
+  return new TextEncoder().encode(
+    events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(""),
+  )
+}
+
+/**
+ * Prod, 2026-11-23 23:13Z: a probe's answer streamed for 33.5 s and held the account's one permit
+ * for all of it. A request that arrived a second in waited its whole 30 s budget and was answered
+ * `429`, three seconds before the stream ended and the account reopened. A recovering account is
+ * proved by its first model output; how the stream ends is still the breaker's to hear.
+ */
+test.skipIf(!databaseUrl)(
+  "a streaming probe reopens the account at its first content, and a later break still strikes",
+  async () => {
+    let starts = 0
+    const firstContent = deferred()
+    const breaks = deferred()
+    const f = await routerProbeFixture(
+      async () => {
+        starts++
+        if (starts > 1) return completion()
+        // The probe: nothing until the test says so, one content frame, then open until it breaks.
+        const body = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            await firstContent.promise
+            controller.enqueue(firstContentFrames("partial"))
+            await breaks.promise
+            controller.error(new Error("upstream connection reset"))
+          },
+        })
+        return new Response(body, { headers: { "content-type": "text/event-stream" } })
+      },
+      // No router probe: the client's own streaming request is the designated one.
+      { attach: false },
+    )
+    try {
+      await openPermit(f)
+      const probing = f.dispatch({ stream: true })
+      await until("the client's request to take the permit upstream", () => starts === 1)
+
+      // Before any model output the account has proved nothing: still one request, not two.
+      expect((await f.dispatch()).status).toBe(429)
+      expect(starts).toBe(1)
+      expect(f.verdicts()).toBe(0)
+
+      firstContent.resolve()
+      const response = await probing
+      expect(response.status).toBe(200)
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader()
+      // The client holds the first content; the upstream has said nothing since.
+      let seen = ""
+      while (!seen.includes("partial")) {
+        const next = await reader.read()
+        if (next.done) break
+        seen += new TextDecoder().decode(next.value)
+      }
+      expect(seen).toContain("partial")
+
+      // Settled at the first content, with the stream still open behind it.
+      await until("the probe to settle at its first content", () => f.verdicts() === 1)
+      await f.components.coordinator.tick()
+      expect((await f.recovery())?.state).toBe("succeeded")
+      expect(f.health.stateOf(f.account.id).breaker.status).toBe("active")
+
+      // The next request reaches the account while the probe's answer is still streaming.
+      expect((await f.dispatch()).status).toBe(200)
+      expect(starts).toBe(2)
+
+      // The stream breaks after the success was stored: the breaker still hears it.
+      breaks.resolve()
+      for (;;) {
+        const next = await reader.read().catch(() => ({ done: true as const }))
+        if (next.done) break
+      }
+      await until(
+        "the broken stream to strike the breaker",
+        () => f.health.stateOf(f.account.id).breaker.consecutiveFailures === 1,
+      )
+      // One verdict for the permit, not a second one overwriting it at the end of the stream.
+      expect(f.verdicts()).toBe(1)
+      await f.components.coordinator.tick()
+      expect((await f.recovery())?.state).toBe("succeeded")
+    } finally {
+      firstContent.resolve()
+      breaks.resolve()
       await f.close()
     }
   },

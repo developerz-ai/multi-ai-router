@@ -56,6 +56,7 @@ export function toAttemptFailure(
     ...(classification?.requestAttributable === true ? { requestAttributable: true } : {}),
     ...(classification?.permanentForRequest === true ? { permanentForRequest: true } : {}),
     ...(classification?.modelScoped === true ? { modelScoped: true } : {}),
+    ...(classification?.providerScoped === true ? { providerScoped: true } : {}),
   }
 }
 

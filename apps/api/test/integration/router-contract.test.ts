@@ -200,8 +200,10 @@ describe("x-router-* headers on every answer", () => {
     expect(res.headers.get("x-request-id")).not.toBeNull()
   })
 
-  test("a stream carries them at its headers, before the first byte, still unbuffered", async () => {
+  test("a stream carries them at its headers, with the first byte, still unbuffered", async () => {
     const slow = slowStream(["data: one\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app } = harness({ responses: [() => slow.response] })
 
     const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
@@ -211,7 +213,6 @@ describe("x-router-* headers on every answer", () => {
     expect(res.headers.get("x-router-request-id")).not.toBeNull()
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
-    slow.release(0)
     expect(new TextDecoder().decode((await reader.read()).value)).toBe("data: one\n\n")
     slow.finish()
     await reader.read()

@@ -143,6 +143,11 @@ export interface DispatcherDeps {
    */
   readonly invokeSdk?: SdkInvoker
   /**
+   * `invokeSdk` answers over direct HTTP (`claude-fast`), which has no pacing of its own: a streamed
+   * turn then runs on the same first-byte and idle clocks as any other streamed upstream.
+   */
+  readonly sdkIsHttp?: boolean
+  /**
    * Session -> Account bindings. Omitted, every subscription turn starts a fresh SDK session and
    * routing places it freely — correct, and cold. Present, a bound session is where selection
    * starts and where an SDK resume becomes possible at all (`session-binding.ts`).

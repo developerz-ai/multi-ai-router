@@ -2,6 +2,7 @@ import type { Logger } from "../../logging/logger"
 import {
   classifySdkFailure,
   type RateLimitSignal,
+  type SdkFailure,
   type SdkInvoker,
   type SdkQuotaStore,
   type SessionStore,
@@ -13,8 +14,14 @@ import {
 } from "../../providers/upstream-admission"
 import { type AttemptOutcome, attemptDeadline, failoverKind } from "./attempt"
 import type { SdkServableCandidate } from "./plan"
-import { errorResponseFailure, rateLimitCapture, releasingWith } from "./sdk-attempt-response"
+import {
+  errorResponseFailure,
+  rateLimitCapture,
+  releasingWith,
+  truncatedTurnLog,
+} from "./sdk-attempt-response"
 import { sdkCancellation } from "./sdk-cancellation"
+import { type StreamDeadlines, upstreamDeadline } from "./upstream-deadline"
 
 /**
  * Shared Claude subscription attempt: default SDK or opt-in direct HTTP invoker.
@@ -54,6 +61,8 @@ export interface SdkAttemptInput {
   readonly beforeUpstreamStart?: UpstreamStartGuard
   readonly onUpstreamStarted?: () => void
   readonly timeoutMs: number
+  /** First-byte and idle clocks for a streamed turn, from the moment the upstream starts. */
+  readonly stream?: StreamDeadlines
   /** The client's own abort signal, so a client that goes away terminates the subprocess. */
   readonly signal?: AbortSignal
   /**
@@ -115,7 +124,13 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
     ...(turn.plan.kind === "fresh" ? { reason: turn.plan.reason } : {}),
   })
   const rateLimit = rateLimitCapture(input, plan.account.id)
-  const attemptSignal = attemptDeadline(input.timeoutMs, input.signal)
+  const total = attemptDeadline(input.timeoutMs, input.signal)
+  const clocks =
+    input.stream === undefined
+      ? undefined
+      : upstreamDeadline({ stream: input.stream, client: total, deferred: true })
+  const attemptSignal = clocks?.signal ?? total
+  let refusal: SdkFailure | undefined
 
   let response: Response
   try {
@@ -124,7 +139,10 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       ...(input.apiKeyId === undefined ? {} : { apiKeyId: input.apiKeyId }),
       ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
       beforeUpstreamStart: input.beforeUpstreamStart,
-      onUpstreamStarted: input.onUpstreamStarted,
+      onUpstreamStarted: () => {
+        clocks?.start()
+        input.onUpstreamStarted?.()
+      },
       accountId: plan.account.id,
       configDir: plan.configDir,
       model: plan.upstreamModel,
@@ -133,29 +151,14 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       session: turn.plan,
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
       onRateLimit: rateLimit.capture,
-      // The turn stopped mid-answer. Logged here because the render layer is pure — this seam is
-      // where the account and the request id meet it — and logged with everything the renderer
-      // knew, because the question this line has to answer is *which* early ending it was: the
-      // query iterator completing, a `result` landing mid-block, or the subprocess dying under it.
-      onTruncatedTurn: (detail) =>
-        input.log?.warn("sdk turn ended mid-answer; the client is told it is incomplete", {
-          accountId: plan.account.id,
-          blocks: detail.blocks,
-          kinds: detail.kinds,
-          lastMessage: detail.lastMessage,
-          lastEvent: detail.lastEvent,
-          sawResult: detail.sawResult,
-          lastSystemSubtype: detail.lastSystemSubtype,
-          // Which of the two explanations for a `tool_use` block that never closed applies —
-          // see `SdkTruncatedTurn`.
-          declaredTools: detail.declaredTools,
-          passthrough: detail.passthrough,
-          flushedBlocks: detail.flushedBlocks,
-          sdkMessages: detail.sdkMessages,
-          frames: detail.frames,
-        }),
+      onRefusal: (failure) => {
+        refusal = failure
+      },
+      onTruncatedTurn: truncatedTurnLog(input.log, plan.account.id),
     })
+    clocks?.headersArrived()
   } catch (error) {
+    clocks?.release()
     // Released here as well as from `onTurnEnd`, and idempotently: a throw before the launch ever
     // existed reaches no `onEnd`, and the *next* attempt of this same request must be able to claim
     // the conversation immediately rather than fail over onto a detached, session-less turn.
@@ -175,9 +178,10 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // The same reason as the catch above: this attempt is over and the chain may try another
   // account, which resolves its own turn against this conversation.
   if (response.status >= 400) {
+    clocks?.release()
     turn.release("failed")
     try {
-      return await errorResponseFailure(response, rateLimit.signal())
+      return await errorResponseFailure(response, rateLimit.signal(), refusal)
     } finally {
       rateLimit.close()
     }
@@ -193,7 +197,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
   // prevent (`claude-sdk/session/inflight.ts`).
   return {
     kind: "success",
-    response: releasingWith(response, () => {
+    response: releasingWith(clocks?.watch(response) ?? response, () => {
       rateLimit.close()
       turn.release()
     }),
@@ -258,6 +262,7 @@ function invocationFailure(
       message: clientMessage,
       ...(classification.requestAttributable === true ? { requestAttributable: true } : {}),
       ...(classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
+      ...(classification.modelScoped === true ? { modelScoped: true } : {}),
     },
     classification,
     // The account's quota state rides `rate_limit_event`, never the throw (§5) — `classifySdkFailure`

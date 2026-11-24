@@ -185,10 +185,11 @@ describe("upstream trust boundary", () => {
 
   test("records a broken response stream as failed without retrying", async () => {
     const stream = slowStream(["data: hello\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    stream.release(0)
     const { app, usage, upstream } = harness({ responses: [() => stream.response] })
     const response = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     const reader = response.body?.getReader()
-    stream.release(0)
     expect((await reader?.read())?.done).toBe(false)
     stream.abort()
     // Bytes were out, so no retry: the stream ends with the router's own error event (2.53.0).
@@ -240,13 +241,14 @@ describe("upstream trust boundary", () => {
   test("client abort after response is recorded without striking account health", async () => {
     const abort = new AbortController()
     const stream = slowStream(["data: hello\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    stream.release(0)
     const { app, usage, health } = harness({ responses: [() => stream.response] })
     const response = await app.request("/v1/messages", {
       ...post(STREAMED_MESSAGE, bearer()),
       signal: abort.signal,
     })
     const reader = response.body?.getReader()
-    stream.release(0)
     await reader?.read()
     abort.abort()
     stream.abort()
@@ -258,10 +260,11 @@ describe("upstream trust boundary", () => {
 
   test("cancelling a response reader without aborting its request does not strike health", async () => {
     const stream = slowStream(["data: hello\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    stream.release(0)
     const { app, usage, health } = harness({ responses: [() => stream.response] })
     const response = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     const reader = response.body?.getReader()
-    stream.release(0)
     await reader?.read()
     await reader?.cancel()
     await settle()

@@ -82,6 +82,29 @@ export interface SdkFailure {
  */
 const STATUS_RULES: readonly SdkRule[] = [
   {
+    // A `403` about one model on this plan. Parking the subscription for it took every other model
+    // out of rotation until the six-hourly credential check put it back.
+    kind: "model-unsupported",
+    signal: "claude-sdk:model-forbidden",
+    status: 404,
+    clientMessage: "the Claude subscription does not serve the requested model",
+    match: (text) =>
+      apiStatus(403)(text) &&
+      text.message.includes("permission_error") &&
+      /\baccess to (?:the |this )?(?:requested )?model\b|\bmodel[:\s][^"]{0,200}\bnot (?:available|allowed|permitted)\b|\baccess to claude-/.test(
+        text.message,
+      ),
+  },
+  {
+    // A page, not an answer: an edge or proxy refused the call before Anthropic saw it, so it says
+    // nothing about the credential.
+    kind: "server-error",
+    signal: "claude-sdk:edge-forbidden",
+    status: 502,
+    clientMessage: "the upstream's edge refused the call before it was read",
+    match: (text) => apiStatus(403)(text) && /<!doctype html|<html[\s>]/.test(text.message),
+  },
+  {
     kind: "auth",
     signal: "claude-sdk:api-status-401",
     status: 401,
@@ -156,6 +179,7 @@ export function classifySdkFailure(error: unknown): SdkFailure {
       ...(text.message === "" ? {} : { message: text.message }),
       ...(rule.requestAttributable ? { requestAttributable: true } : {}),
       ...(rule.permanentForRequest ? { permanentForRequest: true } : {}),
+      ...(rule.modelScoped ? { modelScoped: true } : {}),
     },
     clientMessage: rule.clientMessage,
     text,

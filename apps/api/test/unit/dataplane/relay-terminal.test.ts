@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import { ClientCancelledError } from "../../../src/services/dataplane/relay-cancellation"
-import { createRelayTerminal } from "../../../src/services/dataplane/relay-terminal"
+import {
+  createRelayTerminal,
+  UpstreamTruncatedError,
+} from "../../../src/services/dataplane/relay-terminal"
 import { createResponseObserver } from "../../../src/services/usage/response-observer"
 
 function observer(maximumObservationBytes = 1024) {
@@ -86,3 +89,38 @@ test("an observed upstream failure outranks a later cancel after output", () => 
   terminal.error(new ClientCancelledError(), true)
   expect(terminal.finish(response.snapshot()).recovery).not.toBe("succeeded")
 })
+
+test("a stream with no ending of its own is incomplete, never a success", () => {
+  const response = observer()
+  response.observe(
+    new TextEncoder().encode('event: message_start\ndata: {"type":"message_start"}\n\n'),
+  )
+  const terminal = createRelayTerminal()
+  terminal.error(new UpstreamTruncatedError())
+  expect(terminal.finish(response.snapshot())).toMatchObject({
+    outcome: "upstream_error",
+    errorClass: "upstream_incomplete",
+    failure: null,
+    recovery: "uncertain",
+  })
+})
+
+// The same reading `chain-recovery.ts` gives these kinds before a byte: the provider's shared backend
+// says nothing about the account, and a refusal of the request proves the account answered.
+for (const [kind, recovery] of [
+  ["overloaded", "uncertain"],
+  ["invalid-request", "succeeded"],
+  ["model-unsupported", "succeeded"],
+  ["rate-limited", "failed"],
+  ["server-error", "failed"],
+] as const)
+  test(`an in-stream ${kind} settles recovery ${recovery}`, () => {
+    const facts = observer().snapshot()
+    expect(
+      createRelayTerminal().finish({
+        ...facts,
+        terminal: "explicit_error",
+        failure: { kind, status: 200, retryable: true, signal: "x", rateLimit: null },
+      }).recovery,
+    ).toBe(recovery)
+  })

@@ -288,10 +288,10 @@ describe("a request Anthropic metered against Extra Usage", () => {
     expect(state.cooldownUntil).toBeInstanceOf(Date)
   })
 
-  test("the client hears one honest sentence: no capacity, and where to add more", () => {
+  test("the client hears one honest sentence: it is this request, and what would change that", () => {
     const { clientMessage } = classifySdkFailure(resultError(EXTRA_USAGE, 400))
 
-    expect(clientMessage).toContain("no Claude subscription capacity is available right now")
+    expect(clientMessage).toContain("resending it unchanged is refused again")
     expect(clientMessage).toContain("claude.ai/settings/usage")
     expect(clientMessage).not.toContain("malformed")
     // Router-authored: the rotation is the router's business, so nothing about which account was

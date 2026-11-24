@@ -106,7 +106,8 @@ function isShutdownRefusal(error: Error): boolean {
 }
 
 export function notFoundHandler(): NotFoundHandler<AppEnv> {
-  return (c) => send(c, notFoundResponse(dialectForPath(c.req.path), c.get("requestId") ?? null))
+  return (c) =>
+    send(c, notFoundResponse(dialectForPath(c.req.path), c.get("requestId") ?? null, c.req.path))
 }
 
 function send(c: Context<AppEnv>, response: ErrorResponse): Response {

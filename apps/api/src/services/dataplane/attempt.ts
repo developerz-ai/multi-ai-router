@@ -193,7 +193,7 @@ async function decideAnswer(
         maxBytes: errorMaxBytes,
         signal: AbortSignal.any(signals),
         ...(input.clientStreams === true && input.stream !== undefined
-          ? { hold: { ms: input.stream.wallHoldMs } }
+          ? { hold: { ms: input.stream.wallHoldMs, silence: input.silentHold } }
           : {}),
       })
     } catch (error) {

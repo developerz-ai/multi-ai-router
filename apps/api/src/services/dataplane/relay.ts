@@ -1,5 +1,6 @@
 import { clientHeaders } from "./egress/headers"
-import { observeCancellation, relayCancellationError } from "./relay-cancellation"
+import { pumpBody } from "./relay-pump"
+import type { LastWords } from "./relay-stream-end"
 
 /**
  * Stream relay. **This is the hard requirement, not a preference.**
@@ -41,6 +42,8 @@ export function relayResponse(
   upstream: Response,
   observer: RelayObserver = {},
   signal?: AbortSignal,
+  /** Ends a stream that breaks after its first byte (`relay-stream-end.ts`). */
+  lastWords?: LastWords,
 ): Response {
   const headers = clientHeaders(upstream.headers)
 
@@ -58,44 +61,33 @@ export function relayResponse(
     else observer.onError?.(error, bytes)
   }
 
-  const passthrough = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      // Enqueue first, so the chunk is queued before any observer work. The reader resumes only in
-      // a later microtask, so the observer below still runs before the client sees this chunk.
-      controller.enqueue(chunk)
-      const first = bytes === 0
-      bytes += chunk.length
-      try {
-        observer.onWireBytes?.(bytes)
-        if (first) observer.onFirstByte?.()
-        observer.onChunk?.(chunk)
-      } catch {
-        // A broken observer degrades reporting for this request. It does not break the stream.
-      }
+  const body = pumpBody(
+    upstream.body,
+    {
+      chunk(chunk, controller) {
+        // Enqueue first, so the chunk is queued before any observer work. The reader resumes only in
+        // a later microtask, so the observer below still runs before the client sees this chunk.
+        controller.enqueue(chunk)
+        const first = bytes === 0
+        bytes += chunk.length
+        try {
+          observer.onWireBytes?.(bytes)
+          if (first) observer.onFirstByte?.()
+          observer.onChunk?.(chunk)
+        } catch {
+          // A broken observer degrades reporting for this request. It does not break the stream.
+        }
+        return true
+      },
+      end: () => settle(undefined),
+      failed: (error) => settle(error ?? new Error("response stream cancelled")),
+      // A downstream cancel is a genuine client cancel **unless the router aborted the same signal**;
+      // the error handed over already says which (`relay-cancellation.ts` owns that decision).
+      cancelled: settle,
+      ...(lastWords === undefined ? {} : { lastWords }),
     },
-    flush() {
-      settle(undefined)
-    },
-  })
+    signal,
+  )
 
-  upstream.body
-    .pipeTo(passthrough.writable, signal === undefined ? {} : { signal })
-    .catch((error: unknown) => {
-      settle(error ?? new Error("response stream cancelled"))
-    })
-
-  /**
-   * This callback fires for a downstream cancel, which is a genuine client cancel **unless the
-   * router aborted the same signal**. Which one it is comes from the signal's reason, never from
-   * an unconditional constant: the shared predicate in `relay-cancellation.ts` owns that decision,
-   * so a router-caused abort reports its own class and only a real `AbortError` reads as
-   * `client_cancelled`.
-   */
-  const cancelled = (): void => settle(relayCancellationError(signal))
-
-  return new Response(observeCancellation(passthrough.readable, cancelled), {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers,
-  })
+  return new Response(body, { status: upstream.status, statusText: upstream.statusText, headers })
 }

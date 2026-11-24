@@ -1,17 +1,15 @@
-import type { Logger } from "../../logging/logger"
+import { sanitizeErrorBody } from "../../services/dataplane/error-body"
 import { releasingWith } from "../../services/dataplane/sdk-attempt-response"
 import {
   createTranslationDropLog,
   dropReporter,
 } from "../../services/dataplane/translation-drop-log"
-import type { FetchLike } from "../../services/dataplane/types"
 import type { TranslationDrop } from "../../services/translate/shared/drops"
-import type { SdkConcurrency } from "../claude-sdk/concurrency"
 import { CLI_REFRESH_LEAD_MS } from "../claude-sdk/credential-freshness"
 import type { SdkInvocation, SdkInvoker } from "../claude-sdk/invoke"
 import { UpstreamAdmissionRefused } from "../upstream-admission"
-import type { FastCredential } from "./credential"
 import { FastTransportError, failureReason } from "./failure"
+import type { FastFallbackReason, FastInvokerDeps } from "./invoker-types"
 import { createNativeSchemaMemo } from "./native-schema-memo"
 import { FAST_URL, fastHeaders } from "./profile"
 import { reportFastQuota } from "./quota"
@@ -19,44 +17,13 @@ import { prepareFastRequest, readFastRequest } from "./request"
 import {
   collectFastResponse,
   FastForcedToolUnmet,
-  fastErrorResponse,
+  fastRefusal,
   isNativeSchemaRejection,
   readFastErrorText,
   validateFastResponse,
 } from "./response"
 
-export type FastFallbackReason = "credential" | "model" | "profile"
-
-export interface FastInvokerDeps {
-  readonly concurrency: SdkConcurrency
-  readonly sdk: SdkInvoker
-  /** Must read under this Account's existing metadata-owner fence (or its stat-keyed cache). */
-  readonly credential: (accountId: string, configDir: string) => Promise<FastCredential | null>
-  /** Drops a cached credential after Anthropic answered `401`/`403` (`credential-cache.ts`). */
-  readonly forgetCredential?: (accountId: string) => void
-  readonly resolveModel: (accountId: string, model: string) => string | null
-  readonly errorMaxBytes: number
-  /**
-   * How long a native structured-output request may wait for Anthropic's response headers
-   * (`CLAUDE_FAST_NATIVE_SCHEMA_TIMEOUT_SECONDS`). Anthropic compiles the schema before it answers
-   * and held prod clients ~180 s for a `Schema is too complex.` 400 (101 finding 10.4); past this
-   * bound the attempt is abandoned and re-sent on the adapted tool, which needs no compile.
-   */
-  readonly nativeSchemaTimeoutMs?: number
-  /** Schemas remembered as refused natively, so a repeat skips the wait (bounded, oldest out). */
-  readonly nativeSchemaMemoSize?: number
-  readonly fetch?: FetchLike
-  readonly now?: () => number
-  /**
-   * The `translation dropped fields` warn window (`TRANSLATION_DROP_LOG_WINDOW_SECONDS`), shared
-   * with the translator's own line: one warn per key and drop signature per window, then `debug`.
-   */
-  readonly dropLogWindowMs?: number
-  /** Every fallback, for the `claude_fast_fallback_total{reason}` counter. */
-  readonly onFallback?: (reason: FastFallbackReason, accountId: string) => void
-  /** Warn-once per Account and reason for fallbacks; the transport and native-schema reasons. */
-  readonly logger?: Logger
-}
+export type { FastFallbackReason, FastInvokerDeps } from "./invoker-types"
 
 const DEFAULT_NATIVE_SCHEMA_TIMEOUT_MS = 20_000
 /** The drop line's dialect pair: the Anthropic body, reduced to the native schema subset. */
@@ -184,7 +151,9 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
               body: meta.text,
             }),
           )
-          reportFastQuota(response.headers, input.onRateLimit)
+          // A refusal's verdict waits for its classification: one the request provoked must not
+          // cool the Account through the headers it came with.
+          if (response.ok) reportFastQuota(response.headers, input.onRateLimit)
           return response
         } catch (error) {
           if (stall.signal.aborted && !input.signal.aborted) return "stalled"
@@ -192,6 +161,17 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
         } finally {
           clearTimeout(timer)
         }
+      }
+      const refuse = (
+        upstream: { readonly status: number; readonly headers: Headers },
+        text: string,
+      ): Response => {
+        const { failure, response } = fastRefusal(upstream, text)
+        reportFastQuota(upstream.headers, input.onRateLimit, {
+          requestAttributable: failure.classification.requestAttributable === true,
+        })
+        input.onRefusal?.(failure)
+        return response
       }
       input.beforeUpstreamStart?.()
       input.onUpstreamStarted?.()
@@ -243,11 +223,12 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
           const text =
             errorText ??
             (await readFastErrorText(response, deps.errorMaxBytes, [credential.accessToken]))
-          return fastErrorResponse(response, text)
+          return refuse(response, text)
         } finally {
           release()
         }
       }
+      const upstreamHeaders = response.headers
       response = await validateFastResponse(response)
       if (!response.ok) {
         release()
@@ -261,6 +242,15 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
             response,
             input.signal,
             prepared.forcedTool === "forced-tool",
+            (error) =>
+              refuse(
+                { status: error.status, headers: upstreamHeaders },
+                // Redacted, then cut: a cut can leave half a token no pattern matches.
+                sanitizeErrorBody(error.body, [credential.accessToken]).slice(
+                  0,
+                  deps.errorMaxBytes,
+                ),
+              ),
           )
         } finally {
           release()

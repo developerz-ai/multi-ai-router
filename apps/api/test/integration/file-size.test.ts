@@ -21,10 +21,6 @@ const SOURCE = new Glob("{apps,packages}/*/src/**/*.{ts,tsx}")
 const OVER_LIMIT: Readonly<Record<string, number>> = {
   // Usage slice (A07): one salvage state machine per dialect; split per dialect is the follow-up.
   "apps/api/src/services/usage/response-salvage.ts": 400,
-  // Claude SDK slice (A05): wire re-synthesis per dialect; split with the render/ follow-up.
-  "apps/api/src/providers/claude-sdk/render/envelope.ts": 316,
-  // Claude SDK slice (A05): the early-stop state machine for forwarded tool calls.
-  "apps/api/src/providers/claude-sdk/tools/early-stop.ts": 311,
 }
 
 function lineCount(text: string): number {

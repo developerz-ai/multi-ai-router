@@ -2,6 +2,7 @@ import type { Dialect } from "@multi-ai-router/core"
 import type { FailureClassification, ProviderDriver, UpstreamFailureKind } from "../../providers"
 import { createResponseFraming } from "../usage/response-framing"
 import { protocolFailure, readResponseTerminal } from "../usage/response-terminal"
+import type { SilentHold } from "./silent-hold"
 import { type DeadlineClock, SYSTEM_CLOCK } from "./upstream-deadline"
 
 /**
@@ -15,10 +16,14 @@ import { type DeadlineClock, SYSTEM_CLOCK } from "./upstream-deadline"
  * front of the body is read here and a wall becomes the failure it is.
  *
  * **A streaming client is held too, but briefly.** Its status line waits for the first event that
- * decides, and no longer than `hold` (`UPSTREAM_STREAM_WALL_HOLD_MS`): an upstream still silent
- * then is committed with whatever it sent, so a reasoning upstream that thinks for minutes before
- * speaking cannot run a client's header timeout down. A wall inside the hold fails over in the same
- * call; a wall after it is in-stream, and a stream that breaks after content ends with the router's
+ * decides, and no longer than `hold` (`UPSTREAM_STREAM_WALL_HOLD_MS`) once the upstream has said
+ * anything: preamble frames past it are committed, so a reasoning upstream that thinks for minutes
+ * cannot run a client's header timeout down. An upstream that has sent **no byte at all** is not
+ * committed: there is nothing to relay, so holding costs the client nothing, and the upstream's own
+ * idle clock ends the wait as a failed attempt that fails over (prod 2026-11-24: 29 of 35 NVIDIA
+ * timeouts had sent zero bytes after their headers and were committed at 5 s, past any failover).
+ * That wait is bounded across the chain (`silent-hold.ts`): spent, a silent upstream commits too.
+ * A wall inside the hold fails over in the same call; a wall after it is in-stream, and a stream that breaks after content ends with the router's
  * own error event (`relay-stream-end.ts`). The server's idle clock is off while the handler runs
  * (`middleware/idleClock.ts`), so the hold never trips it.
  *
@@ -56,18 +61,31 @@ export interface SuccessPeekInput {
    */
   readonly signal?: AbortSignal
   /**
-   * A streaming client's bound on the peek (`UPSTREAM_STREAM_WALL_HOLD_MS`). Expiry commits: the
-   * bytes read so far are replayed and the read still in flight is carried, never dropped. Absent
+   * A streaming client's bound on the peek (`UPSTREAM_STREAM_WALL_HOLD_MS`). Expiry commits once a
+   * byte was read: the bytes so far are replayed and the read still in flight is carried, never
+   * dropped. With none read, the first chunk commits instead (or its wall decides). Absent
    * for a client that is not streaming, which sees nothing before the whole answer anyway.
    */
-  readonly hold?: { readonly ms: number; readonly clock?: DeadlineClock }
+  readonly hold?: {
+    readonly ms: number
+    readonly clock?: DeadlineClock
+    /** The request's shared bound on waiting past `ms` with no byte at all. Absent: unbounded. */
+    readonly silence?: SilentHold
+  }
 }
 
 /** Opens a response and carries no output: read past, so the event after it can still decide. */
 const PREAMBLE: Readonly<Record<Dialect, readonly string[]>> = {
   anthropic: ["message_start", "ping"],
   "openai-chat": [],
-  "openai-responses": ["response.created", "response.in_progress"],
+  // Codex states `response.metadata` (and its vendor-prefixed spelling) between the preamble and the
+  // first output or the in-stream wall (prod 2026-11-24: 26 overloads committed on it).
+  "openai-responses": [
+    "response.created",
+    "response.in_progress",
+    "response.metadata",
+    "codex.response.metadata",
+  ],
 }
 
 /**
@@ -136,12 +154,14 @@ export async function peekSuccess(
   let pending: Promise<ReadResult> | undefined
   let releaseHold = (): void => {}
   const { hold } = input
-  const holdExpired =
-    hold === undefined
-      ? undefined
-      : new Promise<typeof HELD>((resolve) => {
-          releaseHold = (hold.clock ?? SYSTEM_CLOCK).after(hold.ms, () => resolve(HELD))
-        })
+  const clock = hold?.clock ?? SYSTEM_CLOCK
+  const heldFor = (ms: number) =>
+    new Promise<typeof HELD>((resolve) => {
+      releaseHold = clock.after(ms, () => resolve(HELD))
+    })
+  let holdExpired = hold === undefined ? undefined : heldFor(hold.ms)
+  /** When the hold ran out with no byte read: from here the silence is charged to the request. */
+  let silentSince: number | undefined
   try {
     while (verdict === undefined) {
       pending ??= reader.read()
@@ -149,7 +169,13 @@ export async function peekSuccess(
         holdExpired === undefined ? pending : Promise.race([pending, holdExpired]),
         input.signal,
       )
-      if (next === HELD) break
+      if (next === HELD) {
+        const left = hold?.silence?.remainingMs()
+        if (read > 0 || silentSince !== undefined || left === 0) break
+        silentSince = clock.now()
+        holdExpired = left === undefined ? undefined : heldFor(left)
+        continue
+      }
       pending = undefined
       if (next.done) {
         ended = true
@@ -166,7 +192,7 @@ export async function peekSuccess(
         partial = lines.pop() ?? ""
         if (lines.some((line) => line.startsWith(":"))) break
       }
-      if (read > input.maxBytes) break
+      if (read > input.maxBytes || (silentSince !== undefined && verdict === undefined)) break
     }
   } catch (error) {
     // The upstream broke, a clock fired, or the request was abandoned inside the peek. Nothing was
@@ -175,6 +201,7 @@ export async function peekSuccess(
     throw error
   } finally {
     releaseHold()
+    if (silentSince !== undefined) hold?.silence?.spend(clock.now() - silentSince)
   }
 
   if (verdict !== undefined && verdict !== "commit") {

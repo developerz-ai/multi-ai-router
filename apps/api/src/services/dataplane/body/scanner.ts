@@ -6,6 +6,7 @@ import type { Frame, ScannerOptions, ScanResult } from "./scanner-types"
 import { createSkim } from "./skim"
 import { createStringValidation } from "./string-validation"
 import { canCloseFrame, consumeSeparator, createFrame } from "./structural"
+import { createUtf8Validation } from "./utf8-validation"
 
 export * from "./scanner-types"
 export function createRoutingScanner(options: ScannerOptions = {}) {
@@ -32,7 +33,8 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
   let finalized = false
   let primitive = false,
     conversationSeen = false
-  const strings = createStringValidation(),
+  const utf8 = createUtf8Validation(),
+    strings = createStringValidation(),
     literal = createPrimitive()
   const opening = createOpeningCapture(limit),
     skim = createSkim({ strings, literal, maximumJsonDepth })
@@ -175,6 +177,8 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
   }
   return {
     push(chunk: Uint8Array) {
+      // Whole chunk, natively: ~30 ns/KB, where following code points per string run cost up to 1 ns/B.
+      utf8.segment(chunk, 0, chunk.length)
       for (let i = 0; i < chunk.length; i++, offset++) {
         if (skim.active) {
           const end = skim.scan(chunk, i)
@@ -276,7 +280,7 @@ export function createRoutingScanner(options: ScannerOptions = {}) {
       finalized = true
       if (primitive) finishPrimitive()
       const open = stack.length > 0 || inString || skim.active || strings.pending
-      if (!rootFinished || open || strings.invalid) invalid = true
+      if (!rootFinished || open || strings.invalid || utf8.invalid || utf8.pending) invalid = true
       return this.result()
     },
     result(): ScanResult {

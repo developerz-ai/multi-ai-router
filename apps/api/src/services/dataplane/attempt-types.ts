@@ -2,6 +2,7 @@ import type { Dialect } from "@multi-ai-router/core"
 import type { ProviderDriver } from "../../providers"
 import type { UpstreamStartGuard } from "../../providers/upstream-admission"
 import type { CredentialCipher } from "../crypto/cipher"
+import type { SilentHold } from "./silent-hold"
 import type { FetchLike, RoutableAccount } from "./types"
 import type { StreamDeadlines } from "./upstream-deadline"
 
@@ -45,6 +46,8 @@ export interface AttemptInput {
    * (`success-wall.ts`). A client that is not streaming is peeked until the first event decides.
    */
   readonly clientStreams?: boolean
+  /** The request's budget for waiting on an upstream that sent no byte (`silent-hold.ts`). */
+  readonly silentHold?: SilentHold
   /**
    * Replaces the client's `Accept`. Set only for a body the router rewrote to stream for a surface
    * that answers only as SSE: the client's own value describes the response *it* is owed, not the

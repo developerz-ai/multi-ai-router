@@ -2,6 +2,7 @@ import type { MiddlewareHandler } from "hono"
 import type { LogFields, Logger } from "../logging/logger"
 import type { AuditContext } from "../services/admin/audit-context"
 import type { AppEnv } from "../types"
+import { observeBody } from "./observe-body"
 
 /**
  * Binds a request-scoped logger onto the context and writes exactly **one** transport line per
@@ -186,7 +187,7 @@ export function requestLogger(
     const path = c.req.path
 
     let written = false
-    const emit = (closedByClient: boolean): void => {
+    const emit = (ending?: "closedByClient" | "bodyBroken"): void => {
       if (written) return
       written = true
       const durationMs = Math.round(performance.now() - startedAt)
@@ -196,7 +197,7 @@ export function requestLogger(
         status,
         durationMs,
         ...(streamed ? { streamed: true, timeToHeadersMs: headersMs } : {}),
-        ...(closedByClient ? { closedByClient: true } : {}),
+        ...(ending === undefined ? {} : { [ending]: true }),
       }
       if (failure === null) {
         const level = status < 400 && quiet.has(path) ? "debug" : "info"
@@ -216,20 +217,18 @@ export function requestLogger(
     }
 
     if (response.body === null) {
-      emit(false)
+      emit()
       return
     }
     c.res = new Response(
-      response.body.pipeThrough(
-        new TransformStream<Uint8Array, Uint8Array>({
-          transform(chunk, controller) {
-            controller.enqueue(chunk)
-          },
-          flush: () => emit(false),
-          // Bun cancels the body when the client goes away mid-response.
-          cancel: () => emit(true),
-        } as Transformer<Uint8Array, Uint8Array>),
-      ),
+      observeBody(response.body, {
+        // Bun cancels the body when the client goes away mid-response. A body that broke by itself
+        // is the upstream's doing unless the client had already left.
+        onEnd: (how) => {
+          if (how === "broken" && !request.signal.aborted) emit("bodyBroken")
+          else emit(how === "end" ? undefined : "closedByClient")
+        },
+      }),
       response,
     )
   }

@@ -353,6 +353,16 @@ describe("a database outage is told apart from an unwritable batch (07.4)", () =
       ).toBe(true)
   })
 
+  test("a lock or statement timeout is the database's clock, never a poison batch", () => {
+    // The admission waits on the usage-history lock: a long holder times every batch out alike.
+    for (const code of ["55P03", "57014"])
+      expect(
+        isTransientDatabaseError(new Error("Failed query: select …", { cause: coded(code) })),
+      ).toBe(true)
+    // Neighbours in the same classes that are not a clock stay possibly-permanent.
+    for (const code of ["55000", "57000"]) expect(isTransientDatabaseError(coded(code))).toBe(false)
+  })
+
   test("a constraint or a malformed row is not", () => {
     for (const code of ["23505", "22P02", "42703"])
       expect(isTransientDatabaseError(coded(code))).toBe(false)

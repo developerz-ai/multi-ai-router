@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer"
 import { createHash } from "node:crypto"
 import { RequestTooLargeError } from "@multi-ai-router/core"
+import { replaceSpan } from "./members"
 import {
   type ByteSpan,
   createRoutingScanner,
@@ -166,18 +167,8 @@ function concat(chunks: readonly Uint8Array[], total: number): Uint8Array {
  * The router never substitutes a model on its own; an alias is the operator saying otherwise.
  */
 export function rewriteModel(bytes: Uint8Array, span: ByteSpan, upstreamModel: string): Uint8Array {
-  const replacement = new TextEncoder().encode(jsonEscape(upstreamModel))
-  const out = new Uint8Array(bytes.length - (span.end - span.start) + replacement.length)
-  out.set(bytes.subarray(0, span.start), 0)
-  out.set(replacement, span.start)
-  out.set(bytes.subarray(span.end), span.start + replacement.length)
-  return out
-}
-
-/** Alias values are operator-authored, so this covers the characters a model id could carry. */
-function jsonEscape(value: string): string {
-  const encoded = JSON.stringify(value)
-  return encoded.slice(1, -1)
+  // Alias values are operator-authored; `JSON.stringify` covers the characters a model id could carry.
+  return replaceSpan(bytes, span, JSON.stringify(upstreamModel).slice(1, -1))
 }
 
 /**

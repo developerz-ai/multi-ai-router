@@ -58,8 +58,12 @@ for (const emitted of ["forwarded-comment", "synthetic-heartbeat"] as const) {
       expect(wire).toEqual([chunk.value?.length])
       if (ending === "error") source.error(new Error("offline stream failure"))
       else source.close()
-      await reader.read().catch(() => {})
-      expect(endings).toEqual([chunk.value?.length])
+      // A stream that said nothing but keepalives ends with the router's error event; a broken one
+      // errors. Either way every byte on the wire is counted, and none of it is content.
+      const last = await reader.read().catch(() => undefined)
+      const total = (chunk.value?.length ?? 0) + (last?.value?.length ?? 0)
+      expect((last?.value?.length ?? 0) > 0).toBe(ending === "clean")
+      expect(endings).toEqual([total])
       expect(firstContent).toBe(0)
     })
   }

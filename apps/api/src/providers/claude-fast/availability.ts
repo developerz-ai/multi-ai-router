@@ -10,7 +10,14 @@ import { CLAUDE_FAST_CLI_VERSION } from "./integrity"
 // Independently compared with native captures and the SDK 0.3.319 manifest (Linux x64/glibc).
 const VERIFIED_BINARY = "dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"
 
-/** Boot-only calibration check, including the image's staged PATH binary after dependency pruning. */
+/**
+ * The runtime whose TLS ClientHello and header framing the calibration compared, deliberately a
+ * literal: derived from `.bun-version`, a Bun bump would declare itself calibrated. A unit test
+ * holds the two equal, so the bump fails there instead of silently serving over the SDK.
+ */
+export const CALIBRATED_BUN_VERSION = "1.4.4"
+
+/** Boot-only calibration check against the CLI this process resolves (the staged one in the image). */
 export function fastProfileAvailable(cliOverride: string | null): boolean {
   return fastProfileState(cliOverride) === "verified"
 }
@@ -19,7 +26,7 @@ export function fastProfileState(
   cliOverride: string | null,
 ): "verified" | "override" | "runtime" | "cli" | "manifest" | "checksum" | "unavailable" {
   if (cliOverride !== null) return "override"
-  if (Bun.version !== "1.4.4") return "runtime"
+  if (Bun.version !== CALIBRATED_BUN_VERSION) return "runtime"
   try {
     const resolved = resolveClaudeCli(createCliProbe({ override: cliOverride }))
     if (!resolved.ok) return "cli"
@@ -31,7 +38,7 @@ export function fastProfileState(
         "manifest.json",
       )
     } catch {
-      // The image copies root node_modules, not workspace links; the SDK is bundled into the API.
+      // The image carries no node_modules: the SDK is bundled into the API and its manifest shipped.
       manifestPath = new URL("../libexec/claude-manifest.json", import.meta.url)
     }
     const manifest = z.object({ version: z.literal(CLAUDE_FAST_CLI_VERSION) })

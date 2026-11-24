@@ -99,8 +99,11 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         ? await bindings.read(input.key.id, session.key, input.key.scope)
         : undefined
     input.request.signal.throwIfAborted()
-
     const log = deps.logger?.child({ component: "transport", requestId: input.requestId })
+    // A deliberate wait is not router work: it stays out of `router_overhead_seconds` (12.4).
+    const waited = (ms: number) => {
+      progress.recoveryWaitMs += ms
+    }
     // One wait budget and a lease held while a chain runs, so a waiting request stays active.
     const recovery = createRequestRecovery({
       options: options.recoveryWait,
@@ -110,10 +113,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       log,
       lease: input.activeRequest,
       probing: deps.recovery?.probing?.bind(deps.recovery),
-      // A deliberate wait is not router work: it stays out of `router_overhead_seconds` (12.4).
-      onWaited: (milliseconds) => {
-        progress.recoveryWaitMs += milliseconds
-      },
+      onWaited: waited,
     })
     const runtime = createRuntime({
       ...shared,
@@ -125,6 +125,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       clientToolLoop: session.clientToolLoop,
       bodyReadMs: progress.bodyReadMs,
       recoveryWaitMs: () => progress.recoveryWaitMs,
+      onWaited: waited,
       record: accounting.record,
       recordTerminal: accounting.recordTerminal,
       selectTerminal: accounting.selectTerminal,
@@ -171,8 +172,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     // Loops only while the router's own recovery hold is the obstacle (`recovery-wait.ts`).
     for (;;) {
       const selection = await recovery.select(select)
-      // Whether the model resolved against the catalog: the request metric labels an unknown one
-      // `other`, since a client-typed string is unbounded.
+      // An unresolved model is labelled `other`: a client-typed string is unbounded.
       progress.modelKnown =
         selection.ok ||
         selection.decision.rejected.some((entry) => entry.reason !== "model-unsupported")
@@ -214,7 +214,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
         })
       }
 
-      // The bound account travels into the chain so a mid-chain hop off it is known (`leavingBound`).
+      // So the chain knows a mid-chain hop off the bound account (`leavingBound`).
       const failover: FailoverOptions = {
         ...options.failover,
         ...(decidedBinding.state === "honored" ? { boundAccountId: decidedBinding.accountId } : {}),

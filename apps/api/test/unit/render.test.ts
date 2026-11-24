@@ -251,4 +251,12 @@ describe("notFoundResponse", () => {
     })
     expect(notFoundResponse(null).status).toBe(404)
   })
+
+  // Prod 2026-11: agents guessed `/api/pools`, `/api/health` and `/api/admin/health` in turn.
+  test("an unknown admin path names where the real ones are listed", () => {
+    for (const path of ["/api/pools", "/api/admin/health"])
+      expect(notFoundResponse(null, null, path).body.error.message).toContain(
+        "docs/idea/04-api-keys-and-access.md#admin-api-route-groups",
+      )
+  })
 })

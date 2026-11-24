@@ -43,6 +43,8 @@ export type DeadlineKind = "first-byte" | "idle" | "total"
 export interface UpstreamDeadline {
   /** The attempt's signal: any clock, or the client going away. */
   readonly signal: AbortSignal
+  /** Arms the first-byte clock of a `deferred` deadline. */
+  start(): void
   /** Response headers are in: the first-byte clock stops. */
   headersArrived(): void
   /** The success response, its body watched for silence. The idle clock starts here. */
@@ -68,6 +70,11 @@ export function upstreamDeadline(input: {
   readonly stream: StreamDeadlines
   readonly client?: AbortSignal | undefined
   readonly clock?: DeadlineClock
+  /**
+   * The first-byte clock waits for {@link UpstreamDeadline.start}: an Agent-SDK attempt queues for a
+   * slot before it has an upstream to wait on.
+   */
+  readonly deferred?: boolean
 }): UpstreamDeadline {
   const clock = input.clock ?? SYSTEM_CLOCK
   const { firstByteMs, idleMs, totalMs } = input.stream
@@ -113,12 +120,18 @@ export function upstreamDeadline(input: {
     failWatched(reason)
   }
 
+  const start = (): void => {
+    if (released) return
+    cancelFirstByte()
+    cancelFirstByte = clock.after(firstByteMs, () => fire("first-byte"))
+  }
+
   // A client already gone arms nothing: the signal is aborted and the fetch never starts.
   if (input.client?.aborted === true) released = true
   else {
     input.client?.addEventListener("abort", release, { once: true })
     cancelTotal = clock.after(totalMs, () => fire("total"))
-    cancelFirstByte = clock.after(firstByteMs, () => fire("first-byte"))
+    if (input.deferred !== true) start()
   }
 
   /**
@@ -176,6 +189,7 @@ export function upstreamDeadline(input: {
 
   return {
     signal,
+    start,
     headersArrived() {
       cancelFirstByte()
     },

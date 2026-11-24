@@ -18,6 +18,21 @@ import { z } from "zod"
  * reading, never a turn — and the gauge is an API its own name says may change.
  */
 
+/**
+ * The windows that meter one model family rather than the subscription: spent, the Account still
+ * serves every other model (docs/idea/05-routing-and-failover.md, T3). Provenance: the CLI's
+ * `rateLimitType` vocabulary (2.1.319 string table); `seven_day_overage_included` is its per-model
+ * "overage-included models" window. Blast radius: a new per-model window reads as the whole
+ * Account's until it is named here. On Pro and Enterprise the CLI words a spent `seven_day_sonnet` as
+ * "weekly limit" (2.1.319), so its text reads as the plan window's: the Account then cools for an
+ * estimate, and the first request it serves ends it.
+ */
+export const MODEL_SCOPED_WINDOWS: ReadonlySet<string> = new Set([
+  "seven_day_opus",
+  "seven_day_sonnet",
+  "seven_day_overage_included",
+])
+
 export type SdkRateLimitStatus = "allowed" | "allowed_warning" | "rejected" | "unknown"
 
 /** One `rate_limit_info` payload, validated. Absent fields stay absent — never defaulted to zero. */
@@ -37,6 +52,12 @@ export interface SdkRateLimitReading {
    * rate-limit headers — rather than as a near-limit alarm, as the SDK's `rate_limit_event` does.
    */
   readonly continuous: boolean
+  /**
+   * The verdict on the request as a whole, when the reading states one. An SDK event's `status` *is*
+   * that verdict (its `rateLimitType` only names the window behind it); a fast-transport window
+   * carries its own status, so the response's overall one rides beside it.
+   */
+  readonly requestStatus: SdkRateLimitStatus
 }
 
 const nullableString = z.string().nullish().catch(null)
@@ -65,6 +86,7 @@ const rateLimitInfoSchema = z.looseObject({
   is_using_overage: nullableBoolean,
   /** Router-internal: set by `claude-fast/quota.ts`, never by the SDK. */
   utilizationSource: nullableString,
+  requestStatus: nullableString,
 })
 
 /** @returns null when the value is not a rate-limit payload at all. The caller skips it. */
@@ -73,15 +95,17 @@ export function readSdkRateLimitInfo(value: unknown, now: Date): SdkRateLimitRea
   if (!parsed.success) return null
   const data = parsed.data
 
+  const continuous = data.utilizationSource === "continuous"
   return {
     status: readStatus(data.status),
+    requestStatus: readStatus(continuous ? data.requestStatus : data.status),
     rateLimitType: nonEmpty(data.rateLimitType ?? data.rate_limit_type ?? null),
     resetsAt: futureEpoch(data.resetsAt ?? data.resets_at ?? null, now),
     utilization: data.utilization ?? null,
     overageStatus: nonEmpty(data.overageStatus ?? data.overage_status ?? null),
     overageResetsAt: futureEpoch(data.overageResetsAt ?? data.overage_resets_at ?? null, now),
     usingOverage: (data.isUsingOverage ?? data.is_using_overage) === true,
-    continuous: data.utilizationSource === "continuous",
+    continuous,
   }
 }
 

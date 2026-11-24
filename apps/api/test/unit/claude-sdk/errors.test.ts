@@ -288,3 +288,81 @@ describe("reading what a throw carries", () => {
     }
   })
 })
+
+describe("a 403 is read by what it refuses", () => {
+  const read = (message: string) => {
+    const error = Object.assign(new Error(message), { apiErrorStatus: 403 })
+    return classifySdkFailure(error).classification
+  }
+  const body = (message: string) =>
+    JSON.stringify({ type: "error", error: { type: "permission_error", message } })
+
+  test("one model on this plan: the model is held, the credential is not parked", () => {
+    for (const message of [
+      "Your organization does not have access to claude-opus-9",
+      "You do not have access to the requested model",
+      "The model: claude-opus-9 is not available on your plan",
+    ])
+      expect(read(body(message))).toMatchObject({
+        kind: "model-unsupported",
+        signal: "claude-sdk:model-forbidden",
+      })
+  })
+
+  test("an edge page says nothing about the credential", () => {
+    for (const page of ["<!DOCTYPE html><title>Attention Required!</title>", "<html><body>no"])
+      expect(read(page)).toMatchObject({
+        kind: "server-error",
+        signal: "claude-sdk:edge-forbidden",
+      })
+  })
+
+  test("the credential itself still needs a human", () => {
+    for (const message of [
+      "OAuth authentication is currently not allowed for this organization.",
+      "This organization has been disabled.",
+      "",
+    ])
+      expect(read(body(message)).kind).toBe("auth")
+  })
+})
+
+describe("a spent model-family window", () => {
+  test("is the model's on this account, never the account's", () => {
+    for (const message of [
+      "You've hit your Opus limit · resets Jul 30, 11pm (UTC)",
+      "You've reached your Fable limit",
+      "You've hit your weekly Sonnet limit",
+      "You've reached your Fable 5 limit",
+      "You've hit your Mythos 5.1 weekly limit",
+      "Fable 5 requires usage credits. Run /model to switch.",
+      "API Error: 429 Opus requires usage credits.",
+    ])
+      expect(classifySdkFailure(new Error(message)).classification).toMatchObject({
+        kind: "rate-limited",
+        signal: "claude-sdk:model-window-spent",
+        modelScoped: true,
+      })
+  })
+
+  test("whatever status came beside it", () => {
+    for (const status of [400, 429])
+      expect(
+        classifySdkFailure(
+          Object.assign(new Error("Fable 5 requires usage credits"), { apiErrorStatus: status }),
+        ).classification.signal,
+      ).toBe("claude-sdk:model-window-spent")
+  })
+
+  test("a plan window is still the account's", () => {
+    for (const message of [
+      "You've hit your weekly limit · resets Jul 30, 11pm (UTC)",
+      "You've hit your monthly spend limit",
+      "you have reached your weekly usage limit",
+    ]) {
+      const { classification } = classifySdkFailure(new Error(message))
+      expect(classification.signal).toBe("claude-sdk:plan-window-spent")
+      expect(classification).not.toHaveProperty("modelScoped")
+    }
+  })
+})

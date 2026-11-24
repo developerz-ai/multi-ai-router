@@ -6,7 +6,7 @@ import type { Readable, Writable } from "node:stream"
 import type { SpawnedProcess } from "@anthropic-ai/claude-agent-sdk"
 import { WORKSPACE_DIR } from "./config-dir"
 import { ownerMonotonicMilliseconds } from "./owner-clock"
-import { diagnoseOwnerLaunchFailure } from "./owner-helper"
+import { diagnoseOwnerLaunchFailure, neverRegistered } from "./owner-helper"
 import type { OwnerLaunch, OwnerLaunchConfig } from "./owner-launch-types"
 import type { ReplicaGenerationHandle } from "./replica-lease"
 
@@ -258,13 +258,13 @@ export function createOwnerLaunch(
         rejectPrepared(new Error("credential owner preparation unavailable"))
         rejectStarted(new Error("credential owner activation unavailable"))
       })
-      guardian.once("close", () => {
+      guardian.once("close", (code, signal) => {
         clearTimeout(admissionTimer)
         clearTimeout(prepareTimer)
         clearTimeout(startTimer)
         if (!isPrepared) rejectPrepared(new Error("credential owner preparation unavailable"))
         if (!hasStarted) rejectStarted(new Error("credential owner activation unavailable"))
-        if (quiescent) resolveExit()
+        if (quiescent || (!isReady && neverRegistered(code, signal))) resolveExit()
         else rejectExit(new Error("credential owner exit is uncertain"))
         if (!isReady) rejectReady(new Error("credential owner admission refused"))
         input.signal?.removeEventListener("abort", cancel)

@@ -53,7 +53,7 @@ describe("ingesting a rate-limit event", () => {
   test("a rejection cools the account down and hands the breaker the window's own reset", () => {
     const snapshot = ingest(createSdkQuotaStore(), {
       status: "rejected",
-      rateLimitType: "seven_day_opus",
+      rateLimitType: "seven_day",
       utilization: 1,
       resetsAt: IN_AN_HOUR,
     })
@@ -209,13 +209,13 @@ describe("ingesting a rate-limit event", () => {
   test("both spellings of every field are read", () => {
     const snapshot = ingest(createSdkQuotaStore(), {
       status: "rejected",
-      rate_limit_type: "seven_day_sonnet",
+      rate_limit_type: "five_hour",
       resets_at: IN_AN_HOUR,
       utilization: 0.99,
       is_using_overage: true,
     })
 
-    expect(snapshot?.windows[0]?.window).toBe("seven_day_sonnet")
+    expect(snapshot?.windows[0]?.window).toBe("five_hour")
     expect(snapshot?.signal.resetsAt).toEqual(new Date(IN_AN_HOUR))
     expect(snapshot?.usingOverage).toBe(true)
   })
@@ -309,5 +309,81 @@ describe("a continuous reading from the fast transport", () => {
     })
     expect(second?.windows[0]?.utilizationSource).toBe("continuous")
     expect(second?.windows[0]?.utilization).toBe(0.23)
+  })
+})
+
+/** docs/idea/05-routing-and-failover.md, T3: a spent Opus week is Opus's, not the Account's. */
+describe("a model family's own window", () => {
+  for (const rateLimitType of ["seven_day_opus", "seven_day_sonnet"]) {
+    test(`a rejected ${rateLimitType} is recorded spent and cools nothing`, () => {
+      const snapshot = ingest(createSdkQuotaStore(), {
+        status: "rejected",
+        rateLimitType,
+        resetsAt: IN_AN_HOUR,
+      })
+      expect(snapshot?.signal.limited).toBe(false)
+      expect(snapshot?.windows).toEqual([
+        expect.objectContaining({
+          window: rateLimitType,
+          utilization: 1,
+          resetsAt: new Date(IN_AN_HOUR),
+        }),
+      ])
+    })
+  }
+
+  test("with no reset it is not recorded spent: nothing would ever clear it", () => {
+    const snapshot = ingest(createSdkQuotaStore(), {
+      status: "rejected",
+      rateLimitType: "seven_day_opus",
+    })
+    expect(snapshot?.windows[0]?.utilization).toBeUndefined()
+    expect(snapshot?.signal.limited).toBe(false)
+  })
+
+  test("the overage-included model window cools nothing either", () => {
+    const snapshot = ingest(createSdkQuotaStore(), {
+      status: "rejected",
+      rateLimitType: "seven_day_overage_included",
+      resetsAt: IN_AN_HOUR,
+    })
+    expect(snapshot?.signal.limited).toBe(false)
+  })
+})
+
+describe("a refusal ends when the upstream serves again", () => {
+  test("an unnamed one with no reset, forty days on", () => {
+    const store = createSdkQuotaStore()
+    expect(ingest(store, { status: "rejected" })?.signal.limited).toBe(true)
+    const later = new Date(NOW.getTime() + 40 * 86_400_000)
+    const served = ingest(store, { status: "allowed", rateLimitType: "five_hour" }, later)
+    expect(served?.signal.limited).toBe(false)
+  })
+
+  test("a named one with no reset, by an event about another window", () => {
+    const store = createSdkQuotaStore()
+    ingest(store, { status: "rejected", rateLimitType: "five_hour" })
+    const served = ingest(store, { status: "allowed_warning", rateLimitType: "seven_day" })
+    expect(served?.signal.limited).toBe(false)
+  })
+
+  test("a named one with a future reset keeps its clock", () => {
+    const store = createSdkQuotaStore()
+    ingest(store, { status: "rejected", rateLimitType: "five_hour", resetsAt: IN_AN_HOUR })
+    const served = ingest(store, { status: "allowed", rateLimitType: "seven_day" })
+    expect(served?.signal.limited).toBe(true)
+  })
+
+  test("a fast response's allowed window is not its verdict", () => {
+    const store = createSdkQuotaStore()
+    ingest(store, { status: "rejected" })
+    const window = {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      utilizationSource: "continuous",
+    }
+    expect(ingest(store, { ...window, requestStatus: "rejected" })?.signal.limited).toBe(true)
+    expect(ingest(store, window)?.signal.limited).toBe(true)
+    expect(ingest(store, { ...window, requestStatus: "allowed" })?.signal.limited).toBe(false)
   })
 })

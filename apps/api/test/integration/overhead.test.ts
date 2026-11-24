@@ -52,6 +52,8 @@ describe("router overhead excludes upstream time", () => {
   test("a streamed reply's drain is upstream time, not router time", async () => {
     let advance: (ms: number) => void = () => undefined
     const slow = slowStream(["event: a\ndata: {}\n\n", "event: b\ndata: {}\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const bench = harness({
       responses: [
         afterUpstream(
@@ -64,7 +66,6 @@ describe("router overhead excludes upstream time", () => {
 
     // The first event decides the wall peek (`success-wall.ts`), so it is out before the answer.
     const answered = bench.app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
-    slow.release(0)
     const response = await answered
     // The client is reading while the upstream is still generating — the long tail of every real
     // stream, and the part that would swamp the budget if it were counted as router time.

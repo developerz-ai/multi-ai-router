@@ -43,13 +43,14 @@ describe("cross-dialect streaming (translate egress)", () => {
       openAiChunk({ choices: [], usage: { prompt_tokens: 11, completion_tokens: 22 } }) +
       DONE
     const slow = slowStream([body])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app, upstream, usage } = harness({
       accounts: [openRouterAccount()],
       responses: [() => slow.response],
     })
 
     const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
-    slow.release(0)
     slow.finish()
     const text = await res.text()
     await settle()
@@ -103,10 +104,11 @@ describe("cross-dialect streaming (translate egress)", () => {
       openAiChunk({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] }) +
       DONE
     const slow = slowStream([body])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
 
     const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
-    slow.release(0)
     slow.finish()
     const text = await res.text()
     await settle()
@@ -127,13 +129,14 @@ describe("cross-dialect streaming (translate egress)", () => {
     })
     const second = openAiChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + DONE
     const slow = slowStream([first, second])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
 
     const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
-    slow.release(0)
     const early = new TextDecoder().decode((await reader.read()).value)
     // The first upstream chunk's own content reached the client...
     expect(early).toContain("event: message_start")
@@ -186,13 +189,14 @@ describe("cross-dialect streaming (translate egress)", () => {
       }) +
       anthropicChunk("message_stop")
     const slow = slowStream([body])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app, upstream } = harness({ responses: [() => slow.response] })
 
     const res = await app.request(
       "/v1/responses",
       post(JSON.stringify({ ...JSON.parse(RESPONSES_BODY), stream: true }), bearer()),
     )
-    slow.release(0)
     slow.finish()
     const text = await res.text()
     await settle()
@@ -435,13 +439,14 @@ describe("a Claude Code turn on translate egress", () => {
       openAiChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) +
       DONE
     const slow = slowStream([first, second])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app } = harness({ accounts: [openRouterAccount()], responses: [() => slow.response] })
 
     const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
-    slow.release(0)
     const early = new TextDecoder().decode((await reader.read()).value)
     // The keepalive went out on its own, while the upstream had said nothing else yet.
     expect(early).toBe(": OPENROUTER PROCESSING\n\n")

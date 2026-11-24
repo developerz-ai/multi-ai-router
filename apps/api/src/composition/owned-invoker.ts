@@ -34,7 +34,9 @@ export function ownedInvoker(
       await response.body?.cancel(error)
       throw error
     }
-    if (!response.body) return response
+    // An error is already whole, and the attempt reads its verdict off the invocation
+    // (`SdkInvocation.onRefusal`): nothing streams under the fence, so there is nothing to wrap.
+    if (!response.body || response.status >= 400) return response
     const reader = response.body.getReader()
     let abort = () => {}
     const clean = () => signal.removeEventListener("abort", abort)

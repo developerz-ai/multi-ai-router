@@ -27,6 +27,9 @@ export function sharedRuntimeInput(
     clock,
     timeoutMs: options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
     ...(options.upstreamStream === undefined ? {} : { streamDeadlines: options.upstreamStream }),
+    ...(options.upstreamStream === undefined || deps.sdkIsHttp !== true
+      ? {}
+      : { sdkStreamDeadlines: options.upstreamStream }),
     ...(deps.reasoningSealer === undefined ? {} : { reasoningSealer: deps.reasoningSealer }),
     ...(options.upstreamErrorMaxBytes === undefined
       ? {}

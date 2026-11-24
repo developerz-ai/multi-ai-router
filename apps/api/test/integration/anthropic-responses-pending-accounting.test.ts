@@ -19,6 +19,8 @@ test("Anthropic pending overflow relays unchanged HTTP200 with exactly one local
     event("message_stop", {}),
   ].join("")
   const slow = slowStream([body])
+  // The head waits for the first upstream byte (`success-wall.ts`).
+  slow.release(0)
   const { app, usage, health, upstream } = harness({
     accounts: [account("overflow", { provider: "anthropic-api", cipher: CRYPTOR })],
     responses: [() => slow.response],
@@ -27,7 +29,6 @@ test("Anthropic pending overflow relays unchanged HTTP200 with exactly one local
     "/v1/responses",
     post(JSON.stringify({ model: "fixture", stream: true, input: "hello" }), bearer()),
   )
-  slow.release(0)
   slow.finish()
   const wire = await response.text()
   await settle()

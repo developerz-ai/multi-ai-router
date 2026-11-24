@@ -58,59 +58,71 @@ export function claimSessionTurnDurable(
   const prepare = (signal?: AbortSignal): Promise<boolean> => {
     if (!claim.held) return Promise.resolve(false)
     if (refused !== undefined) return Promise.resolve(false)
-    if (prepared) return Promise.resolve(true)
-    preparing ??= (async () => {
-      if (lock === undefined) return true
-      const controller = new AbortController()
-      const onAbort = () => controller.abort(signal?.reason)
-      signal?.addEventListener("abort", onAbort, { once: true })
-      // An already-aborted signal fired before the listener existed; honor it here.
-      if (signal?.aborted) controller.abort(signal.reason)
-      try {
-        // The conversation key is the turn mutex; the SDK key additionally fences a resume.
-        const conversation = await lock.tryAcquire(
-          advisoryId(claim.keys.conversation),
-          controller.signal,
-        )
-        if (!conversation.acquired) {
-          refused = conversation.reason === "busy" ? "durable-busy" : "unavailable"
-          return false
-        }
-        const sdkKey = claim.keys.sdk
-        if (sdkKey === undefined) {
-          durable = conversation.value
-          prepared = true
-          return true
-        }
-        // From this point, a failed SDK-key acquisition must release the conversation lease too.
+    if (prepared) return Promise.resolve(!released)
+    preparing ??= take(signal).then((won) => {
+      if (!released) return won
+      // Won after the turn had already let go: nothing else would ever hand it back.
+      dropDurable()
+      return false
+    })
+    return preparing
+  }
+
+  const take = async (signal?: AbortSignal): Promise<boolean> => {
+    if (lock === undefined) return true
+    const controller = new AbortController()
+    const onAbort = () => controller.abort(signal?.reason)
+    signal?.addEventListener("abort", onAbort, { once: true })
+    // An already-aborted signal fired before the listener existed; honor it here.
+    if (signal?.aborted) controller.abort(signal.reason)
+    try {
+      // The conversation key is the turn mutex; the SDK key additionally fences a resume.
+      const conversation = await lock.tryAcquire(
+        advisoryId(claim.keys.conversation),
+        controller.signal,
+      )
+      if (!conversation.acquired) {
+        refused = conversation.reason === "busy" ? "durable-busy" : "unavailable"
+        return false
+      }
+      const sdkKey = claim.keys.sdk
+      if (sdkKey === undefined) {
         durable = conversation.value
-        const sdk = await lock.tryAcquire(advisoryId(sdkKey), controller.signal)
-        if (!sdk.acquired) {
-          refused = sdk.reason === "busy" ? "durable-busy" : "unavailable"
-          return false
-        }
-        durable = {
-          release: async () => {
-            try {
-              await sdk.value.release()
-            } finally {
-              await conversation.value.release()
-            }
-          },
-        }
         prepared = true
         return true
-      } catch {
-        // A lock outage is an explicit refusal, not permission to start a cold session.
-        refused = "unavailable"
-        await durable?.release()
-        durable = undefined
-        return false
-      } finally {
-        signal?.removeEventListener("abort", onAbort)
       }
-    })()
-    return preparing
+      // From this point, a failed SDK-key acquisition must release the conversation lease too.
+      durable = conversation.value
+      const sdk = await lock.tryAcquire(advisoryId(sdkKey), controller.signal)
+      if (!sdk.acquired) {
+        refused = sdk.reason === "busy" ? "durable-busy" : "unavailable"
+        return false
+      }
+      durable = {
+        release: async () => {
+          try {
+            await sdk.value.release()
+          } finally {
+            await conversation.value.release()
+          }
+        },
+      }
+      prepared = true
+      return true
+    } catch {
+      // A lock outage is an explicit refusal, not permission to start a cold session.
+      refused = "unavailable"
+      dropDurable()
+      return false
+    } finally {
+      signal?.removeEventListener("abort", onAbort)
+    }
+  }
+
+  const dropDurable = (): void => {
+    const held = durable
+    durable = undefined
+    if (held !== undefined) void held.release().catch(() => undefined)
   }
 
   const release = (): void => {
@@ -119,9 +131,7 @@ export function claimSessionTurnDurable(
     claim.release()
     // `release()` is synchronous at every call site. The lease releases on its own when its
     // connection dies; here we also release it explicitly and swallow a lost-connection error.
-    const held = durable
-    durable = undefined
-    if (held !== undefined) void held.release().catch(() => undefined)
+    dropDurable()
   }
 
   return {

@@ -26,6 +26,8 @@ export function logAttemptFailure(
     status: outcome.failure.status,
     failureKind: outcome.failure.kind,
     signal: outcome.classification?.signal ?? outcome.upstreamSignal,
+    // The request is refused, not the account: no amount of failing over or waiting changes it.
+    ...(outcome.failure.requestAttributable === true ? { requestAttributable: true } : {}),
     reason: outcome.failure.message,
     upstreamMessage: scrubbedQuote(
       outcome.classification?.message ?? outcome.upstreamMessage,
@@ -63,6 +65,26 @@ export function logStreamFailure(
 }
 
 /**
+ * A response the upstream ended short: it named a reason, or its stream just stopped. The event and
+ * item kinds it carried are the only evidence of what it was doing. Names and counts, never content.
+ */
+export function logIncomplete(
+  log: Logger | undefined,
+  accountId: string,
+  reason: string | null,
+  eventTypes?: Readonly<Record<string, number>>,
+): void {
+  const fields = {
+    accountId,
+    reason: reason ?? "no-terminal-event",
+    ...(eventTypes === undefined ? {} : { eventTypes }),
+  }
+  // A limit the upstream named is ordinary; a stream that just stopped is a fault.
+  if (reason === null) log?.warn("upstream response incomplete", fields)
+  else log?.info("upstream response incomplete", fields)
+}
+
+/**
  * A success whose usage was never read (`usage/usage-unread.ts`). The row says that it happened.
  * This line says what the upstream sent instead: the terminal it reached and the event names it
  * streamed, counted. Names and counts only, never a payload.
@@ -73,11 +95,14 @@ export function logUsageUnread(
   reason: string,
   terminal: string,
   eventTypes?: Readonly<Record<string, number>>,
+  /** What the first unreadable frame was lost to, when one was. */
+  lostTo?: string | null,
 ): void {
   log?.warn("upstream usage unread", {
     accountId,
     reason,
     terminal,
+    ...(lostTo === undefined || lostTo === null ? {} : { lostTo }),
     ...(eventTypes === undefined ? {} : { eventTypes }),
   })
 }

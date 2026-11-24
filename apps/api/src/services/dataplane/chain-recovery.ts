@@ -1,3 +1,4 @@
+import { accountLevelReading, isModelLevelReading } from "../../providers"
 import type { AttemptFailure } from "../routing"
 import type { AttemptOutcome } from "./attempt"
 import type { ChainContext } from "./chain"
@@ -70,13 +71,27 @@ export function recordChainFailure(
   )
   recovery?.finish("failed")
   if (applyQuota)
-    ctx.runtime.health.applyRateLimit(servable.account.id, outcome.rateLimit, now, observation)
+    ctx.runtime.health.applyRateLimit(
+      servable.account.id,
+      servable.kind === "sdk"
+        ? outcome.rateLimit
+        : accountLevelReading(outcome.rateLimit, {
+            driver: servable.driver,
+            upstreamModel: servable.upstreamModel,
+            classification: outcome.classification,
+          }),
+      now,
+      observation,
+    )
 }
 
 function modelThrottle(servable: ServableCandidate, failure: AttemptFailure): boolean {
-  if (failure.kind !== "rate-limited" || servable.kind !== "http") return false
-  return (
-    failure.modelScoped === true ||
-    servable.driver.rateLimitsPerModel?.(servable.upstreamModel) === true
-  )
+  if (failure.kind !== "rate-limited") return false
+  // The Agent-SDK transport states a model window per answer; it has no per-model rule of its own.
+  if (servable.kind === "sdk") return failure.modelScoped === true
+  return isModelLevelReading({
+    driver: servable.driver,
+    upstreamModel: servable.upstreamModel,
+    classification: { modelScoped: failure.modelScoped === true },
+  })
 }

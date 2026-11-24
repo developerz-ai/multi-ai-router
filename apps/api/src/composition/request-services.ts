@@ -232,6 +232,7 @@ export function createRequestServices(
     usage,
     limiter,
     invokeSdk: fastInvoker ? ownedInvoker(cli.replicaLease, fastInvoker) : invokeSdk,
+    sdkIsHttp: fastInvoker !== undefined,
     quota: sdkQuota,
     // Direct HTTP carries each full history; SDK resume claims would serialize unrelated children.
     ...(fastInvoker === undefined ? { sessions: sessionStore } : {}),

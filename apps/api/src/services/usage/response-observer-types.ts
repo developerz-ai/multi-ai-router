@@ -1,5 +1,6 @@
 import type { Dialect } from "@multi-ai-router/core"
 import type { FailureClassification, ResponseObservationDescriptor } from "../../providers/types"
+import type { ObservationLoss } from "./response-framing"
 import type { TokenCounts } from "./tokens"
 
 /**
@@ -33,6 +34,11 @@ export interface ResponseObservationFacts {
    */
   readonly usageStated: boolean
   readonly evidenceUnavailable: boolean
+  /**
+   * What the first lost evidence was lost to, or null when none was. Optional so a hand-built facts
+   * object stays valid; the observer always states it. For the "upstream usage unread" log line.
+   */
+  readonly unavailableReason?: ObservationLoss | null
   readonly terminal: "none" | "completed" | "explicit_error" | "explicit_incomplete"
   readonly failure: FailureClassification | null
   readonly incompleteReason: "max_output_tokens" | "content_filter" | "unknown" | null

@@ -11,10 +11,14 @@ export function attemptLifetime(
   servable: ServableCandidate,
   attempt: number,
   at: AttemptClock,
-  upstreamStarted: number,
+  dispatchedAt: number,
   recovery: RecoveryAttempt | undefined,
   releaseProbe: () => void,
 ) {
+  // An HTTP span opens at the upstream call itself: the decrypt, the headers and the body copy ahead
+  // of it are router work. An Agent-SDK span opens at dispatch, so its slot wait and CLI start count
+  // as upstream (the labeled exception of non-negotiable 8) — as does fast-mode preparation.
+  let opened = dispatchedAt
   let started = false
   let ended = false
   const end = () => {
@@ -32,7 +36,7 @@ export function attemptLifetime(
           timing: runtime.timing(
             at.startedAt,
             at.started,
-            at.upstreamMs + (started ? runtime.clock.elapsed() - upstreamStarted : 0),
+            at.upstreamMs + (started ? runtime.clock.elapsed() - opened : 0),
           ),
           outcome: "router_error",
           streamed: false,
@@ -47,11 +51,14 @@ export function attemptLifetime(
   })
   return {
     started: () => started,
+    /** When this attempt's upstream wait began. */
+    opened: () => opened,
     end,
     onStarted() {
       if (started) return
       runtime.activeRequest?.signal.throwIfAborted()
       started = true
+      if (servable.kind === "http") opened = runtime.clock.elapsed()
       runtime.health.beginAttempt(servable.account.id)
     },
     assertRunning(response?: Response) {

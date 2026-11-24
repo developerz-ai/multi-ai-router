@@ -91,6 +91,8 @@ for (const target of ["chat", "anthropic"] as const)
       target === "chat"
         ? { model, stream: true, messages: [{ role: "user", content: "hello" }] }
         : { model, stream: true, max_tokens: 100, messages: [{ role: "user", content: "hello" }] }
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const res = await app.request(
       target === "chat" ? "/v1/chat/completions" : "/v1/messages",
       post(JSON.stringify(request), bearer()),
@@ -98,7 +100,6 @@ for (const target of ["chat", "anthropic"] as const)
     expect(res.status).toBe(200)
     if (res.body === null) throw new Error("expected response body")
     const reader = res.body.getReader()
-    slow.release(0)
     const early = new TextDecoder().decode((await reader.read()).value)
     expect(early).toContain("Cannot comply")
     expect(early).not.toContain("[DONE]")
@@ -129,6 +130,8 @@ test("declared Responses failure terminates Chat once and remains failed account
       },
     })
   const slow = slowStream([body])
+  // The head waits for the first upstream byte (`success-wall.ts`).
+  slow.release(0)
   const { app, usage } = harness({
     accounts: [provider("openai-responses")],
     responses: [() => slow.response],
@@ -140,7 +143,6 @@ test("declared Responses failure terminates Chat once and remains failed account
       bearer(),
     ),
   )
-  slow.release(0)
   slow.finish()
   const text = await res.text()
   await settle()
@@ -168,6 +170,8 @@ for (const includeUsage of [undefined, false, true] as const)
       accounts: [provider("openai-responses")],
       responses: [() => slow.response],
     })
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const res = await app.request(
       "/v1/chat/completions",
       post(
@@ -180,7 +184,6 @@ for (const includeUsage of [undefined, false, true] as const)
         bearer(),
       ),
     )
-    slow.release(0)
     slow.finish()
     const text = await res.text()
     const payloads = text
