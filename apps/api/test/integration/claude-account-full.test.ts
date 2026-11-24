@@ -248,6 +248,14 @@ describe("a full global gate, with the gate wait bounded", () => {
     expect(body.error.router.signal).toBe("account-at-capacity")
     expect(body.error.message).toBe(ACCOUNT_FULL)
     expect(r.asked).toEqual(["sub-a", "sub-b"])
+    // B was not dropped while the request was prepared: it reached the gate and was refused on the
+    // replica's half, with no upstream status. `asked` alone cannot say so, it is logged before
+    // admission, and A's verdict wins the answer either way.
+    const rows = (id: string) => r.usage.rows.filter((row) => row.accountId === id)
+    expect(rows("sub-a")).toHaveLength(1)
+    expect(rows("sub-a")[0]).toMatchObject({ errorClass: "account-at-capacity", httpStatus: null })
+    expect(rows("sub-b")).toHaveLength(1)
+    expect(rows("sub-b")[0]).toMatchObject({ errorClass: "router-at-capacity", httpStatus: null })
     holder.release()
   })
 })
