@@ -167,6 +167,11 @@ export interface PoolSnapshot {
   readonly overflowAccountId?: string
   /** Per-pool request counter owned by the caller. Drives `round-robin` and `weighted` rotation. */
   readonly rotationCounter?: number
+  /**
+   * Soft utilization ceiling for `quota-aware` policy. Accounts at or above this
+   * fraction are ranked after accounts below it. Value in (0, 1].
+   */
+  readonly quotaSoftLimit?: number
 }
 
 /** The presenting key's scope. Applied first, as an intersection, never widened. */

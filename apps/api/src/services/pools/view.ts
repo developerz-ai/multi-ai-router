@@ -25,6 +25,7 @@ export interface PoolView {
   readonly name: string
   readonly policy: RoutingPolicy
   readonly overflowAccountId: string | null
+  readonly quotaSoftLimit: number
   readonly members: readonly PoolMemberView[]
   readonly createdAt: string
   readonly updatedAt: string
@@ -40,6 +41,7 @@ export function toPoolView(
     name: pool.name,
     policy: pool.policy,
     overflowAccountId: pool.overflowAccountId,
+    quotaSoftLimit: Number(pool.quotaSoftLimit),
     members: members.flatMap((member) =>
       member.poolId === pool.id ? toMemberView(member, accounts.get(member.accountId)) : [],
     ),

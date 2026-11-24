@@ -33,3 +33,12 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = "sticky"
  */
 export const DEFAULT_ACCOUNT_WEIGHT = 100
 export const DEFAULT_ACCOUNT_PRIORITY = 0
+
+/**
+ * Soft utilization ceiling for the `quota-aware` policy. Accounts at or above
+ * this fraction of their quota window are ranked after accounts below it.
+ *
+ * Value is a fraction in (0, 1]. The default is 0.8 (80%). The operator sets
+ * it per pool; the admin API and pool schema store it.
+ */
+export const DEFAULT_QUOTA_SOFT_LIMIT = 0.8

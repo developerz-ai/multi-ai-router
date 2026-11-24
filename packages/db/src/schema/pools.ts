@@ -3,7 +3,16 @@ import {
   DEFAULT_ACCOUNT_WEIGHT,
   DEFAULT_ROUTING_POLICY,
 } from "@multi-ai-router/core"
-import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import {
+  index,
+  integer,
+  numeric,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 import { routingPolicy } from "./enums"
 
@@ -45,6 +54,14 @@ export const pools = pgTable(
      * empty since it existed, and the first member insert clears it.
      */
     emptySince: timestamp("empty_since", { withTimezone: true, mode: "date" }).defaultNow(),
+
+    /**
+     * Soft quota utilization threshold for this pool. Accounts at or above this
+     * utilization rank last in quota-aware policy. Range 0.01–0.99; default 0.80.
+     */
+    quotaSoftLimit: numeric("quota_soft_limit", { precision: 3, scale: 2 })
+      .notNull()
+      .default("0.80"),
 
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),

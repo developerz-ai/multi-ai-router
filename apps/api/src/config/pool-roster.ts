@@ -5,7 +5,12 @@ import { EnvValidationError } from "./env-error"
 const label = z.string().refine((value) => value.trim().length > 0, "must be nonblank")
 
 const poolSchema = z
-  .strictObject({ name: label, members: z.array(label).min(1), overflow: label })
+  .strictObject({
+    name: label,
+    members: z.array(label).min(1),
+    overflow: label,
+    quotaSoftLimit: z.number().min(0).max(1).default(0.8),
+  })
   .superRefine((pool, ctx) => {
     if (new Set(pool.members).size !== pool.members.length) {
       ctx.addIssue({ code: "custom", path: ["members"], message: "duplicate members" })

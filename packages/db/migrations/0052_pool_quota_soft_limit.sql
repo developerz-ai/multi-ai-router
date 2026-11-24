@@ -1,0 +1,1 @@
+ALTER TABLE "pools" ADD COLUMN IF NOT EXISTS "quota_soft_limit" numeric(3,2) NOT NULL DEFAULT 0.80;

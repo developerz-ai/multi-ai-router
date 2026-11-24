@@ -60,7 +60,16 @@ const TABLE_COLUMNS: ReadonlyArray<{ table: Table; columns: readonly string[] }>
   },
   {
     table: schema.pools,
-    columns: ["id", "name", "policy", "overflowAccountId", "emptySince", "createdAt", "updatedAt"],
+    columns: [
+      "id",
+      "name",
+      "policy",
+      "overflowAccountId",
+      "emptySince",
+      "quotaSoftLimit",
+      "createdAt",
+      "updatedAt",
+    ],
   },
   {
     table: schema.poolMembers,

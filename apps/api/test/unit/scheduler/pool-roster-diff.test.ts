@@ -18,8 +18,8 @@ import {
 const ROSTER: PoolRoster = {
   version: 1,
   pools: [
-    { name: "claude-team", members: ["alice", "bob"], overflow: "alice" },
-    { name: "gpt-team", members: ["carol", "dave"], overflow: "carol" },
+    { name: "claude-team", members: ["alice", "bob"], overflow: "alice", quotaSoftLimit: 0.8 },
+    { name: "gpt-team", members: ["carol", "dave"], overflow: "carol", quotaSoftLimit: 0.8 },
   ],
 }
 
@@ -71,7 +71,10 @@ const DRIFTED: LiveRoster = {
 
 const WITH_GONE: PoolRoster = {
   version: 1,
-  pools: [...ROSTER.pools, { name: "gone-team", members: ["alice", "bob"], overflow: "alice" }],
+  pools: [
+    ...ROSTER.pools,
+    { name: "gone-team", members: ["alice", "bob"], overflow: "alice", quotaSoftLimit: 0.8 },
+  ],
 }
 
 describe("diffRoster", () => {
@@ -200,7 +203,16 @@ describe("diffRoster", () => {
   test("a roster label no live account answers reports missing_member with no id", () => {
     const live = cleanLive()
     const items = diffRoster(
-      { pools: [{ name: "claude-team", members: ["alice", "ghost"], overflow: "alice" }] },
+      {
+        pools: [
+          {
+            name: "claude-team",
+            members: ["alice", "ghost"],
+            overflow: "alice",
+            quotaSoftLimit: 0.8,
+          },
+        ],
+      },
       {
         ...live,
         pools: [livePool("claude-team", ["acc-alice"], "acc-alice")],

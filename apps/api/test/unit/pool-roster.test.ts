@@ -6,7 +6,12 @@ const base = {
   DATABASE_URL: "postgres://router:router@localhost/router",
   ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
 }
-const pool = { name: "demo", members: ["primary", "overflow"], overflow: "overflow" }
+const pool = {
+  name: "demo",
+  members: ["primary", "overflow"],
+  overflow: "overflow",
+  quotaSoftLimit: 0.8,
+}
 
 test("v1 preserves exact identities and allows shared labels across pools", () => {
   const roster = { version: 1, pools: [pool, { ...pool, name: "Demo" }] } satisfies PoolRoster

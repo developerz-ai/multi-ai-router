@@ -99,6 +99,7 @@ export async function loadCatalog(
       policy: pool.policy,
       members: membersByPool.get(pool.id) ?? [],
       ...(pool.overflowAccountId === null ? {} : { overflowAccountId: pool.overflowAccountId }),
+      quotaSoftLimit: Number(pool.quotaSoftLimit),
     })),
   }
 }

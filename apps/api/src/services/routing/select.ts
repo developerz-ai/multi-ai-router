@@ -54,6 +54,9 @@ export function selectAccounts(
     }
     usedOverflow = usedOverflow || resolved.usedOverflow
 
+    const pool = snapshot.pools.find((p) => p.id === group.poolId)
+    const poolOptions = { ...options, quotaSoftLimit: pool?.quotaSoftLimit }
+
     const policed =
       resolved.eligible.length === 0
         ? { ordered: [] as readonly Candidate[], notes: [] as readonly PolicyNote[] }
@@ -64,7 +67,7 @@ export function selectAccounts(
               candidates: resolved.eligible,
               sessionKey: request.sessionKey,
               rotationCounter: group.rotationCounter,
-              options,
+              options: poolOptions,
             },
             decided,
           )

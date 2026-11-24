@@ -11,6 +11,9 @@
  * `policy-degraded` note, and the accounts it did rank in a `quota-ranked` one. Without that,
  * a missing usage endpoint is invisible — and a missing usage endpoint is precisely the case an
  * operator has to act on, because it is when this policy silently stops working.
+ *
+ * A configurable soft limit (default 0.8) treats accounts at or above that utilization as having
+ * zero headroom, forcing traffic to alternatives when available.
  */
 
 import { continuousHeadroom } from "../quota"
@@ -18,19 +21,27 @@ import type { PolicyNote } from "../result"
 import type { Candidate } from "../types"
 import { accountIds, compareDeclared, type Policy, rotate, sortDeclared } from "./order"
 
-export const quotaAware: Policy = ({ candidates, rotationCounter, now }) => {
+export const quotaAware: Policy = ({ candidates, rotationCounter, now, options }) => {
+  const softLimit = options.quotaSoftLimit ?? 0.8
   const ranked: { readonly candidate: Candidate; readonly headroom: number }[] = []
   const unranked: Candidate[] = []
+  const softLimited: Candidate[] = []
 
   for (const candidate of candidates) {
     const headroom = continuousHeadroom(candidate.account, now)
-    if (headroom === null) unranked.push(candidate)
-    else ranked.push({ candidate, headroom })
+    if (headroom === null) {
+      unranked.push(candidate)
+    } else if (headroom <= 1 - softLimit) {
+      // Account is at or above the soft limit — treat as zero headroom
+      softLimited.push(candidate)
+    } else {
+      ranked.push({ candidate, headroom })
+    }
   }
 
   // No continuous reading anywhere: every candidate ties at unknown and the tiebreak is an
   // arbitrary rotation. Say so — that is the whole difference from round-robin here.
-  if (ranked.length === 0) {
+  if (ranked.length === 0 && softLimited.length === 0) {
     const ordered = rotate(sortDeclared(candidates), rotationCounter)
     return { ordered, notes: [degraded(accountIds(ordered))] }
   }
@@ -41,11 +52,15 @@ export const quotaAware: Policy = ({ candidates, rotationCounter, now }) => {
   )
   const rankedOrder = rotateTies(ranked, rotationCounter)
   const rotatedUnranked = rotate(sortDeclared(unranked), rotationCounter)
+  const rotatedSoftLimited = rotate(sortDeclared(softLimited), rotationCounter)
+
+  // Soft-limited accounts are ranked after those with headroom, but still part of the quota-ranked set
+  const allRanked = [...rankedOrder, ...rotatedSoftLimited]
 
   const notes: PolicyNote[] = [
     {
       kind: "quota-ranked",
-      accountIds: accountIds(rankedOrder),
+      accountIds: accountIds(allRanked),
       unknownAccountIds: accountIds(rotatedUnranked),
     },
   ]
@@ -53,7 +68,7 @@ export const quotaAware: Policy = ({ candidates, rotationCounter, now }) => {
   if (rotatedUnranked.length > 0) notes.push(degraded(accountIds(rotatedUnranked)))
 
   return {
-    ordered: [...rankedOrder, ...rotatedUnranked],
+    ordered: [...allRanked, ...rotatedUnranked],
     notes,
   }
 }

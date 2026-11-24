@@ -57,6 +57,10 @@
         "apps/web/src/styles/_tokens.scss"
       ],
       "linter": { "rules": { "correctness": { "noUnknownUnit": "off" } } }
+    },
+    {
+      "includes": ["apps/web/src/styles/reset.scss"],
+      "linter": { "rules": { "complexity": { "noImportantStyles": "off" } } }
     }
   ],
   "assist": {

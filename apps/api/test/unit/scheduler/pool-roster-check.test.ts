@@ -27,8 +27,8 @@ const ROSTER: PoolRoster = {
   pools: [
     // The fixture's overflow is alice, so this suite drifts on membership and a missing pool only —
     // the overflow rule has its own coverage in `pool-roster-diff.test.ts`.
-    { name: "claude-team", members: ["alice", "bob"], overflow: "alice" },
-    { name: "gone-team", members: ["alice", "bob"], overflow: "alice" },
+    { name: "claude-team", members: ["alice", "bob"], overflow: "alice", quotaSoftLimit: 0.8 },
+    { name: "gone-team", members: ["alice", "bob"], overflow: "alice", quotaSoftLimit: 0.8 },
   ],
 }
 

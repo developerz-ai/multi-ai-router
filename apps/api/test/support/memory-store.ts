@@ -189,6 +189,7 @@ export function createMemoryStore(): MemoryStore {
           name: input.name,
           policy: input.policy ?? "sticky",
           overflowAccountId: input.overflowAccountId ?? null,
+          quotaSoftLimit: (input.quotaSoftLimit ?? 0.8).toFixed(2),
           // The trigger's rule (migration 0047): empty from creation until a member lands.
           emptySince: EPOCH,
           createdAt: EPOCH,

@@ -4,7 +4,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 const marker = "SYNTHETIC_CREDENTIAL_DO_NOT_PRINT"
-const pool = { name: "demo", members: ["primary", "overflow"], overflow: "overflow" }
+const pool = {
+  name: "demo",
+  members: ["primary", "overflow"],
+  overflow: "overflow",
+  quotaSoftLimit: 0.8,
+}
 const bootUrl = new URL("../../src/boot.ts", import.meta.url).href
 
 async function boot(path?: string, forbidRead = false) {

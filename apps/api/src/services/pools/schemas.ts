@@ -1,6 +1,8 @@
 import { RoutingPolicy } from "@multi-ai-router/core"
 import { z } from "zod"
 
+const QUOTA_SOFT_LIMIT = z.number().min(0.01).max(0.99)
+
 /**
  * The pool write contract.
  *
@@ -41,6 +43,11 @@ export const createPoolBody = z
      * filters empty. `null` is the same as absent: no overflow.
      */
     overflowAccountId: z.uuid().nullable().optional(),
+    /**
+     * Soft quota utilization threshold for `quota-aware` policy. Accounts at or above this
+     * utilization rank last. Range 0.01–0.99; default 0.80.
+     */
+    quotaSoftLimit: QUOTA_SOFT_LIMIT.optional(),
   })
   .strict()
 
@@ -53,6 +60,11 @@ export const updatePoolBody = z
     members: z.array(poolMemberInput).max(200).optional(),
     /** `null` clears the overflow account; an absent key leaves it alone. */
     overflowAccountId: z.uuid().nullable().optional(),
+    /**
+     * Soft quota utilization threshold for `quota-aware` policy. Accounts at or above this
+     * utilization rank last. Range 0.01–0.99; default 0.80.
+     */
+    quotaSoftLimit: QUOTA_SOFT_LIMIT.nullable().optional(),
   })
   .strict()
   .refine((patch) => Object.keys(patch).length > 0, { message: "no fields to update" })

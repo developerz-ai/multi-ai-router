@@ -22,6 +22,12 @@ export interface PolicyInput {
 
 export interface PolicyOptions {
   readonly leastUsedMeasure?: "in-flight" | "recent-tokens"
+  /**
+   * Utilization threshold (0..1) at or above which accounts are treated as having zero headroom.
+   * Accounts at or above this utilization rank last, forcing traffic to alternatives when available.
+   * Default: 0.8
+   */
+  readonly quotaSoftLimit?: number
 }
 
 export interface PolicyOutput {
