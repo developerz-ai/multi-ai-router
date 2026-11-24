@@ -137,6 +137,12 @@ export interface ResponsesCompletion {
 
 const MAX_OUTPUT_TOKENS = "max_output_tokens"
 const CONTENT_FILTER = "content_filter"
+/**
+ * The ChatGPT Codex backend's own reason (prod 2026-11-23, `gpt-6.2-sol`, 33 answers in 12 h). What
+ * it caps is not published; that the upstream called the answer incomplete is, so it reads as the
+ * other truncation does. The usage row still records `upstream_incomplete`, which is the trace.
+ */
+const MAX_MESSAGES = "max_messages"
 
 /**
  * openai-chat `finish_reason` → a Responses `status` + `incomplete_details.reason`.
@@ -161,6 +167,9 @@ export function toResponsesCompletion(
  * model called a tool" by emitting a `function_call` item, never by naming a reason, so a
  * translation that ignored the items would report every tool call as ordinary text.
  *
+ * `incomplete` is always `length` unless the reason is `content_filter`: named reasons silently, any
+ * other one reported as unrecognized.
+ *
  * A status that is neither `completed` nor `incomplete` — `in_progress`, `failed` — is **absence**,
  * not a finish: the upstream did not state that the completion ended well, and claiming `stop` for
  * it would report a success that did not happen.
@@ -174,11 +183,15 @@ export function fromResponsesCompletion(
     return { value: hasToolCall ? "tool_calls" : CONSERVATIVE_FINISH_REASON, unrecognized: null }
   }
   if (status !== "incomplete") return ABSENT
-  if (incompleteReason === MAX_OUTPUT_TOKENS) return { value: "length", unrecognized: null }
+  if (incompleteReason === MAX_OUTPUT_TOKENS || incompleteReason === MAX_MESSAGES) {
+    return { value: "length", unrecognized: null }
+  }
   if (incompleteReason === CONTENT_FILTER) return { value: CONTENT_FILTER, unrecognized: null }
-  // Incomplete for a reason this build does not define: a provider change, mapped conservatively
-  // and reported, exactly as an unknown `stop_reason` is.
-  return { value: CONSERVATIVE_FINISH_REASON, unrecognized: incompleteReason ?? "incomplete" }
+  // Incomplete for a reason this build does not define: a provider change, reported like an unknown
+  // `stop_reason` — but never mapped to `stop`. The upstream said the answer is not whole, so it
+  // reads exactly as `max_output_tokens` does; `stop` told a cut answer (and a half-streamed tool
+  // call) as a finished one.
+  return { value: "length", unrecognized: incompleteReason ?? "incomplete" }
 }
 
 /**

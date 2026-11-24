@@ -1,8 +1,13 @@
 import { z } from "zod"
 import { createHttpDriver } from "../driver"
-import { codeRule, messageRule } from "../failure/classify"
+import { codeRule, isRetryableFailureKind, messageRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
-import type { FailureClassification, ProviderDriver, UpstreamErrorFacts } from "../types"
+import type {
+  FailureClassification,
+  ProviderDriver,
+  UpstreamErrorFacts,
+  UpstreamFailureKind,
+} from "../types"
 import { miniMaxQuotaRead } from "./minimax-quota"
 
 /**
@@ -21,15 +26,35 @@ import { miniMaxQuotaRead } from "./minimax-quota"
 const BASE_URL = "https://api.minimax.io/anthropic"
 
 /**
- * Provenance: MiniMax's `base_resp.status_code` vocabulary — `0` is success, `1008` is an
- * insufficient balance, `1002` is throttling, `1004` is a rejected key. Blast radius: these codes
- * are the only failure signal on the responses that carry a `200`.
+ * Provenance: platform.minimax.io/docs/api-reference/errorcode, read 2026-11-23, the codes a chat
+ * request can draw. `0` is success. Blast radius: these are the only failure signal on a `200`, and a
+ * code missing here is a `server-error`, which strikes the account: `1026` (input refused as
+ * sensitive) let one client's content cool it, and `2056` (a spent plan window) lost its cooldown.
  */
-const BALANCE_CODES = ["1008"]
-const THROTTLE_CODES = ["1002"]
-const AUTH_CODES = ["1004"]
-const SERVER_CODES = ["1000", "1013", "1039"]
-const INVALID_REQUEST_CODES = ["1027", "2013"]
+const CODES = {
+  "credits-exhausted": ["1008", "2053"],
+  "rate-limited": ["1002", "1041", "2045", "2046", "2047", "2056", "2062", "2067"],
+  auth: ["1004", "2049", "2057"],
+  "invalid-request": ["1026", "1027", "1042", "1046", "2013", "2014"],
+  "model-unsupported": ["2022", "2061", "2068", "2069"],
+  overloaded: ["2064"],
+  "server-error": ["1000", "1001", "1013", "1024", "1033", "1039", "2066"],
+} as const satisfies Partial<Record<UpstreamFailureKind, readonly string[]>>
+
+const SIGNALS: Readonly<Record<keyof typeof CODES, string>> = {
+  "credits-exhausted": "minimax:base_resp-1008",
+  "rate-limited": "minimax:base_resp-1002",
+  auth: "minimax:base_resp-1004",
+  "invalid-request": "minimax:base_resp-invalid",
+  "model-unsupported": "minimax:base_resp-model",
+  overloaded: "minimax:base_resp-overloaded",
+  "server-error": "minimax:base_resp-server",
+}
+
+const CODE_KINDS = Object.entries(CODES) as [keyof typeof CODES, readonly string[]][]
+const KIND_BY_CODE: ReadonlyMap<string, UpstreamFailureKind> = new Map(
+  CODE_KINDS.flatMap(([kind, codes]) => codes.map((code) => [code, kind] as const)),
+)
 
 /**
  * Provenance: prod, 2026-11-06 (every recheck of the `minimax` account): `429 Token Plan usage limit
@@ -54,7 +79,7 @@ const THINKING_REQUIRED_MODELS = /^MiniMax-M3\.1-Flash(?:-|$)/i
 const MiniMaxEnvelope = z.object({
   base_resp: z.object({
     status_code: z.number(),
-    status_msg: z.string().optional(),
+    status_msg: z.string().nullish().catch(undefined),
   }),
 })
 
@@ -64,7 +89,7 @@ export function readMiniMaxFacts(body: unknown): UpstreamErrorFacts {
   if (parsed.success && parsed.data.base_resp.status_code !== 0) {
     return {
       code: String(parsed.data.base_resp.status_code),
-      message: parsed.data.base_resp.status_msg,
+      message: parsed.data.base_resp.status_msg ?? undefined,
     }
   }
   return readErrorFacts(body)
@@ -75,21 +100,12 @@ export function inspectMiniMaxSuccess(body: unknown) {
   const parsed = MiniMaxEnvelope.safeParse(body)
   const code = parsed.success ? parsed.data.base_resp.status_code : 0
   if (code === 0) return null
-  const value = String(code)
-  const kind = BALANCE_CODES.includes(value)
-    ? "credits-exhausted"
-    : THROTTLE_CODES.includes(value)
-      ? "rate-limited"
-      : AUTH_CODES.includes(value)
-        ? "auth"
-        : INVALID_REQUEST_CODES.includes(value)
-          ? "invalid-request"
-          : "server-error"
+  const kind = KIND_BY_CODE.get(String(code)) ?? "server-error"
   return {
     kind,
     status: 200,
-    retryable: kind !== "invalid-request",
-    signal: `minimax:base_resp-${BALANCE_CODES.includes(value) || THROTTLE_CODES.includes(value) || AUTH_CODES.includes(value) || SERVER_CODES.includes(value) || INVALID_REQUEST_CODES.includes(value) ? value : "unknown"}`,
+    retryable: isRetryableFailureKind(kind),
+    signal: `minimax:base_resp-${KIND_BY_CODE.has(String(code)) ? code : "unknown"}`,
     rateLimit: null,
   } satisfies FailureClassification
 }
@@ -109,14 +125,10 @@ export const miniMaxDriver: ProviderDriver = {
     ],
     readFacts: readMiniMaxFacts,
     rules: [
-      codeRule("credits-exhausted", "minimax:base_resp-1008", BALANCE_CODES),
-      codeRule("rate-limited", "minimax:base_resp-1002", THROTTLE_CODES),
+      ...CODE_KINDS.map(([kind, codes]) => codeRule(kind, SIGNALS[kind], codes)),
       messageRule("rate-limited", "minimax:token-plan-limit", TOKEN_PLAN_LIMIT, {
         statuses: [429],
       }),
-      codeRule("auth", "minimax:base_resp-1004", AUTH_CODES),
-      codeRule("server-error", "minimax:base_resp-server", SERVER_CODES),
-      codeRule("invalid-request", "minimax:base_resp-invalid", INVALID_REQUEST_CODES),
     ],
   }),
   quotaRead: miniMaxQuotaRead,

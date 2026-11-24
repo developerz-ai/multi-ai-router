@@ -1,5 +1,5 @@
 import { readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
-import { openAiChatCompletionSchema } from "../shared/openai-chat-wire"
+import { openAiChatAnswerText, openAiChatCompletionSchema } from "../shared/openai-chat-wire"
 import type { TranslatedResponse } from "../shared/response"
 import type { ResponsesOutputItem } from "../shared/responses-body"
 import { responsesBodyJson, responsesItemId } from "../shared/responses-body"
@@ -58,7 +58,7 @@ export function openAiChatToOpenAiResponsesResponse(
   if (summary.length > 0) {
     items.push({ type: "reasoning", id: responsesItemId("reasoning", id, items.length), summary })
   }
-  const text = choice?.message?.content ?? ""
+  const text = openAiChatAnswerText(choice?.message)
   // A completion that was only a tool call said nothing out loud, and an empty message item would
   // claim it answered with an empty string.
   if (text.length > 0) {

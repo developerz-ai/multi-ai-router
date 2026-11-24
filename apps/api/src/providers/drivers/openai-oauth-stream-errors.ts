@@ -33,6 +33,7 @@ import type {
  * The mapping is a closed list. The driver's HTTP `rules` share the limit, deactivated and quota
  * lists but not the request-shaped one:
  *   - request-shaped codes → `invalid-request` (failover reads `client-error`; no breaker strike);
+ *   - a busy shared backend → `overloaded`, never struck; a refused model name → `model-unsupported`;
  *   - the driver's limit codes → `rate-limited`; its deactivated and quota codes →
  *     `credits-exhausted`;
  *   - anything else, or nothing → `server-error`, the behaviour before this hook existed.
@@ -44,7 +45,9 @@ export const CODEX_LIMIT_CODES: readonly string[] = ["usage_limit_reached", "rat
 export const CODEX_DEACTIVATED_CODES: readonly string[] = ["account_deactivated"]
 /**
  * A spent balance or spend cap. Provenance: openai/codex `codex-rs/codex-api/src/sse/responses_error.rs`
- * (f82e3659, 2026-10-13) maps these four codes to `QuotaExceeded`, which the CLI never retries. That
+ * (f82e3659, 2026-10-13) maps the first two codes to `QuotaExceeded`, and `codex-api/src/error.rs`
+ * (main, 2026-11-23) the three spend caps to `SpendLimitExceeded` and `usage_not_included` (a plan
+ * that does not carry Codex) to its own error; the CLI retries none. That
  * alone does not separate permanent from clock-recoverable (the CLI does not retry a usage limit
  * either); the codes' own meaning does: a balance or a spend cap, as `insufficient_quota` means on
  * OpenAI's API (`openai-api.ts`). A ChatGPT plan's spent window arrives as `usage_limit_reached`
@@ -56,10 +59,10 @@ export const CODEX_DEACTIVATED_CODES: readonly string[] = ["account_deactivated"
  * 429, as the Codex CLI reads it (`codex-rs/codex-api/src/api_bridge.rs`), so a stray code on
  * another status cannot park an account. The CLI reads the `error` envelope only; this driver also
  * reads the `detail` envelope it reads every other Codex code from (`readCodexFacts`), a deliberate
- * widening. The CLI's fifth HTTP code there, `organization_usage_limit_exceeded`, is left out: its
+ * widening. The CLI's other HTTP code there, `organization_usage_limit_exceeded`, is left out: its
  * name says a usage window, which a 429 already classifies as `rate-limited`. As a `type`, only
- * `insufficient_quota`, as the CLI reads it; the other three are codes only. One more difference:
- * these run after the limit rules, so a limit code or a `rate_limit_exceeded` type beside a quota
+ * `insufficient_quota` and `usage_not_included`, as the CLI reads it; the rest are codes only. One
+ * more difference: these run after the limit rules, so a limit code or a `rate_limit_exceeded` type beside a quota
  * signal reads `rate-limited` here where the CLI reads quota. That errs to cooldown; the stream
  * hook follows the CLI instead (quota wins there).
  */
@@ -68,6 +71,8 @@ export const CODEX_QUOTA_CODES: readonly string[] = [
   "credit_balance_exhausted",
   "organization_spend_limit_exceeded",
   "project_spend_limit_exceeded",
+  "api_key_spend_limit_exceeded",
+  "usage_not_included",
 ]
 
 export const CODEX_STREAM_ERROR_REQUEST_CODES: readonly string[] = [
@@ -77,7 +82,34 @@ export const CODEX_STREAM_ERROR_REQUEST_CODES: readonly string[] = [
   "unsupported_parameter",
   "unsupported_value",
   "invalid_json_schema",
+  // Refusals of the content itself. Provenance: codex-rs `codex-api/src/error.rs`
+  // `parse_terminal_provider_error`, main, 2026-11-23, which ends the turn on each of them. Blast
+  // radius: read as `server-error`, a few flagged prompts from one client cooled the ChatGPT account
+  // for everyone.
+  "cyber_policy",
+  "bio_policy",
+  "content_policy_violation",
+  "misalignment_policy_violation",
+  "inference_hook_denied",
+  "invalid_access_program",
+  "unsupported_access_program",
 ]
+
+/**
+ * The shared backend is busy. Provenance: codex-rs `codex-api/src/sse/responses_error.rs` (stream)
+ * and `api_bridge.rs` (HTTP `503`), main, 2026-11-23. Prod 2026-11-23/24 logged 26 of these in 200
+ * streams by their sentence alone, so the sentence is read too where no listed code is stated. Blast
+ * radius: matched failures retry on the overload budget and never strike; missed ones are
+ * `server-error`, which cools the account over OpenAI's own outage.
+ */
+export const CODEX_OVERLOAD_CODES: readonly string[] = [
+  "server_is_overloaded",
+  "policy_capacity_unavailable",
+]
+export const CODEX_OVERLOADED_WORDING = /^our servers are currently overloaded/i
+
+/** Provenance: `parse_terminal_provider_error`, as above: the name is wrong, not the account. */
+const MODEL_REFUSED_CODES: readonly string[] = ["model_not_found"]
 
 const KIND_BY_CODE: ReadonlyMap<string, UpstreamFailureKind> = new Map([
   ...CODEX_STREAM_ERROR_REQUEST_CODES.map((code): [string, UpstreamFailureKind] => [
@@ -85,6 +117,8 @@ const KIND_BY_CODE: ReadonlyMap<string, UpstreamFailureKind> = new Map([
     "invalid-request",
   ]),
   ...CODEX_LIMIT_CODES.map((code): [string, UpstreamFailureKind] => [code, "rate-limited"]),
+  ...CODEX_OVERLOAD_CODES.map((code): [string, UpstreamFailureKind] => [code, "overloaded"]),
+  ...MODEL_REFUSED_CODES.map((code): [string, UpstreamFailureKind] => [code, "model-unsupported"]),
   ...[...CODEX_DEACTIVATED_CODES, ...CODEX_QUOTA_CODES].map(
     (code): [string, UpstreamFailureKind] => [code, "credits-exhausted"],
   ),
@@ -145,26 +179,29 @@ export function inspectCodexStreamFrame(
   const quotaCode =
     root.type === "response.failed" ? text(record(record(root.response)?.error)?.code) : undefined
   // That location decides a quota code even when a root `code` or `error` would otherwise win.
+  const stated = text(root.message) ?? text(nested?.message) ?? text(root.error)
   const code =
     quotaCode !== undefined && QUOTA_CODES.has(quotaCode)
       ? quotaCode
       : listed !== undefined && QUOTA_CODES.has(listed)
         ? undefined
-        : listed
+        : (listed ?? overloadedBy(stated))
   const kind = code === undefined ? "server-error" : (KIND_BY_CODE.get(code) ?? "server-error")
-  const message =
-    text(root.message) ??
-    text(nested?.message) ??
-    text(root.error) ??
-    describeSilent(type, root, nested)
+  const message = stated ?? describeSilent(type, root, nested)
   return {
     kind,
     status: 200,
     retryable: isRetryableFailureKind(kind),
     signal: `${SIGNAL_PREFIX}${code ?? "other"}`,
     rateLimit: null,
-    ...(message === undefined ? {} : { message }),
+    message,
   }
+}
+
+function overloadedBy(message: string | undefined): string | undefined {
+  return message !== undefined && CODEX_OVERLOADED_WORDING.test(message)
+    ? CODEX_OVERLOAD_CODES[0]
+    : undefined
 }
 
 /**

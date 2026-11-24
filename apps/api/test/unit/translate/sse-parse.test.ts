@@ -252,3 +252,15 @@ describe("frame cap (06.13)", () => {
     expect(() => createSseParser({ maximumFrameLength: 0 })).toThrow(RangeError)
   })
 })
+
+describe("createSseParser: a chunk that decodes to nothing", () => {
+  test("an empty chunk between `\\r` and `\\n` does not turn the `\\n` into a blank line", () => {
+    const parser = createSseParser()
+    const frames = [
+      ...parser.push(encoder.encode("event: a\r")),
+      ...parser.push(new Uint8Array(0)),
+      ...parser.push(encoder.encode('\ndata: {"x":1}\r\n\r\n')),
+    ]
+    expect(frames).toEqual([{ event: "a", data: '{"x":1}' }])
+  })
+})

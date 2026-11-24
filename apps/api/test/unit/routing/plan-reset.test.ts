@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import type { QuotaWindowState } from "@multi-ai-router/core"
-import { type AttemptFailure, spentPlanReset, withPlanReset } from "../../../src/services/routing"
-import { verifiedKeyCapReset } from "../../../src/services/routing/plan-reset"
+import {
+  type AttemptFailure,
+  DEFAULT_KEY_CAP_NEAR_UTILIZATION,
+  HEALTHY,
+  recordFailure,
+  spentPlanReset,
+  verifiedKeyCapReset,
+  withPlanReset,
+} from "../../../src/services/routing"
 
 /**
  * A limit refusal that names no reset borrows the spent plan window's. Prod fingerprint, 2026-11-06:
@@ -122,7 +129,8 @@ describe("verifiedKeyCapReset, the client path's key-cap evidence", () => {
 
   test("headroom, estimated/unknown reset, past reset and stale reading invent no instant", () => {
     for (const held of [
-      cap({ utilization: 0.99 }),
+      // Under the near-cap bound: the refusal is not this cap's (it encoded `< 1` through 2.76.1).
+      cap({ utilization: DEFAULT_KEY_CAP_NEAR_UTILIZATION - 0.01 }),
       cap({ resetSource: "estimated" }),
       cap({ resetSource: "unknown", resetsAt: undefined }),
       cap({ resetsAt: new Date(NOW.getTime() - 1) }),
@@ -136,5 +144,81 @@ describe("verifiedKeyCapReset, the client path's key-cap evidence", () => {
 
   test("no windows, no reset", () => {
     expect(verifiedKeyCapReset([], NOW, FRESH)).toBeNull()
+  })
+})
+
+/**
+ * Prod fingerprint, 2026-11-23 (#441): `openrouter-dz-coding-30d` hit its daily key cap at 17:00Z.
+ * OpenRouter refuses a request the cap's remainder cannot cover, so the `402` landed while the
+ * reading stood under 100 %; the account parked `exhausted` and answered `402 needs a top-up` until
+ * 03:03Z, three hours past its own 00:00Z reset.
+ */
+describe("a key cap refuses before its reading says spent", () => {
+  const AT = new Date("2026-11-23T17:00:00.000Z")
+  const MIDNIGHT = new Date("2026-11-24T00:00:00.000Z")
+  const nearCap = (overrides: Partial<QuotaWindowState> = {}) =>
+    window({
+      window: "spend_limit",
+      utilization: 0.97,
+      resetsAt: MIDNIGHT,
+      lastCheckedAt: new Date(AT.getTime() - 10 * 60_000),
+      ...overrides,
+    })
+  const afford: AttemptFailure = {
+    kind: "credits-exhausted",
+    status: 402,
+    message: "This request requires more credits, or fewer max_tokens.",
+  }
+
+  test("a 402 on a cap at 97 % cools until the cap's reset instead of parking exhausted", () => {
+    const planned = withPlanReset(afford, [nearCap()], AT, FRESH)
+    expect(planned.kind).toBe("rate-limited")
+    expect(planned.resetsAt).toEqual(MIDNIGHT)
+    expect(planned.resetSource).toBe("provider-reported")
+    const breaker = recordFailure(HEALTHY, planned, AT)
+    expect(breaker.status).toBe("cooling_down")
+    expect(breaker.cooldownUntil).toEqual(MIDNIGHT)
+  })
+
+  test("the client path reads the same evidence", () => {
+    expect(verifiedKeyCapReset([nearCap()], AT, FRESH)).toEqual(MIDNIGHT)
+  })
+
+  test("the bound is the caller's: at 1 only a fully spent cap lends", () => {
+    expect(withPlanReset(afford, [nearCap()], AT, FRESH, 1)).toBe(afford)
+    expect(withPlanReset(afford, [nearCap({ utilization: 1 })], AT, FRESH, 1).kind).toBe(
+      "rate-limited",
+    )
+  })
+
+  test("a bound outside (0, 1] never lends on an idle cap", () => {
+    for (const bound of [0, -1, 2, Number.NaN]) {
+      expect(verifiedKeyCapReset([nearCap({ utilization: 0.1 })], AT, FRESH, bound)).toBeNull()
+    }
+  })
+
+  test("a cap with real headroom, or a total cap with no reset, stays a human's", () => {
+    expect(withPlanReset(afford, [nearCap({ utilization: 0.5 })], AT, FRESH)).toBe(afford)
+    const total = nearCap({ resetsAt: undefined, resetSource: "unknown" })
+    expect(withPlanReset(afford, [total], AT, FRESH)).toBe(afford)
+  })
+
+  test("the driver's estimated key-limit re-test takes the cap's real reset", () => {
+    const windowed: AttemptFailure = {
+      kind: "rate-limited",
+      status: 402,
+      retryAfterSeconds: 3600,
+      resetSource: "estimated",
+      message: "create a key with a higher daily limit",
+    }
+    const planned = withPlanReset(windowed, [nearCap()], AT, FRESH)
+    expect(planned.resetsAt).toEqual(MIDNIGHT)
+    expect(planned.retryAfterSeconds).toBeUndefined()
+    expect(planned.resetSource).toBe("provider-reported")
+  })
+
+  test("a reset-less 429 on a near-cap key is not the cap: it keeps the breaker's backoff", () => {
+    const perMinute: AttemptFailure = { kind: "rate-limited", status: 429, message: "slow down" }
+    expect(withPlanReset(perMinute, [nearCap()], AT, FRESH)).toBe(perMinute)
   })
 })

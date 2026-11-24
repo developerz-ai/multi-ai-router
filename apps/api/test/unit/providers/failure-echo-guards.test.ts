@@ -150,7 +150,9 @@ describe("04.1 — an echoed name is never a verdict", () => {
         "The model insufficient balance does not exist",
       ]) {
         const result = classify(provider, 404, openAiError(message, { code: "model_not_found" }))
-        expect({ message, kind: result?.kind }).toEqual({ message, kind: "invalid-request" })
+        // Groq publishes the code, so its refusal is the model's and the next account is asked.
+        const kind = provider === "groq" ? "model-unsupported" : "invalid-request"
+        expect({ message, kind: result?.kind }).toEqual({ message, kind })
       }
     })
 

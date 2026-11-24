@@ -13,12 +13,13 @@ import { type ChunkDelta, chatStreamChunk, type ToolCallDelta } from "../shared/
 import { parseUpstreamError } from "../shared/errors"
 import type { OpenAiFinishReason } from "../shared/stop-reason"
 import { CONSERVATIVE_FINISH_REASON, toOpenAiFinishReason } from "../shared/stop-reason"
+import { createTruncationWatch } from "../shared/stream-truncated"
 import { STRUCTURED_OUTPUT_TOOL } from "../shared/structured-output-anthropic"
 import type { AnthropicUsage } from "../shared/usage"
 import { parseAnthropicUsage, usageToOpenAiChat } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
 import { DONE, NO_EVENTS } from "../sse/emit"
-import { frameJson } from "../sse/parse"
+import { frameJson, type SseFrame } from "../sse/parse"
 
 /**
  * An Anthropic SSE stream → `chat.completion.chunk` events.
@@ -82,6 +83,8 @@ export interface AnthropicToOpenAiChatStreamOptions {
   readonly id?: string | undefined
   /** Used until `message_start` names the model. The client's requested name is the right value. */
   readonly model?: string | undefined
+  /** The request id an error event this translator authors carries (`shared/stream-truncated.ts`). */
+  readonly requestId?: string | undefined
 }
 
 export function anthropicToOpenAiChatStream(
@@ -94,6 +97,7 @@ export function anthropicToOpenAiChatStream(
   let nextToolCall = 0
   let finished = false
   let closed = false
+  const watch = createTruncationWatch("openai-chat", options.requestId)
   /** Anthropic block index → openai call ordinal, for the blocks whose deltas have somewhere to go. */
   const toolCalls = new Map<number, number>()
   const argumentBlocks = new Set<number>()
@@ -240,53 +244,56 @@ export function anthropicToOpenAiChatStream(
     return events
   }
 
-  return {
-    push(frame) {
-      if (closed) return NO_EVENTS
-      const payload = frameJson(frame)
-      const type = eventType(frame.event, payload)
+  function translate(frame: SseFrame): readonly SseEvent[] {
+    const payload = frameJson(frame)
+    const type = eventType(frame.event, payload)
 
-      switch (type) {
-        case "message_start":
-          return onMessageStart(payload)
-        case "content_block_start":
-          return onBlockStart(payload)
-        case "content_block_delta":
-          return onBlockDelta(payload)
-        case "content_block_stop": {
-          const index = readBlockIndex(payload)
-          if (typeof index !== "number") return NO_EVENTS
-          const ordinal = toolCalls.get(index)
-          if (ordinal === undefined) return NO_EVENTS
-          toolCalls.delete(index)
-          const hadArguments = argumentBlocks.delete(index)
-          const stated = startedInputs.get(index) ?? "{}"
-          startedInputs.delete(index)
-          return hadArguments
-            ? NO_EVENTS
-            : [chunk({ tool_calls: [{ index: ordinal, function: { arguments: stated } }] }, null)]
-        }
-        case "message_delta":
-          return onMessageDelta(payload)
-        case "message_stop":
-          closed = true
-          return [DONE]
-        case "error":
-          return onError(payload)
-        default:
-          // `ping`, and anything Anthropic adds after this was written.
-          return NO_EVENTS
+    switch (type) {
+      case "message_start":
+        return onMessageStart(payload)
+      case "content_block_start":
+        return onBlockStart(payload)
+      case "content_block_delta":
+        return onBlockDelta(payload)
+      case "content_block_stop": {
+        const index = readBlockIndex(payload)
+        if (typeof index !== "number") return NO_EVENTS
+        const ordinal = toolCalls.get(index)
+        if (ordinal === undefined) return NO_EVENTS
+        toolCalls.delete(index)
+        const hadArguments = argumentBlocks.delete(index)
+        const stated = startedInputs.get(index) ?? "{}"
+        startedInputs.delete(index)
+        return hadArguments
+          ? NO_EVENTS
+          : [chunk({ tool_calls: [{ index: ordinal, function: { arguments: stated } }] }, null)]
       }
-    },
+      case "message_delta":
+        return onMessageDelta(payload)
+      case "message_stop":
+        closed = true
+        return [DONE]
+      case "error":
+        return onError(payload)
+      default:
+        // `ping`, and anything Anthropic adds after this was written.
+        return NO_EVENTS
+    }
+  }
+
+  return {
+    push: (frame) => (closed ? NO_EVENTS : watch.saw(translate(frame))),
 
     flush() {
-      if (closed || !finished) return NO_EVENTS
-      // `message_delta` arrived and `message_stop` did not. The completion is whole and only its
-      // terminator is missing, so the sentinel is owed. A stream that never finished gets nothing.
+      if (closed) return NO_EVENTS
       closed = true
-      return [DONE]
+      // `message_delta` arrived and `message_stop` did not: the completion is whole and only its
+      // terminator is missing, so the sentinel is owed. A stream that never finished is told it
+      // was truncated (`shared/stream-truncated.ts`), never handed a synthesized ending.
+      return finished ? [DONE] : watch.end()
     },
 
+    truncated: watch.truncated,
     unrecognizedStopReason: () => unrecognized,
   }
 }

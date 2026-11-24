@@ -12,16 +12,27 @@ import type { UpstreamErrorFacts } from "../types"
  * schemas for one job. Provider-specific shapes (MiniMax's `base_resp`) live with their driver.
  */
 
-const ErrorEnvelope = z.object({
-  error: z.union([
-    z.string(),
-    z.object({
-      type: z.string().optional(),
-      message: z.string().optional(),
-      code: z.union([z.string(), z.number()]).nullish(),
-    }),
-  ]),
+/**
+ * One error object's fields, each read on its own: a vendor sending `type: null` (Azure, LiteLLM and
+ * most gateways do) or an object where a string belongs costs that field and never the `code` beside
+ * it. Read strictly, one null dropped `code: "insufficient_quota"` and a dead balance classified as a
+ * throttle on its `429`.
+ */
+export const ErrorFields = z.object({
+  type: z.string().nullish().catch(undefined),
+  message: z.string().nullish().catch(undefined),
+  code: z.union([z.string(), z.number()]).nullish().catch(undefined),
 })
+
+export function factsOf(fields: z.infer<typeof ErrorFields>): UpstreamErrorFacts {
+  return {
+    type: fields.type ?? undefined,
+    code: textOf(fields.code),
+    message: fields.message ?? undefined,
+  }
+}
+
+const ErrorEnvelope = z.object({ error: z.union([z.string(), ErrorFields]) })
 
 /**
  * The other envelope in the wild: the same four fields with **no `error` wrapper**. Mistral
@@ -32,11 +43,7 @@ const ErrorEnvelope = z.object({
  * OpenAI-shaped body — a completion, an embedding list, a model listing — carries a top-level
  * `message`, so a success can never be read as a failure through this shape.
  */
-const FlatErrorEnvelope = z.object({
-  message: z.string(),
-  type: z.string().optional(),
-  code: z.union([z.string(), z.number()]).nullish(),
-})
+const FlatErrorEnvelope = ErrorFields.extend({ message: z.string() })
 
 function textOf(value: string | number | null | undefined): string | undefined {
   if (value === null || value === undefined) return undefined
@@ -63,9 +70,7 @@ export function readErrorFacts(body: unknown): UpstreamErrorFacts {
   if (!parsed.success) return {}
 
   const error = parsed.data.error
-  if (typeof error === "string") return { message: error }
-
-  return { type: error.type, code: textOf(error.code), message: error.message }
+  return typeof error === "string" ? { message: error } : factsOf(error)
 }
 
 function hasFacts(facts: UpstreamErrorFacts): boolean {
@@ -82,11 +87,5 @@ export function readFlatErrorFacts(body: unknown): UpstreamErrorFacts {
   if (hasFacts(nested)) return nested
 
   const parsed = FlatErrorEnvelope.safeParse(body)
-  if (!parsed.success) return nested
-
-  return {
-    type: parsed.data.type,
-    code: textOf(parsed.data.code),
-    message: parsed.data.message,
-  }
+  return parsed.success ? factsOf(parsed.data) : nested
 }

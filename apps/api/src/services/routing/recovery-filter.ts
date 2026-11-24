@@ -1,4 +1,4 @@
-import { findSpentWindow, isWindowSpent } from "./quota"
+import { findSpentWindow, isWindowSpent, windowCoversModel } from "./quota"
 import type { AccountSnapshot } from "./types"
 
 export function hasRecoveryPermit(account: AccountSnapshot): boolean {
@@ -57,15 +57,20 @@ export function accountIsLiveHealthy(
   if (until !== undefined && until.getTime() > now.getTime()) return false
   return findSpentWindow(account, now, threshold) === null
 }
-/** Only the exact captured persisted evidence may be bypassed by the designated permit. */
+/**
+ * Only the exact captured persisted evidence may be bypassed by the designated permit. A model
+ * family's window counts only for a model it meters (`quota.ts`, `windowCoversModel`).
+ */
 export function recoveryAllowsQuota(
   account: AccountSnapshot,
   now: Date,
   threshold: number,
+  model?: string,
 ): boolean {
   if (!hasRecoveryPermit(account)) return false
   return (account.quotaWindows ?? []).every(
     (window) =>
+      !windowCoversModel(window.window, model) ||
       !isWindowSpent(window, now, threshold) ||
       (window.revision !== undefined &&
         account.recovery?.quotaRevisions[window.window] === window.revision),

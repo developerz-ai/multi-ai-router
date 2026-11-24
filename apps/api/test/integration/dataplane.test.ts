@@ -139,13 +139,14 @@ describe("same-dialect passthrough", () => {
 
   test("streams without buffering: a chunk is readable before the upstream sends the next", async () => {
     const slow = slowStream(["data: one\n\n", "data: two\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app } = harness({ responses: [() => slow.response] })
 
     const res = await app.request("/v1/messages", post(STREAMED_MESSAGE, bearer()))
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
-    slow.release(0)
     const first = await reader.read()
     expect(new TextDecoder().decode(first.value)).toBe("data: one\n\n")
 
@@ -283,6 +284,8 @@ describe("failover", () => {
 
   test("does not advance once a byte has reached the client, even when the stream then breaks", async () => {
     const slow = slowStream(["data: partial\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app, upstream, usage } = harness({
       accounts: twoAccounts,
       selection: { unpooledPolicy: "priority-failover" },
@@ -293,7 +296,6 @@ describe("failover", () => {
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
-    slow.release(0)
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial")
 
     // The stream breaks mid-response. Replaying a partially delivered stream would give the
@@ -310,6 +312,8 @@ describe("failover", () => {
 
   test("two frames then an upstream break is a truncation relayed to the client, not a retry", async () => {
     const slow = slowStream(["data: one\n\n", "data: two\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app, upstream, usage } = harness({
       accounts: twoAccounts,
       selection: { unpooledPolicy: "priority-failover" },
@@ -320,7 +324,6 @@ describe("failover", () => {
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
-    slow.release(0)
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("one")
     slow.release(1)
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("two")
@@ -384,6 +387,8 @@ describe("failover", () => {
 
   test("a client that disconnects mid-stream releases the upstream call, with no orphan", async () => {
     const slow = slowStream(["data: partial\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app, upstream, usage } = harness({
       accounts: twoAccounts,
       selection: { unpooledPolicy: "priority-failover" },
@@ -398,7 +403,6 @@ describe("failover", () => {
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
-    slow.release(0)
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial")
 
     const upstreamSignal = upstream.calls[0]?.signal
@@ -647,8 +651,12 @@ describe("failover", () => {
 
     expect(res.status).toBe(429)
     expect(res.headers.get("Retry-After")).toBe("31")
-    expect(health.stateOf("acct-1").breaker.status).toBe("cooling_down")
-    expect(health.stateOf("acct-1").breaker.cooldownSource).toBe("provider-reported")
+    // Google meters per model: the throttle holds this model, and the key's other models keep serving.
+    const state = health.stateOf("acct-1")
+    expect(state.breaker.status).toBe("active")
+    const refused = [...(state.refusedModels ?? new Map()).values()]
+    expect(refused).toHaveLength(1)
+    expect(refused[0]).toMatchObject({ reason: "rate-limited", resetSource: "provider-reported" })
     expect(usage.rows[0]?.outcome).toBe("quota_exhausted")
   })
 
@@ -1338,6 +1346,8 @@ describe("the Agent-SDK transport", () => {
 
   test("bytes a subscription account already streamed are never replayed onto the account behind it", async () => {
     const slow = slowStream(["data: partial\n\n"])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     let sdkCalls = 0
     const { app, upstream, usage } = harness({
       accounts: [...mixedPool()],
@@ -1354,7 +1364,6 @@ describe("the Agent-SDK transport", () => {
     if (res.body === null) throw new Error("expected a body")
     const reader = res.body.getReader()
 
-    slow.release(0)
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("partial")
 
     // The subprocess's stream breaks after bytes are already on the wire. `chain.ts`'s

@@ -49,13 +49,23 @@ export interface AttemptFailure {
    * router `429` (plan 101, 05.14).
    */
   readonly requestAttributable?: boolean
-  /** See `FailureClassification.permanentForRequest`: no clock clears it on this pool. */
+  /**
+   * See `FailureClassification.permanentForRequest`: no clock clears it on this pool. A chain whose
+   * every account refused this way, with none untried, ends as the request wall.
+   */
   readonly permanentForRequest?: boolean
   /**
    * A throttle on the requested model only (`FailureClassification.modelScoped`): the chain holds
    * that model off the account instead of cooling the account (`dataplane/chain-recovery.ts`).
    */
   readonly modelScoped?: boolean
+  /**
+   * A `client-error` about this **vendor's wire**, not the request
+   * (`FailureClassification.providerScoped`): every account of the same provider answers alike and
+   * another vendor may serve the body as it stands. The one `client-error` the chain walks past:
+   * it skips that provider's remaining candidates and goes on ({@link planNextAttempt}).
+   */
+  readonly providerScoped?: boolean
 }
 
 /**

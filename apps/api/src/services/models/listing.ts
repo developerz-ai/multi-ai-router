@@ -93,10 +93,23 @@ const PAGE_LIMIT = "1000"
 
 export const NOT_HTTP = "has no HTTP model listing to read"
 
+/**
+ * Never throws. A credential that will not decrypt, a body the upstream drops half way: each is this
+ * account's failed listing. Thrown on, it ended `model_catalog_refresh` at that account before it was
+ * stamped, so the account sorted first on every later tick and no other was listed again.
+ */
 export async function listUpstreamModels(
   deps: UpstreamListingDeps,
   account: AccountRow,
 ): Promise<UpstreamListing> {
+  try {
+    return await ask(deps, account)
+  } catch (error) {
+    return fail("discovery_failed", messageOf(error, "the account could not be asked"))
+  }
+}
+
+async function ask(deps: UpstreamListingDeps, account: AccountRow): Promise<UpstreamListing> {
   const driver = httpDriver(account.provider)
   if (driver === null) {
     return fail("provider_unavailable", `provider "${account.provider}" ${NOT_HTTP}`)
@@ -120,7 +133,10 @@ export async function listUpstreamModels(
   try {
     url = upstreamModelsUrl(driver, listedAccount, dialect)
   } catch (error) {
-    return fail("endpoint_unresolved", messageOf(error))
+    return fail(
+      "endpoint_unresolved",
+      messageOf(error, "the account's endpoint could not be resolved"),
+    )
   }
   // A driver with its own listing states its own query (`providers/model-listing.ts`).
   const listing = driver.modelListing
@@ -214,9 +230,9 @@ function dialectNote(dialect: Dialect): string {
   return `expected a "data" array of objects with an "id", as the ${dialect} listing returns`
 }
 
-function messageOf(error: unknown): string {
+function messageOf(error: unknown, otherwise: string): string {
   if (isRouterError(error)) return error.message
   // The cause chain, not just the wrapper: "fetch failed" alone names nothing an operator can fix.
   const described = describeError(error, Number.POSITIVE_INFINITY)
-  return described.length > 0 ? described : "the account's endpoint could not be resolved"
+  return described.length > 0 ? described : otherwise
 }

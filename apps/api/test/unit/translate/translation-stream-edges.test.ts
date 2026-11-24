@@ -3,6 +3,7 @@ import { anthropicToOpenAiChatStream } from "../../../src/services/translate/ant
 import { anthropicToOpenAiResponsesStream } from "../../../src/services/translate/anthropic-to-openai-responses/stream"
 import { openAiChatToAnthropicStream } from "../../../src/services/translate/openai-chat-to-anthropic/stream"
 import { openAiChatToOpenAiResponsesStream } from "../../../src/services/translate/openai-chat-to-openai-responses/stream"
+import { isTruncationOnly } from "./fixtures"
 
 function frame(body: unknown) {
   return { event: null, data: JSON.stringify(body) }
@@ -92,7 +93,7 @@ test("a transport-truncated tool stream receives no invented completed arguments
         content_block: { type: "tool_use", id: "a", name: "f" },
       }),
     )
-    expect(t.flush()).toEqual([])
+    expect(isTruncationOnly(t.flush())).toBe(true)
   }
 })
 

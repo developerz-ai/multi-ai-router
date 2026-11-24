@@ -46,7 +46,7 @@ const modelRefusedRule: ClassificationRule = {
 const PER_MODEL_LIMITS = /./
 
 /** RFC 7807 problem details (`{"status":403,"title":"Forbidden","detail":"Authorization failed"}`). */
-const Problem = z.object({ detail: z.string(), title: z.string().optional() })
+const Problem = z.object({ detail: z.string(), title: z.string().nullish().catch(undefined) })
 
 function readNvidiaFacts(body: unknown): UpstreamErrorFacts {
   const problem = Problem.safeParse(body)

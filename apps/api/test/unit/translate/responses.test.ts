@@ -24,6 +24,7 @@ import {
 import {
   anthropicRequest,
   anthropicUsageWire,
+  isTruncationOnly,
   openAiChatRequest,
   openAiChatUsageWire,
   openAiResponsesRequest,
@@ -382,7 +383,7 @@ describe("anthropic -> openai-responses stream", () => {
     stream.push(
       responsesFrame("content_block_delta", { index: 0, delta: { type: "text_delta", text: "x" } }),
     )
-    expect(stream.flush()).toEqual([])
+    expect(isTruncationOnly(stream.flush())).toBe(true)
   })
 
   test("an error event terminates the stream via response.failed", () => {
@@ -665,7 +666,7 @@ describe("openai-responses -> anthropic stream", () => {
     const stream = translator()
     stream.push(responsesFrame("response.created", { response: { id: "resp_01" } }))
     stream.push(responsesFrame("response.output_text.delta", { delta: "partial" }))
-    expect(stream.flush()).toEqual([])
+    expect(isTruncationOnly(stream.flush())).toBe(true)
   })
 })
 
@@ -906,7 +907,7 @@ describe("openai-chat -> openai-responses stream", () => {
     expect(types).toContain("response.completed")
   })
 
-  test("a stream that ends with no finish_reason is truncated: flush emits nothing", () => {
+  test("a stream that ends with no finish_reason is truncated: flush emits the error event and no completion", () => {
     const stream = translator()
     stream.push({
       event: null,
@@ -915,7 +916,7 @@ describe("openai-chat -> openai-responses stream", () => {
         choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }],
       }),
     })
-    expect(stream.flush()).toEqual([])
+    expect(isTruncationOnly(stream.flush())).toBe(true)
   })
 
   /**
@@ -1269,7 +1270,7 @@ describe("openai-responses -> openai-chat stream (the downgrade)", () => {
   test("a truncated stream gets no synthesized [DONE]", () => {
     const stream = translator()
     stream.push(responsesFrame("response.output_text.delta", { delta: "partial" }))
-    expect(stream.flush()).toEqual([])
+    expect(isTruncationOnly(stream.flush())).toBe(true)
   })
 
   test("response.failed renders an openai-chat error body and closes the stream", () => {

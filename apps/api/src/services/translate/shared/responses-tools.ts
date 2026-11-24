@@ -82,8 +82,12 @@ export function toolChoiceFromOpenAiResponses(
   onDrop: DropSink = IGNORE_DROPS,
 ): OpenAiChatToolChoice | undefined {
   const emptied = declared > 0 && (tools === undefined || tools.length === 0)
+  // The client stating the Responses defaults (`tools: []`, `tool_choice: "auto"`): no other dialect
+  // accepts a mode that asks for tools beside none. An explicit `none` says the same as the empty
+  // list and is the caller's own word, so it stays.
+  const defaulted = declared === 0 && tools?.length === 0 && choice !== "none"
   if (typeof choice === "string") {
-    if (!emptied) return choice
+    if (!emptied && !defaulted) return choice
     if (choice === "required") {
       onDrop({
         field: "tool_choice",
@@ -121,7 +125,9 @@ export function responsesToolsAsChat(
 ): { readonly tools?: OpenAiChatTool[]; readonly tool_choice?: OpenAiChatToolChoice } {
   const kept = tools === undefined ? undefined : toolsFromOpenAiResponses(tools, onDrop)
   const declared = tools?.length ?? 0
-  const emitted = kept !== undefined && kept.length === 0 && declared > 0 ? undefined : kept
+  // An empty list is never emitted: openai-chat refuses `tools: []` outright, and a list the
+  // client sent empty states exactly what an absent one does.
+  const emitted = kept !== undefined && kept.length === 0 ? undefined : kept
   const tool_choice =
     choice === undefined ? undefined : toolChoiceFromOpenAiResponses(choice, kept, declared, onDrop)
   return {

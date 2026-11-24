@@ -25,13 +25,19 @@ const ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic"
 const OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 
 /**
- * Provenance: z.ai / GLM numeric error codes, returned as `error.code` on both surfaces —
- * `1113` is a drained balance, the `130x` family is throttling, the `100x` family is auth.
- * Blast radius: without `1113` a dead balance reads as a generic `400` and the account is never
- * marked `exhausted`. Expect drift; this is the one file to fix when it happens.
+ * Provenance: z.ai / GLM numeric error codes, returned as `error.code` on both surfaces
+ * (docs.z.ai/api-reference/api-code, read 2026-11-23). `1113` is a drained balance. `1309` (Coding
+ * Plan expired), `1314` (enterprise package expired) and `1315` (a key limited to another product)
+ * also need a human, though all three arrive as a `429`. `130x` is throttling, `1305` the shared
+ * service overloaded, `100x` auth; `1211` is an unknown model and `1311` one the plan does not carry.
+ * Blast radius: without these a dead balance or an expired plan reads as a throttle and is retried on
+ * a clock forever. Expect drift; this is the one file to fix when it happens.
  */
 const BALANCE_CODES = ["1113", "1112"]
-const THROTTLE_CODES = ["1302", "1303", "1304", "1305"]
+const PLAN_ENDED_CODES = ["1309", "1314", "1315"]
+const THROTTLE_CODES = ["1302", "1303", "1304"]
+const OVERLOADED_CODES = ["1305"]
+const MODEL_CODES = ["1211", "1311"]
 const AUTH_CODES = ["1000", "1001", "1002", "1003", "1004"]
 
 /**
@@ -43,8 +49,12 @@ const AUTH_CODES = ["1000", "1001", "1002", "1003", "1004"]
  * CLAUDE.md non-negotiable 7 puts it in `cooling_down`. Blast radius of losing this code is only
  * the signal's provenance — a 429 already defaults to `rate-limited` — but the reset instant it
  * carries is not recoverable any other way; see {@link parseZaiReset}.
+ *
+ * `1308` and `1316`-`1321` are the same wall by the hour or the week (docs.z.ai, as above). `1316` and
+ * `1317` word it `Usage limit reached for the past 5 hours. Insufficient balance for extra usage.
+ * Resets at …`, so the codes must be read ahead of the balance wording, which would park the account.
  */
-const WINDOW_CODES = ["1310"]
+const WINDOW_CODES = ["1308", "1310", "1316", "1317", "1318", "1319", "1320", "1321"]
 
 /**
  * The wording backstop for a balance code z.ai did not send. The codes above are the verdict; this
@@ -64,7 +74,7 @@ const BALANCE_STATUSES = [400, 402, 429]
  * *weekly* window would therefore be re-probed every five minutes for days — thousands of requests
  * upstream to relearn a fact z.ai stated exactly once.
  */
-const RESET_AT = /reset at\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/i
+const RESET_AT = /resets? at\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/i
 
 /**
  * The stamp carries no offset. It is **UTC+8**, established by comparing z.ai's own request-id
@@ -137,11 +147,14 @@ export const zaiDriver: ProviderDriver = {
     parseRateLimit: parseZaiRateLimit,
     rules: [
       codeRule("credits-exhausted", "zai:balance-code", BALANCE_CODES),
+      codeRule("credits-exhausted", "zai:plan-ended", PLAN_ENDED_CODES),
+      codeRule("rate-limited", "zai:window-exhausted", WINDOW_CODES),
       messageRule("credits-exhausted", "zai:insufficient-balance", INSUFFICIENT_BALANCE, {
         statuses: BALANCE_STATUSES,
       }),
       codeRule("rate-limited", "zai:throttle-code", THROTTLE_CODES),
-      codeRule("rate-limited", "zai:window-exhausted", WINDOW_CODES),
+      codeRule("overloaded", "zai:overloaded", OVERLOADED_CODES),
+      codeRule("model-unsupported", "zai:model-code", MODEL_CODES),
       codeRule("auth", "zai:auth-code", AUTH_CODES),
     ],
   }),

@@ -1,10 +1,17 @@
 import { z } from "zod"
 import { createHttpDriver } from "../driver"
-import { messageRule, typeRule } from "../failure/classify"
+import { messageRule, providerScoped, typeRule } from "../failure/classify"
 import { readErrorFacts } from "../failure/error-body"
 import { parseDurationSeconds } from "../rate-limit/duration"
 import { parseRateLimitHeaders } from "../rate-limit/parse"
-import type { RateLimitSignal, UpstreamErrorFacts, UpstreamResponse } from "../types"
+import type {
+  ProviderDriver,
+  RateLimitSignal,
+  UpstreamErrorFacts,
+  UpstreamResponse,
+} from "../types"
+import { geminiModelListing } from "./gemini-models"
+import { dailyAllowanceReset, isDailyAllowance } from "./gemini-quota"
 
 /**
  * `gemini` — Google's Gemini models over their **OpenAI-compatibility surface**, not the native
@@ -49,11 +56,38 @@ const RATE_LIMIT_STATUSES = ["RESOURCE_EXHAUSTED"]
 const AUTH_STATUSES = ["UNAUTHENTICATED", "PERMISSION_DENIED"]
 
 /**
- * Provenance: `INTERNAL` (500), `UNAVAILABLE` (503, the overloaded-model case) and
- * `DEADLINE_EXCEEDED` (504). Blast radius: naming them keeps the recorded signal readable when the
- * compatibility layer or a gateway in front of it relays one under a status that is not its own.
+ * Provenance: `INTERNAL` (500) and `DEADLINE_EXCEEDED` (504). Blast radius: naming them keeps the
+ * recorded signal readable when the compatibility layer or a gateway in front of it relays one under
+ * a status that is not its own.
  */
-const SERVER_STATUSES = ["INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED"]
+const SERVER_STATUSES = ["INTERNAL", "DEADLINE_EXCEEDED"]
+
+/**
+ * Provenance: `UNAVAILABLE` (503), "The model is overloaded": Google's capacity, shared by every key.
+ * Prod 2026-11-23/24: the free keys answered it to live requests and recovery probes for hours, each
+ * one struck on the account. Blast radius: these retry on the overload budget and never cool a key.
+ */
+const OVERLOADED_STATUSES = ["UNAVAILABLE"]
+
+/**
+ * Provenance: aistudio.google.com/docs/rate-limits, read 2026-11-23 ("Limits vary depending on
+ * the specific model being used", per project): each model has its own per-minute and per-day
+ * allowance. Blast radius: a `429` holds the model it was for, and the key's other models keep serving.
+ */
+const PER_MODEL_LIMITS = /./
+
+/**
+ * Refusals of **this vendor's wire**, which another vendor's account may serve as the body stands.
+ * Provenance: ai.google.dev/gemini-api/docs/thought-signatures — a Gemini 3 turn replaying a tool call
+ * without Google's signature (one another vendor's model made) answers `400 "Function call is missing
+ * a thought_signature in functionCall parts"`; and Google's JSON transcoder refuses a field outside
+ * its schema with `Unknown name "…": Cannot find field.` (google.rpc over JSON). The prod `400`s of
+ * 2026-11-24 (31, alias `free`, other vendors untried) carried no readable message, so which of the
+ * two they were is unproven. Blast radius: a match moves the request to the next vendor.
+ */
+const THOUGHT_SIGNATURE = /thought[_ ]?signature/i
+const UNKNOWN_FIELD = /\bcannot find field\b/i
+const WIRE_STATUSES = [400]
 
 /**
  * Provenance: the only Gemini refusals **no clock can fix** — billing never enabled on the project,
@@ -95,11 +129,22 @@ const BAD_KEY_STATUSES = [400, 401, 403]
 const GoogleStatus = z.object({ error: z.object({ status: z.string() }) })
 
 /**
+ * Provenance: the compatibility surface answers its errors as a **one-element array**,
+ * `[{"error": {…}}]` (discuss.ai.google.dev/t/109823; prod 2026-11-23: every Gemini `429`, `503` and
+ * `400` recorded on its status alone). Both shapes are read. Blast radius: unwrapped, every rule here
+ * and the only reset Gemini states are dead.
+ */
+function unwrapped(body: unknown): unknown {
+  return Array.isArray(body) && body.length === 1 ? body[0] : body
+}
+
+/**
  * The shared envelope first — the compatibility layer answers some failures in OpenAI's own shape —
  * then Google's canonical status lifted into `type`, which is where a rule reads a provider's own
  * vocabulary. A body carrying neither yields no facts and falls back to the HTTP status.
  */
-function readGeminiFacts(body: unknown): UpstreamErrorFacts {
+function readGeminiFacts(raw: unknown): UpstreamErrorFacts {
+  const body = unwrapped(raw)
   const facts = readErrorFacts(body)
   const parsed = GoogleStatus.safeParse(body)
   return parsed.success ? { ...facts, type: parsed.data.error.status } : facts
@@ -116,15 +161,17 @@ const RETRY_INFO_TYPE = "google.rpc.RetryInfo"
 const RetryInfo = z.object({ "@type": z.string(), retryDelay: z.string() })
 const DetailedError = z.object({ error: z.object({ details: z.array(z.unknown()) }) })
 
-function retryDelaySeconds(body: unknown): number | undefined {
+function errorDetails(body: unknown): readonly unknown[] {
   const parsed = DetailedError.safeParse(body)
-  if (!parsed.success) return undefined
+  return parsed.success ? parsed.data.error.details : []
+}
 
-  for (const detail of parsed.data.error.details) {
+function retryDelaySeconds(details: readonly unknown[]): number | undefined {
+  for (const detail of details) {
     const info = RetryInfo.safeParse(detail)
     if (!info.success || !info.data["@type"].endsWith(RETRY_INFO_TYPE)) continue
     const seconds = parseDurationSeconds(info.data.retryDelay)
-    if (seconds !== null) return seconds
+    if (seconds !== null && seconds > 0) return seconds
   }
   return undefined
 }
@@ -134,19 +181,26 @@ function parseGeminiRateLimit(response: UpstreamResponse): RateLimitSignal | nul
   // Only a reading that already says "limited" gets the delay attached: `RetryInfo` rides an
   // `UNAVAILABLE` too, where it is a backoff hint about the service and says nothing about this
   // credential's window. A header the provider did send is never overwritten by the body.
-  if (signal === null || !signal.limited || signal.retryAfterSeconds !== undefined) return signal
+  if (signal === null || !signal.limited) return signal
+  if (signal.retryAfterSeconds !== undefined || signal.resetsAt !== undefined) return signal
 
-  const seconds = retryDelaySeconds(response.body)
+  const details = errorDetails(unwrapped(response.body))
+  if (isDailyAllowance(details)) {
+    const resetsAt = dailyAllowanceReset(response.headers)
+    return resetsAt === null ? signal : { ...signal, resetsAt, resetSource: "estimated" }
+  }
+  const seconds = retryDelaySeconds(details)
   if (seconds === undefined) return signal
 
   return { ...signal, retryAfterSeconds: seconds, resetSource: "provider-reported" }
 }
 
-export const geminiDriver = createHttpDriver({
+const driver = createHttpDriver({
   id: "gemini",
   surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL }],
   readFacts: readGeminiFacts,
   parseRateLimit: parseGeminiRateLimit,
+  modelScopedRateLimits: PER_MODEL_LIMITS,
   rules: [
     messageRule("credits-exhausted", "gemini:billing-stopped", BILLING_STOPPED, {
       statuses: BILLING_STATUSES,
@@ -154,6 +208,19 @@ export const geminiDriver = createHttpDriver({
     typeRule("rate-limited", "gemini:RESOURCE_EXHAUSTED", RATE_LIMIT_STATUSES),
     typeRule("auth", "gemini:auth-status", AUTH_STATUSES),
     messageRule("auth", "gemini:api-key-invalid", BAD_API_KEY, { statuses: BAD_KEY_STATUSES }),
+    typeRule("overloaded", "gemini:UNAVAILABLE", OVERLOADED_STATUSES),
     typeRule("server-error", "gemini:server-status", SERVER_STATUSES),
+    providerScoped(
+      messageRule("invalid-request", "gemini:thought-signature", THOUGHT_SIGNATURE, {
+        statuses: WIRE_STATUSES,
+      }),
+    ),
+    providerScoped(
+      messageRule("invalid-request", "gemini:unknown-field", UNKNOWN_FIELD, {
+        statuses: WIRE_STATUSES,
+      }),
+    ),
   ],
 })
+
+export const geminiDriver: ProviderDriver = { ...driver, modelListing: geminiModelListing }

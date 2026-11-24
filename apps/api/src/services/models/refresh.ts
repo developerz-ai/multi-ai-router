@@ -1,6 +1,6 @@
 import type { ModelListingSource } from "@multi-ai-router/core"
 import type { AccountRow, ModelCatalogRepository } from "@multi-ai-router/db"
-import { providerCatalogSweep } from "../../providers"
+import { httpDriver, providerCatalogSweep } from "../../providers"
 import { describeProvider } from "../accounts/providers"
 import { catalogEntry } from "./entries"
 import { listUpstreamModels, type UpstreamListingDeps } from "./listing"
@@ -110,6 +110,10 @@ export async function refreshAccountCatalog(
       now,
     )
   }
+
+  // A login nobody finished (`accounts/service.ts` writes the row first): nothing to ask with.
+  if (account.authMaterial === null && httpDriver(account.provider)?.authKind !== "none")
+    return { kind: "skipped", reason: "http:no-credential" }
 
   const listed = await listUpstreamModels(deps, account)
   if (!listed.ok) {

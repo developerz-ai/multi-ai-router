@@ -107,8 +107,9 @@ describe("an upstream that is thinking, which translates to nothing", () => {
   test("the content the client is owed still arrives, and the comments are not it", async () => {
     const sse = await relayed(thinking, 4_000).text()
 
-    // Exactly one data line: `message_start`'s opening chunk. Every dropped frame stays dropped.
-    expect(dataLines(sse)).toBe(1)
+    // `message_start`'s opening chunk, and the one event a stream with no ending earns. Every dropped
+    // frame stays dropped.
+    expect(dataLines(sse)).toBe(2)
   })
 
   test("a stream that is never quiet for long enough sends none at all", async () => {
@@ -131,7 +132,7 @@ describe("a stream that is producing output", () => {
     const sse = await relayed(answering, 1_000).text()
 
     expect(comments(sse)).toBe(0)
-    expect(dataLines(sse)).toBe(5)
+    expect(dataLines(sse)).toBe(6)
   })
 
   test("but a long enough gap between two written chunks still earns one", async () => {
@@ -140,6 +141,6 @@ describe("a stream that is producing output", () => {
     const sse = await relayed(answering, 9_000).text()
 
     expect(comments(sse)).toBeGreaterThan(0)
-    expect(dataLines(sse)).toBe(5)
+    expect(dataLines(sse)).toBe(6)
   })
 })

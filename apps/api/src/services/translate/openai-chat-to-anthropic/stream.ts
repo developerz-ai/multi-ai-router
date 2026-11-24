@@ -1,15 +1,16 @@
 import { createAnthropicStreamEmitter } from "../shared/anthropic-stream"
 import { readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
 import { createOpenAiChatToolCallReader } from "../shared/openai-chat-tool-calls"
-import { openAiChatChunkSchema } from "../shared/openai-chat-wire"
+import { createOpenAiChatAnswerReader, openAiChatChunkSchema } from "../shared/openai-chat-wire"
 import { carriesOpenAiChatError } from "../shared/response-error"
 import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { CONSERVATIVE_STOP_REASON, toAnthropicStopReason } from "../shared/stop-reason"
+import { createTruncationWatch } from "../shared/stream-truncated"
 import type { OpenAiChatUsage } from "../shared/usage"
 import { anthropicUsageCounts, parseOpenAiChatUsage } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
 import { NO_EVENTS } from "../sse/emit"
-import { frameJson } from "../sse/parse"
+import { frameJson, type SseFrame } from "../sse/parse"
 
 /**
  * A `chat.completion.chunk` stream → Anthropic SSE events.
@@ -42,6 +43,8 @@ export interface OpenAiChatToAnthropicStreamOptions extends ResponsesRecoveryOpt
   readonly id?: string | undefined
   /** Used until a chunk names the model. The client's requested name is the right value. */
   readonly model?: string | undefined
+  /** The request id an error event this translator authors carries (`shared/stream-truncated.ts`). */
+  readonly requestId?: string | undefined
 }
 
 const DONE_SENTINEL = "[DONE]"
@@ -51,10 +54,12 @@ export function openAiChatToAnthropicStream(
 ): StreamTranslator {
   const emitter = createAnthropicStreamEmitter(options)
   const toolCalls = createOpenAiChatToolCallReader()
+  const answer = createOpenAiChatAnswerReader()
   let hasToolCalls = false
   let finishReason: string | null = null
   let usage: OpenAiChatUsage | null = null
   let unrecognized: string | null = null
+  const watch = createTruncationWatch("anthropic", options.requestId)
 
   function terminate(out: SseEvent[]): void {
     // `[DONE]` says the upstream is finished talking, even on the rare broken stream that never sent
@@ -76,58 +81,62 @@ export function openAiChatToAnthropicStream(
     })
   }
 
-  return {
-    push(frame) {
-      if (emitter.isTerminated()) return NO_EVENTS
-      const out: SseEvent[] = []
-      if (frame.data === DONE_SENTINEL) {
-        terminate(out)
-        return out
-      }
-
-      const payload = frameJson(frame)
-      if (payload === null || typeof payload !== "object") return NO_EVENTS
-      if (carriesOpenAiChatError(payload as Record<string, unknown>)) {
-        emitter.fail(out, payload)
-        return out
-      }
-
-      const parsed = openAiChatChunkSchema.safeParse(payload)
-      if (!parsed.success) return NO_EVENTS
-      emitter.identify(parsed.data.id, parsed.data.model)
-      usage = parseOpenAiChatUsage(parsed.data.usage) ?? usage
-
-      // `n > 1` is refused at request time, so the one choice a translated stream can carry is the
-      // first; an upstream that answers with more anyway has its extras dropped, not interleaved.
-      const choice = (parsed.data.choices ?? []).find((entry) => (entry.index ?? 0) === 0)
-      if (choice === undefined) return out
-
-      emitter.start(out)
-      emitter.text(out, readOpenAiChatReasoning(choice.delta), false, "reasoning")
-      emitter.text(out, choice.delta?.content ?? "")
-      for (const call of choice.delta?.tool_calls ?? []) {
-        hasToolCalls = true
-        const key = toolCalls.key(call)
-        emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
-        emitter.toolArgs(out, key, call.function?.arguments ?? "")
-      }
-      if (choice.finish_reason !== null && choice.finish_reason !== undefined) {
-        finishReason = choice.finish_reason
-        // Keep tool blocks addressable until termination; text-only blocks can close promptly.
-        if (!hasToolCalls) emitter.closeBlock(out)
-      }
+  function translate(frame: SseFrame): readonly SseEvent[] {
+    const out: SseEvent[] = []
+    if (frame.data === DONE_SENTINEL) {
+      terminate(out)
       return out
-    },
+    }
+
+    const payload = frameJson(frame)
+    if (payload === null || typeof payload !== "object") return NO_EVENTS
+    if (carriesOpenAiChatError(payload as Record<string, unknown>)) {
+      emitter.fail(out, payload)
+      return out
+    }
+
+    const parsed = openAiChatChunkSchema.safeParse(payload)
+    if (!parsed.success) return NO_EVENTS
+    emitter.identify(parsed.data.id, parsed.data.model)
+    usage = parseOpenAiChatUsage(parsed.data.usage) ?? usage
+
+    // `n > 1` is refused at request time, so the one choice a translated stream can carry is the
+    // first; an upstream that answers with more anyway has its extras dropped, not interleaved.
+    const choice = (parsed.data.choices ?? []).find((entry) => (entry.index ?? 0) === 0)
+    if (choice === undefined) return out
+
+    emitter.start(out)
+    emitter.text(out, readOpenAiChatReasoning(choice.delta), false, "reasoning")
+    emitter.text(out, answer(choice.delta))
+    for (const call of choice.delta?.tool_calls ?? []) {
+      hasToolCalls = true
+      const key = toolCalls.key(call)
+      emitter.toolStart(out, key, { id: call.id, name: call.function?.name })
+      emitter.toolArgs(out, key, call.function?.arguments ?? "")
+    }
+    if (choice.finish_reason !== null && choice.finish_reason !== undefined) {
+      finishReason = choice.finish_reason
+      // Keep tool blocks addressable until termination; text-only blocks can close promptly.
+      if (!hasToolCalls) emitter.closeBlock(out)
+    }
+    return out
+  }
+
+  return {
+    push: (frame) =>
+      emitter.isTerminated() || watch.truncated() ? NO_EVENTS : watch.saw(translate(frame)),
 
     flush() {
+      if (emitter.isTerminated()) return NO_EVENTS
       // A stream that ended without a finish reason was truncated. Synthesizing `message_delta` and
-      // `message_stop` for it would report a completion that never happened.
-      if (emitter.isTerminated() || finishReason === null) return NO_EVENTS
+      // `message_stop` for it would report a completion that never happened; it is told so instead.
+      if (finishReason === null) return watch.end()
       const out: SseEvent[] = []
       terminate(out)
       return out
     },
 
+    truncated: watch.truncated,
     unrecognizedStopReason: () => unrecognized,
     translationFailure: () => emitter.translationFailure(),
   }

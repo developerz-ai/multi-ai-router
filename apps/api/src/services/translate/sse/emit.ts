@@ -24,11 +24,17 @@ export interface StreamTranslator {
   /** @returns the client events this upstream frame produced, in order. Never throws. */
   push(frame: SseFrame): readonly SseEvent[]
   /**
-   * The upstream stream ended. @returns the terminal events the target dialect is still owed, and
-   * nothing at all when the stream was truncated — a synthesized clean finish would report a
-   * completion that never happened.
+   * The upstream stream ended cleanly. @returns the terminal events the target dialect is still
+   * owed; for a stream that started and stated no terminal, the dialect's one router error event
+   * (`shared/stream-truncated.ts`) and never a synthesized finish — that would report a completion
+   * that never happened. Idempotent: a second call returns nothing.
    */
   flush(): readonly SseEvent[]
+  /**
+   * Whether `flush` ended the stream with that error event. The caller's cue to record the attempt
+   * as `upstream_incomplete` rather than a success; a translator is pure and records nothing.
+   */
+  truncated?(): boolean
   /**
    * A stop reason this build does not define, or null.
    *

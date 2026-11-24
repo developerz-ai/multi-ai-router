@@ -481,9 +481,9 @@ describe("gemini", () => {
     expect(result?.signal).toBe("gemini:api-key-invalid")
   })
 
-  test("an overloaded model is transient", () => {
+  test("an overloaded model is Google's shared backend, never struck on the key", () => {
     expect(gemini?.classifyFailure(response(503, { body: geminiOverloadBody }))?.kind).toBe(
-      "server-error",
+      "overloaded",
     )
   })
 

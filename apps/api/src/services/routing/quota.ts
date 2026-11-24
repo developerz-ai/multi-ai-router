@@ -13,7 +13,7 @@
  * is `null` for everyone.
  */
 
-import type { QuotaWindowState } from "@multi-ai-router/core"
+import type { QuotaWindowKind, QuotaWindowState } from "@multi-ai-router/core"
 import { continuousQuotaHeadroom, mergeQuotaEvidence, retiredEvidence } from "./quota-evidence"
 import type { AccountSnapshot } from "./types"
 
@@ -42,13 +42,41 @@ export function isWindowSpent(
   return true
 }
 
-/** The first spent window blocking this account, or null. The account is blocked by whichever. */
+/**
+ * The windows that meter one model family, and the names that draw on them. A Claude subscription's
+ * `seven_day_opus` is Opus's own weekly allowance and `seven_day_sonnet` Sonnet's: spent, each
+ * refuses its family and nothing else, while `five_hour` and `seven_day` meter every model.
+ * Matched on the upstream name, after the alias map, because that is the model the window counts.
+ */
+const MODEL_WINDOWS: Readonly<Partial<Record<QuotaWindowKind, RegExp>>> = {
+  seven_day_opus: /opus/i,
+  seven_day_sonnet: /sonnet/i,
+}
+
+/**
+ * Whether `window` meters `model`. An account-wide window meters every model. A model family's
+ * window meters only that family, so with no model named — the account asked about as a whole — it
+ * meters nothing: a spent Opus window must not hold the account's Sonnet and Haiku out
+ * (`05-routing-and-failover.md`, T3).
+ */
+export function windowCoversModel(window: QuotaWindowKind, model?: string): boolean {
+  const family = MODEL_WINDOWS[window]
+  if (family === undefined) return true
+  return model !== undefined && family.test(model)
+}
+
+/**
+ * The first spent window blocking this account **for `model`**, or null. Without a model the
+ * question is about the account as a whole, and only the windows every model draws on answer it.
+ */
 export function findSpentWindow(
   account: AccountSnapshot,
   now: Date,
   threshold = DEFAULT_QUOTA_SPENT_THRESHOLD,
+  model?: string,
 ): QuotaWindowState | null {
   for (const window of account.quotaWindows ?? []) {
+    if (!windowCoversModel(window.window, model)) continue
     if (isWindowSpent(window, now, threshold)) return window
   }
   return null

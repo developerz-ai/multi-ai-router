@@ -1,5 +1,11 @@
 import { createHttpDriver } from "../driver"
-import { codeRule, messageRule, modelScoped, withResetEstimate } from "../failure/classify"
+import {
+  codeRule,
+  messageRule,
+  modelScoped,
+  providerScoped,
+  withResetEstimate,
+} from "../failure/classify"
 import type { ProviderDriver } from "../types"
 import { openRouterKeyRead } from "./openrouter-key"
 
@@ -37,6 +43,18 @@ const INSUFFICIENT_CREDITS = /insufficient credits|requires more credits|add mor
  */
 const KEY_LIMIT_WINDOW = /key limit exceeded\s*\((?:daily|weekly|monthly) limit\)/i
 const KEY_LIMIT = /key limit exceeded/i
+
+/**
+ * The other announcement of the same resetting cap: a `402` for a request whose reserved `max_tokens`
+ * the cap's remainder cannot cover — `This request requires more credits, or fewer max_tokens. You
+ * requested up to N tokens, but can only afford M. To increase, … create a key with a higher total
+ * limit` — so a cap at 99.9% refuses before it reads as spent. Provenance: community.n8n.io/t/267444
+ * quotes the `total` form (2026-02); the windowed forms are by analogy with {@link KEY_LIMIT_WINDOW},
+ * not captured. Prod 2026-11-23 22:30Z (#441): a daily cap refused, the account parked `exhausted`,
+ * and clients were told to top up for three hours past the 00:00Z reset. Blast radius: an OpenRouter
+ * `402`/`403` naming a windowed key limit cools instead of parking; a `total` one stays a human's.
+ */
+const HIGHER_WINDOW_LIMIT = /key with a higher (?:daily|weekly|monthly) limit/i
 
 /**
  * Re-test cadence for a resetting key cap: the earliest a daily window can reopen is hours away,
@@ -107,6 +125,25 @@ const NAMESPACED_MODEL_ID = /^[^/\s]+\/[^/\s]\S*$/
 const MODEL_REFUSED = /is not a valid model id|is no longer available/i
 
 /**
+ * No endpoint carries the id at all: `404 "No endpoints found for <id>."`. About the name, as above.
+ * Provenance: github.com/Aider-AI/aider/issues/2444. Blast radius: the model is held off this
+ * account for `MODEL_REFUSAL_TTL_SECONDS`, so the pattern takes the bare form only.
+ */
+const NO_ENDPOINTS = /^no endpoints found for [^\s:]+(?::[^\s:]+)?\.?$/i
+
+/**
+ * No endpoint is left once **this request's** filters apply — the `provider` preferences the account
+ * or the client states, a data policy, a tool or an image the endpoints do not take. Provenance: prod
+ * 2026-11-24 04:06Z, `404 "No endpoints found for the request with quantization: fp8,bf16…"`, caused
+ * by the account's own preferences and relayed to the client; `that support tool use` is
+ * github.com/anomalyco/opencode/issues/1002 and `matching your data policy` help.janitorai.com's
+ * OpenRouter guide, both read 2026-11-23. Not a verdict on the name: a hold would keep the model from
+ * a plain request it does serve. Blast radius: the chain moves past OpenRouter.
+ */
+const REQUEST_FILTERED =
+  /^no endpoints found (?:for the request with|that support|matching your data policy)/i
+
+/**
  * A `429` OpenRouter relays from the provider serving one model — `{"error":{"message":"Provider
  * returned error","code":429,"metadata":{"raw":"<model> is temporarily rate-limited upstream…",
  * "provider_name":…}}}` — is that model's endpoint throttling, not this key. Provenance:
@@ -164,6 +201,12 @@ const driver = createHttpDriver({
       }),
       KEY_LIMIT_RETEST_SECONDS,
     ),
+    withResetEstimate(
+      messageRule("rate-limited", "openrouter:key-limit-window", HIGHER_WINDOW_LIMIT, {
+        statuses: [402, 403],
+      }),
+      KEY_LIMIT_RETEST_SECONDS,
+    ),
     messageRule("credits-exhausted", "openrouter:key-limit", KEY_LIMIT, { statuses: [403] }),
     messageRule(
       "invalid-request",
@@ -174,6 +217,12 @@ const driver = createHttpDriver({
     messageRule("model-unsupported", "openrouter:model-unsupported", MODEL_REFUSED, {
       statuses: [400, 404],
     }),
+    messageRule("model-unsupported", "openrouter:no-endpoints", NO_ENDPOINTS, { statuses: [404] }),
+    providerScoped(
+      messageRule("invalid-request", "openrouter:request-filtered", REQUEST_FILTERED, {
+        statuses: [404],
+      }),
+    ),
     messageRule("credits-exhausted", "openrouter:insufficient-credits", INSUFFICIENT_CREDITS, {
       statuses: [402, 403],
     }),

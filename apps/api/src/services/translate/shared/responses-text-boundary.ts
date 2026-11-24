@@ -1,3 +1,8 @@
+/** An absent index, or a real one: what both readers below accept in an index position. */
+function index(value: unknown): boolean {
+  return value == null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+}
+
 export function validResponsesTextIdentity(event: unknown, fallbackType?: string | null): boolean {
   if (event === null || typeof event !== "object") return true
   const type = "type" in event ? event.type : fallbackType
@@ -9,8 +14,6 @@ export function validResponsesTextIdentity(event: unknown, fallbackType?: string
   const outputIndex = "output_index" in event ? event.output_index : undefined
   const contentIndex = "content_index" in event ? event.content_index : undefined
   const itemId = "item_id" in event ? event.item_id : undefined
-  const index = (value: unknown) =>
-    value == null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
   return index(outputIndex) && index(contentIndex) && (itemId == null || typeof itemId === "string")
 }
 
@@ -24,8 +27,6 @@ export function createResponsesTextBoundary() {
     type?: unknown
     delta?: unknown
   }) => {
-    const index = (value: unknown) =>
-      value == null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
     if (!index(event.output_index) || !index(event.content_index)) return null
     if (event.item_id != null && typeof event.item_id !== "string") return null
     if (typeof event.delta !== "string" || event.delta.length === 0) return null

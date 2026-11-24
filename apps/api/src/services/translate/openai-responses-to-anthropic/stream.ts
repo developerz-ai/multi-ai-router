@@ -13,6 +13,7 @@ import {
 } from "../shared/responses-text-boundary"
 import { fromResponsesCompletion, toAnthropicStopReason } from "../shared/stop-reason"
 import { TranslationStreamError } from "../shared/stream-error"
+import { createTruncationWatch } from "../shared/stream-truncated"
 import {
   anthropicUsageCounts,
   parseOpenAiResponsesUsage,
@@ -56,6 +57,8 @@ export interface OpenAiResponsesToAnthropicStreamOptions extends ResponsesRecove
   readonly model?: string | undefined
   /** The serving account's seal; a reasoning item's handle closes its block (`sealed-reasoning.ts`). */
   readonly reasoningSeal?: ReasoningSeal | undefined
+  /** The request id an error event this translator authors carries (`shared/stream-truncated.ts`). */
+  readonly requestId?: string | undefined
 }
 
 export function openAiResponsesToAnthropicStream(
@@ -74,9 +77,10 @@ export function openAiResponsesToAnthropicStream(
   const textBoundary = createResponsesTextBoundary()
   const recoverSnapshot = createResponsesSnapshotRecovery(options)
   const summaryBoundary = createSummaryBoundary()
+  const watch = createTruncationWatch("anthropic", options.requestId)
 
   function process(payload: unknown, fallbackType: string | null): readonly SseEvent[] {
-    if (emitter.isTerminated()) return NO_EVENTS
+    if (emitter.isTerminated() || watch.truncated()) return NO_EVENTS
     if (!validResponsesTextIdentity(payload, fallbackType)) return NO_EVENTS
     const identity = resolveIdentity({
       ...(payload as Record<string, unknown>),
@@ -220,22 +224,20 @@ export function openAiResponsesToAnthropicStream(
 
   return {
     push(frame) {
-      return responsesFinalEvents(frameJson(frame)).flatMap((payload) =>
-        process(payload, frame.event),
+      return watch.saw(
+        responsesFinalEvents(frameJson(frame)).flatMap((payload) => process(payload, frame.event)),
       )
     },
 
     /**
-     * Always nothing.
-     *
-     * The Anthropic terminator — `message_delta` carrying the stop reason and usage, then
-     * `message_stop` — is emitted on the completion event itself, so a stream that reached one is
-     * already whole. A stream that did not was truncated, and **a truncated stream is never given a
-     * synthesized ending** (`06-protocol-translation.md#streaming-sse-event-mapping`): manufacturing
-     * one would report a completion that never happened, on a request whose bytes are already gone.
+     * Never a terminator. `message_delta` and `message_stop` leave on the completion event itself,
+     * so a stream that reached one is already whole. One that did not was truncated, and **a
+     * truncated stream is never given a synthesized ending**: it is told it was truncated
+     * (`shared/stream-truncated.ts`).
      */
-    flush: () => NO_EVENTS,
+    flush: () => (emitter.isTerminated() ? NO_EVENTS : watch.end()),
 
+    truncated: watch.truncated,
     unrecognizedStopReason: () => unrecognized,
     translationFailure: () => failure ?? emitter.translationFailure(),
   }

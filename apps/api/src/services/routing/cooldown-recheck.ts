@@ -1,5 +1,15 @@
-import { isWindowSpent } from "./quota"
+import type { QuotaWindowState } from "@multi-ai-router/core"
+import { isWindowSpent, windowCoversModel } from "./quota"
 import type { AccountSnapshot } from "./types"
+
+/**
+ * The spent windows that hold the **account** out. A model family's window (`seven_day_opus`) holds
+ * out only that family (`quota.ts`, `windowCoversModel`): it neither makes the account due for a
+ * recheck nor keeps a reread from reopening it.
+ */
+function accountWindowSpent(window: QuotaWindowState, now: Date, threshold: number): boolean {
+  return windowCoversModel(window.window) && isWindowSpent(window, now, threshold)
+}
 
 /**
  * Whether the hourly recheck should look at this account, as a pure read of its live snapshot.
@@ -24,7 +34,7 @@ export function cooldownRecheckDue(
   const held = account.health.cooldownUntil
   const running = held !== undefined && held.getTime() > now.getTime()
   const spent = (account.quotaWindows ?? []).filter((window) =>
-    isWindowSpent(window, now, threshold),
+    accountWindowSpent(window, now, threshold),
   )
   const noStatedEnd =
     (account.status === "cooling_down" && held === undefined) ||
@@ -51,7 +61,7 @@ export function readingReopened(
     const held = before.quotaWindows?.find((prior) => prior.window === window.window)
     return held === undefined || window.lastCheckedAt.getTime() > held.lastCheckedAt.getTime()
   })
-  return reread && !windows.some((window) => isWindowSpent(window, now, threshold))
+  return reread && !windows.some((window) => accountWindowSpent(window, now, threshold))
 }
 
 /**
@@ -71,6 +81,6 @@ export function providerReportedSpent(
       window.resetSource === "provider-reported" &&
       window.resetsAt !== undefined &&
       window.resetsAt.getTime() > now.getTime() &&
-      isWindowSpent(window, now, threshold),
+      accountWindowSpent(window, now, threshold),
   )
 }

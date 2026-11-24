@@ -136,6 +136,7 @@ export {
   toOpenAiFinishReason,
   toResponsesCompletion,
 } from "./shared/stop-reason"
+export { TRUNCATED_STREAM_SIGNAL, truncatedStreamEvent } from "./shared/stream-truncated"
 export type { ThinkingDefaultMatcher } from "./shared/thinking-default"
 export {
   createThinkingDefaultMatcher,
