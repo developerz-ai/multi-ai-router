@@ -191,6 +191,8 @@ export function createMemoryStore(): MemoryStore {
           overflowAccountId: input.overflowAccountId ?? null,
           // The trigger's rule (migration 0047): empty from creation until a member lands.
           emptySince: EPOCH,
+          // Universal soft limit, default 0.80; migration 0060 made it not null.
+          quotaSoftLimit: "0.80",
           createdAt: EPOCH,
           updatedAt: EPOCH,
         }

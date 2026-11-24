@@ -18,8 +18,10 @@
  * while it was down.
  */
 
+import { DEFAULT_QUOTA_SOFT_LIMIT } from "@multi-ai-router/core"
 import { removalOf, resolveModel } from "./model"
 import { DEFAULT_QUOTA_SPENT_THRESHOLD, findSpentWindow } from "./quota"
+import { continuousQuotaHeadroom } from "./quota-evidence"
 import { hasRecoveryPermit, recoveryAllowsQuota, recoveryIsGated } from "./recovery-filter"
 import type { RejectedCandidate } from "./result"
 import type { Candidate, ScopedAccount, SelectionOptions } from "./types"
@@ -165,6 +167,22 @@ export function evaluateCandidate(
   }
 
   if (spentDrop !== null) return spentDrop
+
+  // Universal per-pool soft utilization limit: a member at or above it is treated as
+  // soft-limited here — it is dropped from eligible so any account below the soft limit
+  // within the same pool ranks ahead of it. Clock-recoverable at reset; the account stays
+  // in rotation when nothing else can serve. Preserves key state, model assignments,
+  // key scope, and alert thresholds unchanged.
+  const softLimit = options.quotaSoftLimit ?? DEFAULT_QUOTA_SOFT_LIMIT
+  const softHeadroom = continuousQuotaHeadroom(account, now)
+  if (softLimit !== undefined && softHeadroom !== null && softHeadroom <= 1 - softLimit) {
+    return drop({
+      reason: "soft-limit",
+      ...(account.health.cooldownUntil !== undefined
+        ? { resetsAt: account.health.cooldownUntil }
+        : {}),
+    })
+  }
 
   return {
     ok: true,

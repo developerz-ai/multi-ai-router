@@ -19,6 +19,7 @@ import { NO_NUL, noNul } from "../admin/parse"
 const POOL_NAME = z.string().trim().min(1).max(120).refine(noNul, NO_NUL)
 const WEIGHT = z.number().int().min(1).max(10_000)
 const PRIORITY = z.number().int().min(0).max(10_000)
+const QUOTA_SOFT_LIMIT = z.number().min(0).max(1).step(0.01)
 
 export const poolMemberInput = z
   .object({
@@ -36,6 +37,8 @@ export const createPoolBody = z
   .object({
     name: POOL_NAME,
     policy: RoutingPolicy.optional(),
+    /** Universal per-pool soft utilization limit, 0..1. Default 0.80. */
+    quotaSoftLimit: QUOTA_SOFT_LIMIT.optional(),
     members: z.array(poolMemberInput).max(200).optional(),
     /**
      * The member of last resort — one of `members`, held back from the policy until the pool
@@ -51,6 +54,8 @@ export const updatePoolBody = z
   .object({
     name: POOL_NAME.optional(),
     policy: RoutingPolicy.optional(),
+    /** `null` resets to the column default (0.80); `undefined` leaves it as it is. */
+    quotaSoftLimit: QUOTA_SOFT_LIMIT.nullish(),
     members: z.array(poolMemberInput).max(200).optional(),
     /** `null` clears the overflow account; an absent key leaves it alone. */
     overflowAccountId: z.uuid().nullable().optional(),

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `quotaSoftLimit`: universal per-pool soft utilization limit applied by routing selection/filter regardless of routing policy. Column `pools.quota_soft_limit` numeric(3,2) default `0.80` (migration `0060`). A member at or above it ranks behind members below it and is dropped while anyone below it exists — clock-recoverable at reset. Fixes PR #501, which scoped the soft limit to `quota-aware` only while account `8b609813`'s pool (`openrouter-coding`, like all 11 production pools) uses `priority-failover`, so it changed nothing. No change to key capacity, model assignments, key scope, or `RouterSpendLimitNear` threshold. Spec: `docs/idea/05-routing-and-failover.md#quotasoftlimit-universal-per-pool-soft-utilization-limit`.
+
 ## [2.78.1] — 2026-11-24
 
 ### Fixed

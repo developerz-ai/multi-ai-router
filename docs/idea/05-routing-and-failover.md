@@ -564,6 +564,19 @@ TTLs, and last-good-snapshot behavior are in
 | `priority-failover` | incidental | **no — concentrates** | Yes — it holds a Session on the top account until that account is filtered out. **Not for a fleet**: every new agent lands on the top account and queues at its per-account concurrency gate | burn the subscription first, pay per token last |
 | `quota-aware` | via the binding | by remaining headroom | **Yes** — and only useful with a continuous quota signal | keeping several subscriptions alive together |
 
+### `quotaSoftLimit` — universal per-pool soft utilization limit
+
+Every pool carries a `quota_soft_limit` column (default `0.80`, range `0..1`). A member whose utilization reaches or exceeds it is treated as **soft-limited**: it ranks behind every member below it (ranking step) and is dropped from eligible while anyone below the limit exists (filter step). It is clock-recoverable — at the pool's reset the headroom regenerates and it re-enters rotation.
+
+| Rule | Statement |
+|---|---|
+| Universal | Applied by selection/filter **regardless of routing policy** — priority-failover, sticky, round-robin, weighted, least-used, quota-aware alike. This is what PR #501 missed: scoping it to `quota-aware` alone changed nothing for the `priority-failover` pool (`openrouter-coding`) that account `8b609813` uses. |
+| Default | `0.80`, so no pool changes behavior until an operator sets a lower value. |
+| Preserves state | No key capacity change, no model assignment change, no key scope change, and `RouterSpendLimitNear` is untouched (the column never reads or writes alert thresholds). |
+| Fail-safe open | If every member is at/above the soft limit, selection falls back to headroom ranking among them so traffic is never dropped entirely. |
+
+It lives in `pools.quota_soft_limit`, rendered in `PoolView`, validated by `CreatePoolBody` / `UpdatePoolBody` (0..1, increments of 0.01), and flows into `SelectionOptions` / `PolicyOptions` so every policy sees the same value.
+
 "Safe" means exactly one thing here: an existing Session → Account binding is decided before the
 policy runs and pinned ahead of whatever it ordered, so no policy ever moves a bound Session. The
 policies differ only in where an **unbound** Session — a new conversation, or one whose binding was

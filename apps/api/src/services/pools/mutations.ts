@@ -27,6 +27,9 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
           const pool = await tx.pools.create({
             name: body.name,
             ...(body.policy === undefined ? {} : { policy: body.policy }),
+            ...(body.quotaSoftLimit === undefined || body.quotaSoftLimit === null
+              ? {}
+              : { quotaSoftLimit: body.quotaSoftLimit }),
             overflowAccountId: body.overflowAccountId ?? null,
           })
           const members = await tx.pools.replaceMembers(
@@ -86,6 +89,9 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
               {
                 ...(body.name === undefined ? {} : { name: body.name }),
                 ...(body.policy === undefined ? {} : { policy: body.policy }),
+                ...(body.quotaSoftLimit === undefined
+                  ? {}
+                  : { quotaSoftLimit: body.quotaSoftLimit === null ? null : body.quotaSoftLimit }),
                 ...(body.overflowAccountId === undefined
                   ? {}
                   : { overflowAccountId: body.overflowAccountId }),

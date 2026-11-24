@@ -58,6 +58,8 @@ export interface CreatePoolInput {
   readonly name: string
   readonly policy?: RoutingPolicy
   readonly overflowAccountId?: string | null
+  /** Universal per-pool soft utilization limit, numeric(3,2). Default 0.80 (column default). */
+  readonly quotaSoftLimit?: number
 }
 
 export interface UpdatePoolInput {
@@ -65,6 +67,8 @@ export interface UpdatePoolInput {
   readonly policy?: RoutingPolicy
   /** `null` clears the overflow account; `undefined` leaves it as it is. */
   readonly overflowAccountId?: string | null
+  /** `null` resets to the column default (0.80); `undefined` leaves it as it is. */
+  readonly quotaSoftLimit?: number | null
 }
 
 export interface PoolMemberInput {
@@ -83,6 +87,9 @@ export function createPoolRepository(db: DatabaseExecutor): PoolRepository {
           name: input.name,
           ...(input.policy === undefined ? {} : { policy: input.policy }),
           overflowAccountId: input.overflowAccountId ?? null,
+          ...(input.quotaSoftLimit === undefined
+            ? {}
+            : { quotaSoftLimit: String(input.quotaSoftLimit) }),
         })
         .returning()
       return required(rows[0], "create")
@@ -117,6 +124,9 @@ export function createPoolRepository(db: DatabaseExecutor): PoolRepository {
           ...(patch.overflowAccountId === undefined
             ? {}
             : { overflowAccountId: patch.overflowAccountId }),
+          ...(patch.quotaSoftLimit === undefined
+            ? {}
+            : { quotaSoftLimit: String(patch.quotaSoftLimit) }),
           updatedAt: now,
         })
         .where(eq(pools.id, id))

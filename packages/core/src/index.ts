@@ -44,6 +44,7 @@ export { ProviderPreferences, ProviderQuantization } from "./domain/provider-pre
 export {
   DEFAULT_ACCOUNT_PRIORITY,
   DEFAULT_ACCOUNT_WEIGHT,
+  DEFAULT_QUOTA_SOFT_LIMIT,
   DEFAULT_ROUTING_POLICY,
   RoutingPolicy,
 } from "./domain/routing"

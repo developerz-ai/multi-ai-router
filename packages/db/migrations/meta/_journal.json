@@ -421,6 +421,13 @@
       "when": 1795495608383,
       "tag": "0059_account_egress_health",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1795540832527,
+      "tag": "0060_pool_quota_soft_limit",
+      "breakpoints": true
     }
   ]
 }

@@ -34,10 +34,18 @@ export type FilterReason =
   /** Its cooldown passed, but another request is already spending the one probe it earns. */
   | "probe-in-flight"
   | "quota-window-spent"
+  /** Universal per-pool soft utilization limit: a member at or above it ranks behind members
+   * with headroom remaining. Clock-recoverable at reset, so it renders as a `429` — never a
+   * hard rejection and never as `exhausted` (out of credits, which is a human matter). */
+  | "soft-limit"
   | "model-unsupported"
 
 /** The clock-recoverable subset of {@link FilterReason} — the only reasons a binding may block on. */
-export type RecoverableFilterReason = "cooling-down" | "probe-in-flight" | "quota-window-spent"
+export type RecoverableFilterReason =
+  | "cooling-down"
+  | "probe-in-flight"
+  | "quota-window-spent"
+  | "soft-limit"
 
 /** Filter reasons a clock alone recovers from. Everything else needs a human or a client change. */
 export const RECOVERABLE_FILTER_REASONS: readonly FilterReason[] = [
@@ -46,6 +54,7 @@ export const RECOVERABLE_FILTER_REASONS: readonly FilterReason[] = [
   // the instant it does. Nothing here needs a human, so it must not read as though it did.
   "probe-in-flight",
   "quota-window-spent",
+  "soft-limit",
 ]
 
 export function isRecoverableFilterReason(reason: FilterReason): reason is RecoverableFilterReason {
@@ -120,6 +129,10 @@ export type BindingInvalidationReason =
   | "quota-window-spent"
   | "cooling-down"
   | "probe-in-flight"
+  /** Universal per-pool soft utilization limit: a bound account at or above it cannot be honored,
+   * but the clock recovers it at reset, so it is a clock-recoverable invalidation rather than a
+   * hard rejection. */
+  | "soft-limit"
 
 export type BindingDecision =
   | { readonly state: "none" }

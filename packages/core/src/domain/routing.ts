@@ -33,3 +33,10 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = "sticky"
  */
 export const DEFAULT_ACCOUNT_WEIGHT = 100
 export const DEFAULT_ACCOUNT_PRIORITY = 0
+
+/** Default soft utilization limit per pool: a member at or above it ranks behind members
+ * with headroom remaining. Universal — applied by selection/filter regardless of routing
+ * policy so it covers every pool, not only quota-aware. No account that is below it is
+ * affected, and key state, model assignments, key scope, and alert thresholds are untouched.
+ */
+export const DEFAULT_QUOTA_SOFT_LIMIT = 0.8

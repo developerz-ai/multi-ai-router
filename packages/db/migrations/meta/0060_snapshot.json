@@ -1,0 +1,19 @@
+{
+  "pools": {
+    "id": { "name": "id", "type": "uuid", "primaryKey": true, "notNull": true, "default": "gen_random_uuid()" },
+    "name": { "name": "name", "type": "text", "primaryKey": false, "notNull": true },
+    "policy": { "name": "policy", "type": "routing_policy", "typeSchema": "public", "primaryKey": false, "notNull": true, "default": "'sticky'" },
+    "overflow_account_id": { "name": "overflow_account_id", "type": "uuid", "primaryKey": false, "notNull": false },
+    "empty_since": { "name": "empty_since", "type": "timestamp with time zone", "primaryKey": false, "notNull": false, "default": "now()" },
+    "created_at": { "name": "created_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()" },
+    "updated_at": { "name": "updated_at", "type": "timestamp with time zone", "primaryKey": false, "notNull": true, "default": "now()" },
+    "quota_soft_limit": { "name": "quota_soft_limit", "type": "numeric", "primaryKey": false, "notNull": false, "default": "'0.80'" }
+  },
+  "indexes": { "pools_name_key": { "name": "pools_name_key", "columns": [{ "expression": "name", "isExpression": false, "asc": true, "nulls": "last" }], "isUnique": true, "concurrently": false, "method": "btree", "with": {} } },
+  "foreignKeys": { "pools_overflow_account_id_accounts_id_fk": { "name": "pools_overflow_account_id_accounts_id_fk", "tableFrom": "pools", "tableTo": "accounts", "columnsFrom": ["overflow_account_id"], "columnsTo": ["id"], "onDelete": "set null", "onUpdate": "no action" } },
+  "compositePrimaryKeys": {},
+  "uniqueConstraints": {},
+  "policies": {},
+  "checkConstraints": {},
+  "isRLSEnabled": false
+}

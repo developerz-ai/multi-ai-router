@@ -13,18 +13,22 @@
  * operator has to act on, because it is when this policy silently stops working.
  */
 
+import { DEFAULT_QUOTA_SOFT_LIMIT } from "@multi-ai-router/core"
 import { continuousHeadroom } from "../quota"
 import type { PolicyNote } from "../result"
 import type { Candidate } from "../types"
 import { accountIds, compareDeclared, type Policy, rotate, sortDeclared } from "./order"
 
-export const quotaAware: Policy = ({ candidates, rotationCounter, now }) => {
+export const quotaAware: Policy = ({ candidates, rotationCounter, now, options }) => {
+  const softLimit = options?.quotaSoftLimit ?? DEFAULT_QUOTA_SOFT_LIMIT
   const ranked: { readonly candidate: Candidate; readonly headroom: number }[] = []
   const unranked: Candidate[] = []
 
   for (const candidate of candidates) {
     const headroom = continuousHeadroom(candidate.account, now)
-    if (headroom === null) unranked.push(candidate)
+    // Universal soft limit: an account at or above it ranks behind every account below it,
+    // regardless of routing policy — this is what quota-aware-only scoping missed in PR #501.
+    if (headroom === null || headroom <= 1 - softLimit) unranked.push(candidate)
     else ranked.push({ candidate, headroom })
   }
 

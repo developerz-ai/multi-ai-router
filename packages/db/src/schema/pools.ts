@@ -3,7 +3,16 @@ import {
   DEFAULT_ACCOUNT_WEIGHT,
   DEFAULT_ROUTING_POLICY,
 } from "@multi-ai-router/core"
-import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import {
+  index,
+  integer,
+  numeric,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core"
 import { accounts } from "./accounts"
 import { routingPolicy } from "./enums"
 
@@ -48,6 +57,15 @@ export const pools = pgTable(
 
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+
+    /**
+     * Universal per-pool soft utilization limit. A member at or above it ranks behind
+     * members with headroom remaining; enforced by selection/filter regardless of the
+     * pool's routing policy. Default 0.8 so no pool changes behavior until an operator
+     * sets a lower value. No key state, model assignment, key scope, or alert threshold
+     * changes with it.
+     */
+    quotaSoftLimit: numeric("quota_soft_limit").notNull().default("0.80"),
   },
   (table) => [uniqueIndex("pools_name_key").on(table.name)],
 )

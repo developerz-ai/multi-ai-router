@@ -167,6 +167,9 @@ export interface PoolSnapshot {
   readonly overflowAccountId?: string
   /** Per-pool request counter owned by the caller. Drives `round-robin` and `weighted` rotation. */
   readonly rotationCounter?: number
+  /** Universal per-pool soft utilization limit. A member at or above it ranks behind members
+   * with headroom remaining; enforced regardless of routing policy. Default 0.8. */
+  readonly quotaSoftLimit?: number
 }
 
 /** The presenting key's scope. Applied first, as an intersection, never widened. */
@@ -241,6 +244,8 @@ export interface SelectionOptions {
    * Default: `no-candidates.ts`, `DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS`.
    */
   readonly unknownResetRetryAfterSeconds?: number
+  /** Universal per-pool soft utilization limit applied by filter/policy. Defaults to 0.8. */
+  readonly quotaSoftLimit?: number
 }
 
 /** One in-scope account, carrying the membership values the policies rank on. */

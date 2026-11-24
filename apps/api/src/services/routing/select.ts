@@ -64,7 +64,10 @@ export function selectAccounts(
               candidates: resolved.eligible,
               sessionKey: request.sessionKey,
               rotationCounter: group.rotationCounter,
-              options,
+              options: {
+                ...options,
+                quotaSoftLimit: options.quotaSoftLimit,
+              },
             },
             decided,
           )

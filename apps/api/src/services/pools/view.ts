@@ -24,6 +24,8 @@ export interface PoolView {
   readonly id: string
   readonly name: string
   readonly policy: RoutingPolicy
+  /** Universal per-pool soft utilization limit; null means column default (0.80). */
+  readonly quotaSoftLimit: number | null
   readonly overflowAccountId: string | null
   readonly members: readonly PoolMemberView[]
   readonly createdAt: string
@@ -39,6 +41,11 @@ export function toPoolView(
     id: pool.id,
     name: pool.name,
     policy: pool.policy,
+    /** Convert numeric column default (0.80) to null so callers default via DEFAULT_QUOTA_SOFT_LIMIT. */
+    quotaSoftLimit:
+      pool.quotaSoftLimit === undefined || pool.quotaSoftLimit === null
+        ? null
+        : Number(pool.quotaSoftLimit),
     overflowAccountId: pool.overflowAccountId,
     members: members.flatMap((member) =>
       member.poolId === pool.id ? toMemberView(member, accounts.get(member.accountId)) : [],

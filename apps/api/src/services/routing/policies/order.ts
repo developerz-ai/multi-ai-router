@@ -22,6 +22,8 @@ export interface PolicyInput {
 
 export interface PolicyOptions {
   readonly leastUsedMeasure?: "in-flight" | "recent-tokens"
+  /** Universal per-pool soft utilization limit applied by filter/policy regardless of policy. Defaults to 0.8. */
+  readonly quotaSoftLimit?: number
 }
 
 export interface PolicyOutput {
