@@ -88,6 +88,20 @@ describe("UsageQuota", () => {
     }
   })
 
+  test("a failed refresh over readings already loaded says they are the last ones", () => {
+    const container = document.createElement("div")
+    const dispose = render(
+      () => <UsageQuota accounts={[account()]} failed={true} nowMs={NOW} />,
+      container,
+    )
+    try {
+      expect(container.textContent).toContain("last readings")
+      expect(container.textContent).not.toContain("no quota is shown")
+    } finally {
+      dispose()
+    }
+  })
+
   test("an account with no windows renders no block, and a failed read says so", () => {
     const container = document.createElement("div")
     document.body.appendChild(container)

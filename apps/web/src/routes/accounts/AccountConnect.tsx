@@ -74,7 +74,33 @@ export function AccountConnect(props: AccountConnectProps) {
     )
   }
 
+  // A start resolves after the operator may have left. The screen shows only the one it still
+  // awaits; one it left is cancelled when it lands, unless a newer start on that account has
+  // already replaced it on the router.
+  let starts = 0
+  let awaited = 0
+  const newest = new Map<string, number>()
+  let redeeming: Promise<unknown> | null = null
+
+  const isNewest = (id: string, start: number) => newest.get(id) === start
+
+  function launch<T>(id: string, request: Promise<T>, show: (result: T) => void) {
+    starts += 1
+    const mine = starts
+    awaited = mine
+    newest.set(id, mine)
+    request.then(
+      (result) => {
+        if (awaited === mine) show(result)
+        else if (isNewest(id, mine)) cancel.mutate(id)
+      },
+      () => {}, // Rendered from the mutation's own `error`.
+    )
+  }
+
   const clear = () => {
+    awaited = 0
+    redeeming = null
     setStarted(null)
     setCompleted(null)
     setDeviceStarted(null)
@@ -97,7 +123,9 @@ export function AccountConnect(props: AccountConnectProps) {
     if (account === null) return
     setCompleted(null)
     setDeviceStarted(null)
-    begin.mutate({ id: account.id, mode: mode() }, { onSuccess: (result) => setStarted(result) })
+    complete.reset()
+    beginDevice.reset()
+    launch(account.id, begin.mutateAsync({ id: account.id, mode: mode() }), setStarted)
   }
 
   // Selecting a different account starts a different login. Carrying the previous one across would
@@ -133,23 +161,34 @@ export function AccountConnect(props: AccountConnectProps) {
     // The server retires any paste attempt this start supersedes; the screen follows.
     setStarted(null)
     begin.reset()
-    beginDevice.mutate(
-      { id: account.id, mode: mode() },
-      { onSuccess: (result) => setDeviceStarted(result) },
-    )
+    complete.reset()
+    launch(account.id, beginDevice.mutateAsync({ id: account.id, mode: mode() }), setDeviceStarted)
+  }
+
+  const redeem = (pasted: string) => {
+    const account = props.account
+    if (account === null) return
+    const run = complete.mutateAsync({ id: account.id, pasted })
+    redeeming = run
+    run
+      .then((result) => redeeming === run && setCompleted(result))
+      .catch(() => {}) // Rendered from the mutation's own `error`.
+      .finally(() => {
+        if (redeeming === run) redeeming = null
+      })
   }
 
   /** Abandons an unfinished login (terminating its subprocess), then hands control to `then`. */
   const leave = (then: () => void) => {
-    const pending = started()
     const account = props.account
+    const pending = started() !== null || deviceStarted() !== null
     // Completed logins have nothing left to abandon; an unfinished one does.
-    if (
-      (pending !== null || deviceStarted() !== null) &&
-      completed() === null &&
-      account !== null
-    ) {
-      cancel.mutate(account.id)
+    if (account !== null && completed() === null) {
+      const { id } = account
+      const left = newest.get(id) ?? 0
+      // A code being redeemed may be about to succeed: cancelled only if it does not.
+      if (redeeming !== null) redeeming.catch(() => isNewest(id, left) && cancel.mutate(id))
+      else if (pending) cancel.mutate(id)
     }
     clear()
     then()
@@ -180,11 +219,7 @@ export function AccountConnect(props: AccountConnectProps) {
       nowMs={props.nowMs}
       onBegin={beginLogin}
       onClose={() => leave(props.onClose)}
-      onComplete={(pasted) => {
-        const account = props.account
-        if (account === null) return
-        complete.mutate({ id: account.id, pasted }, { onSuccess: (result) => setCompleted(result) })
-      }}
+      onComplete={redeem}
       onNext={props.onNext === undefined ? undefined : () => leave(props.onNext ?? (() => {}))}
       onSkip={props.onSkip === undefined ? undefined : () => leave(props.onSkip ?? (() => {}))}
       open={props.account !== null}

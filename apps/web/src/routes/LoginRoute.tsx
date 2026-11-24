@@ -3,6 +3,7 @@ import { createSignal, Show } from "solid-js"
 import { Button } from "../components/Button"
 import { TextField } from "../components/Field"
 import { errorMessage } from "../lib/api/errors"
+import { rememberReturn, takeReturn } from "../lib/login-return"
 import { useAuthMethods, useLocalLogin } from "../lib/queries/session"
 import { safeNextPath } from "../lib/routes"
 import styles from "./LoginRoute.module.scss"
@@ -41,19 +42,19 @@ export default function LoginRoute() {
   }
 
   const startOIDC = () => {
-    const next = destination()
-    const url =
-      next === "/"
-        ? "/api/admin/auth/oidc/start"
-        : `/api/admin/auth/oidc/start?next=${encodeURIComponent(next)}`
-    window.location.assign(url)
+    rememberReturn(destination())
+    window.location.assign("/api/admin/auth/oidc/start")
   }
 
   const submitPassword = (event: Event) => {
     event.preventDefault()
     if (password().length === 0 || login.isPending) return
     login.mutate(password(), {
-      onSuccess: () => navigate(destination(), { replace: true }),
+      onSuccess: () => {
+        // A single sign-on started here and abandoned must not redirect this sign-in.
+        takeReturn()
+        navigate(destination(), { replace: true })
+      },
     })
   }
 

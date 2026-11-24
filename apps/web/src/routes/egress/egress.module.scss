@@ -1,0 +1,42 @@
+.stack {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 8rem;
+}
+
+.sub {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+}
+
+// Colour repeats what the words already say.
+.warn {
+  max-width: 34ch;
+  color: var(--warn);
+  font-size: var(--text-xs);
+  line-height: var(--line-snug);
+  text-wrap: pretty;
+}
+
+.address {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.name {
+  font-weight: var(--weight-medium);
+}
+
+.editor {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-start;
+}

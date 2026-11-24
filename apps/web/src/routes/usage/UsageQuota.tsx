@@ -63,8 +63,9 @@ export function UsageQuota(props: UsageQuotaProps) {
 
         <Show when={props.failed}>
           <p class={styles.failed} role="alert">
-            Accounts could not be loaded, so no quota is shown here. This is a failed read, not an
-            absence of quota.
+            {metered().length > 0
+              ? "Accounts could not be refreshed. These are the last readings, not current ones."
+              : "Accounts could not be loaded, so no quota is shown here. This is a failed read, not an absence of quota."}
           </p>
         </Show>
 

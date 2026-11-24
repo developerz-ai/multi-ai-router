@@ -26,11 +26,11 @@ export interface AccountsTableProps {
   /** Names the table for its region landmark. Per provider group, so seven tables have seven names. */
   readonly caption?: string
   /** The id currently being re-checked, if any. */
-  readonly recheckingId: string | null
+  readonly recheckingIds: ReadonlySet<string>
   /** The id currently being tested, if any. */
-  readonly testingId: string | null
+  readonly testingIds: ReadonlySet<string>
   /** The id whose model catalog is currently being discovered, if any. */
-  readonly discoveringId: string | null
+  readonly discoveringIds: ReadonlySet<string>
   /**
    * This account's provider as `GET /providers` describes it — which login it takes, and whether it
    * needs a credential at all. Asked of the descriptor so no provider fact is restated here.
@@ -86,6 +86,9 @@ export function AccountsTable(props: AccountsTableProps) {
               an unpinned row has nothing to add to its provider's default. */}
           <Show when={account.dialect}>
             {(dialect) => <span class={styles.provider}>dialect {dialect()}</span>}
+          </Show>
+          <Show when={account.egressProxy}>
+            {(proxy) => <span class={styles.provider}>via {proxy()}</span>}
           </Show>
         </div>
       ),
@@ -170,7 +173,7 @@ export function AccountsTable(props: AccountsTableProps) {
       cell: (account) => (
         <AccountModels
           accountId={account.id}
-          busy={props.discoveringId === account.id}
+          busy={props.discoveringIds.has(account.id)}
           models={account.supportedModels}
           onDiscover={props.onDiscoverModels}
           transport={props.providerFor(account)?.transport}
@@ -183,7 +186,7 @@ export function AccountsTable(props: AccountsTableProps) {
       cell: (account) => (
         <AccountRecheck
           accountId={account.id}
-          busy={props.recheckingId === account.id}
+          busy={props.recheckingIds.has(account.id)}
           lastCheckedAt={account.availability?.lastCheckedAt ?? null}
           recovery={account.availability?.recovery}
           nowMs={props.nowMs}
@@ -198,7 +201,7 @@ export function AccountsTable(props: AccountsTableProps) {
         <AccountTestNow
           accountId={account.id}
           accountLabel={account.label}
-          busy={props.testingId === account.id}
+          busy={props.testingIds.has(account.id)}
           nowMs={props.nowMs}
           onTest={props.onTest}
           transport={props.providerFor(account)?.transport}

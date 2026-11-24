@@ -82,6 +82,12 @@ export const queryKeys = {
     detail: () => ["settings", "detail"] as const,
   },
 
+  /** Proxy vendors' lists, who uses which, and each one's health, in one body. */
+  egress: {
+    root: () => ["egress-proxies"] as const,
+    overview: () => ["egress-proxies"] as const,
+  },
+
   tasks: {
     root: () => ["tasks"] as const,
     list: () => ["tasks", "list"] as const,

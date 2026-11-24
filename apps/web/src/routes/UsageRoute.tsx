@@ -14,6 +14,7 @@ import {
 } from "../lib/api/usage"
 import { NO_USAGE_FILTERS } from "../lib/api/usage-params"
 import { createNow } from "../lib/clock"
+import { loadedData } from "../lib/loaded"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { useUsageSummary } from "../lib/queries/usage"
 import { usageFilterOptions, withSelected } from "../lib/usage-filter-options"
@@ -172,7 +173,11 @@ export default function UsageRoute() {
               rows={breakdownFor(data(), dimension())}
             />
 
-            <UsageQuota accounts={accounts.data ?? []} failed={accounts.isError} nowMs={now()} />
+            <UsageQuota
+              accounts={loadedData(accounts) ?? []}
+              failed={accounts.isError}
+              nowMs={now()}
+            />
           </>
         )}
       </QueryBoundary>

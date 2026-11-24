@@ -115,6 +115,17 @@ export function mergeKinds(a: readonly string[], b: readonly string[]): readonly
   return [...new Set([...a, ...b])].sort()
 }
 
+/** Changes nobody in the console made, and why they happen. */
+const KIND_NOTE: Readonly<Record<string, string>> = {
+  "account.egress_proxy_replaced":
+    "The router moved this account off a dead proxy to another of the same vendor.",
+}
+
+/** One sentence under a kind that does not explain itself, or null. */
+export function auditKindNote(kind: string): string | null {
+  return Object.hasOwn(KIND_NOTE, kind) ? (KIND_NOTE[kind] ?? null) : null
+}
+
 /** The kinds present in one page — all a filter built from the data itself can honestly offer. */
 export function auditKinds(events: readonly AuditEvent[]): readonly string[] {
   return mergeKinds(

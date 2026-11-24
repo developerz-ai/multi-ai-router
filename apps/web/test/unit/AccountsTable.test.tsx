@@ -70,7 +70,7 @@ function withMount(
         <AccountsTable
           accounts={accounts}
           nowMs={Date.parse("2026-07-26T00:00:00.000Z")}
-          discoveringId={null}
+          discoveringIds={new Set()}
           onConnect={() => {}}
           onDelete={() => {}}
           onDisable={() => {}}
@@ -80,8 +80,8 @@ function withMount(
           onRecheck={() => {}}
           onTest={() => {}}
           providerFor={() => PROVIDER}
-          recheckingId={null}
-          testingId={null}
+          recheckingIds={new Set()}
+          testingIds={new Set()}
           usage={new Map()}
           usageBucket="day"
           usageLoading={false}
@@ -388,7 +388,7 @@ describe("AccountsTable", () => {
           <AccountsTable
             accounts={[account({})]}
             nowMs={Date.parse("2026-07-26T00:00:00.000Z")}
-            discoveringId={null}
+            discoveringIds={new Set()}
             onConnect={() => {}}
             onDelete={() => {}}
             onDisable={() => {}}
@@ -398,8 +398,8 @@ describe("AccountsTable", () => {
             onRecheck={() => {}}
             onTest={() => {}}
             providerFor={() => PROVIDER}
-            recheckingId={null}
-            testingId={null}
+            recheckingIds={new Set()}
+            testingIds={new Set()}
             usage={usage()}
             usageBucket="day"
             usageLoading={false}

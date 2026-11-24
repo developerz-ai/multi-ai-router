@@ -96,7 +96,7 @@ export async function request<T>(spec: RequestSpec): Promise<T> {
   }
 
   if (!response.ok) {
-    throw toApiError(response.status, await readBody(response))
+    throw toApiError(response.status, await readBody(response), response.headers.get("retry-after"))
   }
 
   return (await readBody(response)) as T

@@ -17,6 +17,12 @@ import {
 // on it.
 
 describe("formatCount", () => {
+  test("rounds up into the next unit instead of reading 1000k", () => {
+    expect(formatCount(999_949)).toBe("999.9k")
+    expect(formatCount(999_950)).toBe("1M")
+    expect(formatCount(999_950_000)).toBe("1B")
+  })
+
   test("is exact below a thousand", () => {
     expect(formatCount(0)).toBe("0")
     expect(formatCount(934)).toBe("934")

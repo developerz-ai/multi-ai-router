@@ -14,9 +14,10 @@ const BILLION = 1_000_000_000
 export function formatCount(value: number): string {
   if (!Number.isFinite(value)) return "—"
   const abs = Math.abs(value)
-  if (abs < THOUSAND) return String(Math.round(value))
-  if (abs < MILLION) return `${trim(value / THOUSAND)}k`
-  if (abs < BILLION) return `${trim(value / MILLION)}M`
+  if (abs < THOUSAND - 0.5) return String(Math.round(value))
+  // Each ceiling is where one decimal would round into the next unit: 999 950 is 1M, not 1000k.
+  if (abs < MILLION - 50) return `${trim(value / THOUSAND)}k`
+  if (abs < BILLION - 50_000) return `${trim(value / MILLION)}M`
   return `${trim(value / BILLION)}B`
 }
 
@@ -53,7 +54,26 @@ export function formatPercent(numerator: number, denominator: number): string {
  * the width is tightest. Two spellings of one instant on one row read as two different instants.
  */
 export function formatAbsolute(epochMs: number, locale?: string): string {
-  return new Date(epochMs).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" })
+  return formatter("instant", locale).format(epochMs)
+}
+
+const STYLES = {
+  instant: { dateStyle: "short", timeStyle: "short" },
+  date: { dateStyle: "medium" },
+  time: { timeStyle: "short" },
+} as const satisfies Readonly<Record<string, Intl.DateTimeFormatOptions>>
+
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
+/** One formatter per style and locale: building one costs ~40× using it, and tables use hundreds. */
+function formatter(style: keyof typeof STYLES, locale: string | undefined): Intl.DateTimeFormat {
+  const key = `${style} ${locale ?? ""}`
+  let built = formatters.get(key)
+  if (built === undefined) {
+    built = new Intl.DateTimeFormat(locale, STYLES[style])
+    formatters.set(key, built)
+  }
+  return built
 }
 
 /** `formatAbsolute` for a wire instant; null or unparseable is a dash. */
@@ -69,7 +89,7 @@ export function formatDate(iso: string | null, locale?: string): string {
   if (iso === null) return "—"
   const parsed = Date.parse(iso)
   if (Number.isNaN(parsed)) return "—"
-  return new Date(parsed).toLocaleDateString(locale, { dateStyle: "medium" })
+  return formatter("date", locale).format(parsed)
 }
 
 /** Time only, viewer's zone — for an hourly-bucketed chart axis, where the date is implied. */
@@ -77,7 +97,7 @@ export function formatTime(iso: string | null, locale?: string): string {
   if (iso === null) return "—"
   const parsed = Date.parse(iso)
   if (Number.isNaN(parsed)) return "—"
-  return new Date(parsed).toLocaleTimeString(locale, { timeStyle: "short" })
+  return formatter("time", locale).format(parsed)
 }
 
 /**

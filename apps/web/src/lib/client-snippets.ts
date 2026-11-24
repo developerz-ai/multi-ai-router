@@ -81,12 +81,22 @@ export function clientRecipes(
     {
       id: "claude-code",
       label: "Claude Code",
-      lead: "Anthropic dialect, two variables. The base URL carries no /v1 suffix — Claude Code appends /v1/messages itself.",
+      lead: "Start it with the claudes launcher, which keeps the key out of the session environment and checks the wiring with claudes doctor. Or export two variables yourself.",
       steps: [
-        "Export exactly these two variables in the shell that runs claude. Unset ANTHROPIC_API_KEY there — a second, different key is a rejected request, not a fallback.",
+        "With claudes: run the block below, paste this key at the login prompt, then start sessions with claudes instead of claude.",
+        "With variables: export exactly these two in the shell that runs claude. The base URL carries no /v1 suffix — Claude Code appends /v1/messages itself. Unset ANTHROPIC_API_KEY there — a second, different key is a rejected request, not a fallback.",
         "Scope this key to a pool that contains the Claude subscriptions (anthropic-oauth accounts). That is what puts a Claude Code turn onto a subscription; a scope with none reaches API-key accounts only.",
       ],
       snippets: [
+        {
+          label: "claudes (recommended)",
+          // The key is typed at the prompt, never here: a command line ends up in shell history.
+          text: [
+            "git clone https://github.com/developerz-ai/claudes.git",
+            "cd claudes && bin/setup && bin/check && npm i -g .",
+            `claudes login --url "${origin}"`,
+          ].join("\n"),
+        },
         {
           label: "Shell environment",
           text: `export ANTHROPIC_BASE_URL="${origin}"\nexport ANTHROPIC_AUTH_TOKEN="${keyValue}"`,

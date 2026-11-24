@@ -9,14 +9,12 @@ import type { AccountListFilter } from "../lib/api/accounts"
 import { findProvider } from "../lib/api/providers"
 import type { AccountView, ProviderConnectFlow } from "../lib/api/types"
 import { createNow } from "../lib/clock"
+import { loadedData } from "../lib/loaded"
 import {
   useAccounts,
   useCreateAccount,
   useDeleteAccount,
-  useDiscoverAccountModels,
-  useRecheckAccount,
   useRecheckAllAccounts,
-  useTestAccount,
   useUpdateAccount,
 } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
@@ -36,6 +34,7 @@ import { AccountsTable } from "./accounts/AccountsTable"
 import { ProviderGroup } from "./accounts/ProviderGroup"
 import { ReconnectActions } from "./accounts/ReconnectActions"
 import { ReconnectSequence } from "./accounts/ReconnectSequence"
+import { useAccountRowActions } from "./accounts/row-actions"
 import { SubscriptionBanner } from "./accounts/SubscriptionBanner"
 
 /** Account CRUD, recovery controls and deletion cleanup outcomes. */
@@ -60,10 +59,10 @@ export default function AccountsRoute() {
 
   const accounts = useAccounts(filter)
   const pools = usePools()
-  const poolList = () => (pools.isSuccess ? (pools.data ?? []) : [])
+  const poolList = () => loadedData(pools) ?? []
   const providers = useProviders()
-  const providerList = () => (providers.isSuccess ? (providers.data ?? []) : [])
-  const accountList = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
+  const providerList = () => loadedData(providers) ?? []
+  const accountList = () => loadedData(accounts) ?? []
   const shown = () => accountList().filter((row) => status() === "" || row.status === status())
   const groups = createMemo(() => groupAccountsByProvider(shown(), groupingNow()))
   const groupOrder = createMemo(() => groups().map((group) => group.provider))
@@ -94,10 +93,8 @@ export default function AccountsRoute() {
   const create = useCreateAccount()
   const update = useUpdateAccount()
   const remove = useDeleteAccount()
-  const recheck = useRecheckAccount()
+  const row = useAccountRowActions()
   const recheckAll = useRecheckAllAccounts()
-  const test = useTestAccount()
-  const discover = useDiscoverAccountModels()
 
   const closeForm = () => {
     create.reset()
@@ -144,16 +141,16 @@ export default function AccountsRoute() {
 
       <SubscriptionBanner
         accounts={accountList()}
-        action={(health) => <ReconnectActions health={health} onReconnect={startReconnectAll} />}
+        action={(health) => <ReconnectActions health={health()} onReconnect={startReconnectAll} />}
         nowMs={now()}
       />
 
       <AccountsNotices
-        discover={discover}
+        discover={row.discoveries}
         enableError={editing() === null ? update.error : null}
-        recheck={recheck}
+        recheck={row.rechecks}
         recheckAll={recheckAll}
-        test={test}
+        test={row.tests}
       />
       <AccountDeletionNotice
         label={deferredDeletionLabel()}
@@ -205,17 +202,17 @@ export default function AccountsRoute() {
                           onConnect={setConnecting}
                           onDelete={setPendingDelete}
                           onDisable={setPendingDisable}
-                          onDiscoverModels={(id) => discover.mutate(id)}
+                          onDiscoverModels={row.onDiscoverModels}
                           onEdit={openEdit}
                           onEnable={(account) =>
                             update.mutate({ id: account.id, patch: { status: "active" } })
                           }
-                          onRecheck={(id) => recheck.mutate(id)}
-                          onTest={(input) => test.mutate(input)}
-                          discoveringId={discover.isPending ? (discover.variables ?? null) : null}
+                          onRecheck={row.onRecheck}
+                          onTest={row.onTest}
+                          discoveringIds={row.discoveries.pending()}
                           providerFor={providerFor}
-                          recheckingId={recheck.isPending ? (recheck.variables ?? null) : null}
-                          testingId={test.isPending ? (test.variables?.id ?? null) : null}
+                          recheckingIds={row.rechecks.pending()}
+                          testingIds={row.tests.pending()}
                           {...usage()}
                         />
                       </ProviderGroup>

@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { render } from "solid-js/web"
 import type { UpdateAccountInput } from "../../src/lib/api/accounts"
-import type { AccountView, ProviderDescriptor } from "../../src/lib/api/types"
-import { AccountEditDialog } from "../../src/routes/accounts/AccountEditDialog"
-import { fire, selectOption, typeInto } from "../support/dom"
+import {
+  account,
+  aliasBox,
+  base,
+  fieldByLabel,
+  hasFieldLabelled,
+  SUBSCRIPTION,
+  submitForm,
+  withMount,
+} from "../support/account-edit"
+import { typeInto } from "../support/dom"
 
 /**
  * Editing an account is the only way to rotate a credential without deleting the
@@ -17,110 +24,6 @@ import { fire, selectOption, typeInto } from "../support/dom"
  * `CLAUDE_CONFIG_DIR` and the router must never hold one (CLAUDE.md
  * non-negotiable 1).
  */
-function withMount(props: Parameters<typeof AccountEditDialog>[0], run: () => void): void {
-  const container = document.createElement("div")
-  document.body.appendChild(container)
-  const dispose = render(() => <AccountEditDialog {...props} />, container)
-  try {
-    run()
-  } finally {
-    dispose()
-    container.remove()
-  }
-}
-
-const HTTP_PROVIDER: ProviderDescriptor = {
-  id: "zai",
-  transport: "http",
-  authKind: "api-key",
-  nativeDialect: "anthropic",
-  supportedDialects: ["anthropic", "openai-chat"],
-  requiresBaseUrl: false,
-  requiresConfigDir: false,
-  connectFlow: null,
-  creatable: true,
-  reason: null,
-  defaultBilling: "metered",
-  billingFixed: false,
-}
-
-const SUBSCRIPTION: ProviderDescriptor = {
-  ...HTTP_PROVIDER,
-  id: "anthropic-oauth",
-  transport: "agent-sdk",
-  authKind: null,
-  supportedDialects: ["anthropic"],
-  requiresConfigDir: true,
-  connectFlow: "claude-cli",
-  // Sold only as a subscription: there is no per-token price to meter, so the operator cannot say
-  // otherwise and the API refuses the write either way.
-  defaultBilling: "subscription",
-  billingFixed: true,
-}
-
-function account(overrides: Partial<AccountView> = {}): AccountView {
-  return {
-    id: "11111111-1111-4111-8111-111111111111",
-    label: "zai-primary",
-    provider: "zai",
-    status: "active",
-    hasCredential: true,
-    configDir: null,
-    baseUrl: null,
-    dialect: null,
-    modelAliases: { "claude-sonnet-4-5": "glm-4.6" },
-    supportedModels: ["glm-4.6", "glm-4.7"],
-    windowTokenLimits: null,
-    weight: 300,
-    priority: 2,
-    billing: "metered",
-    tokenExpiresAt: null,
-    lastUsedAt: null,
-    createdAt: "2026-07-24T12:00:00.000Z",
-    updatedAt: "2026-07-24T12:00:00.000Z",
-    ...overrides,
-  }
-}
-
-function base(overrides: Partial<Parameters<typeof AccountEditDialog>[0]> = {}) {
-  return {
-    open: true,
-    account: account(),
-    provider: HTTP_PROVIDER,
-    busy: false,
-    error: null,
-    onSubmit: () => {},
-    onClose: () => {},
-    ...overrides,
-  }
-}
-
-const fieldByLabel = (text: string): HTMLInputElement => {
-  const label = Array.from(document.body.querySelectorAll("label")).find(
-    (element) => element.textContent?.trim().startsWith(text) === true,
-  )
-  const input = label === undefined ? null : document.getElementById(label.htmlFor)
-  if (!(input instanceof HTMLInputElement)) throw new Error(`no input labelled "${text}"`)
-  return input
-}
-
-const hasFieldLabelled = (text: string): boolean =>
-  Array.from(document.body.querySelectorAll("label")).some(
-    (element) => element.textContent?.trim().startsWith(text) === true,
-  )
-
-const aliasBox = (): HTMLTextAreaElement => {
-  const box = document.body.querySelector("textarea")
-  if (!(box instanceof HTMLTextAreaElement)) throw new Error("no alias textarea")
-  return box
-}
-
-function submitForm(): void {
-  const form = document.body.querySelector("form")
-  if (!(form instanceof HTMLFormElement)) throw new Error("form not rendered")
-  fire(form, "submit")
-}
-
 describe("AccountEditDialog seeding", () => {
   test("opens on the account's own label, models, aliases and routing numbers", () => {
     withMount(base({ account: account({ baseUrl: "https://proxy.example/v1" }) }), () => {
@@ -275,133 +178,5 @@ describe("AccountEditDialog submission", () => {
       submitForm()
       expect(patch?.modelAliases).toEqual({ "gpt-5": "glm-4.7", "claude-opus-4-1": "glm-4.6" })
     })
-  })
-})
-
-describe("AccountEditDialog window token ceilings", () => {
-  const subAccount = (overrides: Partial<AccountView> = {}) =>
-    account({ provider: "anthropic-oauth", billing: "subscription", ...overrides })
-
-  test("offers no ceiling boxes for an http provider, and never sends the field", () => {
-    // An http account reports no named windows, so a ceiling would draw nothing — and sending
-    // `null` from a form that never displayed the boxes would silently clear limits set elsewhere.
-    let patch: UpdateAccountInput | undefined
-    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
-      expect(hasFieldLabelled("5h tokens")).toBe(false)
-      submitForm()
-      expect(patch).toBeDefined()
-      expect("windowTokenLimits" in (patch ?? {})).toBe(false)
-    })
-  })
-
-  test("seeds each box from the stored ceiling, and offers no box for overage", () => {
-    withMount(
-      base({
-        provider: SUBSCRIPTION,
-        account: subAccount({ windowTokenLimits: { five_hour: 3_000_000 } }),
-      }),
-      () => {
-        expect(fieldByLabel("5h tokens").value).toBe("3000000")
-        expect(fieldByLabel("7d tokens").value).toBe("")
-        expect(hasFieldLabelled("7d Opus tokens")).toBe(true)
-        expect(hasFieldLabelled("7d Sonnet tokens")).toBe(true)
-        // No span, so no bar can ever be drawn for it — a box would be a silent no-op.
-        expect(hasFieldLabelled("Overage")).toBe(false)
-      },
-    )
-  })
-
-  test("typed ceilings go up as numbers, keeping the ones already stored", () => {
-    let patch: UpdateAccountInput | undefined
-    withMount(
-      base({
-        provider: SUBSCRIPTION,
-        account: subAccount({ windowTokenLimits: { five_hour: 3_000_000 } }),
-        onSubmit: (next) => (patch = next),
-      }),
-      () => {
-        typeInto(fieldByLabel("7d tokens"), "5000000")
-        submitForm()
-        expect(patch?.windowTokenLimits).toEqual({ five_hour: 3_000_000, seven_day: 5_000_000 })
-      },
-    )
-  })
-
-  test("all boxes empty sends null — the clear-everything spelling, not a zero", () => {
-    let patch: UpdateAccountInput | undefined
-    withMount(
-      base({
-        provider: SUBSCRIPTION,
-        account: subAccount({ windowTokenLimits: { five_hour: 3_000_000 } }),
-        onSubmit: (next) => (patch = next),
-      }),
-      () => {
-        typeInto(fieldByLabel("5h tokens"), "")
-        submitForm()
-        expect(patch?.windowTokenLimits).toBeNull()
-      },
-    )
-  })
-})
-
-describe("AccountEditDialog billing", () => {
-  const billingSelect = (): HTMLSelectElement => {
-    const select = Array.from(document.body.querySelectorAll("select")).find((element) =>
-      element.textContent?.includes("billed per token"),
-    )
-    if (select === undefined) throw new Error("no billing select")
-    return select
-  }
-
-  test("seeds from the account's stored mode, not from the first option", () => {
-    // The same failure the dialect control had: an account already on a coding plan that reads as
-    // "metered" is one save away from having its cost basis silently flattened.
-    withMount(base({ account: account({ billing: "subscription" }) }), () => {
-      expect(billingSelect().value).toBe("subscription")
-    })
-  })
-
-  test("states the consequence, because the two words alone name no column", () => {
-    withMount(base({ account: account({ billing: "subscription" }) }), () => {
-      expect(document.body.textContent).toContain("notional")
-      expect(document.body.textContent).toContain("never summed")
-    })
-  })
-
-  test("sends the mode on every save, so an untouched control is not a silent no-op", () => {
-    // `PATCH` reads an absent field as "leave it". A control the operator can see but that sends
-    // nothing is a control that does not work — the bug this dialog already had for weights.
-    let patch: UpdateAccountInput | undefined
-    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
-      submitForm()
-      expect(patch?.billing).toBe("metered")
-    })
-  })
-
-  test("carries a change through to the patch", () => {
-    let patch: UpdateAccountInput | undefined
-    withMount(base({ onSubmit: (next) => (patch = next) }), () => {
-      selectOption(billingSelect(), "subscription")
-      submitForm()
-      expect(patch?.billing).toBe("subscription")
-    })
-  })
-
-  test("offers no control for a provider sold only as a subscription, and says why", () => {
-    let patch: UpdateAccountInput | undefined
-    withMount(
-      base({
-        provider: SUBSCRIPTION,
-        account: account({ provider: "anthropic-oauth", billing: "subscription" }),
-        onSubmit: (next) => (patch = next),
-      }),
-      () => {
-        expect(document.body.textContent).toContain("no per-token price to meter")
-        // Never sent: the API refuses the field for this provider whichever value it carries.
-        submitForm()
-        expect(patch).toBeDefined()
-        expect(patch?.billing).toBeUndefined()
-      },
-    )
   })
 })

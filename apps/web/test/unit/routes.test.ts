@@ -55,6 +55,13 @@ describe("loginPathFor", () => {
     expect(loginPathFor("/keys")).toBe("/login?next=%2Fkeys")
   })
 
+  test("keeps the query the view was linked with", () => {
+    expect(loginPathFor("/usage", "?window=30d&owner=marta")).toBe(
+      "/login?next=%2Fusage%3Fwindow%3D30d%26owner%3Dmarta",
+    )
+    expect(loginPathFor(LOGIN_PATH, "?next=%2Fkeys")).toBe(LOGIN_PATH)
+  })
+
   test("never points back at itself, and never at the default surface", () => {
     expect(loginPathFor(LOGIN_PATH)).toBe(LOGIN_PATH)
     expect(loginPathFor("/")).toBe(LOGIN_PATH)

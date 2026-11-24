@@ -96,3 +96,11 @@ describe("errorMessage", () => {
     expect(errorMessage(toApiError(400, { error: { message: "bad label" } }))).toBe("bad label")
   })
 })
+
+test("a refusal's Retry-After becomes the instant it clears, and anything else is none", () => {
+  const before = Date.now()
+  const held = toApiError(429, undefined, "50").retryAtMs ?? 0
+  expect(held).toBeGreaterThanOrEqual(before + 50_000)
+  expect(toApiError(429, undefined, null).retryAtMs).toBeNull()
+  expect(toApiError(429, undefined, "soon").retryAtMs).toBeNull()
+})

@@ -1,4 +1,4 @@
-import { For, type JSX, Show } from "solid-js"
+import { type Accessor, createMemo, For, type JSX, Show } from "solid-js"
 import { Banner } from "../../components/Banner"
 import type { AccountView } from "../../lib/api/types"
 import { formatAbsolute } from "../../lib/format"
@@ -6,6 +6,7 @@ import {
   describeLoginExpiry,
   listNames,
   NAMED_LIMIT,
+  type SubscriptionHealth,
   subscriptionBannerTitle,
   summarizeSubscriptions,
 } from "../../lib/subscription-login"
@@ -15,7 +16,7 @@ export interface SubscriptionBannerProps {
   readonly accounts: readonly AccountView[]
   readonly nowMs: number
   /** One action: "Reconnect all (N)" on the accounts page, a link to it on the overview. */
-  readonly action?: (health: ReturnType<typeof summarizeSubscriptions>) => JSX.Element
+  readonly action?: (health: Accessor<SubscriptionHealth>) => JSX.Element
 }
 
 /**
@@ -31,14 +32,18 @@ export interface SubscriptionBannerProps {
  * keeps that one, and it says "needs top-up", never a countdown.
  */
 export function SubscriptionBanner(props: SubscriptionBannerProps) {
-  const health = () => summarizeSubscriptions(props.accounts, props.nowMs)
+  // The clock ticks every second and the verdict does not. Held until it changes, and handed to
+  // the action as an accessor, so the reconnect button is never rebuilt under a press or a focus.
+  const health = createMemo(() => summarizeSubscriptions(props.accounts, props.nowMs), undefined, {
+    equals: sameHealth,
+  })
   const title = () => subscriptionBannerTitle(health())
 
   return (
     <Show when={title()}>
       {(text) => (
         <Banner
-          action={props.action?.(health())}
+          action={props.action?.(health)}
           title={text()}
           tone={health().needsReconnect.length > 0 ? "danger" : "warn"}
         >
@@ -52,12 +57,13 @@ export function SubscriptionBanner(props: SubscriptionBannerProps) {
             <ul class={styles.list}>
               <For each={health().expiringSoon.slice(0, NAMED_LIMIT)}>
                 {(account) => {
-                  const login = describeLoginExpiry(account, props.nowMs)
+                  const login = createMemo(() => describeLoginExpiry(account, props.nowMs))
+                  const expiresAtMs = () => login().expiresAtMs
                   return (
                     <li>
                       {account.label} — login valid until{" "}
-                      {login.expiresAtMs === null ? "unknown" : formatAbsolute(login.expiresAtMs)}
-                      <Show when={login.countdown}>{(left) => <> · {left()}</>}</Show>
+                      {expiresAtMs() === null ? "unknown" : formatAbsolute(expiresAtMs() ?? 0)}
+                      <Show when={login().countdown}>{(left) => <> · {left()}</>}</Show>
                     </li>
                   )
                 }}
@@ -72,5 +78,15 @@ export function SubscriptionBanner(props: SubscriptionBannerProps) {
         </Banner>
       )}
     </Show>
+  )
+}
+
+function sameHealth(a: SubscriptionHealth, b: SubscriptionHealth): boolean {
+  const same = (one: readonly AccountView[], two: readonly AccountView[]) =>
+    one.length === two.length && one.every((account, index) => account === two[index])
+  return (
+    a.warnDays === b.warnDays &&
+    same(a.needsReconnect, b.needsReconnect) &&
+    same(a.expiringSoon, b.expiringSoon)
   )
 }

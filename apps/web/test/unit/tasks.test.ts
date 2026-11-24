@@ -6,6 +6,7 @@ import {
   type TaskHealthRow,
   taskHealthLabel,
   taskHealthTone,
+  taskItemsLabel,
   taskLabel,
 } from "../../src/lib/api/tasks"
 
@@ -15,6 +16,14 @@ import {
  * The clock is a parameter, never `Date.now()` — the same rule `lib/reset-countdown.ts` follows,
  * and the reason a task that has never run cannot accidentally acquire a plausible timestamp.
  */
+
+test("every scheduled task the API registers has a label and an items noun", () => {
+  for (const task of ["pool_roster_check", "egress_proxy_check"]) {
+    expect(taskItemsLabel(task)).not.toBe("items processed")
+  }
+  expect(taskLabel("pool_roster_check")).toBe("Pool roster check")
+  expect(taskLabel("egress_proxy_check")).toBe("Egress proxy check")
+})
 
 const NOW = Date.parse("2026-07-25T12:00:00.000Z")
 

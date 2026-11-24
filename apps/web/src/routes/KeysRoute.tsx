@@ -9,6 +9,7 @@ import type { ApiKeyView, KeyScopeView } from "../lib/api/types"
 import type { ClaudeReach } from "../lib/client-snippets"
 import { createNow } from "../lib/clock"
 import { scopeReaches } from "../lib/key-scope"
+import { loadedData } from "../lib/loaded"
 import { routerBaseUrl } from "../lib/onboarding"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
@@ -68,15 +69,17 @@ export default function KeysRoute() {
   // The address the snippets tell a client to call. `PUBLIC_URL` wins when the operator set one —
   // this tab's origin can be a private hostname, a port-forward, or an SSH tunnel that no agent
   // machine can resolve. Falls back to the origin, which is right for the common single-host case.
-  const baseUrl = () => routerBaseUrl(settings.data?.publicUrl ?? null, window.location.origin)
+  const baseUrl = () =>
+    routerBaseUrl(loadedData(settings)?.publicUrl ?? null, window.location.origin)
 
   const usage = useTableUsage("key")
 
   // Scope ∩ fleet, the router's own rule, answered before the operator pastes a key into Claude
   // Code and gets a 403 for a scope that never held a subscription. Unknown until both lists are in.
   const claudeReach = (scope: KeyScopeView): ClaudeReach => {
-    if (!pools.isSuccess || !accounts.isSuccess) return "unknown"
-    return scopeReaches(scope, pools.data ?? [], accounts.data ?? [], isSubscriptionLogin)
+    const [poolList, accountList] = [loadedData(pools), loadedData(accounts)]
+    if (poolList === undefined || accountList === undefined) return "unknown"
+    return scopeReaches(scope, poolList, accountList, isSubscriptionLogin)
       ? "reachable"
       : "unreachable"
   }
@@ -240,14 +243,14 @@ export default function KeysRoute() {
       </QueryBoundary>
 
       <KeyFormDialog
-        accounts={accounts.isSuccess ? (accounts.data ?? []) : []}
+        accounts={loadedData(accounts) ?? []}
         apiKey={editing()}
         busy={create.isPending || update.isPending}
         error={editing() === null ? create.error : update.error}
         onClose={closeForm}
         onSubmit={submit}
         open={formOpen()}
-        pools={pools.isSuccess ? (pools.data ?? []) : []}
+        pools={loadedData(pools) ?? []}
         successorOf={successorOf()}
       />
 

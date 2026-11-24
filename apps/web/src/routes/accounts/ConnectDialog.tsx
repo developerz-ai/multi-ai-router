@@ -1,4 +1,12 @@
-import { createEffect, createMemo, createSignal, createUniqueId, type JSX, Show } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  type JSX,
+  on,
+  Show,
+} from "solid-js"
 import { Banner } from "../../components/Banner"
 import { CopyValue } from "../../components/CopyValue"
 import { Field } from "../../components/Field"
@@ -85,6 +93,14 @@ export function ConnectDialog(props: ConnectDialogProps) {
   createEffect(() => {
     if (!props.open || props.completed !== null) setPasted("")
   })
+  // A code belongs to the login it was issued for; a fresh start never inherits the last one's.
+  createEffect(
+    on(
+      () => props.started,
+      () => setPasted(""),
+      { defer: true },
+    ),
+  )
 
   const pending = createMemo(() => (props.completed === null ? props.started : null))
   const expiry = createMemo(() => {

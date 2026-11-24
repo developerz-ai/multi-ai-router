@@ -1,11 +1,13 @@
 import { A, type RouteSectionProps, useLocation, useNavigate } from "@solidjs/router"
-import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, Show, untrack } from "solid-js"
 import { Button } from "../components/Button"
 import { Icon } from "../components/Icon"
 import { ScreenErrorBoundary } from "../components/ScreenErrorBoundary"
 import { ThemeToggle } from "../components/ThemeToggle"
 import { sessionLost } from "../lib/api/session"
 import { createFocusTrap } from "../lib/focus-trap"
+import { loadedData } from "../lib/loaded"
+import { takeReturn } from "../lib/login-return"
 import { createMediaQuery, SIDEBAR_QUERY } from "../lib/media"
 import { useLogout, useSession } from "../lib/queries/session"
 import { useSettings } from "../lib/queries/settings"
@@ -48,9 +50,16 @@ export default function AppLayout(props: RouteSectionProps) {
    */
   createEffect(
     on(sessionLost, (lost) => {
-      if (lost) navigate(loginPathFor(location.pathname), { replace: true })
+      if (lost) navigate(loginPathFor(location.pathname, location.search), { replace: true })
     }),
   )
+
+  // Single sign-on always lands on `/`; this is where it was going.
+  createEffect(() => {
+    if (!session.isSuccess) return
+    const kept = takeReturn()
+    if (kept !== "/" && untrack(() => location.pathname) === "/") navigate(kept, { replace: true })
+  })
 
   const signOut = () => {
     logout.mutate(undefined, { onSuccess: () => navigate("/login", { replace: true }) })
@@ -146,21 +155,19 @@ export default function AppLayout(props: RouteSectionProps) {
         </ul>
 
         <div class={styles.navFooter}>
-          {/* Guarded on `isSuccess`, not on `data`: in solid-query `data` is a
-              resource, and reading it while pending suspends the nearest
-              boundary — which here would take the whole nav with it. */}
-          <Show when={session.isSuccess}>
-            <span class={styles.identity}>Signed in as {session.data?.username}</span>
+          {/* Absent until the first answer: a name that flickers in from a placeholder is noise. */}
+          <Show when={loadedData(session)}>
+            {(current) => <span class={styles.identity}>Signed in as {current().username}</span>}
           </Show>
           <ThemeToggle />
           <Button busy={logout.isPending} onClick={signOut} size="sm" tone="ghost">
             Sign out
           </Button>
-          {/* Guarded the same way and for the same reason. Absent rather than
+          {/* Absent rather than
               "unknown" while it loads: a version that flickers through a
               placeholder is a version someone copies into a bug report. */}
-          <Show when={settings.isSuccess}>
-            <span class={styles.version}>v{settings.data?.version}</span>
+          <Show when={loadedData(settings)}>
+            {(current) => <span class={styles.version}>v{current().version}</span>}
           </Show>
         </div>
       </nav>

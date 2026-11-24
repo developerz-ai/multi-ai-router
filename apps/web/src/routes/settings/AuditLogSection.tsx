@@ -9,6 +9,7 @@ import {
   AUDIT_LIMITS,
   type AuditEvent,
   auditDetailEntries,
+  auditKindNote,
   auditKinds,
   auditSubjectText,
   mergeKinds,
@@ -45,8 +46,6 @@ export function AuditLogSection() {
     actor: null,
   }))
 
-  // `isSuccess` is read before `data` for the reason `QueryBoundary` documents:
-  // the data is resource-backed, and reading it while pending suspends.
   createEffect(() => {
     if (!events.isSuccess) return
     const page = events.data
@@ -76,7 +75,14 @@ export function AuditLogSection() {
     {
       id: "kind",
       header: "Kind",
-      cell: (event) => <span class={styles.kind}>{kindWithBreaks(event.kind)}</span>,
+      cell: (event) => (
+        <div class={styles.stack}>
+          <span class={styles.kind}>{kindWithBreaks(event.kind)}</span>
+          <Show when={auditKindNote(event.kind)}>
+            {(note) => <span class={styles.sub}>{note()}</span>}
+          </Show>
+        </div>
+      ),
     },
     {
       id: "subject",
@@ -165,7 +171,7 @@ export function AuditLogSection() {
                 description={
                   kind() === null
                     ? "Every admin-plane mutation lands here — accounts added, keys minted or viewed, pools re-policied, settings changed. Nothing has been recorded yet."
-                    : "No event of that kind is in this page(). Widen the window or clear the filter."
+                    : "No event of that kind is in this page. Widen the window or clear the filter."
                 }
                 icon="settings"
                 title={kind() === null ? "No admin activity yet" : "Nothing matches that kind"}

@@ -1,11 +1,12 @@
 import { Show } from "solid-js"
-import { Badge } from "../../components/Badge"
+import { Badge, type BadgeTone } from "../../components/Badge"
 import { Button } from "../../components/Button"
 import { SpendCell } from "../../components/SpendCell"
 import { type Column, Table } from "../../components/Table"
 import { UsageCell } from "../../components/UsageCell"
 import type { ApiKeyView } from "../../lib/api/types"
-import { formatDate, formatRelative, formatWindow } from "../../lib/format"
+import { formatDate, formatRelative, formatTimestamp, formatWindow } from "../../lib/format"
+import { type KeyState, keyState } from "../../lib/key-state"
 import { TABLE_USAGE_WINDOW_LABEL } from "../../lib/queries/table-usage"
 import type { UsageRowSummary } from "../../lib/usage-index"
 import { usageFor } from "../../lib/usage-index"
@@ -60,13 +61,14 @@ export function KeysTable(props: KeysTableProps) {
     {
       id: "state",
       header: "State",
-      cell: (key) => (
-        <Show fallback={<Badge tone="ok">active</Badge>} when={key.revoked}>
-          <Badge title={`Revoked ${formatDate(key.revokedAt)}`} tone="danger">
-            revoked
+      cell: (key) => {
+        const state = () => keyState(key, props.nowMs)
+        return (
+          <Badge title={stateTitle(key, state())} tone={STATE_TONE[state()]}>
+            {state()}
           </Badge>
-        </Show>
-      ),
+        )
+      },
     },
     {
       id: "scope",
@@ -170,6 +172,18 @@ export function KeysTable(props: KeysTableProps) {
       rows={props.keys}
     />
   )
+}
+
+const STATE_TONE: Readonly<Record<KeyState, BadgeTone>> = {
+  active: "ok",
+  expired: "warn",
+  revoked: "danger",
+}
+
+function stateTitle(key: ApiKeyView, state: KeyState): string | undefined {
+  if (state === "revoked") return `Revoked ${formatDate(key.revokedAt)}`
+  if (state === "expired") return `Expired ${formatTimestamp(key.expiresAt)}. Clients get a 401.`
+  return undefined
 }
 
 /** Scope is enforced upstream as an intersection; this only counts the targets. */
