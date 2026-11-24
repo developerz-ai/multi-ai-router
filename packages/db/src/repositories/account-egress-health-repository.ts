@@ -42,7 +42,8 @@ export interface EgressRepairInput {
 export interface AccountEgressHealthRepository {
   listForAccounts(ids: readonly string[]): Promise<EgressHealthRow[]>
   /**
-   * Records one check and returns the row after it, or `undefined` when the account is gone.
+   * Records one check and returns the row after it, or `undefined` when nothing was written: the
+   * account is gone, or it no longer has the proxy `assignment` names (the check is stale).
    * A live proxy (`ok`, or `refused`: it answered and declined the target) or a changed assignment
    * restarts the count at 0, so failures are consecutive; otherwise `countsAsFailure` adds one and
    * an uncounted check (an operator's own test) leaves it. A live proxy also returns `repair` to
@@ -51,10 +52,17 @@ export interface AccountEgressHealthRepository {
    */
   recordCheck(input: EgressCheckInput): Promise<EgressHealthRow | undefined>
   /**
-   * Records where repair stands. `swappedAt` stamps `last_swap_at` and counts the swap. A changed
+   * Records where repair stands; nothing is written when the account no longer has the proxy
+   * `assignment` names. `swappedAt` stamps `last_swap_at` and counts the swap. A changed
    * assignment restarts the failure count and forgets the old proxy's last outcome.
    */
   recordRepair(input: EgressRepairInput): Promise<void>
+  /**
+   * A check that could not run (the stored proxy is unreadable). Advances the row's attempt stamp
+   * and nothing else, so `listDueEgressChecks` moves the account behind the others; a first row
+   * starts with no outcome, zero failures and `idle`. Fenced on the current assignment.
+   */
+  recordAttempt(input: { readonly accountId: string; readonly assignment: string }): Promise<void>
 }
 
 const columns = {
@@ -85,6 +93,15 @@ type RawRow = {
   swaps: number
 }
 
+/**
+ * The fence both writes share: the account still has the proxy this write is about. A probe runs
+ * for seconds, and the operator may reassign meanwhile; written anyway, a late `ok` about the old
+ * proxy erased the failure streak of its replacement. Checked while the statement holds the account
+ * row lock (`for update of a`), so an assign cannot land between the check and the write.
+ */
+const current = (assignment: string) =>
+  sql`encode(sha256(convert_to(a.egress_proxy->>'sealed', 'UTF8')), 'hex') = ${assignment}::text`
+
 const instant = (value: Date | string | null): Date | null =>
   value === null ? null : value instanceof Date ? value : new Date(value)
 
@@ -100,8 +117,8 @@ export function createAccountEgressHealthRepository(
         .where(inArray(accountEgressHealth.accountId, [...new Set(ids)]))
     },
 
-    // `insert … select from accounts`: an account deleted between the sweep's read and this write
-    // yields no row instead of a foreign-key error that fails the tick. Values in a raw template
+    // `insert … select from accounts`: an account deleted or reassigned between the sweep's read
+    // and this write yields no row instead of a foreign-key error or a row about the wrong proxy. Values in a raw template
     // have no column encoder, so every one is cast and dates cross as ISO strings.
     recordCheck: async (input) => {
       const ok = input.outcome === "ok"
@@ -116,7 +133,8 @@ export function createAccountEgressHealthRepository(
         select a.id, ${input.assignment}::text, ${input.outcome}::text, ${input.status}::int,
           ${input.latencyMs}::int, ${failure}::int, ${at}, case when ${ok}::boolean then ${at} end,
           'idle', now()
-        from accounts a where a.id = ${input.accountId}::uuid
+        from accounts a where a.id = ${input.accountId}::uuid and ${current(input.assignment)}
+        for update of a
         on conflict (account_id) do update set
           assignment = excluded.assignment,
           last_outcome = excluded.last_outcome,
@@ -160,7 +178,8 @@ export function createAccountEgressHealthRepository(
         insert into account_egress_health as h (account_id, assignment, repair, last_swap_at, swaps, updated_at)
         select a.id, ${input.assignment}::text, ${input.repair}::text, ${at},
           ${swapped ? 1 : 0}::int, now()
-        from accounts a where a.id = ${input.accountId}::uuid
+        from accounts a where a.id = ${input.accountId}::uuid and ${current(input.assignment)}
+        for update of a
         on conflict (account_id) do update set
           assignment = excluded.assignment,
           repair = excluded.repair,
@@ -177,6 +196,15 @@ export function createAccountEgressHealthRepository(
           last_swap_at = coalesce(excluded.last_swap_at, h.last_swap_at),
           swaps = h.swaps + excluded.swaps,
           updated_at = now()`)
+    },
+
+    recordAttempt: async (input) => {
+      await db.execute(sql`
+        insert into account_egress_health as h (account_id, assignment, updated_at)
+        select a.id, ${input.assignment}::text, now()
+        from accounts a where a.id = ${input.accountId}::uuid and ${current(input.assignment)}
+        for update of a
+        on conflict (account_id) do update set updated_at = now()`)
     },
   }
 }

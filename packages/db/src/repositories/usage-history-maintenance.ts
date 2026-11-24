@@ -26,6 +26,13 @@ async function advanceBankedWatermark(tx: DatabaseExecutor) {
         or (newest.created_at, newest.id) > (s.banked_through_at, s.banked_through_id))`)
 }
 
+/** ` and (created_at, id) > cursor`, or nothing: where an ordered sweep resumes. */
+function afterSql(after: { createdAt: Date; id: string } | undefined) {
+  if (after === undefined) return sql``
+  const at = sql`${after.createdAt.toISOString()}::timestamptz`
+  return sql`and ${usageRecords.createdAt} >= ${at} and (${usageRecords.createdAt},${usageRecords.id}) > (${at},${after.id}::uuid)`
+}
+
 export function createUsageHistoryMaintenance(db: Database) {
   // A committed sweep advances through the indexed event clock. Exhaustion resets this hint so
   // newly arrived older legacy rows are picked up next sweep; correctness remains receipt-based.
@@ -35,17 +42,25 @@ export function createUsageHistoryMaintenance(db: Database) {
   const backfill = async ({ limit, fullScan = false }: { limit: number; fullScan?: boolean }) => {
     boundUsageBatch(limit)
     // A full scan anti-joins every retained row (prod: 1.1M rows, 10-14 s, zero ever found), and
-    // under the history lock that stalled every usage admission for as long. Ask first without the
-    // lock: admission commits a row and its receipt in one transaction, so a snapshot sees both or
-    // neither, and "no unbanked row" is as true here as under the lock. Only a hit takes the lock.
-    // `count`, not `limit 1`: the planner expects many hits, and a limit talks it out of the hash
-    // anti-join into a million index probes. Nothing is certified on this path, so no watermark.
-    if (fullScan && cursor === undefined) {
-      const [probe] = await db.execute<{ pending: number }>(
-        sql`select count(*)::int as pending from ${usageRecords} where ${unbanked}`,
-      )
-      if ((probe?.pending ?? 0) === 0) return { processed: 0, remaining: false }
+    // under the history lock that stalled every usage admission for as long. So the search runs
+    // first, without the lock, and is bounded: it picks at most `limit` candidates. Admission
+    // commits a row and its receipt in one transaction, so a snapshot sees both or neither, and a
+    // row unbanked here is a real candidate. The lock is then taken only to revalidate and adopt
+    // those ids. Nothing is proven about the rest of the table, so this path moves no watermark.
+    let candidates: { id: string; createdAt: Date }[] | undefined
+    if (fullScan) {
+      candidates = await db
+        .select({ id: usageRecords.id, createdAt: usageRecords.createdAt })
+        .from(usageRecords)
+        .where(sql`${unbanked} ${afterSql(cursor)}`)
+        .orderBy(asc(usageRecords.createdAt), asc(usageRecords.id))
+        .limit(limit)
+      if (candidates.length === 0) {
+        cursor = undefined
+        return { processed: 0, remaining: false }
+      }
     }
+    const chosen = candidates
     const committed = await db.transaction(async (tx) => {
       const { state, dbNow } = await lockUsageHistory(tx)
       // A fresh sweep starts at the banked-through watermark, not the table start: every row at or
@@ -62,7 +77,9 @@ export function createUsageHistoryMaintenance(db: Database) {
         .select()
         .from(usageRecords)
         .where(
-          sql`${unbanked} ${after === undefined ? sql`` : sql`and ${usageRecords.createdAt} >= ${after.createdAt.toISOString()}::timestamptz and (${usageRecords.createdAt},${usageRecords.id}) > (${after.createdAt.toISOString()}::timestamptz,${after.id}::uuid)`}`,
+          chosen === undefined
+            ? sql`${unbanked} ${afterSql(after)}`
+            : sql`${unbanked} and ${usageRecords.id} = any(${sql.param(chosen.map((row) => row.id))}::uuid[])`,
         )
         .orderBy(asc(usageRecords.createdAt), asc(usageRecords.id))
         .limit(limit)
@@ -115,8 +132,13 @@ export function createUsageHistoryMaintenance(db: Database) {
       // adoption is evidence a lock-free pre-2.16 writer was active, whose rows can land below any
       // watermark; do not certify a sweep that saw one.
       const sawLockFreeWriter = inputs.some((input) => input.source === "legacy_overlap")
-      if (fresh && rows.length < limit && !sawLockFreeWriter) await advanceBankedWatermark(tx)
-      return { processed: rows.length, remaining: rows.length === limit, last: rows.at(-1) }
+      if (chosen === undefined && fresh && rows.length < limit && !sawLockFreeWriter)
+        await advanceBankedWatermark(tx)
+      // A full sweep resumes past what it chose, adopted or not: a candidate banked meanwhile is
+      // done, and "more" is whether the bounded search filled its limit.
+      return chosen === undefined
+        ? { processed: rows.length, remaining: rows.length === limit, last: rows.at(-1) }
+        : { processed: rows.length, remaining: chosen.length === limit, last: chosen.at(-1) }
     })
     cursor =
       committed.remaining && committed.last !== undefined

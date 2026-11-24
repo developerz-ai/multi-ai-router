@@ -408,7 +408,10 @@ browser](#driving-the-admin-api-without-a-browser). The one route that distingui
 A `503` from the admin plane means something the router asked did not answer (a vendor or device
 sign-in, a model listing that timed out or got `429`/`5xx`), and a `429` means the caller asked
 again too soon; both carry `Retry-After` and `error.router.retryable: true`. A `400`/`404`/`409` is
-wrong in the request and fails alike when resent. Two `400`s guard a stored credential: moving an
+wrong in the request and fails alike when resent. That contract is the JSON endpoints'. The OIDC
+callback is a browser navigation: its `429` and `503` are HTML pages, and its `503` carries no
+`Retry-After`. After a callback outage the operator starts a fresh sign-in; the consumed state
+cannot be resent. Two `400`s guard a stored credential: moving an
 account's `baseUrl` to another origin without the `credential` in the same request is
 `credential_required_for_new_endpoint`, and an egress proxy on an account that reaches a plain
 `http` endpoint with a credential is `egress_proxy_plaintext`.

@@ -15,8 +15,6 @@ export interface RepairInput extends EgressSweepInput {
   readonly row: EgressAccountRow
   readonly health: EgressHealthRow
   readonly listing: (vendor: string) => Promise<VendorListing>
-  /** What every account leaves through, kept current as this sweep moves them. */
-  readonly held: Map<string, StoredEgressProxy>
 }
 
 /** One dead proxy, decided and, when the decision says so, replaced. */
@@ -27,13 +25,16 @@ export async function repair(
   const { row, health, now, signal } = input
   const proxy = row.egressProxy
   if (proxy.replace !== "on-failure" || proxy.vendor === undefined) return "none"
+  // Not dead for long enough: nothing to decide, so nothing is read for it.
+  if (health.consecutiveFailures < deps.policy.failureThreshold) return "none"
   const facts: RepairFacts = {
     proxy,
     url: deps.cipher.decrypt(proxy.sealed),
     consecutiveFailures: health.consecutiveFailures,
+    repair: currentHealth(proxy, health).repair,
     lastSwapAt: health.lastSwapAt,
     listing: await input.listing(proxy.vendor),
-    taken: takenBy(input.held, row.id),
+    taken: takenBy(await deps.accounts.listHeldEgressProxies(row.id)),
     now,
     threshold: deps.policy.failureThreshold,
     cooldownMs: deps.policy.swapCooldownMs,
@@ -101,13 +102,14 @@ async function commit(
     next,
     exclusive: swap,
     actor: "sweep",
+    // The candidate was probed towards this endpoint and says nothing about another.
+    expectedUpstream: { baseUrl: row.baseUrl, dialect: row.dialect },
     // One write with the swap: a swap that stands without its cooldown could be followed by another.
     recorded: { assignment: assignmentOf(next), ...(swap ? { swappedAt: now } : {}) },
     now,
   })
   if (written === undefined) return false
 
-  input.held.set(row.id, next)
   const change = {
     vendor: chosen.vendor,
     from: before.address,
@@ -137,15 +139,12 @@ async function commit(
 }
 
 function takenBy(
-  held: ReadonlyMap<string, StoredEgressProxy>,
-  except: string,
+  held: readonly { address: string; vendor: string | null; vendorId: string | null }[],
 ): RepairFacts["taken"] {
-  const addresses = new Set<string>()
-  const ids = new Set<string>()
-  for (const [id, proxy] of held) {
-    if (id === except) continue
-    addresses.add(proxy.address)
-    if (proxy.vendorId !== undefined) ids.add(`${proxy.vendor}/${proxy.vendorId}`)
+  return {
+    addresses: new Set(held.map((proxy) => proxy.address)),
+    ids: new Set(
+      held.flatMap(({ vendor, vendorId }) => (vendorId === null ? [] : `${vendor}/${vendorId}`)),
+    ),
   }
-  return { addresses, ids }
 }

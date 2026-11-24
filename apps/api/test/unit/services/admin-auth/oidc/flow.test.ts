@@ -570,9 +570,11 @@ describe("an issuer that ends in a slash (Auth0, Authentik)", () => {
   const slashed = (fetchImpl: typeof fetch): typeof fetch =>
     Object.assign(
       async (input: string | URL | Request, init?: RequestInit) =>
-        String(input).endsWith("/.well-known/openid-configuration")
+        String(input) === `${ISSUER}/.well-known/openid-configuration`
           ? Response.json({ ...(buildDiscovery() as object), issuer: `${ISSUER}/` })
-          : fetchImpl(input, init),
+          : String(input).includes("openid-configuration")
+            ? new Response("", { status: 404 })
+            : fetchImpl(input, init),
       { preconnect: () => {} },
     )
 
@@ -613,6 +615,7 @@ describe("an IdP or store that does not answer is an outage, not a refusal", () 
   for (const [name, path, answer] of [
     ["the token endpoint is unreachable", "/token", refused],
     ["the token endpoint answers 502", "/token", async () => new Response("", { status: 502 })],
+    ["the token endpoint throttles", "/token", async () => new Response("", { status: 429 })],
     ["the key set is unreachable", "/keys", refused],
     ["the key set answers 503", "/keys", async () => new Response("", { status: 503 })],
   ] as const) {
@@ -627,6 +630,22 @@ describe("an IdP or store that does not answer is an outage, not a refusal", () 
       expect((error as Error).message).not.toContain("ECONNREFUSED")
     })
   }
+
+  test("the IdP's own refusal counts only with a state this router issued, once", async () => {
+    const { h, fetch } = await buildHarness()
+    const flow = buildFlow(h, fetch, baseConfig())
+    const { state } = await flow.start()
+    const reason = async (presented: string) => {
+      const error = await flow
+        .complete({ state: presented, idpError: "access_denied" })
+        .catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(AdminAuthError)
+      return (error as AdminAuthError).reason
+    }
+    expect(await reason("forged")).not.toContain("access_denied")
+    expect(await reason(state)).toBe("idp_refused: access_denied")
+    expect(await reason(state)).not.toContain("access_denied")
+  })
 
   test("a token endpoint that refuses the code is still a refusal", async () => {
     const { h, fetch } = await buildHarness()

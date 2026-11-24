@@ -75,6 +75,15 @@ describe("the Webshare listing", () => {
     })
   }
 
+  test("a credential that is not well-formed text is an unreadable listing, not a throw", async () => {
+    for (const broken of [{ username: "u\ud800" }, { password: "p\udc00" }]) {
+      const { vendor } = webshare(() =>
+        Response.json({ next: null, results: [{ ...row("d-1"), ...broken }] }),
+      )
+      expect(await vendor.list()).toEqual({ ok: false, code: "unreadable" })
+    }
+  })
+
   test("a vendor that hangs is a timeout, and the deadline covers the whole listing", async () => {
     const { vendor } = webshare(
       (_page, init) =>

@@ -132,12 +132,23 @@ run_sharded() {
         # (a type error stopping the run, a Ctrl-C) would otherwise end the subshell and leave the
         # helper running SQL after the script had reported and exited. Its answer comes back
         # through a file in this run's private directory.
-        helper=""
-        trap 'kill "$helper" 2>/dev/null; wait "$helper" 2>/dev/null || true; exit 143' INT TERM
+        #
+        # A signal that lands between starting the helper and saving its pid must not be lost or
+        # acted on with no pid to kill: until the pid is saved the trap only notes the signal, and
+        # the note is honoured the moment there is something to stop. (Noted, not ignored — an
+        # ignored signal would be inherited by the helper, which would then ignore it too.)
+        stopping=""
+        trap 'stopping=1' INT TERM
         bun bin/lib/ensure-test-database.ts "$shard" >"$logs/$shard.url" <<EOF &
 $database_url
 EOF
         helper=$!
+        trap 'kill "$helper" 2>/dev/null; wait "$helper" 2>/dev/null || true; exit 143' INT TERM
+        if [ -n "$stopping" ]; then
+          kill "$helper" 2>/dev/null
+          wait "$helper" 2>/dev/null || true
+          exit 143
+        fi
         wait "$helper" || {
           echo "bin/test: could not prepare shard $shard's database" >&2
           exit 1

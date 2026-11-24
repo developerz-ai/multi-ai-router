@@ -154,6 +154,18 @@ describe("the replace mode", () => {
     expect(await h.proxyOf(row.id)).toMatchObject({ vendorId: "d-1", replace: "on-failure" })
   })
 
+  test("a mode changed while the vendor was being asked is the one kept", async () => {
+    const h = egressHarness({ listing: listed(vendorProxy("d-1"), vendorProxy("d-2")) })
+    const row = await h.add()
+    await h.service.set(row.id, { vendor: "webshare", id: "d-1", replace: "on-failure" })
+    h.world.onList = async () => {
+      h.world.onList = undefined
+      await h.service.setReplace(row.id, { replace: "manual" })
+    }
+    await h.service.set(row.id, { vendor: "webshare", id: "d-2" })
+    expect(await h.proxyOf(row.id)).toMatchObject({ vendorId: "d-2", replace: "manual" })
+  })
+
   test("it survives a change of proxy, and an account with none refuses it", async () => {
     const h = egressHarness({ listing: listed(D1, vendorProxy("d-2")) })
     const row = await h.add()

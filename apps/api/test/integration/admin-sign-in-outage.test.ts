@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test"
 import { AdminAuthError } from "@multi-ai-router/core"
 import { Hono } from "hono"
 import { ADMIN_AUTH_BASE_PATH, adminAuthRoutes } from "../../src/routes/admin/auth"
-import { type AdminAuthService, AdminAuthUnavailableError } from "../../src/services/admin-auth"
+import {
+  type AdminAuthService,
+  AdminAuthUnavailableError,
+  AdminLoginThrottledError,
+} from "../../src/services/admin-auth"
 import type { AppEnv } from "../../src/types"
 
 /** A sign-in the router could not judge is an outage, not a wrong password, and leaves a log line. */
@@ -83,10 +87,34 @@ describe("sign-in when a dependency is down", () => {
   })
 
   test("the IdP's own refusal is logged by code, and junk is not echoed", async () => {
-    const { app, lines } = mount({})
-    const path = `${ADMIN_AUTH_BASE_PATH}/oidc/callback?error=`
-    expect((await app.request(`${path}access_denied`)).status).toBe(400)
-    expect((await app.request(`${path}${encodeURIComponent("<b>x y</b>")}`)).status).toBe(400)
-    expect(lines.map((line) => line.fields.idpError)).toEqual(["access_denied", "unrecognized"])
+    const { app, lines } = mount({
+      completeLogin: async (input) => {
+        const refused = "idpError" in input ? input.idpError : "none"
+        throw new AdminAuthError("no", { reason: `idp_refused: ${refused}` })
+      },
+    })
+    const path = `${ADMIN_AUTH_BASE_PATH}/oidc/callback?state=s&error=`
+    expect((await app.request(`${path}access_denied`)).status).toBe(401)
+    expect((await app.request(`${path}${encodeURIComponent("<b>x y</b>")}`)).status).toBe(401)
+    expect(lines.map((line) => line.fields.reason)).toEqual([
+      "idp_refused: access_denied",
+      "idp_refused: unrecognized",
+    ])
+  })
+
+  test("an unsolicited refusal is throttled like any callback, and one without a state logs nothing", async () => {
+    const { app, lines } = mount({ completeLogin: refuse(new AdminLoginThrottledError(7)) })
+    const path = `${ADMIN_AUTH_BASE_PATH}/oidc/callback?error=access_denied`
+    expect((await app.request(path)).status).toBe(400)
+    const throttled = await app.request(`${path}&state=s`)
+    expect(throttled.status).toBe(429)
+    expect(throttled.headers.get("retry-after")).toBe("7")
+    expect(lines).toEqual([])
+  })
+
+  test("after an outage the callback page asks for a new sign-in: its code is spent", async () => {
+    const { app } = mount({ completeLogin: refuse(new AdminAuthUnavailableError()) })
+    const page = await app.request(`${ADMIN_AUTH_BASE_PATH}/oidc/callback?code=c&state=s`)
+    expect(await page.text()).toContain("start a new sign-in")
   })
 })

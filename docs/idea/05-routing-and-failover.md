@@ -1150,7 +1150,8 @@ refusal is about that cap, and the evidence is the refusal's own words, never th
 - A `credits-exhausted` refusal that says nothing either way (no flag: a `402` no rule could read)
   borrows only from a cap the reading says is fully spent, where refusal and reading agree and
   nothing contradicts them.
-- A reset the refusal states itself (`metadata.resets_at`) always stands and nothing is borrowed. A
+- A reset the refusal states itself always stands and nothing is borrowed: a reset or `Retry-After`
+  in its headers first, the body's `metadata.resets_at` when the headers state none. A
   `total` cap names no reset and stays a human's. A stale reading lends nothing.
 - The breaker and the client's error read one predicate (`keyCapResetFor`), so the status a client
   is told and the state the account lands in cannot disagree.

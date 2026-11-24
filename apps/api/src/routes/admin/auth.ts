@@ -9,7 +9,6 @@ import { readJsonBody } from "../../services/admin"
 import {
   ADMIN_API_TOKEN_ACTOR,
   ADMIN_LOGIN_FAILED_MESSAGE,
-  ADMIN_LOGIN_UNAVAILABLE_MESSAGE,
   type AdminAuthService,
   AdminLoginThrottledError,
   type AdminSession,
@@ -52,6 +51,10 @@ import {
 
 /** Where these routes belong, per docs/idea/04-api-keys-and-access.md#admin-api-route-groups. */
 export const ADMIN_AUTH_BASE_PATH = "/api/admin/auth"
+
+/** Not "try again": the code and state in this address are spent, so a reload only fails. */
+const CALLBACK_UNAVAILABLE =
+  "Sign-in is temporarily unavailable. Wait a moment, then start a new sign-in."
 
 export interface AdminAuthRoutesDeps {
   readonly maximumJsonBytes?: number
@@ -153,24 +156,16 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     const code = c.req.query("code")
     const state = c.req.query("state")
     const error = c.req.query("error")
-    if (error !== undefined && error.length > 0) {
-      // The IdP denied the authorization. Render the callback page with a
-      // generic failure message — the operator sees the same wording as a
-      // probe would, and the log names the IdP's code.
-      c.get("log").warn("the identity provider refused an admin sign-in", {
-        component: "admin-auth",
-        idpError: idpErrorCode(error),
-        remedy: "docs/idea/13-admin-oidc.md#troubleshooting",
-      })
-      return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 400)
-    }
-    if (code === undefined || code === "" || state === undefined || state === "") {
+    // An `error` is the IdP's refusal, and logged as one, only once the throttle admitted the
+    // callback and its state proved to be ours.
+    const answer = error ? { idpError: idpErrorCode(error) } : code ? { code } : null
+    if (answer === null || state === undefined || state === "") {
       return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 400)
     }
 
     try {
       const result = await deps.service.completeLogin({
-        code,
+        ...answer,
         state,
         ip: requestClientIp(c, trustedHops),
       })
@@ -189,7 +184,7 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       }
       if (isSignInOutage(err)) {
         logSignInOutage(c, "oidc-callback", err)
-        return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_UNAVAILABLE_MESSAGE), 503)
+        return c.html(callbackPage("Sign-in failed", CALLBACK_UNAVAILABLE), 503)
       }
       // This route renders HTML, so it answers the failure itself rather than rethrowing into the
       // error handler — which means it owes the operator the line that handler would have written.

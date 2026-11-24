@@ -2,7 +2,7 @@ import type { Env } from "../../config/env"
 import type { AuditRecorder } from "../admin/audit"
 import type { AdminAuthConfig } from "./config"
 import type { LocalAdminCredentials } from "./localCredential"
-import type { OIDCFlow } from "./oidc/flow"
+import type { OIDCCallback, OIDCFlow } from "./oidc/flow"
 import type { AdminSession, SessionStore } from "./sessionStore"
 import type { SharedThrottle } from "./shared-throttle"
 
@@ -71,12 +71,8 @@ export interface AdminAuthService {
   methods(): Promise<AdminAuthMethods>
   /** Mints a state and an authorize URL. The route redirects the browser. */
   startLogin(ip?: string): Promise<LoginStartResult>
-  /** Trades the callback's `code` for an admin session. */
-  completeLogin(input: {
-    readonly code: string
-    readonly state: string
-    readonly ip: string
-  }): Promise<LoginCompleteResult>
+  /** Trades the callback's `code` for an admin session, or records the IdP's refusal and throws. */
+  completeLogin(input: OIDCCallback & { readonly ip: string }): Promise<LoginCompleteResult>
   /**
    * Trades a password for the same admin session the OIDC callback issues —
    * a second way to OBTAIN the session, not a second session model. Per-IP

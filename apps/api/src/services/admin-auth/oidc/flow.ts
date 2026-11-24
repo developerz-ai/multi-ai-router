@@ -7,6 +7,7 @@ import { assertEmailVerified, OIDCIdTokenInvalidError, verifyIdToken } from "./i
 import { createJWKSCache, DEFAULT_JWKS_TTL_MS, type JWKSCache, OIDCJWKSError } from "./jwks"
 import { unmetRequiredClaim } from "./requiredClaims"
 import { createOIDCStateStore, OIDCStateMismatchError, type OIDCStateStoreDeps } from "./state"
+import { exchangeCode } from "./token-exchange"
 
 /**
  * The two halves of the admin-OIDC flow.
@@ -68,6 +69,12 @@ export class OIDCPrincipalMismatchError extends Error {
 /** Collapses every failure to a single wording for the operator-facing answer. */
 const OIDC_VERIFICATION_FAILED = ADMIN_LOGIN_FAILED_MESSAGE
 
+/** What the IdP sent the browser back with: a code, or its own refusal. */
+export type OIDCCallback = { readonly state: string } & (
+  | { readonly code: string }
+  | { readonly idpError: string }
+)
+
 export interface OIDCFlow {
   /** Builds the authorize URL and the state row for it. The state is the IdP-opaque value. */
   start(): Promise<{ readonly authorizeUrl: string; readonly state: string }>
@@ -78,10 +85,7 @@ export interface OIDCFlow {
    * Throws {@link AdminAuthError} on every failure. The message is the single
    * wording; the *kind* is what the audit log records.
    */
-  complete(input: {
-    readonly code: string
-    readonly state: string
-  }): Promise<{ readonly email: string; readonly subject: string }>
+  complete(input: OIDCCallback): Promise<{ readonly email: string; readonly subject: string }>
 }
 
 export interface OIDCFlowDeps {
@@ -139,49 +143,6 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
     return jwks.cache
   }
 
-  async function exchangeCode(
-    tokenEndpoint: string,
-    code: string,
-    codeVerifier: string,
-  ): Promise<{ id_token: string }> {
-    const params = new URLSearchParams()
-    params.set("grant_type", "authorization_code")
-    params.set("code", code)
-    params.set("redirect_uri", config.redirectUri)
-    params.set("client_id", config.clientId)
-    if (config.clientSecret !== null) params.set("client_secret", config.clientSecret)
-    params.set("code_verifier", codeVerifier)
-    {
-      let res: Response
-      try {
-        res = await discoveryFetch(tokenEndpoint, {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body: params.toString(),
-        })
-      } catch (err) {
-        // The endpoint may have moved: the next sign-in re-discovers rather than waiting out the TTL.
-        discovery.invalidate()
-        throw err
-      }
-      if (!res.ok) {
-        discovery.invalidate()
-        // The status only. A token-endpoint error body quotes the request back — including the
-        // authorization code and, on some providers, the client secret — so it never reaches a log.
-        const reason = `token_exchange: endpoint returned ${res.status}`
-        if (res.status >= 500) throw new AdminAuthUnavailableError({ reason })
-        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, { reason })
-      }
-      const body = (await res.json()) as { id_token?: unknown }
-      if (typeof body.id_token !== "string" || body.id_token.length === 0) {
-        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
-          reason: "token_exchange: response carried no id_token",
-        })
-      }
-      return { id_token: body.id_token }
-    }
-  }
-
   return {
     async start() {
       const doc = await discovery.load()
@@ -199,13 +160,24 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
       return { authorizeUrl: url.toString(), state: issued.state }
     },
 
-    async complete({ code, state }) {
+    async complete({ state, ...answer }) {
       let principal: { email: string; subject: string } | null = null
       try {
         // Invalid callbacks must not turn a cold process into an unauthenticated IdP probe.
         const consumed = await stateStore.consume(state)
+        // Only now is it the IdP's word: anyone can send a callback that claims a refusal.
+        if ("idpError" in answer) {
+          throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
+            reason: `idp_refused: ${answer.idpError}`,
+          })
+        }
         const doc = await discovery.load()
-        const tokenResponse = await exchangeCode(doc.token_endpoint, code, consumed.codeVerifier)
+        const tokenResponse = await exchangeCode(
+          config,
+          doc.token_endpoint,
+          { code: answer.code, codeVerifier: consumed.codeVerifier },
+          { fetch: discoveryFetch, onFailure: () => discovery.invalidate() },
+        )
         const verified = await verifyIdToken(
           {
             token: tokenResponse.id_token,
@@ -259,7 +231,7 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         // browser still learns only {@link OIDC_VERIFICATION_FAILED}.
         // The whole cause chain, innermost first — it earns its keep on the `unknown:` branch,
         // where a failed fetch buries the socket-level complaint one `cause` down. It cannot
-        // resurrect a token-endpoint body: `exchangeCode` throws status-only errors with no cause
+        // resurrect a token-endpoint body: `exchangeCode` (`token-exchange.ts`) throws status-only errors with no cause
         // attached, by design (see the comment there), and every OIDC error here is built the
         // same way. Bounded like any logged reason; the transport's redactor scrubs the line.
         const reason = `${kind}: ${describeError(err, 500)}`

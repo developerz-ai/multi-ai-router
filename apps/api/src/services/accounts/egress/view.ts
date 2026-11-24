@@ -88,6 +88,14 @@ export function toOverview(input: {
   readonly accounts: readonly EgressAccountRow[]
   readonly health: ReadonlyMap<string, EgressHealthRow>
 }): EgressOverview {
+  const inventory = new Map<string, ReadonlyMap<string, VendorProxy>>()
+  for (const [vendor, listing] of input.listings)
+    if (listing.ok)
+      inventory.set(vendor, new Map(listing.proxies.map((proxy) => [proxy.id, proxy])))
+  // A row stored before identities were is matched by its address.
+  const holders = Map.groupBy(input.accounts, ({ egressProxy: held }) =>
+    held.vendorId === undefined ? held.address : identity(held.vendor, held.vendorId),
+  )
   const proxies = [...input.listings.values()].flatMap((listing) =>
     listing.ok ? listing.proxies : [],
   )
@@ -103,12 +111,8 @@ export function toOverview(input: {
     proxies: proxies.map(({ url: _url, ...shown }) => ({
       ...shown,
       location: [shown.city, shown.country].filter(Boolean).join(", "),
-      accounts: input.accounts
-        .filter(({ egressProxy: held }) =>
-          held.vendorId === undefined
-            ? held.address === shown.address
-            : held.vendor === shown.vendor && held.vendorId === shown.id,
-        )
+      accounts: [identity(shown.vendor, shown.id), shown.address]
+        .flatMap((key) => holders.get(key) ?? [])
         .map(({ id, label }) => ({ id, label })),
     })),
     assigned: input.accounts.map((row) => {
@@ -121,7 +125,7 @@ export function toOverview(input: {
         vendorId: proxy.vendorId ?? null,
         country: proxy.country ?? null,
         replace: proxy.replace ?? "manual",
-        ...vendorWord(proxy, input.listings),
+        ...vendorWord(proxy, input.listings, inventory),
         health: {
           outcome: health.lastOutcome,
           status: health.lastStatus,
@@ -138,15 +142,21 @@ export function toOverview(input: {
   }
 }
 
+/** Never an address: no `host:port` holds a slash. */
+function identity(vendor: string | undefined, id: string): string {
+  return `${vendor}/${id}`
+}
+
 function vendorWord(
   proxy: StoredEgressProxy,
   listings: ReadonlyMap<string, VendorListing>,
+  inventory: ReadonlyMap<string, ReadonlyMap<string, VendorProxy>>,
 ): { listed: boolean | null; valid: boolean | null } {
   const silent = { listed: null, valid: null }
   if (proxy.vendor === undefined || proxy.vendorId === undefined) return silent
   const listing = listings.get(proxy.vendor)
   if (listing === undefined || !listing.ok) return silent
-  const held = listing.proxies.find((candidate) => candidate.id === proxy.vendorId)
+  const held = inventory.get(proxy.vendor)?.get(proxy.vendorId)
   if (held !== undefined) return { listed: true, valid: held.valid }
   return listing.complete ? { listed: false, valid: null } : silent
 }

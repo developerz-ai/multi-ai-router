@@ -178,7 +178,7 @@ A router API key (`mar_live_…`) can never authenticate the admin plane.
 
 ## Troubleshooting
 
-The browser receives only “Sign-in failed. Try again.” — for both paths. A `503` “Sign-in is temporarily unavailable” (`admin_auth_unavailable`) is not a verdict: Postgres or the IdP did not answer. The log line `admin sign-in could not be judged` names the door and the reason, and `the identity provider refused an admin sign-in` carries the IdP's own error code. The kind is in the router log and in the audit feed, never in the response:
+The browser receives only “Sign-in failed. Try again.” — for both paths. A `503` “Sign-in is temporarily unavailable” (`admin_auth_unavailable`) is not a verdict: Postgres or the IdP did not answer. The log line `admin sign-in could not be judged` names the door and the reason, and `admin sign-in rejected at the OIDC callback` carries `idp_refused: <code>` for the IdP's own refusal, logged only after the callback throttle admitted it and its state proved to be ours. After an outage the callback page asks for a new sign-in: its code and state are spent. The kind is in the router log and in the audit feed, never in the response:
 
 ```
 {"level":"warn","msg":"admin sign-in rejected at the OIDC callback","component":"admin-auth",

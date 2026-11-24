@@ -333,3 +333,9 @@ test("one account's failure in a recheck-all does not lose the accounts that com
   await expect(h.service.recheckAll()).rejects.toThrow("claude is unavailable")
   expect(h.audited.map((event) => event.subjectId)).toEqual(["b"])
 })
+
+test("a publish that fails in a recheck-all does not lose the commits after it", async () => {
+  const h = harness(60, [row("a"), row("b")], { auditFails: true })
+  await expect(h.service.recheckAll()).rejects.toThrow("audit unavailable")
+  expect(h.order).toEqual(["barrier", "audit", "audit"])
+})

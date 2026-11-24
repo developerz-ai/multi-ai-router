@@ -415,13 +415,14 @@ operators or one double refresh issue one set of statements on one snapshot conn
 is never kept. Labelling the breakdowns groups each dimension's series points once, so 100 rows x
 400 buckets label in ~2.5 ms per dimension rather than ~96 ms on the loop that relays streams.
 
-The per-read scan count is unchanged: every breakdown and series still reads the windowed facts
-once (~62k shared buffers, 14 facts scans per summary at fixture scale), and the key series'
-group sort still spills (~52k rows over the default `work_mem`). If a deployment outgrows the
-budgets on this shape, the next levers — in order — are consolidating the per-dimension scans
-into one `grouping sets` pass, a coarser series grain, and the rollup grain itself.
+Historical, before the grouped reads: every breakdown and series read the windowed facts once
+(~62k shared buffers, 14 facts scans per summary at fixture scale), and the key series' group sort
+spilled (~52k rows over the default `work_mem`). The levers named then were, in order,
+consolidating the per-dimension scans into one `grouping sets` pass, a coarser series grain, and
+the rollup grain itself. The first is done, in two steps, and the 2.77.0 query shape is the 8
+statements described below; the other two remain the levers if a deployment outgrows the budgets.
 
-The first lever exists at the repository: `UsageHistoryRepository.summaryAggregates(window,
+The first step is at the repository: `UsageHistoryRepository.summaryAggregates(window,
 limit, filter, attribution)` returns `totals` and all six breakdowns from one statement — facts
 read once, folded to the (key, account, pool, model) grain, labelled once with both the owner and
 tool bucket, aggregated over `GROUPING SETS ((), (api_key_id), …, (tool_grp))`, each set ranked
