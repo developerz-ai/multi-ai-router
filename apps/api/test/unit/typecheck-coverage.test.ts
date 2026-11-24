@@ -123,12 +123,12 @@ export function unused(parameter: string) { const local = 1; return 0 }
     COMPILER_TEST_TIMEOUT_MS,
   )
 
-  test("bin/check requires bin/lint and the solution build followed by the no-emit projects", () => {
+  test("bin/check and bin/lint both run the solution build followed by the no-emit projects", () => {
     const manifest: { scripts: { typecheck: string } } = JSON.parse(
       readFileSync(join(root, "package.json"), "utf8"),
     )
     expect(manifest.scripts.typecheck.split(/\s*&&\s*/)).toEqual([
-      "tsc --build --verbose",
+      "tsc --build",
       "tsc --project apps/api/tsconfig.tests.json",
       "tsc --project packages/core/tsconfig.tests.json",
       "tsc --project packages/db/tsconfig.tests.json",
@@ -138,7 +138,14 @@ export function unused(parameter: string) { const local = 1; return 0 }
     for (const path of ["bin/check", "bin/lint"]) {
       expect(commands(path)).toContain("set -eu")
     }
-    expect(commands("bin/check")).toContain("bin/lint")
+    // bin/check runs the two halves of bin/lint as stages of its own — Biome first, tsc beside the
+    // suite — so each reports its own verdict and time. Same package scripts as CI's jobs.
+    expect(commands("bin/check")).toContain("stage lint bun run lint")
+    expect(commands("bin/check")).toContain('bun run typecheck >"$logs/typecheck.log" 2>&1 &')
+    expect(commands("bin/check")).toContain(
+      '[ "$typecheck_status" -eq 0 ] || failed typecheck "$(seconds_since "$typecheck_started")"',
+    )
+    expect(commands("bin/lint")).toContain("bun run lint")
     expect(commands("bin/lint")).toContain("bun run typecheck")
   })
 })

@@ -1,16 +1,20 @@
-import type { ProviderId } from "@multi-ai-router/core"
-import { type BenchApp, benchApp, scrape } from "./harness"
-import { transcriptBody } from "./transcript"
-import { stubUpstream, TRIP_HEADER, type Trip } from "./upstream"
+import type { Dialect, ProviderId } from "@multi-ai-router/core"
+import { type Built, drive, startBackground } from "./drive"
+import { benchApp, type Fleet, scrape } from "./harness"
+import { stubUpstream } from "./upstream"
 
 /**
  * What gets driven, and how the two claims in the budget are told apart.
  *
  * CLAUDE.md non-negotiable 8 makes two separate promises, and they need two separate measurements:
  *
- * 1. **< 5 ms added p99 overhead.** Read off `router_overhead_seconds` — the router's own histogram,
- *    scraped from `/metrics`. Nothing here holds a stopwatch, because the series is what regresses
- *    and the series is what alerts.
+ * 1. **< 5 ms added p99 overhead.** Measured per request, unrounded: the time the client waited,
+ *    minus the time the stub upstream held the request (from the router calling it to its last
+ *    byte). That is everything the router added on either side of the wait. The router's own
+ *    `router_overhead_seconds` histogram is scraped beside it and must have recorded every request —
+ *    the series is what alerts — but it is fed whole milliseconds into eight buckets, so it cannot
+ *    tell 0.1 ms from 0.9 ms, and its interpolated p99 reads a bucket's upper edge. The verdict
+ *    needs the measurement; the series is the cross-check.
  * 2. **Zero added time-to-first-token.** No series records this, and none can: `ttfbMs` is measured
  *    from when the request entered the *router*, so it necessarily contains the upstream's own think
  *    time and cannot say how much of it the router added. The only honest form of "added" is a
@@ -37,10 +41,42 @@ export interface Scenario {
   readonly answerBytes?: number
   /** SSE chunks for this scenario, overriding `--chunks`: a long answer, not a 16-chunk one. */
   readonly chunks?: number
+  /** The wire the account speaks when it is not its provider's default (`openai-responses`). */
+  readonly dialect?: Extract<Dialect, "openai-responses">
+  /** A deployment-sized roster instead of the single account. See `harness.ts`. */
+  readonly fleet?: Fleet
+  /**
+   * Long streams kept in flight on the same app for the whole measurement, and never measured
+   * themselves. Prod's tail is not made by idle routers: a short request there shares the event
+   * loop with dozens of generations being relayed chunk by chunk.
+   */
+  readonly backgroundStreams?: number
+  /**
+   * Scales `--requests` for a scenario whose every request is slow by construction. A 200-chunk
+   * stream takes eleven times as long as a 16-chunk one; at the full count it was half the bench's
+   * wall time for one row, and a quarter of the samples still resolves a p99. Warm-up scales too.
+   */
+  readonly requestShare?: number
+  /**
+   * A ceiling on `--concurrency` for this scenario. The bench reports per-request cost, which only
+   * holds while offered load sits well under what one event loop retires (`run.ts`). A 350 KB
+   * transcript costs milliseconds of CPU where a 1 KB prompt costs microseconds, so eight of them
+   * in flight against a 20 ms upstream is a saturated loop, and what that measures is its queue.
+   */
+  readonly maxConcurrency?: number
 }
 
 /** The size prod's p99 is measured at (plan 101, 10.2 / 12.4): a long Claude Code session. */
 const TRANSCRIPT_BYTES = 350_000
+
+/** The deployment the prod overhead numbers come from: 31 accounts in 11 pools. */
+const PROD_FLEET: Fleet = { accounts: 31, pools: 11 }
+
+/** Heavy bodies run few at a time and for fewer requests: see `maxConcurrency`, `requestShare`. */
+const HEAVY = { maxConcurrency: 2, requestShare: 0.2 } as const
+
+/** Chunks in one background stream: long enough to outlast the measured requests around it. */
+const BACKGROUND_CHUNKS = 400
 
 export const SCENARIOS: readonly Scenario[] = [
   { name: "passthrough", path: "passthrough", stream: false, provider: "anthropic-api" },
@@ -53,6 +89,7 @@ export const SCENARIOS: readonly Scenario[] = [
     stream: false,
     provider: "anthropic-api",
     transcriptBytes: TRANSCRIPT_BYTES,
+    ...HEAVY,
   },
   {
     name: "passthrough 350 KB transcript (stream, 200 chunks)",
@@ -61,6 +98,8 @@ export const SCENARIOS: readonly Scenario[] = [
     provider: "anthropic-api",
     transcriptBytes: TRANSCRIPT_BYTES,
     chunks: 200,
+    maxConcurrency: 4,
+    requestShare: 0.1,
   },
   {
     name: "passthrough 1 MB transcript",
@@ -68,6 +107,7 @@ export const SCENARIOS: readonly Scenario[] = [
     stream: false,
     provider: "anthropic-api",
     transcriptBytes: 1_000_000,
+    ...HEAVY,
   },
   {
     // ~62 KB on the wire: just under the 64 KiB a non-streamed success is peeked at before commit.
@@ -83,6 +123,39 @@ export const SCENARIOS: readonly Scenario[] = [
     stream: false,
     provider: "openrouter",
     transcriptBytes: TRANSCRIPT_BYTES,
+    ...HEAVY,
+  },
+  {
+    name: "passthrough, 31 accounts in 11 pools",
+    path: "passthrough",
+    stream: false,
+    provider: "anthropic-api",
+    fleet: PROD_FLEET,
+  },
+  {
+    // Prod's most expensive path: Anthropic Messages in, a Responses-API account out.
+    name: "translate to responses (stream)",
+    path: "translate",
+    stream: true,
+    provider: "openai-api",
+    dialect: "openai-responses",
+  },
+  {
+    name: "translate to responses 350 KB transcript",
+    path: "translate",
+    stream: false,
+    provider: "openai-api",
+    dialect: "openai-responses",
+    transcriptBytes: TRANSCRIPT_BYTES,
+    ...HEAVY,
+  },
+  {
+    name: "passthrough under 32 long streams, 31 accounts",
+    path: "passthrough",
+    stream: false,
+    provider: "anthropic-api",
+    fleet: PROD_FLEET,
+    backgroundStreams: 32,
   },
 ]
 
@@ -106,132 +179,68 @@ export interface ScenarioResult {
   readonly failures: number
   /** The `/metrics` body, scraped after the usage queue drained. */
   readonly exposition: string
+  /**
+   * Per-request router overhead, ms, ascending and unrounded: client wall time minus the time the
+   * stub held the request. One per measured request that reached the upstream.
+   */
+  readonly overheadMs: readonly number[]
   /** Added time-to-first-token, ms, ascending. Empty for a non-streamed scenario. */
   readonly addedTtftMs: readonly number[]
   /** Streams whose first client byte landed after the upstream's last one — a buffered relay. */
   readonly buffered: number
 }
 
-const INGRESS_PATH = "/v1/messages"
-const MODEL = "claude-opus-5"
-
 export async function runScenario(
   scenario: Scenario,
   options: DriveOptions,
 ): Promise<ScenarioResult> {
-  // Warmed on a throwaway app so its samples never reach the histogram that gets reported.
-  await drive(build(scenario, options), scenario, options, options.warmup)
+  const share = scenario.requestShare ?? 1
+  const shaped: DriveOptions = {
+    ...options,
+    concurrency: Math.min(options.concurrency, scenario.maxConcurrency ?? options.concurrency),
+  }
+  const requests = Math.max(1, Math.round(options.requests * share))
 
-  const built = build(scenario, options)
-  const driven = await drive(built, scenario, options, options.requests)
+  // Warmed on a throwaway app so its samples never reach the histogram that gets reported.
+  await drive(build(scenario, shaped), scenario, shaped, Math.round(options.warmup * share))
+
+  const built = build(scenario, shaped)
+  const background = startBackground(built, scenario, shaped)
+  const driven = await drive(built, scenario, shaped, requests).finally(() => background.stop())
+  await background.settled
 
   return {
     scenario,
-    requests: options.requests,
-    failures: driven.failures,
+    requests,
+    failures: driven.failures + background.failures(),
     exposition: await scrape(built.bench),
+    overheadMs: [...driven.overheadMs].sort((a, b) => a - b),
     addedTtftMs: [...driven.addedTtftMs].sort((a, b) => a - b),
     buffered: driven.buffered,
   }
 }
 
-interface Built {
-  readonly bench: BenchApp
-  readonly open: (id: string) => Trip
-}
-
 function build(scenario: Scenario, options: DriveOptions): Built {
   const upstream = stubUpstream({
-    dialect: scenario.provider === "anthropic-api" ? "anthropic" : "openai-chat",
+    dialect:
+      scenario.dialect ?? (scenario.provider === "anthropic-api" ? "anthropic" : "openai-chat"),
     stream: scenario.stream,
     chunks: scenario.chunks ?? options.chunks,
     ...(scenario.answerBytes === undefined ? {} : { answerBytes: scenario.answerBytes }),
     chunkGapMs: options.chunkGapMs,
     firstByteDelayMs: options.firstByteDelayMs,
+    // The stub answers a request that asks to stream with a stream, whatever the scenario's own
+    // shape — which is what lets background streams share an app with non-streamed requests.
+    streamOnRequest: scenario.backgroundStreams !== undefined,
+    backgroundChunks: BACKGROUND_CHUNKS,
   })
-  return { bench: benchApp({ provider: scenario.provider, upstream }), open: upstream.open }
-}
-
-interface Driven {
-  readonly failures: number
-  readonly addedTtftMs: number[]
-  readonly buffered: number
-}
-
-async function drive(
-  built: Built,
-  scenario: Scenario,
-  options: DriveOptions,
-  count: number,
-): Promise<Driven> {
-  const body =
-    scenario.transcriptBytes === undefined
-      ? requestBody(scenario.stream, options.promptBytes)
-      : transcriptBody({ model: MODEL, bytes: scenario.transcriptBytes, stream: scenario.stream })
-  const addedTtftMs: number[] = []
-  let failures = 0
-  let buffered = 0
-
-  await pool(count, options.concurrency, async (index) => {
-    const id = `${scenario.name}-${index}`
-    const trip = built.open(id)
-
-    const response = await built.bench.app.request(INGRESS_PATH, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${built.bench.key}`,
-        [TRIP_HEADER]: id,
-      },
-      body,
-    })
-
-    if (response.status !== 200) failures += 1
-    // Drained either way: the usage record is written when the last byte lands, so a body left
-    // unread is a sample the histogram never sees.
-    if (!scenario.stream || response.body === null) {
-      await response.arrayBuffer()
-      return
-    }
-
-    trip.clientFirstByteAt = await drain(response.body)
-    if (trip.clientFirstByteAt > trip.upstreamLastByteAt) buffered += 1
-    addedTtftMs.push(trip.clientFirstByteAt - trip.upstreamFirstByteAt)
-  })
-
-  return { failures, addedTtftMs, buffered }
-}
-
-/** Reads to the end and returns when the **first** chunk arrived. Zero if none ever did. */
-async function drain(body: ReadableStream<Uint8Array>): Promise<number> {
-  const reader = body.getReader()
-  let firstByteAt = 0
-  for (;;) {
-    const { done } = await reader.read()
-    if (done) break
-    if (firstByteAt === 0) firstByteAt = performance.now()
+  return {
+    bench: benchApp({
+      provider: scenario.provider,
+      upstream,
+      ...(scenario.dialect === undefined ? {} : { dialect: scenario.dialect }),
+      ...(scenario.fleet === undefined ? {} : { fleet: scenario.fleet }),
+    }),
+    open: upstream.open,
   }
-  return firstByteAt
-}
-
-/** N requests through C workers. Single-threaded, so the cursor needs no lock. */
-async function pool(
-  count: number,
-  concurrency: number,
-  run: (index: number) => Promise<void>,
-): Promise<void> {
-  let next = 0
-  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, count)) }, async () => {
-    for (let index = next++; index < count; index = next++) await run(index)
-  })
-  await Promise.all(workers)
-}
-
-function requestBody(stream: boolean, promptBytes: number): string {
-  return JSON.stringify({
-    model: MODEL,
-    max_tokens: 256,
-    messages: [{ role: "user", content: "x".repeat(Math.max(1, promptBytes)) }],
-    ...(stream ? { stream: true } : {}),
-  })
 }

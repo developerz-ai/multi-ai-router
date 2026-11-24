@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "budgets": {
     "overheadP99Ms": 5,
     "addedTtftP95Ms": 2
@@ -8,42 +8,132 @@
     {
       "scenario": "passthrough",
       "path": "passthrough",
-      "overheadMeanMs": 0.1580000000000001,
-      "overheadP50Ms": 0.2885170225043278,
-      "overheadP95Ms": 0.8408163265306123,
-      "overheadP99Ms": 1.25,
+      "overheadMeanMs": 0.7616590539999886,
+      "overheadP50Ms": 0.6638925000002018,
+      "overheadP95Ms": 1.3787974999999733,
+      "overheadP99Ms": 2.3370387099998196,
       "addedTtftP50Ms": null,
       "addedTtftP95Ms": null
     },
     {
       "scenario": "passthrough (stream)",
       "path": "passthrough",
-      "overheadMeanMs": 0.33100000000000024,
-      "overheadP50Ms": 0.34989503149055284,
-      "overheadP95Ms": 0.932904411764706,
-      "overheadP99Ms": 1.6363636363636362,
-      "addedTtftP50Ms": 0.03560849999939819,
-      "addedTtftP95Ms": 0.19362549999768813
+      "overheadMeanMs": 0.5669429724999795,
+      "overheadP50Ms": 0.4746034999989206,
+      "overheadP95Ms": 1.0201504499989822,
+      "overheadP99Ms": 1.4464370999967462,
+      "addedTtftP50Ms": 0.17319850000058068,
+      "addedTtftP95Ms": 0.3720608999991782
     },
     {
       "scenario": "translate",
       "path": "translate",
-      "overheadMeanMs": 0.08950000000000005,
-      "overheadP50Ms": 0.2704164413196322,
-      "overheadP95Ms": 0.6861313868613139,
-      "overheadP99Ms": 0.9781021897810218,
+      "overheadMeanMs": 0.8335684244999593,
+      "overheadP50Ms": 0.7353414999979577,
+      "overheadP95Ms": 1.3459122000012937,
+      "overheadP99Ms": 2.5855206900015033,
       "addedTtftP50Ms": null,
       "addedTtftP95Ms": null
     },
     {
       "scenario": "translate (stream)",
       "path": "translate",
-      "overheadMeanMs": 0.20400000000000015,
-      "overheadP50Ms": 0.30413625304136255,
-      "overheadP95Ms": 0.8809523809523809,
-      "overheadP99Ms": 1,
-      "addedTtftP50Ms": 0.11245950000011362,
-      "addedTtftP95Ms": 0.3741550499955335
+      "overheadMeanMs": 0.6450065775000021,
+      "overheadP50Ms": 0.5740470000037021,
+      "overheadP95Ms": 1.077751849999003,
+      "overheadP99Ms": 1.4194607999995783,
+      "addedTtftP50Ms": 0.21471349999956146,
+      "addedTtftP95Ms": 0.42494365000493417
+    },
+    {
+      "scenario": "passthrough 350 KB transcript",
+      "path": "passthrough",
+      "overheadMeanMs": 2.511461297499645,
+      "overheadP50Ms": 2.2922919999982696,
+      "overheadP95Ms": 4.153182400000877,
+      "overheadP99Ms": 7.1235818999942415,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
+    },
+    {
+      "scenario": "passthrough 350 KB transcript (stream, 200 chunks)",
+      "path": "passthrough",
+      "overheadMeanMs": 2.653779225000071,
+      "overheadP50Ms": 2.3889990000025136,
+      "overheadP95Ms": 3.7219487999944207,
+      "overheadP99Ms": 9.462763890006386,
+      "addedTtftP50Ms": 0.28980050000245683,
+      "addedTtftP95Ms": 0.4648096499986422
+    },
+    {
+      "scenario": "passthrough 1 MB transcript",
+      "path": "passthrough",
+      "overheadMeanMs": 4.236125307500097,
+      "overheadP50Ms": 3.831256499997835,
+      "overheadP95Ms": 6.665587749995751,
+      "overheadP99Ms": 9.346755889990149,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
+    },
+    {
+      "scenario": "passthrough 62 KB answer",
+      "path": "passthrough",
+      "overheadMeanMs": 1.3971876499997706,
+      "overheadP50Ms": 1.2400535000015225,
+      "overheadP95Ms": 2.060393549996297,
+      "overheadP99Ms": 4.680932709999033,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
+    },
+    {
+      "scenario": "translate 350 KB transcript",
+      "path": "translate",
+      "overheadMeanMs": 6.980803572500117,
+      "overheadP50Ms": 6.480517499992857,
+      "overheadP95Ms": 10.564932300009962,
+      "overheadP99Ms": 14.731428259996317,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
+    },
+    {
+      "scenario": "passthrough, 31 accounts in 11 pools",
+      "path": "passthrough",
+      "overheadMeanMs": 1.0006074490001993,
+      "overheadP50Ms": 0.8370185000094352,
+      "overheadP95Ms": 1.7284358499942754,
+      "overheadP99Ms": 4.48658101001245,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
+    },
+    {
+      "scenario": "translate to responses (stream)",
+      "path": "translate",
+      "overheadMeanMs": 0.8692410500000042,
+      "overheadP50Ms": 0.754844499999308,
+      "overheadP95Ms": 1.4342902499927728,
+      "overheadP99Ms": 1.7887363899991031,
+      "addedTtftP50Ms": 0.32003049999912037,
+      "addedTtftP95Ms": 0.5721904000078211
+    },
+    {
+      "scenario": "translate to responses 350 KB transcript",
+      "path": "translate",
+      "overheadMeanMs": 7.158824205000201,
+      "overheadP50Ms": 6.362299500004156,
+      "overheadP95Ms": 11.776948949996585,
+      "overheadP99Ms": 13.31655075999877,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
+    },
+    {
+      "scenario": "passthrough under 32 long streams, 31 accounts",
+      "path": "passthrough",
+      "overheadMeanMs": 0.9631512130000992,
+      "overheadP50Ms": 0.7764689999967231,
+      "overheadP95Ms": 1.3392656000003624,
+      "overheadP99Ms": 4.622487859993412,
+      "addedTtftP50Ms": null,
+      "addedTtftP95Ms": null
     }
   ]
 }

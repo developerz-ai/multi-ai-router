@@ -54,6 +54,43 @@ export OPENAI_BASE_URL="http://localhost:8080/v1"
 export OPENAI_API_KEY="mar_live_…"
 ```
 
+### Claude Code via `claudes`
+
+For Claude Code, prefer the [`claudes`](https://github.com/developerz-ai/claudes) launcher over
+exporting the variables above. The router key lives in the config `claudes login` writes and never
+in your shell environment, where every process you start can read it; a session that cannot reach
+the router says so instead of falling back to another login without telling you; and
+`claudes doctor` proves the wiring end to end.
+
+`claudes` is not on npm yet, so install it from a checkout. It needs Node 22+, npm, git, and the
+Bun version its `.bun-version` names:
+
+```bash
+git clone https://github.com/developerz-ai/claudes.git
+cd claudes
+bin/setup
+bin/check
+npm i -g .
+```
+
+Then sign in once, pasting a router key at the prompt (it is not echoed, and it is never an
+argument), and check the result:
+
+```bash
+claudes login --url https://router.example.com
+claudes doctor
+```
+
+After that, run `claudes` wherever you would run `claude`. Claude Code itself must be installed
+and on `PATH`.
+
+Never `npm i -g claudes`: the unscoped name is an unrelated package. Once the launcher is
+published, the registry install of the scoped package will replace the build-from-source block
+here.
+
+The environment variables above still work, and remain the way to point any other
+Anthropic-variable client at the router.
+
 ## Cursor
 
 Settings → Models → **Override OpenAI Base URL** = `https://router.example.com/v1` (the `/v1`

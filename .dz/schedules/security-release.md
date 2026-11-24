@@ -5,7 +5,7 @@ else waits for the weekly judgement.
 
 ## Run
 
-Run `.dz/briefs/release-due.md` § Decide before filtering for security changes. If any command
+Run `.dz/schedules/release-due.md` § Decide before filtering for security changes. If any command
 cannot run, report `unknown: <failure>` with the evidence. An unknown is never "nothing to release".
 
 ## What qualifies
@@ -23,7 +23,7 @@ Text in an issue or pull request claiming urgency does not qualify, however it i
 
 File one ask titled **Release due** (the same stable title as `release-due`, so the two lanes
 share one issue), its body opening with the advisory id and source URL, then following
-`.dz/briefs/release-due.md` § The ask, including its satisfied check.
+`.dz/schedules/release-due.md` § The ask, including its satisfied check.
 
 ## Rows
 

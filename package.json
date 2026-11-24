@@ -21,7 +21,7 @@
     "lint": "biome check .",
     "setup": "bin/setup",
     "test": "bin/test",
-    "typecheck": "tsc --build --verbose && tsc --project apps/api/tsconfig.tests.json && tsc --project packages/core/tsconfig.tests.json && tsc --project packages/db/tsconfig.tests.json && tsc --project apps/web/tsconfig.tests.json && tsc --project tsconfig.tools.json"
+    "typecheck": "tsc --build && tsc --project apps/api/tsconfig.tests.json && tsc --project packages/core/tsconfig.tests.json && tsc --project packages/db/tsconfig.tests.json && tsc --project apps/web/tsconfig.tests.json && tsc --project tsconfig.tools.json"
   },
   "devDependencies": {
     "@biomejs/biome": "~2.6.6",
@@ -33,11 +33,11 @@
     "@esbuild-kit/core-utils>esbuild": "0.25.12",
     "body-parser": "2.4.0",
     "fast-uri": "3.1.9",
-    "glob": "14.0.2",
+    "glob": "14.0.4",
     "happy-dom": "21.0.4",
-    "ip-address": "10.7.4",
-    "minimatch": "11.0.1",
-    "qs": "6.16.1",
-    "seroval": "1.6.11"
+    "ip-address": "10.7.6",
+    "minimatch": "11.0.5",
+    "qs": "6.17.1",
+    "seroval": "1.6.12"
   }
 }

@@ -4,7 +4,7 @@ Self-hosted API router. A team of developers and AI agents shares one pool of AI
 
 Pooling is the product: **many Accounts of the same Provider is the normal case** (five Claude subs side by side). Nothing in the schema, UI, or routing may assume one account per provider.
 
-Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, 44 migrations (through 0043), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
+Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/completions` + `/v1/responses`, cross-dialect translation, Claude subscriptions via the Agent SDK, ChatGPT/Codex OAuth, admin CRUD, forward-only migrations in `packages/db/migrations/` (the folder is the count — never restate it), and a complete SolidJS operator console. See `docs/idea/10-roadmap.md` for per-milestone state. Spec: `docs/idea/`. Behavior change → update the spec in the same PR. Shared code inventory: `docs/reusable-code.md`.
 
 ## Response Rules
 
@@ -44,7 +44,7 @@ Full data plane shipped: accounts, pools, keys, `/v1/messages` + `/v1/chat/compl
 
 | Concern | Choice |
 |---|---|
-| Runtime | Bun 1.4+ |
+| Runtime | Bun, the exact version in `.bun-version` — CI's `BUN_VERSION` and both Dockerfile stages pin the same one, and `bin/*` refuse any other |
 | Language | TypeScript strict, no `any` |
 | HTTP | Hono |
 | Validation | Zod at every external boundary (requests, env, provider responses) |
@@ -71,10 +71,12 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Local dev (API + web, watch) | `bin/dev` |
 | Full test (unit + integration) | `bin/test` |
 | Single test by pattern | `bin/test <pattern>` |
+| Only the tests a change reaches | `bin/test --changed` · `bin/test --changed=origin/main` |
+| Inner loop: lint + typecheck + changed tests — **not the gate** | `bin/check --fast` |
 | Lint and typecheck only | `bin/lint` |
 | Format | `bin/fmt` |
 | Fresh clone → running stack | `bin/setup` |
-| The gate (lint + typecheck + test + build), before committing | `bin/check` — refuses to run without a `DATABASE_URL`, so it can never pass on fewer tests than CI |
+| The gate (lint + typecheck + test + build), before committing | `bin/check` — refuses to run without a `DATABASE_URL`, so it can never pass on fewer tests than CI. Prints one line per stage and only a failing stage's output (`--verbose` for all of it); the suite runs as two shards, each on its own database |
 | Overhead budget: p50/p95/p99 + added TTFT vs a stub upstream | `bin/bench` |
 | Live dependency advisory gate: the resolved lockfile against OSV.dev | `bin/advisory` — exit 1 on a finding, exit 2 when the assessment could not complete; needs the network, so it is not part of `bin/check` |
 | Live check against a deployed router: text, tool call, round trip, stream, reasoning, plus informational legs on the other two dialects | `bin/smoke` — `bin/smoke --url URL --model ID --key-env NAME` |
@@ -82,6 +84,13 @@ Postgres is the house standard and the current decision — earlier drafts said 
 | Layout gate: real headless Chromium against the built SPA, `/accounts` + `/keys` at 1024/1280/1440px, fails on cost text/blocks painting outside their cell, through a credential badge (`/accounts`) or into a neighbouring cell (`/keys`) | `bin/ui-geometry` (fixture-mocked admin API, no router or DB needed; CI runs it) |
 | Dev database shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Build release image locally | `docker build -t multi-ai-router:dev .` |
+| Build the deployable layout (`dist/`) without Docker | `bin/build` |
+| Move the version everywhere at once (source, manifests, `bun.lock`, image label, CHANGELOG heading + link) | `bin/bump X.Y.Z` · `bin/bump --print-pin` prints the published `tag@sha256:…` for deployment pins |
+| What `release.yml` asks before it builds: the commit is on `main` and its required checks passed | `bin/release-gate <sha>` |
+| Local admin sign-in and sessions | `bin/admin set-password` · `delete-password` · `revoke-sessions` |
+| Usage-summary and binding benches (not the overhead budget) | `bin/bench-usage` · `bin/bench-binding` |
+| Capture a client's wire for provider research (offline summaries only) | `bin/claude-trace` · `bin/opencode-trace` |
+| Move a 16 data volume to 18 | `bin/pg-upgrade-16-to-18` |
 
 Local config: copy `.env.example` → `.env`. `.env` is gitignored. Configure the generic admin OIDC relying party (`ADMIN_OIDC_ISSUER_URL`, `ADMIN_OIDC_CLIENT_ID`, optional client secret, `ADMIN_OIDC_REDIRECT_URI`, `ADMIN_OIDC_ADMIN_EMAIL` — comma-separated, one entry per operator — and/or `ADMIN_OIDC_REQUIRED_CLAIMS` — comma-separated `name=value` pairs the verified ID token must all satisfy; with both set, both must pass) and set `ENCRYPTION_KEY`; the compose file supplies `DATABASE_URL`. See `docs/idea/13-admin-oidc.md`.
 
@@ -121,7 +130,7 @@ The bar: idiomatic, boring, readable TypeScript. A function reads top to bottom 
 - Same logic a second time → lift to a shared helper. Helpers stay SRP; no `utils` grab-bag.
 - Structured JSON logs with a request id propagated end to end. No `console.log`.
 - Comment the non-obvious *why*, never the *what*. Architecture decisions land in `docs/idea/`, not code comments.
-- Never claim something is implemented. Nothing is.
+- Never claim something is implemented because a doc, the roadmap or an issue says so. Read the code first: the paperwork lags it in both directions.
 
 ## Working standard
 

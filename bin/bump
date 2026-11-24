@@ -1,0 +1,109 @@
+#!/bin/sh
+# Move the tree to a new version: every file that restates it, in one step.
+#
+#   bin/bump 2.77.0             rewrite the version everywhere, then prove the tree agrees
+#   bin/bump --print-pin        the published image pin for the tree's version, `tag@sha256:…`
+#   bin/bump --print-pin 2.77.0 …or for another released version
+#
+# A release restates one number in eight places, and a missed one is a red gate after the tag is
+# already pushed: packages/core/src/version.ts (the source — /healthz, router_build_info, the boot
+# log and the console footer read it), the root and four workspace package.json files, bun.lock's
+# copy of those workspace versions, the Dockerfile's `org.opencontainers.image.version` label, and
+# CHANGELOG.md's section heading plus its footer link. This writes all of them and then runs
+# `bin/verify-version` — the same check release.yml runs — so "bumped" and "consistent" are one
+# command. It does not write the changelog's prose, commit, or tag: those stay deliberate.
+#
+# CHANGELOG.md: whatever sits under `## [Unreleased]` becomes the new section (the heading
+# `## [X.Y.Z] — YYYY-MM-DD` is inserted directly below it), and the footer link is appended after
+# the last one. Running it twice for the same version changes nothing.
+#
+# --print-pin is the other half of a release: every deployment repository pins the image by tag AND
+# digest, and the digest only exists once release.yml has published. It asks the registry (needs
+# docker and network) and prints the one line a pin PR needs.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+die() { printf '\033[0;31m✘\033[0m  %s\n' "$*" >&2; exit 1; }
+ok() { printf '\033[0;32m✔\033[0m  %s\n' "$*"; }
+
+source_file="packages/core/src/version.ts"
+image="ghcr.io/developerz-ai/multi-ai-router"
+link_base="https://github.com/developerz-ai/multi-ai-router/releases/tag/v"
+
+current=$(sed -n 's/^export const VERSION = "\([^"]*\)".*/\1/p' "$source_file")
+[ -n "$current" ] || die "no VERSION constant found in $source_file"
+
+if [ "${1:-}" = "--print-pin" ]; then
+  version="${2:-$current}"
+  version="${version#v}"
+  command -v docker >/dev/null 2>&1 || die "--print-pin asks the registry through docker, and docker is not in PATH"
+  # The top-level digest is the manifest list's: the one pin that resolves on amd64 and arm64 alike.
+  digest=$(docker buildx imagetools inspect "$image:$version" 2>/dev/null | sed -n 's/^Digest:[[:space:]]*//p' | head -n 1)
+  [ -n "$digest" ] || die "$image:$version is not in the registry (yet) — release.yml publishes it after the tag's gate passes"
+  printf '%s:%s@%s\n' "$image" "$version" "$digest"
+  exit 0
+fi
+
+next="${1:-}"
+next="${next#v}"
+[ -n "$next" ] || { sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 64; }
+[ "$#" -eq 1 ] || die "one version, nothing else: bin/bump X.Y.Z"
+
+# The same semver bin/verify-version accepts: no build metadata, no leading zeros.
+printf '%s\n' "$next" | grep -Eq \
+  '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$' ||
+  die "not a semver this project can tag: $next"
+
+command -v jq >/dev/null 2>&1 || die "jq is required (bin/verify-version needs it too)"
+
+# In place, without sed -i: its flag differs between GNU and BSD sed.
+rewrite() {
+  file="$1"
+  shift
+  tmp="$file.bump.$$"
+  sed "$@" "$file" >"$tmp" && cat "$tmp" >"$file" && rm -f "$tmp"
+}
+
+# Escaped for use inside a sed pattern: a version's dots must not match any character.
+current_pattern=$(printf '%s' "$current" | sed 's/[.]/\\./g')
+
+rewrite "$source_file" "s/^export const VERSION = \"$current_pattern\"/export const VERSION = \"$next\"/"
+
+manifests="package.json"
+for pattern in $(jq -r '.workspaces // [] | .[]' package.json); do
+  for member in ${pattern%\*}*/; do
+    [ -f "${member}package.json" ] && manifests="$manifests ${member}package.json"
+  done
+done
+for manifest in $manifests; do
+  # Only the manifest's own top-level `"version"`: two spaces in, never a dependency's.
+  rewrite "$manifest" "s/^  \"version\": \"$current_pattern\",\$/  \"version\": \"$next\",/"
+done
+
+# bun.lock restates each workspace's version. `--frozen-lockfile` tolerates a stale one, which is
+# how it went unnoticed, but a lockfile that names the previous release is a diff waiting to happen
+# on the next real install. Workspace entries are the only six-space `"version"` lines in the file.
+[ ! -f bun.lock ] || rewrite bun.lock "s/^      \"version\": \"[^\"]*\",\$/      \"version\": \"$next\",/"
+
+rewrite Dockerfile "s/org\\.opencontainers\\.image\\.version=\"$current_pattern\"/org.opencontainers.image.version=\"$next\"/"
+
+changelog="CHANGELOG.md"
+if ! grep -q "^## \[$next\]" "$changelog"; then
+  grep -q '^## \[Unreleased\]$' "$changelog" || die "$changelog has no '## [Unreleased]' heading to release from"
+  today=$(date -u +%Y-%m-%d)
+  tmp="$changelog.bump.$$"
+  awk -v heading="## [$next] — $today" '
+    { print }
+    /^## \[Unreleased\]$/ && !done { print ""; print heading; done = 1 }
+  ' "$changelog" >"$tmp" && cat "$tmp" >"$changelog" && rm -f "$tmp"
+fi
+link="[$next]: $link_base$next"
+grep -qxF "$link" "$changelog" || printf '%s\n' "$link" >>"$changelog"
+
+ok "$current → $next in $source_file, $(echo "$manifests" | wc -w | tr -d ' ') manifests, bun.lock, Dockerfile, $changelog"
+
+# The tag for this version cannot exist yet, and verify-version exempts the version being released
+# from its tags-on-origin check; offline, so a bump works on a train.
+VERIFY_VERSION_OFFLINE=1 bin/verify-version "v$next" || die "the tree does not agree on $next — see the line above"
+ok "bin/verify-version v$next agrees. Next: write the $changelog entries under ## [$next], bin/check, PR, then tag v$next on the merged commit."

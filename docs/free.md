@@ -1,7 +1,7 @@
 # Free models
 
 What costs nothing, what each one needs from you, and how to use it. Read off each vendor's own page on
-**2026-11-23** unless it says otherwise; `.dz/briefs/free-providers.md` re-checks it daily.
+**2026-11-23** unless it says otherwise; `.dz/schedules/free-providers.md` re-checks it daily.
 
 ## Add one in a minute
 

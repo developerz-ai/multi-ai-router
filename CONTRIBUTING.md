@@ -28,11 +28,14 @@ Other commands you'll use often:
 | Task | Command |
 |---|---|
 | Single test by pattern | `bin/test <pattern>` |
+| Only the tests your change reaches | `bin/test --changed` · `bin/test --changed=origin/main` |
+| Inner loop: lint + typecheck + changed tests (not the gate) | `bin/check --fast` |
 | Lint only | `bin/lint` |
 | Format | `bin/fmt` |
 | Dev DB shell / migrate / reset | `bin/db psql` · `bin/db migrate` · `bin/db reset` |
 | Overhead budget (p50/p95/p99 + TTFT) | `bin/bench` |
 | Version agrees everywhere, and with a tag | `bin/verify-version [vX.Y.Z]` |
+| Move the version everywhere at once | `bin/bump X.Y.Z` · `bin/bump --print-pin` for the published image pin |
 
 ## Workflow
 

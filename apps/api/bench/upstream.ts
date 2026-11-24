@@ -1,4 +1,5 @@
 import type { Dialect } from "@multi-ai-router/core"
+import { responsesBody, responsesStreamChunks } from "./upstream-responses"
 
 /**
  * The stub upstream the bench measures against: in-process, no socket, no provider.
@@ -7,8 +8,9 @@ import type { Dialect } from "@multi-ai-router/core"
  * HTTP parse, and the scheduler's opinion about both to every sample — noise measured in the same
  * milliseconds as the budget being defended. What is left here is the router and nothing else.
  *
- * It answers in two dialects because the router has two non-SDK egress paths and they cost
- * different amounts: `anthropic` for byte passthrough, `openai-chat` for translation. The Agent-SDK
+ * It answers in three dialects because the router's non-SDK egress paths cost different amounts:
+ * `anthropic` for byte passthrough, `openai-chat` and `openai-responses` for the two translations
+ * (the second is a ChatGPT/Codex account's wire, and prod's most expensive path). The Agent-SDK
  * path is deliberately absent — it spawns a subprocess per request and is the labeled exception to
  * the overhead budget (CLAUDE.md non-negotiable 8), so benching it here would only dilute the
  * number that matters.
@@ -24,6 +26,11 @@ import type { Dialect } from "@multi-ai-router/core"
 export const TRIP_HEADER = "x-bench-trip"
 
 export interface Trip {
+  /**
+   * Monotonic reading when the router called the upstream. With `upstreamLastByteAt` it bounds the
+   * time this request spent *waiting*, which is what a per-request overhead subtracts.
+   */
+  upstreamEnteredAt: number
   /** Monotonic reading when the stub handed the router its first byte. */
   upstreamFirstByteAt: number
   /** Monotonic reading when the stub's last byte went out. */
@@ -33,8 +40,8 @@ export interface Trip {
 }
 
 export interface StubOptions {
-  /** What the account speaks. `anthropic` is passthrough; `openai-chat` is translated. */
-  readonly dialect: Extract<Dialect, "anthropic" | "openai-chat">
+  /** What the account speaks. `anthropic` is passthrough; the other two are translated. */
+  readonly dialect: Extract<Dialect, "anthropic" | "openai-chat" | "openai-responses">
   readonly stream: boolean
   /** Chunks after the first. Long enough that a buffering relay is unmistakable, not subtle. */
   readonly chunks?: number
@@ -49,6 +56,12 @@ export interface StubOptions {
   readonly firstByteDelayMs?: number
   /** Pads a non-streamed answer's text to about this many bytes of escaped prose. */
   readonly answerBytes?: number
+  /**
+   * Answer a request whose body asks to stream with a stream of `backgroundChunks`, whatever
+   * `stream` says. Lets long background streams and short measured requests share one app.
+   */
+  readonly streamOnRequest?: boolean
+  readonly backgroundChunks?: number
 }
 
 export interface StubUpstream {
@@ -70,7 +83,12 @@ export function stubUpstream(options: StubOptions): StubUpstream {
 
   return {
     open(id) {
-      const trip: Trip = { upstreamFirstByteAt: 0, upstreamLastByteAt: 0, clientFirstByteAt: 0 }
+      const trip: Trip = {
+        upstreamEnteredAt: 0,
+        upstreamFirstByteAt: 0,
+        upstreamLastByteAt: 0,
+        clientFirstByteAt: 0,
+      }
       trips.set(id, trip)
       return trip
     },
@@ -79,6 +97,12 @@ export function stubUpstream(options: StubOptions): StubUpstream {
       const id = request.headers.get(TRIP_HEADER)
       const trip = id === null ? undefined : trips.get(id)
       if (trip !== undefined && id !== null) trips.delete(id)
+      if (trip !== undefined) trip.upstreamEnteredAt = performance.now()
+
+      if (options.streamOnRequest === true && !options.stream && (await asksToStream(request))) {
+        const chunks = streamChunks(options.dialect, options.backgroundChunks ?? chunkCount)
+        return sse(chunks, delayMs, gapMs, undefined)
+      }
 
       if (!options.stream) {
         await sleep(delayMs)
@@ -95,6 +119,12 @@ export function stubUpstream(options: StubOptions): StubUpstream {
       return sse(streamChunks(options.dialect, chunkCount), delayMs, gapMs, trip)
     },
   }
+}
+
+/** Whether the forwarded body sets `stream: true`. Read only when a scenario mixes both shapes. */
+async function asksToStream(request: Request): Promise<boolean> {
+  const text = await request.clone().text()
+  return /"stream"\s*:\s*true/.test(text)
 }
 
 function json(payload: unknown): Response {
@@ -149,6 +179,9 @@ function answerText(bytes: number | undefined): string {
 
 function body(dialect: StubOptions["dialect"], answerBytes?: number): unknown {
   const text = answerText(answerBytes)
+  if (dialect === "openai-responses") {
+    return responsesBody(text, { input_tokens: TOKENS_IN, output_tokens: TOKENS_OUT })
+  }
   if (dialect === "anthropic") {
     return {
       id: "msg_bench",
@@ -170,6 +203,9 @@ function body(dialect: StubOptions["dialect"], answerBytes?: number): unknown {
 }
 
 function streamChunks(dialect: StubOptions["dialect"], count: number): readonly string[] {
+  if (dialect === "openai-responses") {
+    return responsesStreamChunks(count, { input_tokens: TOKENS_IN, output_tokens: TOKENS_OUT })
+  }
   const deltas = Array.from({ length: Math.max(1, count) }, (_unused, index) =>
     dialect === "anthropic" ? anthropicDelta(index) : openAiDelta(index),
   )

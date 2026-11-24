@@ -71,14 +71,62 @@ COPY apps/web/package.json apps/web/
 COPY packages/core/package.json packages/core/
 COPY packages/db/package.json packages/db/
 
-# `--frozen-lockfile` makes the image build fail rather than silently resolving
-# a different tree than CI tested. Same flag CI uses.
+# The router's own `claude` resolver, ahead of the rest of the source, so the binary can be staged
+# in the install layer below. Exactly its import closure (node builtins only): a fourth import that
+# is not copied here fails the build at the staging step, it does not stage a different binary.
+COPY apps/api/src/providers/claude-sdk/print-cli-path.ts \
+     apps/api/src/providers/claude-sdk/cli-probe.ts \
+     apps/api/src/providers/claude-sdk/resolve-cli.ts \
+     apps/api/src/providers/claude-sdk/
+
+# ---- install, and the `claude` binary ----
+# One layer, three jobs, in an order that matters.
 #
-# `--ignore-scripts` is a security floor, not an optimisation: a postinstall in
-# any transitive dependency runs with the build's full context. Nothing we ship
-# needs one — the `claude` binary arrives as a prebuilt platform package, not as
-# a postinstall download (see the staging step below).
-RUN bun install --frozen-lockfile --ignore-scripts
+# INSTALL. `--frozen-lockfile` makes the image build fail rather than silently resolving a different
+# tree than CI tested. Same flag CI uses. `--ignore-scripts` is a security floor, not an
+# optimisation: a postinstall in any transitive dependency runs with the build's full context.
+# Nothing we ship needs one — the `claude` binary arrives as a prebuilt platform package, not as a
+# postinstall download.
+#
+# STAGE. Claude subscription Accounts go through the Claude Agent SDK, which SPAWNS A NATIVE
+# `claude` BINARY as a subprocess (spec §11). Without it in the image, every Claude subscription
+# account is dead on arrival — API-key accounts are unaffected. The binary is a prebuilt optional
+# dependency of `@anthropic-ai/claude-agent-sdk` (`…-sdk-<platform>-<arch>`), so it is already in
+# the install tree at a lockfile-pinned version that cannot skew from the SDK calling it. It is
+# resolved by the router's OWN ladder (`providers/claude-sdk/resolve-cli.ts`), run as source so
+# module resolution anchors inside apps/api where the SDK's install tree is visible. Hard-coding the
+# store path here would drift from the resolver the instant bun changes its layout — silently, which
+# is the whole failure mode the ladder exists to expose. No binary, no image.
+#
+# DELETE THE COPIES. bun resolves the SDK's platform package for every libc it might need, so the
+# tree holds a ~260 MB copy of the same executable per variant. Nothing after this step reads them
+# (the bundler does not, and the runtime stage takes no node_modules at all), and leaving them in a
+# layer of their own cost the layer cache ~460 MB per lockfile change plus ~160 MB per source change
+# — enough to push the 10 GB Actions cache over quota and evict the layers a release needs.
+# Deleting them in the SAME layer that installed them is what keeps them out of every cached blob.
+#
+# THE SIZE IS A HEURISTIC, SO IT IS ASSERTED RATHER THAN TRUSTED. A bare `find -delete` succeeds
+# when it matches nothing: the day the SDK's binary drops under 100 MB the cache quietly grows back
+# and every layer downstream still builds green. Zero matches is a broken assumption, not a clean
+# tree: fail here and make someone re-measure the threshold. The second sweep proves the deletion
+# actually happened, which `find`'s exit status inside a command substitution would not report.
+RUN set -eu; \
+    bun install --frozen-lockfile --ignore-scripts; \
+    mkdir -p /opt/claude-cli; \
+    cp "$(bun apps/api/src/providers/claude-sdk/print-cli-path.ts)" /opt/claude-cli/claude; \
+    chmod 0755 /opt/claude-cli/claude; \
+    pruned=$(find node_modules -type f -name claude -size +100M -print -delete | wc -l); \
+    [ "$pruned" -gt 0 ] || { \
+      echo "no claude binary over 100M in node_modules — the size heuristic no longer" >&2; \
+      echo "matches the SDK's platform package, and the layer cache just grew by its copies." >&2; \
+      echo "Re-measure with: du -h \$(find node_modules -type f -name claude)" >&2; \
+      exit 1; \
+    }; \
+    [ -z "$(find node_modules -type f -name claude -size +100M)" ] || { \
+      echo "claude binaries over 100M survived the prune" >&2; \
+      exit 1; \
+    }; \
+    echo "staged /opt/claude-cli/claude; pruned $pruned copies from node_modules"
 
 # Now the actual sources. `.dockerignore` keeps node_modules, dist, .git and any
 # local *.db out of the context so this COPY is small and cache-stable.
@@ -89,67 +137,12 @@ COPY . .
 #   dist/web/          — the Vite-built SPA, served as static assets by that
 #                        same Hono process (same origin: no CORS, cookie auth
 #                        just works — see spec §17b)
+#
+# The bundles are complete: every dependency is inlined, so the runtime stage takes `dist/` and NO
+# node_modules. That is asserted by bin/build itself (a bare specifier left in a bundle fails it) rather
+# than assumed, because the runtime also turns bun's auto-install off — an unresolved import there
+# is an error, never a download.
 RUN bun run build
-
-# ---- the `claude` binary ----
-# Claude subscription Accounts go through the Claude Agent SDK, which SPAWNS A
-# NATIVE `claude` BINARY as a subprocess (spec §11). Without it in the image,
-# every Claude subscription account is dead on arrival — API-key accounts are
-# unaffected.
-#
-# The binary is a prebuilt optional dependency of `@anthropic-ai/claude-agent-sdk`
-# (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`), so it is already in the
-# install tree at a lockfile-pinned version that cannot skew from the SDK calling
-# it. Staging it here — rather than fetching `@anthropic-ai/claude-code` in the
-# runtime stage — is the difference between one pinned copy and a second,
-# separately versioned copy of the same executable.
-#
-# Resolved by the router's OWN ladder (`providers/claude-sdk/resolve-cli.ts`),
-# run as source so module resolution anchors inside apps/api where the SDK's
-# install tree is visible. Hard-coding the store path here would drift from the
-# resolver the instant bun changes its layout — silently, which is the whole
-# failure mode the ladder exists to expose. No binary, no image: the build fails
-# here rather than at the first Claude subscription request.
-RUN mkdir -p /opt/claude-cli \
- && cp "$(bun apps/api/src/providers/claude-sdk/print-cli-path.ts)" /opt/claude-cli/claude \
- && chmod 0755 /opt/claude-cli/claude
-
-# Prune the install down to production-only, so the runtime stage copies a
-# node_modules without Vite, Biome, type packages, etc. Anything the bundler
-# already inlined is gone; what survives is native/externalised deps.
-RUN bun install --frozen-lockfile --production --ignore-scripts
-
-# …with one exception the prune cannot make: bun resolves the SDK's platform
-# package for every libc it might need, so the tree holds a ~260 MB copy of the
-# same executable per variant — half a gigabyte of image for a file we already
-# staged on PATH and hand to the SDK explicitly (`pathToClaudeCodeExecutable`).
-# Matched by size, not by store path, so a change in bun's install layout can
-# neither break this line nor silently reinflate the image.
-#
-# THE SIZE IS A HEURISTIC, SO IT IS ASSERTED RATHER THAN TRUSTED. A bare
-# `find -delete` succeeds when it matches nothing: the day the SDK's binary drops
-# under 100 MB — a smaller build, a compressed payload, a split package — the
-# image quietly grows back by half a gigabyte and every layer downstream still
-# builds green. Nothing else in the pipeline weighs the result, so this is the
-# only place that failure can be caught. Zero matches is a broken assumption, not
-# a clean tree: fail here and make someone re-measure the threshold.
-#
-# The second sweep is not redundant. The first proves the heuristic still selects
-# something; this one proves the deletion actually happened, which `find`'s exit
-# status inside a command substitution would not have reported.
-RUN set -eu; \
-    pruned=$(find node_modules -type f -name claude -size +100M -print -delete | wc -l); \
-    [ "$pruned" -gt 0 ] || { \
-      echo "no claude binary over 100M in node_modules — the size heuristic no longer" >&2; \
-      echo "matches the SDK's platform package, and ~500M of duplicates just shipped." >&2; \
-      echo "Re-measure with: du -h \$(find node_modules -type f -name claude)" >&2; \
-      exit 1; \
-    }; \
-    [ -z "$(find node_modules -type f -name claude -size +100M)" ] || { \
-      echo "claude binaries over 100M survived the prune" >&2; \
-      exit 1; \
-    }; \
-    echo "pruned $pruned duplicate claude binaries from node_modules"
 
 # ---- runtime ----
 # -slim: Debian without the build toolchain. Not distroless — the `claude` CLI
@@ -271,10 +264,23 @@ VOLUME ["/data/claude"]
 # Ownership matters even for read-only files: the process runs as `bun`, and a
 # root-owned tree is a silent trap the first time something wants to write.
 COPY --from=builder --chown=bun:bun /src/dist ./dist
-COPY --from=builder --chown=bun:bun /src/node_modules ./node_modules
 COPY --from=builder --chown=bun:bun /src/package.json ./package.json
 
-# Prove fast-profile availability in the shipped, pruned layout. Unsupported arm64 stays SDK-only.
+# NO node_modules, on purpose. The bundles in dist/ inline every dependency (asserted in the
+# builder), and the tree that used to be copied here was never the "production-only" one its comment
+# claimed: `bun install --production` over an existing install removes nothing, so every release up
+# to 2.76.1 shipped 636 MB of Biome, TypeScript, Playwright, Vite and esbuild beside the router.
+#
+# With no node_modules bun would AUTO-INSTALL an unresolved bare import from the registry at run
+# time — a network fetch of unpinned code into a container holding every upstream credential. Turned
+# off for every `bun` started in /app (the server, `dist/api/admin.js`, the healthcheck), so a
+# missing module is an error. Both halves are asserted: the directory is absent, and an import of a
+# package that exists on the registry fails instead of downloading.
+RUN printf '[install]\nauto = "disable"\n' > bunfig.toml \
+ && test ! -e node_modules \
+ && ! bun -e 'await import("is-number")' 2>/dev/null
+
+# Prove fast-profile availability in the shipped layout. Unsupported arm64 stays SDK-only.
 RUN bun dist/libexec/claude-profile-check.js
 
 # The default listen port. Overridable via `PORT` (spec §15); EXPOSE is metadata

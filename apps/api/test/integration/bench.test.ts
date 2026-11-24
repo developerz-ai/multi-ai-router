@@ -57,13 +57,20 @@ describe("the overhead bench", () => {
     const outcome = verdict(results, UNBOUNDED)
 
     expect(outcome.rows).toHaveLength(SCENARIOS.length)
-    for (const row of outcome.rows) {
+    for (const [index, row] of outcome.rows.entries()) {
+      const result = results[index] ?? notReached()
       expect(row.failures).toBe(0)
-      // One `UsageRecord` per request, and every one of them reached the histogram.
-      expect(row.samples).toBe(OPTIONS.requests)
+      // Every measured request has an overhead of its own, unrounded…
+      expect(row.samples).toBe(result.requests)
+      expect(result.overheadMs.every((value) => Number.isFinite(value) && value >= 0)).toBe(true)
       expect(row.overheadP99Ms).not.toBeNaN()
-      expect(row.overheadMeanMs).toBeGreaterThanOrEqual(0)
+      expect(row.overheadMeanMs).toBeGreaterThan(0)
+      // …and one `UsageRecord` each reached the histogram too. At least: a scenario's background
+      // streams land on the same series, and they are load, not samples.
+      expect(row.seriesSamples).toBeGreaterThanOrEqual(result.requests)
     }
+    // A heavy scenario runs a share of the requests; none runs zero.
+    expect(results.every((result) => result.requests >= 1)).toBe(true)
     expect(outcome.violations).toEqual([])
   }, 30_000)
 
@@ -85,7 +92,7 @@ describe("the overhead bench", () => {
     expect(streamed).not.toHaveLength(0)
     for (const result of results) {
       expect(result.buffered).toBe(0)
-      expect(result.addedTtftMs).toHaveLength(OPTIONS.requests)
+      expect(result.addedTtftMs).toHaveLength(result.requests)
     }
   }, 30_000)
 
@@ -114,6 +121,9 @@ describe("the verdict", () => {
     'router_overhead_seconds_count{ingress_dialect="anthropic",path="passthrough"} 10',
   ].join("\n")
 
+  /** Ten requests that each cost a fifth of a millisecond: well inside any budget. */
+  const MEASURED = Array.from({ length: 10 }, () => 0.2)
+
   /** `sampleQuantile` reads its input as already sorted, which is what `runScenario` hands it. */
   const ascending = (count: number, value: number, tail: number, tailValue: number): number[] => [
     ...Array.from({ length: count }, () => value),
@@ -122,7 +132,17 @@ describe("the verdict", () => {
 
   test("names a buffered relay rather than letting it read as a slow percentile", () => {
     const outcome = verdict(
-      [{ scenario, requests: 10, failures: 0, exposition, addedTtftMs: [], buffered: 3 }],
+      [
+        {
+          scenario,
+          requests: 10,
+          failures: 0,
+          exposition,
+          overheadMs: MEASURED,
+          addedTtftMs: [],
+          buffered: 3,
+        },
+      ],
       BUDGETS,
     )
 
@@ -134,7 +154,17 @@ describe("the verdict", () => {
 
   test("refuses to pass a run whose requests failed, however fast they failed", () => {
     const outcome = verdict(
-      [{ scenario, requests: 10, failures: 2, exposition, addedTtftMs: [], buffered: 0 }],
+      [
+        {
+          scenario,
+          requests: 10,
+          failures: 2,
+          exposition,
+          overheadMs: MEASURED,
+          addedTtftMs: [],
+          buffered: 0,
+        },
+      ],
       BUDGETS,
     )
 
@@ -143,7 +173,17 @@ describe("the verdict", () => {
 
   test("a scenario that recorded nothing fails — an empty series is not a fast one", () => {
     const outcome = verdict(
-      [{ scenario, requests: 10, failures: 0, exposition: "", addedTtftMs: [], buffered: 0 }],
+      [
+        {
+          scenario,
+          requests: 10,
+          failures: 0,
+          exposition: "",
+          overheadMs: MEASURED,
+          addedTtftMs: [],
+          buffered: 0,
+        },
+      ],
       BUDGETS,
     )
 
@@ -165,6 +205,7 @@ describe("the verdict", () => {
           requests: 10,
           failures: 0,
           exposition,
+          overheadMs: MEASURED,
           addedTtftMs: ascending(10, 15, 0, 15),
           buffered: 0,
         },
@@ -191,6 +232,7 @@ describe("the verdict", () => {
           requests: 200,
           failures: 0,
           exposition,
+          overheadMs: MEASURED,
           addedTtftMs: ascending(197, 0.1, 3, 50),
           buffered: 0,
         },
@@ -205,16 +247,105 @@ describe("the verdict", () => {
 
   test("a streamed scenario that timed no first byte fails rather than reporting a blank as a pass", () => {
     const outcome = verdict(
-      [{ scenario: streamed, requests: 10, failures: 0, exposition, addedTtftMs: [], buffered: 0 }],
+      [
+        {
+          scenario: streamed,
+          requests: 10,
+          failures: 0,
+          exposition,
+          overheadMs: MEASURED,
+          addedTtftMs: [],
+          buffered: 0,
+        },
+      ],
       BUDGETS,
     )
 
     expect(outcome.violations[0]).toContain("no time-to-first-token was measured")
   })
 
+  /**
+   * The reason the verdict stopped reading the histogram. This exposition is what the series holds
+   * for a scenario whose every request the router rounded to 0 ms — 0.495 ms at p99 by
+   * interpolation, the same number every fast scenario printed for months — while the requests
+   * themselves took nine. The measurement is what fails it.
+   */
+  test("fails a p99 the bucketed series cannot see", () => {
+    const outcome = verdict(
+      [
+        {
+          scenario,
+          requests: 100,
+          failures: 0,
+          exposition,
+          overheadMs: ascending(98, 0.3, 2, 9),
+          addedTtftMs: [],
+          buffered: 0,
+        },
+      ],
+      BUDGETS,
+    )
+
+    expect(outcome.rows[0]?.overheadP99Ms).toBeGreaterThan(BUDGETS.overheadP99Ms)
+    expect(outcome.rows[0]?.seriesMeanMs).toBe(2)
+    expect(outcome.violations).toHaveLength(1)
+    expect(outcome.violations[0]).toContain("p99 overhead")
+    expect(outcome.violations[0]).toContain("5 ms budget")
+  })
+
+  test("reports the measurement unrounded: a third of a millisecond is not half a bucket", () => {
+    const outcome = verdict(
+      [
+        {
+          scenario,
+          requests: 10,
+          failures: 0,
+          exposition,
+          overheadMs: Array.from({ length: 10 }, () => 0.33),
+          addedTtftMs: [],
+          buffered: 0,
+        },
+      ],
+      BUDGETS,
+    )
+
+    expect(outcome.rows[0]?.overheadP50Ms).toBeCloseTo(0.33, 10)
+    expect(outcome.rows[0]?.overheadP99Ms).toBeCloseTo(0.33, 10)
+    expect(outcome.rows[0]?.overheadMeanMs).toBeCloseTo(0.33, 10)
+  })
+
+  test("a series that recorded every request but a bench that measured none still fails", () => {
+    const outcome = verdict(
+      [
+        {
+          scenario,
+          requests: 10,
+          failures: 0,
+          exposition,
+          overheadMs: [],
+          addedTtftMs: [],
+          buffered: 0,
+        },
+      ],
+      BUDGETS,
+    )
+
+    expect(outcome.violations[0]).toContain("no request's overhead was measured")
+  })
+
   test("holds a non-streamed scenario to the overhead budget only — it has no first token to be late with", () => {
     const outcome = verdict(
-      [{ scenario, requests: 10, failures: 0, exposition, addedTtftMs: [], buffered: 0 }],
+      [
+        {
+          scenario,
+          requests: 10,
+          failures: 0,
+          exposition,
+          overheadMs: MEASURED,
+          addedTtftMs: [],
+          buffered: 0,
+        },
+      ],
       { overheadP99Ms: 5, addedTtftP95Ms: 0 },
     )
 

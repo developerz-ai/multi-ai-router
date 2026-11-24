@@ -45,6 +45,11 @@ bun build apps/api/src/providers/claude-fast/profile-check.ts --target=bun --out
 # same copied folder as the server's own boot migrations.
 bun build apps/api/src/bin/admin.ts --target=bun --outfile dist/api/admin.js
 
+# The image ships dist/ and no node_modules, so a bundle that still imports a package by name would
+# break at whichever request first reaches that import. Fail the build instead.
+bun bin/lib/assert-bundles-self-contained.ts \
+  dist/api/index.js dist/api/admin.js dist/libexec/claude-profile-check.js
+
 # Migrations are data, not code — `bun build` cannot bundle a directory of .sql
 # files, so they must be copied. The destination is not arbitrary: migrate.ts
 # resolves its folder as `../migrations` relative to `import.meta.url`, which is

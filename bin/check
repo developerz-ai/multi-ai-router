@@ -1,5 +1,15 @@
 #!/bin/sh
-# The gate: lint, typecheck, test, build — the four offline CI jobs, in order.
+# The gate: lint, typecheck, test, build — the four offline CI jobs.
+#
+#   bin/check             the gate
+#   bin/check --fast      NOT the gate: lint, typecheck and only the tests your changes affect
+#                         (`bin/test --changed=origin/main`), no build. The inner loop while
+#                         working; a commit still wants the plain `bin/check`.
+#   bin/check --verbose   stream every stage's full output instead of the summary below
+#
+# OUTPUT. One line per stage — its name, its verdict, how long it took — and nothing else when the
+# stage passed. A stage that fails prints its own output in full (the test stage's is already only
+# the failures) and the gate stops. So the last screen of a red run is the reason it is red.
 #
 # Not the whole CI gate. CI also runs `ui-geometry` (it needs a browser, for the
 # headless layout check; a required check), `image` (it needs Docker, to build
@@ -14,6 +24,16 @@
 set -eu
 
 cd "$(dirname "$0")/.."
+
+fast=""
+verbose=""
+for argument in "$@"; do
+  case "$argument" in
+    --fast) fast=1 ;;
+    --verbose) verbose=1 ;;
+    *) echo "usage: bin/check [--fast] [--verbose]" >&2; exit 64 ;;
+  esac
+done
 
 bin/lib/require-bun
 
@@ -49,11 +69,88 @@ if [ -z "$(bin/lib/database-url)" ]; then
     .env.local, or blanked in .env.test, is not the one this run would use."
 fi
 
-# Same flag CI uses, so a stale lockfile fails here rather than on the PR.
-bun install --frozen-lockfile
+logs="$(mktemp -d "${TMPDIR:-/tmp}/router-check.XXXXXX")"
+trap 'rm -rf "$logs"' EXIT
+# The children by pid, never `kill 0`: run under CI, `timeout` or an agent's tool runner this script
+# shares its caller's process group, and signalling the group would signal the caller too.
+typecheck_pid=""
+test_pid=""
+# shellcheck disable=SC2086  # each is one pid or empty
+trap 'kill $typecheck_pid $test_pid 2>/dev/null; exit 130' INT TERM
 
-# Sequential and fail-fast (set -e): stop at the first broken gate, exactly like
-# reading those four CI jobs top to bottom (lint, typecheck, test, build).
-bin/lint
-bin/test
-bun run build
+seconds_since() { echo $(($(date +%s) - $1)); }
+
+passed() { printf '\033[0;32m✔\033[0m  %-10s %ss\n' "$1" "$2"; }
+
+# The stage's own output, then the one line that says which stage it was: an agent reading the tail
+# of this run gets the failures and the verdict without scrolling.
+failed() {
+  [ -n "$verbose" ] || cat "$logs/$1.log"
+  printf '\033[0;31m✘\033[0m  %-10s %ss — bin/check stopped here; the output above is that stage.\n' "$1" "$2" >&2
+  exit 1
+}
+
+# stage <name> <command…>: run it, keep its output unless it fails or --verbose asked for it.
+stage() {
+  name="$1"
+  shift
+  started=$(date +%s)
+  if [ -n "$verbose" ]; then
+    printf '\n▸ %s\n' "$name"
+    "$@" || failed "$name" "$(seconds_since "$started")"
+  else
+    "$@" >"$logs/$name.log" 2>&1 || failed "$name" "$(seconds_since "$started")"
+  fi
+  passed "$name" "$(seconds_since "$started")"
+}
+
+# Same flag CI uses, so a stale lockfile fails here rather than on the PR.
+stage install bun install --frozen-lockfile
+
+# Cheapest first: a formatting slip stops the gate in a second, not after the suite.
+# Read-only, the same script as CI's lint job; `bin/fmt` is the writing counterpart.
+stage lint bun run lint
+
+# Typecheck and the suite share nothing — tsc reads the sources, the suite runs them — so they run
+# at the same time and the gate costs max(typecheck, test) instead of their sum. Same script as CI's
+# typecheck job. Its verdict is read first below: it finishes first, and a type error is the cheaper
+# thing to be told about.
+typecheck_started=$(date +%s)
+bun run typecheck >"$logs/typecheck.log" 2>&1 &
+typecheck_pid=$!
+
+# In the background and waited for, so a signal reaches the trap above while the suite runs (a
+# shell does not run a trap until its foreground child returns).
+test_started=$(date +%s)
+test_status=0
+if [ -n "$fast" ]; then
+  # Only the test files git says the change reaches, in one process. Proves less than the gate, on
+  # purpose — and says so at the end.
+  bin/test --changed="${CHECK_FAST_BASE:-origin/main}" >"$logs/test.log" 2>&1 &
+else
+  bin/test >"$logs/test.log" 2>&1 &
+fi
+test_pid=$!
+wait "$test_pid" || test_status=$?
+test_pid=""
+test_seconds="$(seconds_since "$test_started")"
+
+typecheck_status=0
+wait "$typecheck_pid" || typecheck_status=$?
+typecheck_pid=""
+[ -z "$verbose" ] || { printf '\n▸ typecheck\n'; cat "$logs/typecheck.log"; printf '\n▸ test\n'; cat "$logs/test.log"; }
+[ "$typecheck_status" -eq 0 ] || failed typecheck "$(seconds_since "$typecheck_started")"
+passed typecheck "$(seconds_since "$typecheck_started")"
+[ "$test_status" -eq 0 ] || failed test "$test_seconds"
+passed test "$test_seconds"
+
+if [ -n "$fast" ]; then
+  printf '\n\033[0;33m⚠\033[0m  bin/check --fast passed. It is NOT the gate: it ran only the tests affected by the\n'
+  printf '   change and built nothing. Run bin/check before committing.\n'
+  exit 0
+fi
+
+# Last, and alone: it rewrites dist/ and the native helper, which the suite reads.
+stage build bun run build
+
+printf '\n\033[0;32m✔\033[0m  bin/check passed — lint, typecheck, test, build.\n'
