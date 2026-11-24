@@ -29,6 +29,18 @@ describe("the capacity-answer exception", () => {
     expect(read("docs/clients.md")).toContain("CLAUDE_SDK_QUEUE_WAIT_MS")
   })
 
+  test("the client guide states the full-replica exception and the attempt-cap qualifier", () => {
+    // Whitespace-normalised: the guide wraps its prose, the claims must not depend on where.
+    const guide = read("docs/clients.md").replace(/\s+/g, " ")
+    // Deleting the exception leaves the old, wrong "tried across the pool" promise standing.
+    expect(guide).toContain("the remaining Claude accounts are not asked")
+    expect(guide).toContain("an account of another kind still is")
+    // With `ROUTING_MAX_ATTEMPTS` set the walk stops at the cap, so "the eligible accounts" and
+    // "tried across the pool" are only true for the default, uncapped router.
+    expect(guide).toContain("up to `ROUTING_MAX_ATTEMPTS` accounts")
+    expect(guide.split("`ROUTING_MAX_ATTEMPTS`").length - 1).toBeGreaterThanOrEqual(2)
+  })
+
   test("the knob is in the example env and the deployment table", () => {
     expect(read(".env.example")).toContain("# CLAUDE_SDK_QUEUE_WAIT_MS=60000")
     expect(read("docs/idea/09-deployment.md")).toContain(

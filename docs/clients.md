@@ -245,8 +245,10 @@ name is served as that model and nothing else. What to add, and what each needs:
 ## Errors, retries and timeouts
 
 The router walks the eligible accounts before it answers with an error, so a failure that reaches
-you was tried across the pool, with one exception: a full replica ends the walk over Claude
-subscription accounts early (below). A Claude subscription request queues for a subprocess slot for
+you was tried across the pool, with two exceptions: a full replica ends the walk over Claude
+subscription accounts early (below), and an operator who sets `ROUTING_MAX_ATTEMPTS` lowered the
+walk to up to `ROUTING_MAX_ATTEMPTS` accounts, so with a cap of 1 a failed first attempt leaves
+its eligible siblings untried. A Claude subscription request queues for a subprocess slot for
 up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next account. When an
 account stayed at its in-flight limit through the wait and nothing could serve the request you get
 `429 account_at_capacity`. When the replica's own ceiling refused a candidate, the remaining Claude
@@ -363,8 +365,9 @@ On every data-plane answer, success or failure, stream or not, before the first 
 ### Retries: let the router do it
 
 - **Set your SDK's own retries to `0` or `1`** (`maxRetries` in the OpenAI, Anthropic and Vercel AI
-  SDKs). One request to the router already tries the eligible accounts (a full replica ends the
-  walk over Claude subscription accounts early, see above). Three SDK retries
+  SDKs). One request to the router already tries the eligible accounts, up to `ROUTING_MAX_ATTEMPTS`
+  accounts when your operator set that cap (a full replica ends the walk over Claude subscription
+  accounts early, see above). Three SDK retries
   multiplied by several keys on the same router send the same failing request 4×K times, all to a
   pool that already said no.
 - **Never retry automatically on `401`, `402`, `403`, `413`, `415`**, or a `502`/`503` whose
