@@ -193,3 +193,51 @@ describe("an error frame inside a 200, to a client still owed its whole answer",
     expect(r.failure).toBeUndefined()
   })
 })
+
+describe("rejected quota headers on a 200", () => {
+  const headers = {
+    "content-type": "text/event-stream",
+    [`${P}status`]: "rejected",
+    [`${P}reset`]: String(RESET),
+  }
+  const answer = (frames: readonly object[]) => () =>
+    new Response(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""), { headers })
+  const start = {
+    type: "message_start",
+    message: { id: "m", type: "message", role: "assistant", model: "x", content: [] },
+  }
+  const verdict = { status: "rejected", resetsAt: RESET, overageStatus: null }
+
+  test("say nothing of the Account when the body is the request's own refusal", async () => {
+    const r = await refused(
+      answer([start, { type: "error", error: { type: "invalid_request_error", message: GATED } }]),
+      false,
+    )
+    expect(r.failure?.classification.requestAttributable).toBe(true)
+    expect(r.readings).toEqual([])
+  })
+
+  test("are the Account's, once, when the body is its own rate limit", async () => {
+    const r = await refused(
+      answer([
+        start,
+        { type: "error", error: { type: "rate_limit_error", message: "rate limit exceeded" } },
+      ]),
+      false,
+    )
+    expect(r.failure?.classification.kind).toBe("rate-limited")
+    expect(r.readings).toEqual([verdict])
+  })
+
+  test("are still reported for a completed, a truncated and a streamed answer", async () => {
+    for (const [frames, stream, status] of [
+      [[start, { type: "message_stop" }], false, 200],
+      [[start], false, 502],
+      [[start, { type: "message_stop" }], true, 200],
+    ] as const) {
+      const r = await refused(answer(frames), stream)
+      expect(r.response.status).toBe(status)
+      expect(r.readings).toEqual([verdict])
+    }
+  })
+})

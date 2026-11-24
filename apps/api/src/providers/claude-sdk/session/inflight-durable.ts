@@ -85,14 +85,15 @@ export function claimSessionTurnDurable(
         refused = conversation.reason === "busy" ? "durable-busy" : "unavailable"
         return false
       }
+      // From this point, a failed SDK-key acquisition must release the conversation lease too.
+      durable = conversation.value
+      // The turn let go while it waited: waiting on the second lock would hold the first from the next.
+      if (released) return false
       const sdkKey = claim.keys.sdk
       if (sdkKey === undefined) {
-        durable = conversation.value
         prepared = true
         return true
       }
-      // From this point, a failed SDK-key acquisition must release the conversation lease too.
-      durable = conversation.value
       const sdk = await lock.tryAcquire(advisoryId(sdkKey), controller.signal)
       if (!sdk.acquired) {
         refused = sdk.reason === "busy" ? "durable-busy" : "unavailable"

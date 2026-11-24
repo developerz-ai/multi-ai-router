@@ -91,6 +91,11 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
     readonly dialect: string | null
   }>({ models: [], baseUrl: null, dialect: null })
 
+  const [submitted, setSubmitted] = createSignal<{
+    readonly baseUrl: string
+    readonly dialect: string
+  } | null>(null)
+
   // Sync-from-props, re-seeded whenever the dialog opens on a different account.
   // The credential is deliberately not among them: there is nothing to seed it
   // from, and a placeholder that looked like one would be a lie about what the
@@ -124,8 +129,13 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
   const move = () => {
     if (props.account?.hasCredential !== true) return "same"
     const verdict = endpointMove(opened(), { baseUrl: baseUrl(), dialect: dialect() })
-    // Where only the router can tell, its refusal of this save is the answer.
-    const refused = isApiError(props.error) && props.error.code === KEY_FOR_NEW_ENDPOINT
+    // Where only the router can tell, its refusal is the answer, about the endpoint it was asked.
+    const asked = submitted()
+    const refused =
+      isApiError(props.error) &&
+      props.error.code === KEY_FOR_NEW_ENDPOINT &&
+      asked?.baseUrl === baseUrl() &&
+      asked.dialect === dialect()
     return verdict === "unknown" && refused ? "moved" : verdict
   }
 
@@ -138,6 +148,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
     if (account === null || !parsedAliases.ok || (takesPreferences && !prefs.ok)) return
     if (rotatable() && move() === "moved" && credential().length === 0) return
 
+    setSubmitted({ baseUrl: baseUrl(), dialect: dialect() })
     const aliasMap = parsedAliases.aliases
 
     props.onSubmit({

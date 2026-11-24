@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/solid-query"
 import {
+  type EgressOverview,
   fetchEgressOverview,
+  type ProxyCheck,
+  type ProxyHealthView,
   setEgressProxy,
   setReplaceMode,
   testAccountProxy,
@@ -59,7 +62,39 @@ export function useTestProxy() {
 export function useTestAccountProxy() {
   const client = useQueryClient()
   return useMutation(() => ({
-    mutationFn: (accountId: string) => testAccountProxy(accountId),
-    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.egress.root() }),
+    mutationFn: (tested: TestedProxy) => testAccountProxy(tested.accountId),
+    // Into the row it is about. Refetching would ask every vendor for its whole list, per press.
+    onSuccess: (check: ProxyCheck, tested) => {
+      client.setQueryData<EgressOverview>(queryKeys.egress.overview(), (held) =>
+        held === undefined ? held : withCheck(held, tested, check),
+      )
+    },
   }))
+}
+
+export interface TestedProxy {
+  readonly accountId: string
+  readonly address: string
+}
+
+/** The overview with one check recorded the way the router records it: shown, never counted. */
+function withCheck(held: EgressOverview, tested: TestedProxy, check: ProxyCheck): EgressOverview {
+  const alive = check.outcome === "ok" || check.outcome === "refused"
+  const record = (health: ProxyHealthView): ProxyHealthView => ({
+    ...health,
+    outcome: check.outcome,
+    status: check.status,
+    latencyMs: check.latencyMs,
+    lastCheckedAt: check.checkedAt,
+    ...(alive ? { consecutiveFailures: 0 } : {}),
+    ...(check.outcome === "ok" ? { lastOkAt: check.checkedAt, repair: "idle" as const } : {}),
+  })
+  return {
+    ...held,
+    assigned: held.assigned.map((row) =>
+      row.account.id === tested.accountId && row.address === tested.address
+        ? { ...row, health: record(row.health) }
+        : row,
+    ),
+  }
 }

@@ -16,7 +16,11 @@ export const REPLACE_OPTIONS: readonly { readonly value: ReplaceMode; readonly l
 const OUTCOME: Readonly<
   Record<ProxyOutcome, { readonly label: string; readonly tone: BadgeTone; readonly hint: string }>
 > = {
-  ok: { label: "ok", tone: "ok", hint: "The proxy opened a tunnel to the account's upstream." },
+  ok: {
+    label: "ok",
+    tone: "ok",
+    hint: "The proxy opened a tunnel: to the account's upstream when an account was tested, to a neutral host otherwise.",
+  },
   auth: { label: "login refused", tone: "danger", hint: "The proxy refused its own credentials." },
   unreachable: {
     label: "unreachable",
@@ -88,7 +92,7 @@ export function vendorNote(
 /** Whether the router can replace this proxy at all: only a vendor's has a sibling to move to. */
 export function replaceable(
   assignment: Pick<EgressAssignment, "vendor" | "address">,
-  listed: readonly { readonly address: string }[],
+  listedAddresses: ReadonlySet<string>,
 ): boolean {
-  return assignment.vendor !== null || listed.some((proxy) => proxy.address === assignment.address)
+  return assignment.vendor !== null || listedAddresses.has(assignment.address)
 }

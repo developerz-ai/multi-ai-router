@@ -274,11 +274,16 @@ COPY --from=builder --chown=bun:bun /src/package.json ./package.json
 # With no node_modules bun would AUTO-INSTALL an unresolved bare import from the registry at run
 # time — a network fetch of unpinned code into a container holding every upstream credential. Turned
 # off for every `bun` started in /app (the server, `dist/api/admin.js`, the healthcheck), so a
-# missing module is an error. Both halves are asserted: the directory is absent, and an import of a
-# package that exists on the registry fails instead of downloading.
+# missing module is an error.
+#
+# Asserted with a positive control, because "an import of a registry package fails" is also what a
+# build with no route to the registry looks like with auto-install fully on. The probe serves a
+# package from 127.0.0.1, shows bun fetches and imports it by default, then shows that with THIS
+# bunfig.toml the same import fails and the registry is never asked (bin/lib/auto-install-probe.ts).
 RUN printf '[install]\nauto = "disable"\n' > bunfig.toml \
- && test ! -e node_modules \
- && ! bun -e 'await import("is-number")' 2>/dev/null
+ && test ! -e node_modules
+COPY --from=builder /src/bin/lib/auto-install-probe.ts /tmp/auto-install-probe.ts
+RUN bun /tmp/auto-install-probe.ts /app/bunfig.toml && rm /tmp/auto-install-probe.ts
 
 # Prove fast-profile availability in the shipped layout. Unsupported arm64 stays SDK-only.
 RUN bun dist/libexec/claude-profile-check.js

@@ -91,11 +91,14 @@ export function clientRecipes(
         {
           label: "claudes (recommended)",
           // The key is typed at the prompt, never here: a command line ends up in shell history.
+          // One chain: where a `claudes` directory already exists the clone fails, and whatever is
+          // in it must not be run.
           text: [
             "git clone https://github.com/developerz-ai/claudes.git",
-            "cd claudes && bin/setup && bin/check && npm i -g .",
+            "cd claudes",
+            "bin/setup && bin/check && npm i -g .",
             `claudes login --url "${origin}"`,
-          ].join("\n"),
+          ].join(" && \\\n"),
         },
         {
           label: "Shell environment",

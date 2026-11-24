@@ -282,10 +282,9 @@ describe("replica-lease conservative local authority", () => {
 
 test("authority ends at the deadline even when nothing asks", async () => {
   // A heartbeat that throws or hangs used to leave the signal open until a later beat looked.
-  for (const heartbeat of [
-    () => Promise.reject(new Error("connection lost")),
-    () => new Promise<boolean>(() => {}),
-  ]) {
+  for (const hangs of [false, true]) {
+    const beat = Promise.withResolvers<boolean>()
+    const heartbeat = () => (hangs ? beat.promise : Promise.reject(new Error("connection lost")))
     const manager = createReplicaLeaseManager(
       {
         acquire: async (accountId, owner) => ({
@@ -311,10 +310,16 @@ test("authority ends at the deadline even when nothing asks", async () => {
     const aborted = new Promise<number>((resolve) =>
       handle.signal.addEventListener("abort", () => resolve(performance.now() - started)),
     )
-    const at = await Promise.race([aborted, Bun.sleep(1_000).then(() => Number.NaN)])
-    expect(at).toBeGreaterThanOrEqual(245)
-    // Before the row's own TTL, which is when another replica may take it.
-    expect(at).toBeLessThan(300)
+    try {
+      const at = await Promise.race([aborted, Bun.sleep(1_000).then(() => Number.NaN)])
+      expect(at).toBeGreaterThanOrEqual(245)
+      // Before the row's own TTL, which is when another replica may take it.
+      expect(at).toBeLessThan(300)
+    } finally {
+      // The beat still in flight is settled and the timer stopped, so nothing outlives the test.
+      beat.resolve(false)
+      await manager.stop(async () => {})
+    }
   }
 })
 
@@ -339,8 +344,11 @@ test("a renewal moves the deadline the signal ends at", async () => {
   )
   const handle = await manager.ensure("a")
   manager.start()
-  await Bun.sleep(500)
-  expect(handle?.signal.aborted).toBe(false)
-  await manager.stop(async () => {})
+  try {
+    await Bun.sleep(500)
+    expect(handle?.signal.aborted).toBe(false)
+  } finally {
+    await manager.stop(async () => {})
+  }
   expect(handle?.signal.aborted).toBe(true)
 })

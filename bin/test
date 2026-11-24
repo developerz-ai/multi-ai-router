@@ -18,9 +18,11 @@
 # SHARDS. A bare `bin/test` splits the files across N `bun test --shard=k/N` processes that run at
 # the same time, balanced by the per-file durations in bin/lib/test-timings.json. Each shard after
 # the first gets its own database on the same server (`router_shard2`, created on demand by
-# bin/lib/ensure-test-database.ts), because the live-Postgres suites own the database they are
-# pointed at. Each shard's output is captured and printed whole when all have finished, in shard
-# order, so two interleaved runs never have to be untangled. ANY shard failing fails the run.
+# bin/lib/ensure-test-database.ts and stamped as bin/test's own; one it did not create is refused),
+# because the live-Postgres suites own the database they are pointed at. Each shard's output is
+# captured and printed whole when all have finished, in shard order, so two interleaved runs never
+# have to be untangled; on a terminal, or with ROUTER_TEST_VERBOSE=1, it is also streamed while they
+# run, so a stalled suite is visible as one. ANY shard failing fails the run.
 #
 # Refresh the timings after adding or reshaping slow suites — a normal sharded run that also
 # rewrites bin/lib/test-timings.json from what it measured (commit the result):
@@ -80,6 +82,10 @@ if [ ! -t 1 ] && [ -z "${CI:-}" ] && [ "${ROUTER_TEST_VERBOSE:-}" != "1" ]; then
   quiet="--only-failures"
 fi
 
+# Stream the shards while they run when a person is watching: a terminal, or an explicit ask.
+live=""
+if [ -t 1 ] || [ "${ROUTER_TEST_VERBOSE:-}" = "1" ]; then live=1; fi
+
 shards="${ROUTER_TEST_SHARDS:-2}"
 case "$shards" in
   '' | *[!0-9]* | 0) echo "bin/test: ROUTER_TEST_SHARDS must be a positive integer, got '$shards'" >&2; exit 64 ;;
@@ -94,9 +100,24 @@ run_sharded() {
   # A Ctrl-C must take the shards with it, not leave N suites running against the dev database.
   # The shards by pid, never `kill 0`: run from CI, `timeout`, or bin/check, this script shares its
   # caller's process group, and signalling the group would take the caller down with it.
+  # Killed and then waited for: the caller (bin/check, CI) may start something on the same
+  # database the moment this script exits, and a shard still shutting down would be in it.
   pids=""
+  follower=""
   # shellcheck disable=SC2086  # one pid per word
-  trap 'kill $pids 2>/dev/null; exit 130' INT TERM
+  trap 'kill $pids $follower 2>/dev/null; wait $pids 2>/dev/null || true; exit 130' INT TERM
+
+  shard=1
+  while [ "$shard" -le "$shards" ]; do
+    : >"$logs/$shard.log"
+    shard=$((shard + 1))
+  done
+  # Live progress where someone is watching. The per-shard report below is still printed — the
+  # follower is killed, not drained, so only that report is guaranteed to hold the last lines.
+  if [ -n "$live" ]; then
+    tail -n +1 -f "$logs"/*.log 2>/dev/null &
+    follower=$!
+  fi
 
   shard=1
   while [ "$shard" -le "$shards" ]; do
@@ -105,7 +126,8 @@ run_sharded() {
         # `|| exit 1`, spelled out: this function is called as `run_sharded || …`, where errexit is
         # off, and bash (macOS's /bin/sh) would carry on with an EMPTY DATABASE_URL — which outranks
         # .env, skips every live-Postgres suite, and exits green. A shard with no database fails.
-        DATABASE_URL="$(bun bin/lib/ensure-test-database.ts "$database_url" "$shard")" || {
+        # On stdin, never as an argument: the URL carries a password, and argv is world-readable.
+        DATABASE_URL="$(printf '%s' "$database_url" | bun bin/lib/ensure-test-database.ts "$shard")" || {
           echo "bin/test: could not prepare shard $shard's database" >&2
           exit 1
         }
@@ -128,12 +150,19 @@ run_sharded() {
   done
 
   failed=""
-  shard=1
+  codes=""
   for pid in $pids; do
     code=0
     wait "$pid" || code=$?
+    codes="$codes $code"
+  done
+  [ -z "$follower" ] || { kill "$follower" 2>/dev/null; wait "$follower" 2>/dev/null || true; }
+
+  shard=1
+  for code in $codes; do
     printf '\n── shard %s/%s — exit %s ──\n' "$shard" "$shards" "$code"
-    cat "$logs/$shard.log"
+    # Streamed already: repeat only the end, where the failures' summary and the counts are.
+    if [ -n "$live" ]; then tail -n 15 "$logs/$shard.log"; else cat "$logs/$shard.log"; fi
     [ "$code" -eq 0 ] || failed="$failed $shard"
     shard=$((shard + 1))
   done
@@ -156,8 +185,15 @@ status=0
 if [ "$#" -eq 0 ] && [ "$shards" -gt 1 ]; then
   run_sharded || status=$?
 else
+  # In the background and waited for, with its stdin kept: a shell runs no trap while a foreground
+  # child is alive, and dies on a TERM it has no trap for — leaving `bun test` running against the
+  # database with nobody waiting on it. This way a signal stops the run and reaps it.
   # shellcheck disable=SC2086  # $quiet is one flag or nothing
-  bun test $quiet "$@" || status=$?
+  bun test $quiet "$@" <&0 &
+  single=$!
+  trap 'kill "$single" 2>/dev/null; wait "$single" 2>/dev/null || true; exit 130' INT TERM
+  wait "$single" || status=$?
+  trap - INT TERM
 fi
 
 # Only when nothing promised a database. If something did, the run refused before

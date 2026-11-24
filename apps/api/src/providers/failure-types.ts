@@ -153,6 +153,21 @@ export interface FailureClassification {
    * the upstream's own `4xx` is the answer. Absent: a bad request is bad at every account.
    */
   readonly providerScoped?: boolean
+  /**
+   * An `invalid-request` about **this account's own settings**: an OpenRouter provider filter or data
+   * policy that leaves no endpoint, one request larger than the account's in-flight budget. The next
+   * account, of the same provider included, may serve the body as it stands. No strike, no hold on
+   * the model. With no candidate left, the upstream's own `4xx` is the answer. Absent: a bad request
+   * is bad at every account.
+   */
+  readonly accountScoped?: boolean
+  /**
+   * A spend refusal that may be the **key's own cap**: it names the key, or it names neither the key
+   * nor the prepaid balance. Only then does a near-spent key reading explain it and lend its reset
+   * (`routing/plan-reset.ts`). Never set on a refusal that names the balance: no key reset refills
+   * one, and calling it a clock would answer `429` for a wall only a top-up clears (non-negotiable 7).
+   */
+  readonly keyCap?: boolean
 }
 
 /** Parsed bounded successful-body evidence; no I/O, raw body logging, or response replacement. */

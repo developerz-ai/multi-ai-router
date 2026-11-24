@@ -24,8 +24,11 @@ const MAX_BREAKPOINTS = 4
 
 export function placeCacheBreakpoints(request: CacheableRequest): void {
   const { system, messages, tools } = request
-  const inMessages = !request.unmarked && hasCacheControl(messages)
+  // The prefix first: with it marked, Claude Code's own placement stands and its history, the one
+  // part that can be megabytes, is not walked.
   const inPrefix = !request.unmarked && hasCacheControl({ system, tools })
+  if (inPrefix && request.native) return
+  const inMessages = !request.unmarked && hasCacheControl(messages)
   if (!inMessages && !inPrefix) {
     markUnmarked(system, messages)
     return

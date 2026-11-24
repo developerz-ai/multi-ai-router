@@ -321,21 +321,27 @@ jobs:
       # start in the runtime layer, not just exist in the builder.
       - name: the shipped claude CLI runs
         run: docker run --rm --entrypoint claude multi-ai-router:ci --version
-      # The built image, not the Dockerfile's text: no dependency tree beside the bundles, bun
-      # cannot fetch one in its place, and the bundles still load without it. `set -e` and no
-      # `|| true` — any one of these failing fails the job. The import must FAIL (auto-install
-      # off); the server must get as far as refusing its (absent) configuration, which is past
+      # The built image, not the Dockerfile's text: no dependency tree beside the bundles, and the
+      # bundles still load without it. `sh -e` and no `|| true` — any one of these failing fails
+      # the job. The server must get as far as refusing its (absent) configuration, which is past
       # every import the bundle makes at load.
-      - name: the image carries no node_modules and cannot auto-install one
+      - name: the image carries no node_modules and its bundles load without one
         run: |
           docker run --rm --entrypoint sh multi-ai-router:ci -ec '
             test ! -e /app/node_modules
             test -z "$(find / -xdev -type d -name node_modules -not -path "/proc/*" 2>/dev/null)"
-            if bun -e "await import(\"is-number\")" 2>/dev/null; then echo "bun auto-installed a package" >&2; exit 1; fi
             bun dist/libexec/claude-profile-check.js
             bun dist/api/admin.js 2>&1 | grep -q "set-password"
             bun dist/api/index.js 2>&1 | grep -q "Invalid environment configuration"
           '
+      # …and bun cannot fetch one in its place. With a positive control, served from loopback
+      # inside the container: a bare "this import fails" also passes when the registry is merely
+      # unreachable, with auto-install fully on. The probe is mounted, not shipped.
+      - name: the image's bunfig is what stops bun auto-installing
+        run: |
+          docker run --rm --entrypoint bun \
+            -v "$PWD/bin/lib/auto-install-probe.ts:/tmp/auto-install-probe.ts:ro" \
+            multi-ai-router:ci /tmp/auto-install-probe.ts /app/bunfig.toml
 # NOTE: this workflow deliberately publishes NOTHING.
 #
 # Image pushes happen only on a tagged release (.github/workflows/release.yml,

@@ -1,5 +1,5 @@
-import type { Dialect } from "@multi-ai-router/core"
-import { responsesBody, responsesStreamChunks } from "./upstream-responses"
+import { tokensIn } from "./clocks"
+import { type StubDialect, streamChunks, stubBody } from "./upstream-wire"
 
 /**
  * The stub upstream the bench measures against: in-process, no socket, no provider.
@@ -37,11 +37,15 @@ export interface Trip {
   upstreamLastByteAt: number
   /** Monotonic reading when the driver read the client's first byte. Zero until it does. */
   clientFirstByteAt: number
+  /** When the stub released stream token N (`tok<N> `), so each can be matched at the client. */
+  upstreamTokenAt: (number | undefined)[]
+  /** Background streams in flight on this app when the router called the upstream for this trip. */
+  backgroundActive: number
 }
 
 export interface StubOptions {
   /** What the account speaks. `anthropic` is passthrough; the other two are translated. */
-  readonly dialect: Extract<Dialect, "anthropic" | "openai-chat" | "openai-responses">
+  readonly dialect: StubDialect
   readonly stream: boolean
   /** Chunks after the first. Long enough that a buffering relay is unmistakable, not subtle. */
   readonly chunks?: number
@@ -69,6 +73,8 @@ export interface StubUpstream {
   readonly fetch: (request: Request) => Promise<Response>
   /** Registers a trip before the request that will fill it in. */
   open(id: string): Trip
+  /** Background streams the router has open against this stub right now. */
+  backgroundActive(): number
 }
 
 const DEFAULT_CHUNKS = 16
@@ -80,14 +86,20 @@ export function stubUpstream(options: StubOptions): StubUpstream {
   const chunkCount = options.chunks ?? DEFAULT_CHUNKS
   const gapMs = options.chunkGapMs ?? DEFAULT_CHUNK_GAP_MS
   const delayMs = options.firstByteDelayMs ?? DEFAULT_FIRST_BYTE_DELAY_MS
+  /** Background streams the router has open against this stub right now. */
+  let backgroundActive = 0
 
   return {
+    backgroundActive: () => backgroundActive,
+
     open(id) {
       const trip: Trip = {
         upstreamEnteredAt: 0,
         upstreamFirstByteAt: 0,
         upstreamLastByteAt: 0,
         clientFirstByteAt: 0,
+        upstreamTokenAt: [],
+        backgroundActive: 0,
       }
       trips.set(id, trip)
       return trip
@@ -97,11 +109,17 @@ export function stubUpstream(options: StubOptions): StubUpstream {
       const id = request.headers.get(TRIP_HEADER)
       const trip = id === null ? undefined : trips.get(id)
       if (trip !== undefined && id !== null) trips.delete(id)
-      if (trip !== undefined) trip.upstreamEnteredAt = performance.now()
+      if (trip !== undefined) {
+        trip.upstreamEnteredAt = performance.now()
+        trip.backgroundActive = backgroundActive
+      }
 
       if (options.streamOnRequest === true && !options.stream && (await asksToStream(request))) {
         const chunks = streamChunks(options.dialect, options.backgroundChunks ?? chunkCount)
-        return sse(chunks, delayMs, gapMs, undefined)
+        backgroundActive += 1
+        return sse(chunks, delayMs, gapMs, undefined, () => {
+          backgroundActive -= 1
+        })
       }
 
       if (!options.stream) {
@@ -111,7 +129,7 @@ export function stubUpstream(options: StubOptions): StubUpstream {
           trip.upstreamFirstByteAt = at
           trip.upstreamLastByteAt = at
         }
-        return json(body(options.dialect, options.answerBytes))
+        return json(stubBody(options.dialect, options.answerBytes))
       }
 
       // Headers now, first token after the wait — the shape every streaming provider has, and the
@@ -144,18 +162,31 @@ function sse(
   delayMs: number,
   gapMs: number,
   trip: Trip | undefined,
+  onEnd: () => void = () => undefined,
 ): Response {
   const encoder = new TextEncoder()
+  // Worked out before the stream starts, so stamping a token is one clock read and an assignment:
+  // anything the stub does between chunks is time the router's relay has to share the loop with.
+  const tokens = chunks.map(tokensIn)
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      for (const [index, chunk] of chunks.entries()) {
-        await sleep(index === 0 ? delayMs : gapMs)
-        controller.enqueue(encoder.encode(chunk))
-        if (trip !== undefined && index === 0) trip.upstreamFirstByteAt = performance.now()
+      try {
+        for (const [index, chunk] of chunks.entries()) {
+          await sleep(index === 0 ? delayMs : gapMs)
+          controller.enqueue(encoder.encode(chunk))
+          if (trip === undefined) continue
+          const at = performance.now()
+          if (index === 0) trip.upstreamFirstByteAt = at
+          // First release only: a closing event may repeat the whole text.
+          for (const token of tokens[index] ?? []) trip.upstreamTokenAt[token] ??= at
+        }
+        if (trip !== undefined) trip.upstreamLastByteAt = performance.now()
+        controller.close()
+      } finally {
+        onEnd()
       }
-      if (trip !== undefined) trip.upstreamLastByteAt = performance.now()
-      controller.close()
     },
+    cancel: onEnd,
   })
 
   return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } })
@@ -163,119 +194,4 @@ function sse(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-const MODEL = "claude-opus-5"
-const UPSTREAM_MODEL = "gpt-4o"
-const TOKENS_IN = 24
-const TOKENS_OUT = 32
-
-/** Answer text with an escape every line, the shape a model's code answer has on the wire. */
-function answerText(bytes: number | undefined): string {
-  if (bytes === undefined) return "bench"
-  const line = 'const value = "bench"\n'
-  return line.repeat(Math.max(1, Math.ceil(bytes / line.length)))
-}
-
-function body(dialect: StubOptions["dialect"], answerBytes?: number): unknown {
-  const text = answerText(answerBytes)
-  if (dialect === "openai-responses") {
-    return responsesBody(text, { input_tokens: TOKENS_IN, output_tokens: TOKENS_OUT })
-  }
-  if (dialect === "anthropic") {
-    return {
-      id: "msg_bench",
-      type: "message",
-      role: "assistant",
-      model: MODEL,
-      content: [{ type: "text", text }],
-      stop_reason: "end_turn",
-      usage: { input_tokens: TOKENS_IN, output_tokens: TOKENS_OUT },
-    }
-  }
-  return {
-    id: "chatcmpl-bench",
-    object: "chat.completion",
-    model: UPSTREAM_MODEL,
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: TOKENS_IN, completion_tokens: TOKENS_OUT },
-  }
-}
-
-function streamChunks(dialect: StubOptions["dialect"], count: number): readonly string[] {
-  if (dialect === "openai-responses") {
-    return responsesStreamChunks(count, { input_tokens: TOKENS_IN, output_tokens: TOKENS_OUT })
-  }
-  const deltas = Array.from({ length: Math.max(1, count) }, (_unused, index) =>
-    dialect === "anthropic" ? anthropicDelta(index) : openAiDelta(index),
-  )
-  return dialect === "anthropic"
-    ? [anthropicStart(), ...deltas, anthropicEnd()]
-    : [...deltas, openAiEnd()]
-}
-
-function event(name: string, data: unknown): string {
-  return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
-}
-
-function anthropicStart(): string {
-  return (
-    event("message_start", {
-      type: "message_start",
-      message: {
-        id: "msg_bench",
-        type: "message",
-        role: "assistant",
-        model: MODEL,
-        content: [],
-        stop_reason: null,
-        usage: { input_tokens: TOKENS_IN, output_tokens: 0 },
-      },
-    }) +
-    event("content_block_start", {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "text", text: "" },
-    })
-  )
-}
-
-function anthropicDelta(index: number): string {
-  return event("content_block_delta", {
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "text_delta", text: `tok${index} ` },
-  })
-}
-
-function anthropicEnd(): string {
-  return (
-    event("content_block_stop", { type: "content_block_stop", index: 0 }) +
-    event("message_delta", {
-      type: "message_delta",
-      delta: { stop_reason: "end_turn" },
-      usage: { output_tokens: TOKENS_OUT },
-    }) +
-    event("message_stop", { type: "message_stop" })
-  )
-}
-
-function openAiChunk(payload: Record<string, unknown>): string {
-  return `data: ${JSON.stringify({ id: "chatcmpl-bench", object: "chat.completion.chunk", model: UPSTREAM_MODEL, ...payload })}\n\n`
-}
-
-function openAiDelta(index: number): string {
-  const delta = index === 0 ? { role: "assistant", content: "tok0 " } : { content: `tok${index} ` }
-  return openAiChunk({ choices: [{ index: 0, delta }] })
-}
-
-function openAiEnd(): string {
-  return (
-    openAiChunk({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) +
-    openAiChunk({
-      choices: [],
-      usage: { prompt_tokens: TOKENS_IN, completion_tokens: TOKENS_OUT },
-    }) +
-    "data: [DONE]\n\n"
-  )
 }

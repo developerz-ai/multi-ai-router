@@ -168,9 +168,10 @@ describe("a streamed fast turn runs on the streamed clocks", () => {
     expect(r.usage.rows[0]).toMatchObject({ outcome: "upstream_timeout" })
   })
 
-  // The wall peek does not run on this path, so the head is out: the stream ends with the router's
-  // own error event instead of hanging, and cannot fail over.
-  test("a body that goes quiet ends at the idle clock and is recorded as a timeout", async () => {
+  // Known limit, not the goal: unlike an HTTP attempt (`success-wall.ts`), this path commits its `200`
+  // before the upstream's first byte. The idle clock ends the silence with the router's own error
+  // event, but a body that never sends anything cannot fail over to another account here.
+  test("a body that never sends a byte is committed, then ends in-stream at the idle clock (no failover)", async () => {
     const r = router(
       () =>
         new Response(new ReadableStream({}), { headers: { "content-type": "text/event-stream" } }),

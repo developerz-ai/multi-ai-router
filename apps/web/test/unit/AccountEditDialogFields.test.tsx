@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createSignal } from "solid-js"
 import type { UpdateAccountInput } from "../../src/lib/api/accounts"
 import { ApiError } from "../../src/lib/api/errors"
 import type { AccountView } from "../../src/lib/api/types"
@@ -184,13 +185,25 @@ describe("AccountEditDialog moving an endpoint", () => {
       type: null,
       code: "credential_required_for_new_endpoint",
     })
-    withMount(base({ error: refused }), () => {
-      expect(fieldByLabel("Rotate credential").required).toBe(false)
-      const dialect = document.body.querySelector("select")
-      if (dialect === null) throw new Error("no dialect select")
-      selectOption(dialect, "openai-chat")
-      expect(fieldByLabel("Rotate credential").required).toBe(true)
-    })
+    const [error, setError] = createSignal<unknown>(null)
+    withMount(
+      {
+        ...base({ onSubmit: () => setError(refused) }),
+        get error() {
+          return error()
+        },
+      },
+      () => {
+        typeInto(fieldByLabel("Base URL"), "https://b.example/v1")
+        submitForm()
+        expect(fieldByLabel("Rotate credential").required).toBe(true)
+        // The refusal was about that host. Another one has not been asked about yet.
+        typeInto(fieldByLabel("Base URL"), "https://c.example/v1")
+        expect(fieldByLabel("Rotate credential").required).toBe(false)
+        typeInto(fieldByLabel("Base URL"), "https://b.example/v1")
+        expect(fieldByLabel("Rotate credential").required).toBe(true)
+      },
+    )
   })
 
   test("leaving the provider's own endpoint explains, and lets the router decide", () => {

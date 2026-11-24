@@ -217,10 +217,18 @@ describe("UsageReports re-send", () => {
       buttons()[1]?.click()
       await settle()
       expect(gates).toHaveLength(2)
-      for (const gate of gates) {
-        gate.resolve(Response.json({ deliveryStatus: "sent", deliveryAttempts: 1 }))
-      }
+      gates[0]?.resolve(
+        Response.json({ deliveryStatus: "failed", deliveryAttempts: 1, lastError: "no channel" }),
+      )
       await settle()
+      const [first, second] = [...view.node.querySelectorAll("tr[data-row-id]")]
+      expect(first?.textContent).toContain("Delivery failed: no channel")
+      expect(second?.textContent).toContain("Posting to the channel")
+      gates[1]?.resolve(Response.json({ deliveryStatus: "sent", deliveryAttempts: 1 }))
+      await settle()
+      // The second week's answer does not take the first one's off the screen.
+      expect(first?.textContent).toContain("Delivery failed: no channel")
+      expect(second?.textContent).toContain("Posted to the channel.")
       expect(buttons().map((button) => button.getAttribute("aria-busy"))).toEqual([null, null])
     } finally {
       view.dispose()

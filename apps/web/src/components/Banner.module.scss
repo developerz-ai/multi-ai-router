@@ -35,7 +35,11 @@
 }
 
 .action {
+  display: flex;
   flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  max-width: 100%;
 }
 
 // The tint is deliberately faint and the edge carries the weight: a saturated

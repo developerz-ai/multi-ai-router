@@ -148,6 +148,7 @@ export default function AccountsRoute() {
       <AccountsNotices
         discover={row.discoveries}
         enableError={editing() === null ? update.error : null}
+        labelFor={(id) => accountList().find((one) => one.id === id)?.label ?? "a deleted account"}
         recheck={row.rechecks}
         recheckAll={recheckAll}
         test={row.tests}

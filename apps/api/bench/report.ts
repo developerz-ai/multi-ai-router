@@ -96,6 +96,13 @@ export function verdict(results: readonly ScenarioResult[], budgets: Budgets): V
         `${entry.scenario}: p99 overhead ${ms(entry.overheadP99Ms)} exceeds the ${budgets.overheadP99Ms} ms budget`,
       )
     }
+    const overlap = results[rows.indexOf(entry)]?.backgroundOverlap
+    const wanted = results[rows.indexOf(entry)]?.scenario.backgroundStreams
+    if (wanted !== undefined && (overlap === null || overlap === undefined || overlap.min < 1)) {
+      violations.push(
+        `${entry.scenario}: measured requests ran with no background stream in flight — the load the scenario names was not there`,
+      )
+    }
     if (entry.buffered > 0) {
       violations.push(
         `${entry.scenario}: ${entry.buffered} streams delivered their first byte after the upstream's last — the relay buffered`,
@@ -204,7 +211,7 @@ export function render(result: Verdict): string {
   ])
 
   const lines = [
-    `router overhead — measured per request (client wall time minus the upstream's hold), budget ${result.budgets.overheadP99Ms} ms p99`,
+    `router overhead — measured per request (how late the router made it: before the upstream, then the worse of its tail and its latest stream token), budget ${result.budgets.overheadP99Ms} ms p99`,
     "",
     table(OVERHEAD_HEADERS, overhead),
     "",
@@ -215,7 +222,7 @@ export function render(result: Verdict): string {
 
   lines.push(
     "",
-    `added time-to-first-token — client's first byte minus the upstream's, budget ${result.budgets.addedTtftP95Ms} ms p95`,
+    `added time-to-first-token — client's wait for a first byte from request start, less the upstream's own, budget ${result.budgets.addedTtftP95Ms} ms p95`,
     "",
     table(TTFT_HEADERS, ttft),
     "",

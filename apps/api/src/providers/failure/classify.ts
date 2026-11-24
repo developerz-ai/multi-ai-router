@@ -31,6 +31,10 @@ export interface ClassificationRule {
   readonly modelScoped?: true
   /** Copied onto the classification: see `FailureClassification.providerScoped`. */
   readonly providerScoped?: true
+  /** Copied onto the classification: see `FailureClassification.accountScoped`. */
+  readonly accountScoped?: true
+  /** Copied onto the classification: see `FailureClassification.keyCap`. */
+  readonly keyCap?: true
 }
 
 /**
@@ -159,6 +163,8 @@ export function classifyUpstreamFailure(
     rateLimit: withEstimatedReset(rateLimit, matched?.estimatedResetSeconds),
     ...(matched?.modelScoped === true ? { modelScoped: true } : {}),
     ...(matched?.providerScoped === true ? { providerScoped: true } : {}),
+    ...(matched?.accountScoped === true ? { accountScoped: true } : {}),
+    ...(matched?.keyCap === true ? { keyCap: true } : {}),
   }
 }
 
@@ -213,6 +219,16 @@ export function modelScoped(rule: ClassificationRule): ClassificationRule {
 /** The same rule, its refusal about this vendor's wire rather than the request or the account. */
 export function providerScoped(rule: ClassificationRule): ClassificationRule {
   return { ...rule, providerScoped: true }
+}
+
+/** The same rule, its refusal about this account's own settings: a sibling account may serve it. */
+export function accountScoped(rule: ClassificationRule): ClassificationRule {
+  return { ...rule, accountScoped: true }
+}
+
+/** The same rule, its spend refusal possibly the key's own cap rather than the balance. */
+export function keyCap(rule: ClassificationRule): ClassificationRule {
+  return { ...rule, keyCap: true }
 }
 
 /** The same rule, carrying an estimated reset for responses that name none. */

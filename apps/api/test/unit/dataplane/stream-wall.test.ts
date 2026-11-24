@@ -202,7 +202,9 @@ test("codex metadata is a preamble: the overload behind it is a wall, not a comm
       )(),
       { dialect: "openai-responses", driver: driverOf("openai-oauth"), maxBytes: 4096 },
     )
-    expect(peek.kind).toBe("wall")
+    if (peek.kind !== "wall") throw new Error(`${name} committed the stream`)
+    // Overloaded is the provider's shared backend: read as anything else it would strike the account.
+    expect(peek.classification.kind).toBe("overloaded")
   }
 })
 

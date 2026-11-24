@@ -1,3 +1,4 @@
+import { addedTtftMs, overheadMs, type RequestClocks, tokensIn } from "./clocks"
 import type { BenchApp } from "./harness"
 import type { DriveOptions, Scenario } from "./scenarios"
 import { transcriptBody } from "./transcript"
@@ -16,24 +17,36 @@ export const MODEL = "claude-opus-5"
 export interface Built {
   readonly bench: BenchApp
   readonly open: (id: string) => Trip
+  /** Background streams in flight at the stub right now. */
+  readonly backgroundActive: () => number
 }
 
 export interface Background {
+  /** Resolves once every background stream is in flight at the upstream. Measure after it. */
+  readonly ready: Promise<void>
   stop(): void
   failures(): number
   readonly settled: Promise<void>
 }
 
 const NO_BACKGROUND: Background = {
+  ready: Promise.resolve(),
   stop: () => undefined,
   failures: () => 0,
   settled: Promise.resolve(),
 }
 
+/** How long the background streams get to all be in flight before the scenario is called broken. */
+const BACKGROUND_READY_TIMEOUT_MS = 10_000
+
 /**
  * Keeps `backgroundStreams` long streams open until told to stop. Each worker opens the next as
  * soon as its last one ends, so the count in flight holds for the whole measurement. Their bodies
  * are drained and nothing about them is timed: they are load, not samples.
+ *
+ * `ready` exists because starting them is not having them: a stream is load only once the router
+ * has it open against the upstream, and a measured request sent in the same tick gets there first.
+ * Without the wait the first requests of a "loaded" scenario were measured on an idle router.
  */
 export function startBackground(
   built: Built,
@@ -58,7 +71,19 @@ export function startBackground(
     }
   }
   const settled = Promise.all(Array.from({ length: count }, worker)).then(() => undefined)
+  const ready = (async () => {
+    const deadline = performance.now() + BACKGROUND_READY_TIMEOUT_MS
+    while (built.backgroundActive() < count) {
+      if (performance.now() > deadline) {
+        throw new Error(
+          `${scenario.name}: only ${built.backgroundActive()} of ${count} background streams were in flight after ${BACKGROUND_READY_TIMEOUT_MS} ms`,
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
+  })()
   return {
+    ready,
     stop: () => {
       running = false
     },
@@ -72,6 +97,8 @@ interface Driven {
   readonly overheadMs: number[]
   readonly addedTtftMs: number[]
   readonly buffered: number
+  /** Background streams in flight when each measured request reached the upstream. */
+  readonly backgroundActive: number[]
 }
 
 export async function drive(
@@ -84,18 +111,15 @@ export async function drive(
     scenario.transcriptBytes === undefined
       ? requestBody(scenario.stream, options.promptBytes)
       : transcriptBody({ model: MODEL, bytes: scenario.transcriptBytes, stream: scenario.stream })
-  const addedTtftMs: number[] = []
-  const overheadMs: number[] = []
+  const driven: Driven = {
+    failures: 0,
+    overheadMs: [],
+    addedTtftMs: [],
+    buffered: 0,
+    backgroundActive: [],
+  }
   let failures = 0
   let buffered = 0
-
-  // Everything the client waited, less everything the upstream held it for. A request that never
-  // reached the stub has no wait to subtract and is a failure already; it adds no sample.
-  const settle = (trip: Trip, startedAt: number) => {
-    if (trip.upstreamEnteredAt === 0 || trip.upstreamLastByteAt === 0) return
-    const waited = trip.upstreamLastByteAt - trip.upstreamEnteredAt
-    overheadMs.push(Math.max(0, performance.now() - startedAt - waited))
-  }
 
   await pool(count, options.concurrency, async (index) => {
     const id = `${scenario.name}-${index}`
@@ -115,31 +139,63 @@ export async function drive(
     if (response.status !== 200) failures += 1
     // Drained either way: the usage record is written when the last byte lands, so a body left
     // unread is a sample the histogram never sees.
-    if (!scenario.stream || response.body === null) {
-      await response.arrayBuffer()
-      settle(trip, startedAt)
-      return
+    const streamBody = scenario.stream ? response.body : null
+    const streamed = streamBody !== null
+    let read: Drained = { firstByteAt: 0, tokenAt: [] }
+    if (streamBody !== null) read = await drain(streamBody)
+    else await response.arrayBuffer()
+    const clocks: RequestClocks = {
+      startedAt,
+      endedAt: performance.now(),
+      upstreamEnteredAt: trip.upstreamEnteredAt,
+      upstreamFirstByteAt: trip.upstreamFirstByteAt,
+      upstreamLastByteAt: trip.upstreamLastByteAt,
+      clientFirstByteAt: read.firstByteAt,
+      upstreamTokenAt: trip.upstreamTokenAt,
+      clientTokenAt: read.tokenAt,
     }
+    trip.clientFirstByteAt = read.firstByteAt
 
-    trip.clientFirstByteAt = await drain(response.body)
-    settle(trip, startedAt)
-    if (trip.clientFirstByteAt > trip.upstreamLastByteAt) buffered += 1
-    addedTtftMs.push(trip.clientFirstByteAt - trip.upstreamFirstByteAt)
+    // The arithmetic is `clocks.ts`'s. A request that never reached the stub adds no sample.
+    const overhead = overheadMs(clocks)
+    if (overhead !== null) {
+      driven.overheadMs.push(overhead)
+      driven.backgroundActive.push(trip.backgroundActive)
+    }
+    if (!streamed) return
+    if (read.firstByteAt > trip.upstreamLastByteAt) buffered += 1
+    const ttft = addedTtftMs(clocks)
+    if (ttft !== null) driven.addedTtftMs.push(ttft)
   })
 
-  return { failures, addedTtftMs, overheadMs, buffered }
+  return { ...driven, failures, buffered }
 }
 
-/** Reads to the end and returns when the **first** chunk arrived. Zero if none ever did. */
-async function drain(body: ReadableStream<Uint8Array>): Promise<number> {
+interface Drained {
+  /** When the first chunk arrived. Zero if none ever did. */
+  readonly firstByteAt: number
+  /** When the chunk carrying stream token N arrived, to match against the stub's release of it. */
+  readonly tokenAt: (number | undefined)[]
+}
+
+/**
+ * Reads to the end, timing the first chunk and every stream token. The clock is read before the
+ * chunk is decoded, so the driver's own scan is not charged to the token it finds.
+ */
+async function drain(body: ReadableStream<Uint8Array>): Promise<Drained> {
   const reader = body.getReader()
+  const decoder = new TextDecoder()
+  const tokenAt: (number | undefined)[] = []
   let firstByteAt = 0
   for (;;) {
-    const { done } = await reader.read()
+    const { done, value } = await reader.read()
     if (done) break
-    if (firstByteAt === 0) firstByteAt = performance.now()
+    const at = performance.now()
+    if (firstByteAt === 0) firstByteAt = at
+    // First sight only: a translated stream's closing event may carry the whole text again.
+    for (const token of tokensIn(decoder.decode(value, { stream: true }))) tokenAt[token] ??= at
   }
-  return firstByteAt
+  return { firstByteAt, tokenAt }
 }
 
 /** N requests through C workers. Single-threaded, so the cursor needs no lock. */

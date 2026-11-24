@@ -174,11 +174,13 @@ describe("the chain: a hung upstream fails over, a stalled stream fails honestly
 })
 
 /**
- * Silence costs a request its headers, so it is bounded across the chain, not per account: three
- * silent accounts at the 55 s idle clock was 165 s with no status line, past any edge's header
- * timeout, and a request the third account would have served slowly became the edge's 524.
+ * Silence is bounded across the chain, not per account: three silent accounts at the 55 s idle clock
+ * was 165 s. The bound decides when the router stops moving on, **not** when the client sees a head:
+ * Bun.serve sends a complete header block only with the first body byte (measured on 1.4.2 and
+ * 1.4.4; an empty chunk or a `flush()` changes nothing), so a committed stream that is still silent
+ * has told the client nothing yet.
  */
-describe("a streaming client's head waits out one idle clock of silence, whatever the chain", () => {
+describe("a chain waits out one idle clock of silence, however many accounts are silent", () => {
   const silent = () =>
     new Response(new ReadableStream({}), { headers: { "content-type": "text/event-stream" } })
   const CLOCKS = { firstByteMs: 5_000, idleMs: 400, totalMs: 60_000, wallHoldMs: 60 }
@@ -193,22 +195,41 @@ describe("a streaming client's head waits out one idle clock of silence, whateve
     expect(built.upstream.calls).toHaveLength(2)
   })
 
-  test("a second silent account commits its head at the wall hold; no third is asked", async () => {
+  test("a second silent account is committed and no third asked; the client's head comes with its first byte", async () => {
     const built = harness({
       accounts: pool(3),
       responses: [silent, silent, sse],
       upstreamStream: CLOCKS,
     })
+    // A real listener: `app.request` hands back a Response object, which is not a head on a socket.
+    let committedAt = 0
     const started = performance.now()
-    const res = await built.app.request("/v1/messages", post(STREAM, bearer()))
-    const headAt = performance.now() - started
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (request) => {
+        const response = await built.app.fetch(request)
+        committedAt = performance.now() - started
+        return response
+      },
+    })
+    try {
+      const res = await fetch(new URL("/v1/messages", server.url), post(STREAM, bearer()))
+      const headAt = performance.now() - started
 
-    expect(res.status).toBe(200)
-    expect(built.upstream.calls).toHaveLength(2)
-    // One idle clock, then one wall hold: nowhere near two idle clocks (800 ms).
-    expect(headAt).toBeGreaterThanOrEqual(380)
-    expect(headAt).toBeLessThan(700)
-    await res.text().catch(() => "")
+      expect(res.status).toBe(200)
+      expect(built.upstream.calls).toHaveLength(2)
+      // Committed after one idle clock (400 ms) and one wall hold (60 ms).
+      expect(committedAt).toBeGreaterThanOrEqual(380)
+      expect(committedAt).toBeLessThan(700)
+      // Known limit: the client hears nothing until the second silence ends too, with the router's
+      // error event as the first byte. Two idle clocks, never three.
+      expect(headAt - committedAt).toBeGreaterThan(200)
+      expect(headAt).toBeLessThan(1_150)
+      expect(await res.text()).toContain("event: error")
+    } finally {
+      server.stop(true)
+    }
   })
 
   test("a slow first byte inside the remaining budget is still served from its own account", async () => {

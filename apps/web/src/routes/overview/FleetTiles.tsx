@@ -94,6 +94,8 @@ function tile(
   value: () => string,
   note: () => string,
 ): { readonly value?: string; readonly note?: string } {
-  if (loadedData(query) !== undefined) return { value: value(), note: note() }
+  if (loadedData(query) !== undefined) {
+    return { value: value(), note: query.isError ? `last reading · ${note()}` : note() }
+  }
   return query.isError ? { value: "—", note: "could not load" } : {}
 }

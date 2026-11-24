@@ -36,10 +36,17 @@ export function createPriceState(prices: Accessor<PriceTable | undefined>) {
   const table = () => prices() ?? NO_PRICES
   const merged = createMemo(() => mergePriceRows(table().shipped, table().overrides))
 
+  // An extra whose row is stored is held back, not dropped: should someone else delete the stored
+  // one, this session's unsaved rates still have a row.
+  const added = createMemo(() => {
+    const stored = new Set(merged().map((row) => row.id))
+    return extras().filter((row) => !stored.has(row.id))
+  })
+
   // A row added in this session sits at the end until the save lands and the
   // server's ordering takes over — a just-added row must not be hard to find.
   const rows = createMemo(() =>
-    [...merged(), ...extras()]
+    [...merged(), ...added()]
       .filter((row) => !dropped().has(row.id))
       .map((row) => withRates(row, parsed(row.id) ?? row.rates)),
   )
@@ -102,24 +109,20 @@ export function createPriceState(prices: Accessor<PriceTable | undefined>) {
       if (rows().some((row) => row.id === id)) {
         return `${provider.id} / ${name} is already listed — edit its row instead.`
       }
-      // A stored row removed in this session comes back as itself; a second one beside it would be
-      // the same price listed twice.
-      if (!merged().some((row) => row.id === id)) {
-        setExtras((current) => [
-          ...current,
-          {
-            id,
-            accountId: accountId || null,
-            provider: provider.id,
-            model: name,
-            origin: "added",
-            shipped: null,
-            rates: ZERO_RATES,
-            longContext: null,
-            updatedAt: null,
-          },
-        ])
-      }
+      setExtras((current) => [
+        ...current.filter((extra) => extra.id !== id),
+        {
+          id,
+          accountId: accountId || null,
+          provider: provider.id,
+          model: name,
+          origin: "added",
+          shipped: null,
+          rates: ZERO_RATES,
+          longContext: null,
+          updatedAt: null,
+        },
+      ])
       setDrafts((current) => ({ ...current, [id]: EMPTY_DRAFT }))
       setDropped((current) => {
         const next = new Set(current)

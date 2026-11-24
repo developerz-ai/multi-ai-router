@@ -8,6 +8,9 @@ import { formatDuration } from "../../lib/reset-countdown"
 import styles from "./egress.module.scss"
 import { outcomeBadge } from "./egress-copy"
 
+/** Refused as too soon. Any other failure, a retry deadline on it or not, is shown as it was said. */
+const TEST_COOLDOWN = "proxy_test_cooldown"
+
 /**
  * A press and its answer. The probe opens a tunnel and closes it; no request reaches an AI vendor.
  * Each one goes through somebody's paid proxy, so the router allows one per proxy per cooldown: the
@@ -23,7 +26,8 @@ export function ProxyTest(props: {
   readonly onTest: () => void
 }) {
   /** When the router refused a test as too soon: the instant it will take one. */
-  const refusedUntil = () => (isApiError(props.error) ? props.error.retryAtMs : null)
+  const refusedUntil = () =>
+    isApiError(props.error) && props.error.code === TEST_COOLDOWN ? props.error.retryAtMs : null
   const waitMs = () => {
     const next = Math.max(refusedUntil() ?? 0, Date.parse(props.result?.nextAllowedAt ?? "") || 0)
     return Math.max(0, next - props.nowMs)

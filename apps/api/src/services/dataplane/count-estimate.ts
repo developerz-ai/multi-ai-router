@@ -69,12 +69,18 @@ interface WalkItem {
 
 /** Characters of a string, counted the way a tokenizer meets them: one code point each. */
 function codePoints(text: string): number {
-  // A pair of surrogates is one code point. Counting the low halves is a regex pass over two-byte
-  // text and nothing at all over the Latin-1 text nearly every prompt is.
-  return text.length - (text.match(SURROGATE_PAIR)?.length ?? 0)
+  // A surrogate pair is one code point. Counted in place: collecting the pairs allocated an entry
+  // per emoji, 213 MB for one prompt near the body limit.
+  let count = text.length
+  const last = text.length - 1
+  for (let i = 0; i < last; i++) {
+    if ((text.charCodeAt(i) & 0xfc00) !== 0xd800) continue
+    if ((text.charCodeAt(i + 1) & 0xfc00) !== 0xdc00) continue
+    count--
+    i++
+  }
+  return count
 }
-
-const SURROGATE_PAIR = /[\ud800-\udbff][\udc00-\udfff]/g
 
 /**
  * The request's **envelope**: top-level fields that configure the call rather than carry context.

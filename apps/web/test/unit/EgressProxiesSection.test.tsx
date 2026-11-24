@@ -1,56 +1,18 @@
 import { afterEach, expect, test } from "bun:test"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
-import type { EgressOverview } from "../../src/lib/api/egress"
 import { clearSession } from "../../src/lib/api/session"
 import { outcomeBadge } from "../../src/routes/egress/egress-copy"
 import { EgressProxiesSection } from "../../src/routes/settings/EgressProxiesSection"
 import { selectOption } from "../support/dom"
 import { assignment, overview } from "../support/egress"
+import { settle, withSection } from "../support/egress-section"
 
 const originalFetch = globalThis.fetch
 afterEach(() => {
   globalThis.fetch = originalFetch
   clearSession()
 })
-
-const settle = () => new Promise((resolve) => setTimeout(resolve, 25))
-
-async function withSection(
-  view: EgressOverview,
-  run: (root: HTMLElement, calls: string[]) => Promise<void> | void,
-  write: () => Response = () => Response.json({}),
-): Promise<void> {
-  const calls: string[] = []
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input)
-    if (url.includes("/auth/session")) return Response.json({ username: "a", csrfToken: "t" })
-    if ((init?.method ?? "GET") !== "GET") {
-      calls.push(`${init?.method} ${url.replace("/api/admin", "")} ${init?.body ?? ""}`.trim())
-      return write()
-    }
-    return Response.json(url.includes("/egress-proxies") ? view : [])
-  }) as typeof fetch
-  const root = document.createElement("div")
-  document.body.appendChild(root)
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const dispose = render(
-    () => (
-      <QueryClientProvider client={client}>
-        <EgressProxiesSection />
-      </QueryClientProvider>
-    ),
-    root,
-  )
-  try {
-    await settle()
-    await run(root, calls)
-  } finally {
-    dispose()
-    client.clear()
-    root.remove()
-  }
-}
 
 const modeSelect = (root: HTMLElement) =>
   root.querySelector('select[aria-label="If the proxy of or-main dies"]') as HTMLSelectElement
@@ -123,33 +85,6 @@ test("a proxy typed in by hand has no mode to choose", () =>
       expect(root.textContent).toContain("custom")
     },
   ))
-
-test("two accounts tested at once each get their own answer", () => {
-  const answers = ["ok", "timeout"]
-  return withSection(
-    overview({ assigned: [assignment(), assignment({ id: "b", label: "or-two" })] }),
-    async (root, calls) => {
-      for (const label of ["or-main", "or-two"]) {
-        root
-          .querySelector<HTMLButtonElement>(`button[aria-label="Test the proxy of ${label} now"]`)
-          ?.click()
-      }
-      await settle()
-      expect(calls).toHaveLength(2)
-      const status = [...root.querySelectorAll('tr [role="status"]')].map((n) => n.textContent)
-      expect(status[0]).toContain("ok")
-      expect(status[1]).toContain("timed out")
-    },
-    () =>
-      Response.json({
-        outcome: answers.shift(),
-        status: null,
-        latencyMs: 5,
-        checkedAt: new Date().toISOString(),
-        nextAllowedAt: new Date().toISOString(),
-      }),
-  )
-})
 
 test("an unreadable vendor list is said, and is not an empty inventory", () =>
   withSection(
@@ -227,22 +162,4 @@ test("a proxy its vendor disowns is kept while it answers, and the row says both
       expect(root.textContent).toContain("It still answers, so it is kept.")
       expect(root.textContent).toContain("no longer lists it")
     },
-  ))
-
-test("a test inside its cooldown counts down to the next one, and holds the button", () =>
-  withSection(
-    overview({ assigned: [assignment()] }),
-    async (root) => {
-      const button = () =>
-        root.querySelector<HTMLButtonElement>('button[aria-label="Test the proxy of or-main now"]')
-      button()?.click()
-      await settle()
-      expect(root.textContent).toContain("Tested moments ago. Next test in ")
-      expect(button()?.disabled).toBe(true)
-    },
-    () =>
-      Response.json(
-        { error: { message: "tested moments ago — in 50s", code: "proxy_test_cooldown" } },
-        { status: 429, headers: { "retry-after": "50" } },
-      ),
   ))

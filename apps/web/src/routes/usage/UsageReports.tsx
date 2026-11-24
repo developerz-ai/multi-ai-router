@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js"
+import { Show } from "solid-js"
 import { QueryBoundary } from "../../components/QueryBoundary"
 import { type Column, Table } from "../../components/Table"
 import { TableSkeleton } from "../../components/TableSkeleton"
@@ -27,20 +27,21 @@ import styles from "./UsageReports.module.scss"
 export function UsageReports() {
   const reports = useUsageReports()
   const deliver = useDeliverUsageReport()
-  // One notice at a time, keyed to the row it belongs to: a re-send is a deliberate click, and the
-  // answer the server gave that click is what the operator reads next.
-  const [notice, setNotice] = createSignal<{ periodStart: string; text: string } | null>(null)
-  // Busy belongs to the row that was clicked, never to the whole list (#270).
+  // Busy, and the answer, belong to the row that was clicked (#270): two weeks can be posted at
+  // once, and each keeps what the server said about it.
   const runs = createRowRuns<UsageReportDeliveryView>()
 
   const resend = (periodStart: string) => {
     // The guard behind `aria-disabled`: the button stays focusable, so the click still lands here.
-    if (runs.pending().has(periodStart)) return
-    setNotice({ periodStart, text: "Posting to the channel…" })
-    void runs.run(periodStart, () => deliver.mutateAsync(periodStart), {
-      onSuccess: (view) => setNotice({ periodStart, text: deliveryNotice(view) }),
-      onError: (error) => setNotice({ periodStart, text: errorMessage(error) }),
-    })
+    void runs.run(periodStart, () => deliver.mutateAsync(periodStart))
+  }
+
+  const notice = (periodStart: string): string | null => {
+    if (runs.pending().has(periodStart)) return "Posting to the channel…"
+    const error = runs.errors().get(periodStart)
+    if (error !== undefined) return errorMessage(error)
+    const view = runs.results().get(periodStart)
+    return view === undefined ? null : deliveryNotice(view)
   }
 
   const columns: readonly Column<UsageReportListItem>[] = [
@@ -78,10 +79,12 @@ export function UsageReports() {
           >
             Resend to channel
           </button>
-          <Show when={notice()?.periodStart === row.periodStart}>
-            <span class={styles.resendNotice} role="status">
-              {notice()?.text}
-            </span>
+          <Show when={notice(row.periodStart)}>
+            {(text) => (
+              <span class={styles.resendNotice} role="status">
+                {text()}
+              </span>
+            )}
           </Show>
         </div>
       ),

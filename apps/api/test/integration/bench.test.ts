@@ -69,9 +69,48 @@ describe("the overhead bench", () => {
       // streams land on the same series, and they are load, not samples.
       expect(row.seriesSamples).toBeGreaterThanOrEqual(result.requests)
     }
+    // The scenario that claims load had it: its background streams were in flight when the
+    // measured requests reached the upstream — all of them at the peak, never none. A sample count
+    // alone passes just as well when those streams never start.
+    const loaded = results.filter((result) => result.scenario.backgroundStreams !== undefined)
+    expect(loaded).not.toHaveLength(0)
+    for (const result of loaded) {
+      expect(result.backgroundOverlap?.min).toBeGreaterThanOrEqual(1)
+      expect(result.backgroundOverlap?.max).toBe(result.scenario.backgroundStreams ?? notReached())
+    }
+    expect(
+      results
+        .filter((r) => r.scenario.backgroundStreams === undefined)
+        .every((r) => r.backgroundOverlap === null),
+    ).toBe(true)
     // A heavy scenario runs a share of the requests; none runs zero.
     expect(results.every((result) => result.requests >= 1)).toBe(true)
     expect(outcome.violations).toEqual([])
+  }, 30_000)
+
+  test("subtracts the upstream's wait: an overhead sample is not the stub's own think time", async () => {
+    // The stub holds every request for 60 ms. A driver that charged that wait to the router would
+    // report at least 60 ms per request; the router's real cost here is around one. The margin is
+    // a factor of several, on the median, so a loaded machine does not decide the answer.
+    const held = 60
+    const result = await runScenario(SCENARIOS[0] ?? notReached(), {
+      ...OPTIONS,
+      firstByteDelayMs: held,
+    })
+    const median = result.overheadMs[Math.floor(result.overheadMs.length / 2)] ?? notReached()
+
+    expect(result.overheadMs).toHaveLength(result.requests)
+    expect(median).toBeLessThan(held / 3)
+  }, 30_000)
+
+  test("added time-to-first-token counts from the request's start, so it is never below the pre-upstream work", async () => {
+    const streamed = SCENARIOS.find((scenario) => scenario.stream) ?? notReached()
+    const result = await runScenario(streamed, OPTIONS)
+
+    // From the upstream's first byte this difference could be a few microseconds; from the
+    // request's start it contains auth, the body scan and selection, and cannot be negative.
+    expect(result.addedTtftMs).toHaveLength(result.requests)
+    expect(result.addedTtftMs.every((value) => value > 0)).toBe(true)
   }, 30_000)
 
   test("covers both non-SDK egress paths — the labels prove it was not passthrough twice", async () => {
@@ -141,6 +180,7 @@ describe("the verdict", () => {
           overheadMs: MEASURED,
           addedTtftMs: [],
           buffered: 3,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -163,6 +203,7 @@ describe("the verdict", () => {
           overheadMs: MEASURED,
           addedTtftMs: [],
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -182,6 +223,7 @@ describe("the verdict", () => {
           overheadMs: MEASURED,
           addedTtftMs: [],
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -208,6 +250,7 @@ describe("the verdict", () => {
           overheadMs: MEASURED,
           addedTtftMs: ascending(10, 15, 0, 15),
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -235,6 +278,7 @@ describe("the verdict", () => {
           overheadMs: MEASURED,
           addedTtftMs: ascending(197, 0.1, 3, 50),
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -256,6 +300,7 @@ describe("the verdict", () => {
           overheadMs: MEASURED,
           addedTtftMs: [],
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -281,6 +326,7 @@ describe("the verdict", () => {
           overheadMs: ascending(98, 0.3, 2, 9),
           addedTtftMs: [],
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -304,6 +350,7 @@ describe("the verdict", () => {
           overheadMs: Array.from({ length: 10 }, () => 0.33),
           addedTtftMs: [],
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
@@ -325,12 +372,39 @@ describe("the verdict", () => {
           overheadMs: [],
           addedTtftMs: [],
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       BUDGETS,
     )
 
     expect(outcome.violations[0]).toContain("no request's overhead was measured")
+  })
+
+  test("a scenario that names background load fails when none was in flight", () => {
+    const loaded = SCENARIOS.find((candidate) => candidate.backgroundStreams !== undefined)
+    const base = {
+      requests: 10,
+      failures: 0,
+      exposition,
+      overheadMs: MEASURED,
+      addedTtftMs: [],
+      buffered: 0,
+    }
+
+    for (const backgroundOverlap of [null, { min: 0, max: 32 }]) {
+      const outcome = verdict(
+        [{ ...base, scenario: loaded ?? notReached(), backgroundOverlap }],
+        BUDGETS,
+      )
+      expect(outcome.violations).toHaveLength(1)
+      expect(outcome.violations[0]).toContain("no background stream in flight")
+    }
+    const held = verdict(
+      [{ ...base, scenario: loaded ?? notReached(), backgroundOverlap: { min: 31, max: 32 } }],
+      BUDGETS,
+    )
+    expect(held.violations).toEqual([])
   })
 
   test("holds a non-streamed scenario to the overhead budget only — it has no first token to be late with", () => {
@@ -344,6 +418,7 @@ describe("the verdict", () => {
           overheadMs: MEASURED,
           addedTtftMs: [],
           buffered: 0,
+          backgroundOverlap: null,
         },
       ],
       { overheadP99Ms: 5, addedTtftP95Ms: 0 },

@@ -251,10 +251,12 @@ bin/check     # before committing: lint, typecheck, test, build — the offline 
 ```
 
 `bin/check` prints one line per stage (name, verdict, seconds) and a failing stage's own output,
-nothing else; `bin/check --verbose` streams everything. While you work, `bin/check --fast` runs
+nothing else; `bin/check --verbose` streams the suite live and prints typecheck the moment it
+finishes. A type error stops the suite and is reported at once. While you work, `bin/check --fast` runs
 lint, typecheck and only the tests your changes reach (`bin/test --changed=origin/main`) — it says
 itself that it is not the gate. A bare `bin/test` runs the suite as two shards at once, each on its
-own database (`router`, and `router_shard2`, created on demand); `bin/test <pattern>` and
+own database (`router`, and `router_shard2`, created on demand and stamped as `bin/test`'s own — a
+database of that name it did not create is refused, because the suites truncate); `bin/test <pattern>` and
 `bin/test --changed` run one process. Off a terminal, test output is failures and the summary only.
 
 `bin/check` needs a database and refuses to start without one, because CI's test job uses real
@@ -274,9 +276,11 @@ wave through exactly the silent skip it exists to stop. `bin/lib/database-url` p
 run will use if you ever need to see it.
 
 One more when you touch the request path: `bin/bench` drives the real router against an in-process
-stub upstream and reports the overhead it measured per request — client wall time minus the time the
-upstream held the request, unrounded — beside what the router's own `router_overhead_seconds`
-recorded, plus added time-to-first-token measured separately. Its scenarios include prod-shaped
+stub upstream and reports the overhead it measured per request, unrounded — how late the router
+made it: its time before calling the upstream, plus the worse of its time after the upstream's last
+byte and the latest any stream token reached the client — beside what the router's own
+`router_overhead_seconds` recorded, plus added time-to-first-token, counted from the request's
+start. Its scenarios include prod-shaped
 350 KB and 1 MB transcripts, a 31-account / 11-pool roster, a Responses-API account, and short
 requests under 32 long streams. It exits non-zero when either half of the budget breaks —
 overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
