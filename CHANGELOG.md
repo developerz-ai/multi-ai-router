@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.78.0] — 2026-11-24
+
+### Added
+
+- `CLAUDE_SDK_QUEUE_WAIT_MS` (default `60000`): the most one Claude subscription request waits at the subprocess gate, in total. A request that cannot get a slot within it is told so and moves on, instead of waiting silently until its attempt deadline (`UPSTREAM_TIMEOUT_MS`, 600 s) behind a client that cuts a silent call at 300 s. One budget per request, not per attempt: the next candidate, the fast transport's fallback to the SDK and a busy-session retry all draw on what is left, so a walk over N full accounts answers after about one wait. Both halves of the gate are bounded, by the same budget. Test now, the idle probe, the credential keepalive, the model list and the usage-gauge read keep the unbounded queue: nobody is waiting on them, and refusing the keepalive would skip a token refresh. The caps (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) do not change.
+- Two failure kinds for a full gate, both retryable and blameless (no cooldown, no strike, no recovery probe, no model hold): `account-full` (the account's in-flight limit) fails over to the next eligible account; `router-full` (the replica's global ceiling) also stops the chain offering further Claude subscription candidates in that request, while an account of another kind is still tried. The usage row's `errorClass` is `account-at-capacity` / `router-at-capacity`, with no `httpStatus`.
+- `429 account_at_capacity` (wall `clock`, scope `pool`, `signal: account-at-capacity`, `Retry-After` 30 s from `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): every eligible Claude account was at its in-flight limit for the whole wait. When the replica's own ceiling was full the answer is the existing `503 no_healthy_account` with wall `capacity`, scope `router`, `signal: router-at-capacity`. At prod's 8/8 ceilings a saturated account also fills the global gate, so the typical answer is the `429` after about one wait.
+
+### Changed
+
+- The rule "a router-made `429` while an eligible account is in scope is a bug" (`CLAUDE.md`) is narrowed, with the owner's authorization (developerz-ai/developerz.ai#10277), to allow this one capacity answer after the bounded gate wait. The `concurrency.ts` header and `docs/clients.md` no longer say a capacity wait never fails a request.
+
 ## [2.77.0] — 2026-11-24
 
 ### Security
@@ -2540,3 +2552,4 @@ your tooling config.
 [2.76.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.0
 [2.76.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.1
 [2.77.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.77.0
+[2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0

@@ -245,7 +245,11 @@ name is served as that model and nothing else. What to add, and what each needs:
 ## Errors, retries and timeouts
 
 The router walks every eligible account before it answers with an error. A failure that reaches
-you has already been tried across the pool. What follows is what the code does today
+you has already been tried across the pool. A Claude subscription request queues for a subprocess slot
+for up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next account; when
+every eligible account was full for the whole wait you get `429 account_at_capacity` (or, when the
+replica itself was full, `503 no_healthy_account` with signal `router-at-capacity`) after about that
+long, never a silent wait. What follows is what the code does today
 (`packages/core/src/errors.ts`, `packages/core/src/wall.ts`, `apps/api/src/errors/`,
 `apps/api/src/services/dataplane/`).
 
@@ -263,6 +267,7 @@ you has already been tried across the pool. What follows is what the code does t
 | `413` | `request_too_large` | `request` | Body over `MAX_REQUEST_BODY_BYTES` (32 MiB default) | No. Send less |
 | `415` | `unsupported_content_encoding` | `request` | The body is compressed with an encoding the router does not decode | No. Send it uncompressed |
 | `429` | `quota_exhausted` | `clock` | Every account that could serve has a spent window. **Always** has `Retry-After`: the earliest reset, or a 30 s floor when the reset is unknown | Yes, after `Retry-After` |
+| `429` | `account_at_capacity` | `clock` | Every eligible Claude subscription account was at its in-flight limit for the whole bounded gate wait (`CLAUDE_SDK_QUEUE_WAIT_MS`). No account is out of anything and none was cooled. `Retry-After` is 30 s (`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): a full gate names no instant. Arrives after about one wait, not one per account. `signal` is `account-at-capacity` | Yes, after `Retry-After` |
 | `429` | `key_rate_limited` | `clock` | **Your key** exceeded its own rate limit. No account is out of anything | Yes, after `Retry-After`. Slow down. Switching to another key on the same router only moves the load |
 | `500` | `credential_decrypt_failed` | `human` | A stored credential cannot be read | No. Ask the operator |
 | `500` | none | `internal` | Unexpected router failure. The detail is logged, not returned | Once, with backoff |
@@ -270,7 +275,7 @@ you has already been tried across the pool. What follows is what the code does t
 | `502` | `translation_protocol_error` | `internal` | A non-streamed cross-dialect answer could not be translated faithfully (e.g. an upstream tool call whose `arguments` are not a JSON object). Never relayed as a tool call with `input: {}`. `retryable: false` | No automatic retry; the same request usually reproduces it. Report it |
 | `503` | `upstream_overloaded` | `clock` | The provider's shared backend is busy. Has `Retry-After` (the upstream's own value, or 30 s) | Yes, after `Retry-After` |
 | `503` | `key_verification_unavailable` | `capacity` | Key verification is briefly busy, or the router's database is unreachable and your key has no recently verified copy in memory (a warm key keeps working through a short outage). `Retry-After: 1` | Yes, a bounded number of times |
-| `503` | `no_healthy_account` | `capacity`, `human` or `scope` | Nothing in scope can serve. When **every attempt failed on capacity** (overloaded, server error, connection, timeout) it has `Retry-After` (and `error.router.retry_after_s`): the soonest account cooldown, or 30 s when unknown. Other `capacity` endings carry no `Retry-After`. `human` (accounts disabled or needing re-auth) and `scope` (no account serves this operation) never carry one and will not clear on a retry | When `retryable` is `true`: after `Retry-After` if present, else bounded exponential backoff |
+| `503` | `no_healthy_account` | `capacity`, `human` or `scope` | Nothing in scope can serve. When **every attempt failed on capacity** (overloaded, server error, connection, timeout) it has `Retry-After` (and `error.router.retry_after_s`): the soonest account cooldown, or 30 s when unknown. Other `capacity` endings carry no `Retry-After`. The ending `scope: router`, `signal: router-at-capacity` is a Claude subscription request that waited the whole `CLAUDE_SDK_QUEUE_WAIT_MS` for this replica's subprocess ceiling (`CLAUDE_SDK_MAX_CONCURRENCY`) and found it full; it carries `Retry-After` (30 s by default) and is `retryable`. A `429 account_at_capacity` outranks it when both happened in one request. `human` (accounts disabled or needing re-auth) and `scope` (no account serves this operation) never carry one and will not clear on a retry | When `retryable` is `true`: after `Retry-After` if present, else bounded exponential backoff |
 | `503` | `router_shutdown`, `request_admission_unavailable` | `capacity` | The router is restarting, or its request admission is closed or full. No `Retry-After` | Yes, after a few seconds with backoff. A restart usually takes seconds |
 | `504` | `upstream_timeout` | `capacity` | The upstream was reached and missed its deadline | Yes, with backoff. Prefer streaming for long calls |
 
@@ -306,7 +311,7 @@ The OpenAI dialects use the same object: `{"error":{"message":…,"type":…,"pa
 | `reset_at`, `reset_source` | A `429`'s refill instant and whether it was `provider-reported`, `estimated` or `unknown` |
 | `scope` | Who the verdict is about: `pool`, `account`, `session`, `key`, `request`, `router` |
 | `accounts`, `pools` | Opaque account references (`acct_…`) and pool names, for the operator |
-| `signal` | The machine token that decided it (`anthropic:rate_limit_error`, `cooling-down`, …) |
+| `signal` | The machine token that decided it (`anthropic:rate_limit_error`, `cooling-down`, `account-at-capacity`, `router-at-capacity`, …) |
 | `attempts`, `request_id` | Upstream attempts made, and the id to quote to the operator |
 | `reconnect` | Accounts in your scope that lost their login and must be reconnected by a router admin, as `{account, label, provider, url}` (`url` is the console's Accounts page, `null` without `PUBLIC_URL`); `[]` when none. The message ends with the same instruction in words, so relay it to your human |
 
