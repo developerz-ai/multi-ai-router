@@ -13,22 +13,27 @@ const choices = [
 for (const tool_choice of choices) {
   test(`Haiku 5.5 preserves native ${tool_choice.type} and every declared tool`, () => {
     for (const thinking of [undefined, { type: "disabled" }, { type: "adaptive" }]) {
-      const input = { model: "claude-haiku-5-5", tools, tool_choice, thinking }
+      const input = structuredClone({ model: "claude-haiku-5-5", tools, tool_choice, thinking })
+      const snapshot = structuredClone(input)
       const result = adaptFastToolChoice(input)
       expect(result.body).toBe(input)
+      expect(result.body).toEqual(snapshot)
+      expect(input).toEqual(snapshot)
       expect(result.adapted).toBeNull()
     }
   })
 }
 
 test("Haiku leaves incompatible thinking plus force for upstream validation", () => {
-  const input = {
+  const input = structuredClone({
     model: "claude-haiku-5-5",
     tools,
     tool_choice: { type: "any" },
     thinking: { type: "enabled", budget_tokens: 1024 },
-  }
+  })
+  const snapshot = structuredClone(input)
   expect(adaptFastToolChoice(input).body).toBe(input)
+  expect(input).toEqual(snapshot)
 })
 
 test("uncalibrated models retain the existing adaptation", () => {

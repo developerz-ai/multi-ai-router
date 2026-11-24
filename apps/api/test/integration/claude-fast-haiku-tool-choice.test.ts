@@ -81,8 +81,32 @@ for (const stream of [false, true]) {
     )
     expect(response.status).toBe(200)
     const text = await response.text()
-    expect(text).toContain("tool_use")
-    expect(text).toContain("echo")
+    if (stream) {
+      expect(response.headers.get("content-type")).toContain("text/event-stream")
+      const events = text
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice(6)) as Record<string, unknown>)
+      expect(events).toContainEqual({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "tool_1", name: "echo", input: {} },
+      })
+      expect(events).toContainEqual({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"marker":"OK"}' },
+      })
+      expect(events).toContainEqual({ type: "message_stop" })
+    } else {
+      expect(response.headers.get("content-type")).toContain("application/json")
+      expect(JSON.parse(text)).toMatchObject({
+        type: "message",
+        model: "claude-haiku-5-5",
+        stop_reason: "tool_use",
+        content: [{ type: "tool_use", id: "tool_1", name: "echo", input: { marker: "OK" } }],
+      })
+    }
     expect(sent[0]?.tool_choice).toEqual({ type: "any" })
     await settle()
     expect(h.usage.rows).toHaveLength(1)
