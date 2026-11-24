@@ -128,6 +128,7 @@ export const CLAUDE_SUBSCRIPTION_MODELS: readonly string[] = Object.freeze([
   "claude-sonnet-5-5",
   "claude-sonnet-5",
   "claude-sonnet-4-6",
+  "claude-haiku-5-5",
   "claude-haiku-4-5",
 ])
 
@@ -136,15 +137,14 @@ export const CLAUDE_SUBSCRIPTION_MODELS: readonly string[] = Object.freeze([
  * of the same date. A live listing's own `resolvedModel` wins over this map whenever it states
  * one; this is only what the shipped fallback claims.
  *
- * Provenance: the model catalog baked into the bundled `claude` CLI (2.1.286, Agent SDK 0.3.286) —
- * its first-party `aliases.*.default` and `latest_per_family` both name exactly these four. It is a
+ * Provenance: the CLI 2.1.331 handshake (2026-11-24) and the published current family models. It is a
  * **label**, never a rewrite: the client's `opus` goes upstream as `opus` and the CLI resolves it.
  * Blast radius of a stale entry: the `resolved_model` shown beside an alias, and the context window
  * looked up through it, on a shipped-fallback row.
  */
 export const CLAUDE_SUBSCRIPTION_ALIASES: Readonly<Record<string, string>> = Object.freeze({
-  fable: "claude-fable-5-1",
+  fable: "claude-fable-5-2",
   opus: "claude-opus-5-5",
   sonnet: "claude-sonnet-5-5",
-  haiku: "claude-haiku-4-5",
+  haiku: "claude-haiku-5-5",
 })

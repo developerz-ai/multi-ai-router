@@ -36,7 +36,7 @@ Every fallback calls `onFallback(reason, accountId)` (for the `claude_fast_fallb
 counter) and warns **once per Account and reason**. An Account whose `.claude.json` lacks its
 identity, or whose alias never resolves, falls back on every request, and debug logs alone hid it.
 
-The calibrated profile is CLI `2.1.319`, SDK `0.3.319`, Bun `1.4.4`. A custom CLI override,
+The calibrated profile is CLI `2.1.331`, SDK `0.3.331`, Bun `1.4.4`. A custom CLI override,
 a different Bun version or SDK manifest, or a binary SHA-256 differing from the captured Linux x64
 glibc build disables
 the direct transport at boot and emits a warning. The check accepts the image's staged PATH copy
@@ -44,6 +44,8 @@ after dependency pruning and hashes in bounded chunks, once at boot. The build s
 manifest alongside the bundled artifacts because workspace package links are absent in the image;
 a final-image gate checks availability before publication. Boot logs distinguish verified direct
 inference from SDK fallback and include safe fallback reason codes. Recalibrate before upgrading these pins.
+The 2026-11-24 recalibration adds the observed first-party request-class header; the uncalibrated
+`x-cc-atis` header is intentionally omitted. See the wire record for measured differences.
 Concrete `claude-*` model IDs pass through; aliases require a live SDK catalog resolution.
 The `[1m]` model suffix becomes the corresponding beta header, without model substitution.
 
@@ -101,7 +103,7 @@ requirements, completion checks and private artifact handling.
 
 The [wire record](../research/claude-wire.md) distinguishes observed TTY, print, SDK, tool,
 subagent, notification and compaction behavior from reconstruction. The checksum matched 22/22
-private captures for CLI `2.1.301` and 15/15 for CLI `2.1.319` on 2026-11-07, with the same
+private captures for CLI `2.1.301` and 15/15 for CLI `2.1.319` on 2026-11-07 and 16/16 for CLI `2.1.331` on 2026-11-24, with the same
 per-version seed and suffix algorithm. A local CLI/Bun comparison matched ClientHello fingerprints
 and header order. These results do not establish identical production behavior or
 account-enforcement outcomes.

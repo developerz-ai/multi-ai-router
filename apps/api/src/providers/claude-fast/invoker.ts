@@ -144,6 +144,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
                 betas: input.clientHeaders?.get("anthropic-beta"),
                 contextTag,
                 requestClass: input.clientHeaders?.get("x-claude-code-request-class"),
+                firstPartyRequestClass: input.clientHeaders?.get("x-claude-1p-request-class"),
                 agentType: input.clientHeaders?.get("x-claude-code-agent-type"),
                 subagent: meta.subagent,
                 toolNames: meta.toolNames,

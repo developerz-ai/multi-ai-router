@@ -70,6 +70,24 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertFalse((Path(self.tmp.name) / 'private-bodies.jsonl').exists())
 
+    def test_request_class_retains_only_known_enums(self):
+        flow = self.flow()
+        flow.request.headers['x-claude-code-request-class'] = 'main'
+        flow.request.headers['x-claude-1p-request-class'] = 'private-secret'
+        flow.request.headers['x-cc-atis'] = 'private-secret'
+        self.module.request(flow)
+        headers = flow.metadata['trace']['headers']
+        self.assertEqual(headers['x-claude-code-request-class'], 'main')
+        self.assertEqual(headers['x-claude-1p-request-class'], '<redacted>')
+        self.assertEqual(headers['x-cc-atis'], '<redacted>')
+
+    def test_first_party_request_class_retains_foreground_agent_enum(self):
+        flow = self.flow()
+        flow.request.headers['x-claude-1p-request-class'] = 'blocking-subagent'
+        self.module.request(flow)
+        self.assertEqual(flow.metadata['trace']['headers']['x-claude-1p-request-class'],
+                         'blocking-subagent')
+
     def test_gzip_stream_is_forwarded_compressed_but_analyzed_decoded(self):
         flow = self.flow()
         flow.response.headers['content-encoding'] = 'gzip'

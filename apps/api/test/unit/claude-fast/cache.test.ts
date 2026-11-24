@@ -95,7 +95,7 @@ describe("a client that marks only its prefix", () => {
   test("a native Claude Code request and a top-level cache_control are untouched", () => {
     const billing = {
       type: "text",
-      text: "x-anthropic-billing-header: cc_version=2.1.319.abc; cc_entrypoint=cli; cch=12345;",
+      text: "x-anthropic-billing-header: cc_version=2.1.331.abc; cc_entrypoint=cli; cch=12345;",
     }
     const native = prepare({ system: [billing, ...system], messages: [first, ...tool("a")] })
     expect(markers(native.messages)).toBe(0)
