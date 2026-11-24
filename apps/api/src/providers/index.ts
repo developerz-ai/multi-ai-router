@@ -251,6 +251,7 @@ export { mapModelAlias } from "./model-alias"
 export type { ListedModel, ProviderModelListing } from "./model-listing"
 export type { ProviderQuotaRead } from "./quota-read"
 export { parseRateLimitHeaders } from "./rate-limit/parse"
+export { accountLevelReading, isModelLevelReading, type ReadingSource } from "./rate-limit/scope"
 export type { ProviderSupport } from "./registry"
 export {
   HTTP_DRIVERS,

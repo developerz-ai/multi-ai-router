@@ -6,7 +6,7 @@
  * Operator-facing description only. Nothing here is read by routing or cost: a free tier's limit is
  * enforced by the upstream's own `429`, and whether an attempt cost anything is the price table's
  * question. Limits move often, so every entry is dated and re-checked weekly
- * (`.dz/briefs/free-providers.md`).
+ * (`.dz/schedules/free-providers.md`).
  */
 export interface ProviderFreeTier {
   /** `keyless`: an Account needs no credential. `free-key`: a key that costs nothing to create. */

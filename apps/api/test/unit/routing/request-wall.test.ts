@@ -19,6 +19,8 @@ const gated: AttemptFailure = {
   status: 429,
   message: "claude-sdk:extra-usage-gated",
   requestAttributable: true,
+  // Since 2.77.0 (`claude-sdk/failure-rules-quota.ts`): the body's fingerprint is refused on any clock.
+  permanentForRequest: true,
 }
 const chain = candidates(account("a"), account("b"), account("c"))
 
@@ -68,10 +70,22 @@ describe("a request-attributable refusal", () => {
     })
   })
 
-  test("a lone refusal that clears with time is not: extra-usage-gated keeps its held 429", () => {
-    expect(planNextAttempt(candidates(account("a")), answered("a"), gated)).not.toEqual({
+  // Through 2.76.1 this asserted the opposite ("clears with time … keeps its held 429"). Prod
+  // 2026-11-23: one session's body drew 873 such refusals over seven hours on a one-account pool,
+  // each a fresh upstream turn the `429` invited.
+  test("a lone extra-usage-gated refusal on a one-account pool is the request wall", () => {
+    expect(planNextAttempt(candidates(account("a")), answered("a"), gated)).toEqual({
       action: "stop",
       reason: "request-wall",
+    })
+  })
+
+  test("a request-attributable refusal a clock does clear keeps its held answer", () => {
+    const clearing: AttemptFailure = { ...gated, permanentForRequest: false }
+    const progress = noteRequestAttributable(recordAttempt(NO_ATTEMPTS, "a"), clearing)
+    expect(planNextAttempt(candidates(account("a")), progress, clearing)).toEqual({
+      action: "stop",
+      reason: "attempts-exhausted",
     })
   })
 

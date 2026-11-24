@@ -167,7 +167,9 @@ export function createSseParser(options: SseParserOptions = {}): SseParser {
       atStreamStart = false
       if (text.startsWith(BOM)) text = text.slice(1)
     }
-    if (pendingLf) {
+    // Only a chunk that decoded to something answers the question: an empty one (a zero-length
+    // read, the head of a multi-byte character) leaves the `\n` still owed.
+    if (pendingLf && text.length > 0) {
       pendingLf = false
       if (text.startsWith("\n")) text = text.slice(1)
     }

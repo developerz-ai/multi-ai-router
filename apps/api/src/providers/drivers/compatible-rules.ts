@@ -1,4 +1,4 @@
-import type { ClassificationRule } from "../failure/classify"
+import { type ClassificationRule, codeRule, messageRule } from "../failure/classify"
 import { COMPATIBLE_BODY_RESET } from "../rate-limit/compatible-body"
 import type { UpstreamErrorFacts } from "../types"
 
@@ -102,3 +102,23 @@ export const reportedQuotaResetRule: ClassificationRule = {
   signal: "compatible:reported-body-reset",
   when: (facts, status) => status === 429 && COMPATIBLE_BODY_RESET.test(facts.message ?? ""),
 }
+
+/**
+ * Alibaba Model Studio, which the console offers as a preset of the generic hatch (`free-presets.ts`),
+ * so its vocabulary sits here. Provenance: alibabacloud.com/help/en/model-studio/error-code, read
+ * 2026-11-23: `403 AllocationQuota.FreeTierOnly` is **one model's** free tokens spent, with the
+ * stop-when-free-quota-is-used switch the preset tells the operator to turn on; `403 Arrearage` is an
+ * unpaid account; `429 "Allocated quota exceeded"` is a per-minute token rate that may carry OpenAI's
+ * `insufficient_quota` code. Blast radius: read by status alone, the first model to run dry parked the
+ * key as rejected for every model, and the per-minute limit read as a dead balance. Codes and wording
+ * no other vendor uses.
+ */
+const FREE_MODEL_SPENT: readonly string[] = ["AllocationQuota.FreeTierOnly"]
+const ARREARAGE: readonly string[] = ["Arrearage"]
+const ALLOCATED_RATE = /^allocated quota exceeded/i
+
+export const modelStudioRules: readonly ClassificationRule[] = [
+  codeRule("model-unsupported", "model-studio:free-tier-spent", FREE_MODEL_SPENT),
+  codeRule("credits-exhausted", "model-studio:arrearage", ARREARAGE),
+  messageRule("rate-limited", "model-studio:allocated-rate", ALLOCATED_RATE, { statuses: [429] }),
+]

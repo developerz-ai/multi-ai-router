@@ -2,7 +2,7 @@ import { createHttpDriver } from "../driver"
 import { FREE_PRESETS } from "../free-presets"
 import { parseCompatibleRateLimit } from "../rate-limit/compatible-body"
 import type { ProviderDriver } from "../types"
-import { genericCreditsRule, reportedQuotaResetRule } from "./compatible-rules"
+import { genericCreditsRule, modelStudioRules, reportedQuotaResetRule } from "./compatible-rules"
 
 /**
  * `openai-compatible` — the escape hatch for any vLLM / Ollama / LiteLLM / vendor endpoint that
@@ -13,7 +13,7 @@ const driver = createHttpDriver({
   id: "openai-compatible",
   surfaces: [{ dialect: "openai-chat", baseUrl: null }],
   parseRateLimit: parseCompatibleRateLimit,
-  rules: [reportedQuotaResetRule, genericCreditsRule],
+  rules: [...modelStudioRules, reportedQuotaResetRule, genericCreditsRule],
 })
 
 export const openAiCompatibleDriver: ProviderDriver = { ...driver, freePresets: FREE_PRESETS }

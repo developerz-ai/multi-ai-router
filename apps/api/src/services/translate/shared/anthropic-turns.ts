@@ -62,7 +62,10 @@ export function imageBlockFromUrl(url: string, at: string): AnthropicImageBlock 
   const mediaType = inline?.[1]
   const data = inline?.[2]
   if (mediaType !== undefined && data !== undefined) {
-    return { type: "image", source: { type: "base64", media_type: mediaType, data } }
+    // `image/jpg` is not a registered type, but clients write it and OpenAI reads it; Anthropic
+    // accepts only the registered name and answers `400` for the other.
+    const media_type = mediaType.toLowerCase() === "image/jpg" ? "image/jpeg" : mediaType
+    return { type: "image", source: { type: "base64", media_type, data } }
   }
   if (url.startsWith("https://") || url.startsWith("http://")) {
     return { type: "image", source: { type: "url", url } }

@@ -105,9 +105,10 @@ export function evaluateCandidate(
     })
 
   const threshold = options.quotaSpentThreshold ?? DEFAULT_QUOTA_SPENT_THRESHOLD
-  const spent = findSpentWindow(account, now, threshold)
+  // Per requested model and per window: a spent Opus window drops this account for Opus alone.
+  const spent = findSpentWindow(account, now, threshold, resolution.upstreamModel)
   const spentDrop =
-    spent !== null && !recoveryAllowsQuota(account, now, threshold)
+    spent !== null && !recoveryAllowsQuota(account, now, threshold, resolution.upstreamModel)
       ? drop({
           reason: "quota-window-spent",
           window: spent.window,

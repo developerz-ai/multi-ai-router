@@ -160,3 +160,36 @@ describe("advertisedModels", () => {
     expect([...advertised].sort()).toEqual(["identity", "keep", "shadowed", "target"])
   })
 })
+
+// Plan 2.77 A6: an OpenRouter account declares 442 names. Membership is read through a set built
+// once per declared list, so these pin what a set could get wrong and an array scan never did.
+describe("a declared list read as a set", () => {
+  test("a replaced list answers for itself, not for the list it replaced", () => {
+    const before = account("a", { supportedModels: ["old"] })
+    expect(resolveModel(before, "old").supported).toBe(true)
+    const after = { ...before, supportedModels: ["new"] }
+    expect(resolveModel(after, "old").supported).toBe(false)
+    expect(resolveModel(after, "new").supported).toBe(true)
+  })
+
+  test("two accounts sharing one list object read the same membership", () => {
+    const shared = ["m1", "m2"]
+    expect(resolveModel(account("a", { supportedModels: shared }), "m2").supported).toBe(true)
+    expect(resolveModel(account("b", { supportedModels: shared }), "m3").supported).toBe(false)
+  })
+
+  test("a routing variant and a tagged spelling still resolve through the list", () => {
+    const openrouter = account("a", {
+      supportedModels: ["deepseek/flash", "claude-x[1m]"],
+      routingVariants: [":floor"],
+    })
+    expect(resolveModel(openrouter, "deepseek/flash:floor").supported).toBe(true)
+    expect(resolveModel(openrouter, "claude-x[1m]").upstreamModel).toBe("claude-x[1m]")
+  })
+
+  test("the listing of a 442-name account is the declared names, each once", () => {
+    const names = Array.from({ length: 442 }, (_, index) => `vendor/model-${index}`)
+    const listed = advertisedModels(account("a", { supportedModels: [...names, names[0] ?? ""] }))
+    expect(listed).toEqual(names)
+  })
+})

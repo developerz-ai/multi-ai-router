@@ -130,9 +130,11 @@ export interface FailureClassification {
   /**
    * The refusal can never succeed for this request on this pool, however long the client waits:
    * the Agent SDK's `claude-sdk:structured-output-unsupported` (no carrier for the field, on any
-   * clock). Only a refusal with this flag ends a chain whose every account refused it as the
-   * request wall when fewer than `REQUEST_WALL_AFTER` were tried; one that clears with time
-   * (`claude-sdk:extra-usage-gated`) keeps its held `429` (developerz.ai plan 101 slice 09, R1).
+   * clock) and the third-party wording of `claude-sdk:extra-usage-gated` (the fingerprint is in the
+   * body the client resends).
+   * A chain whose every account refused it this way ends as the request wall even when fewer than
+   * `REQUEST_WALL_AFTER` were tried (`routing/failover.ts`, `walled`). A refusal that clears with
+   * time must not carry it (developerz.ai plan 101 slice 09, R1).
    */
   readonly permanentForRequest?: boolean
   /**
@@ -142,6 +144,15 @@ export interface FailureClassification {
    * serving every other model (`HealthStore.throttleModel`). Absent: about the account, as before.
    */
   readonly modelScoped?: boolean
+  /**
+   * An `invalid-request` about **this vendor's wire**, not the request: Gemini refusing a tool call
+   * another vendor's model made (no thought signature), or a field its schema does not name. Every
+   * account of the same provider answers alike, so the chain drops that provider's remaining
+   * candidates and goes on to the next one; another vendor may serve the body as it stands. No
+   * strike, and no hold on the model: the next request is a different body. With no candidate left,
+   * the upstream's own `4xx` is the answer. Absent: a bad request is bad at every account.
+   */
+  readonly providerScoped?: boolean
 }
 
 /** Parsed bounded successful-body evidence; no I/O, raw body logging, or response replacement. */

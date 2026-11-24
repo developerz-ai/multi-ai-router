@@ -29,6 +29,8 @@ export interface ClassificationRule {
   readonly estimatedResetSeconds?: number
   /** Copied onto the classification: see `FailureClassification.modelScoped`. */
   readonly modelScoped?: true
+  /** Copied onto the classification: see `FailureClassification.providerScoped`. */
+  readonly providerScoped?: true
 }
 
 /**
@@ -156,6 +158,7 @@ export function classifyUpstreamFailure(
     message: facts.message,
     rateLimit: withEstimatedReset(rateLimit, matched?.estimatedResetSeconds),
     ...(matched?.modelScoped === true ? { modelScoped: true } : {}),
+    ...(matched?.providerScoped === true ? { providerScoped: true } : {}),
   }
 }
 
@@ -205,6 +208,11 @@ export function onStatus(
 /** The same rule, its refusal about the requested model on this account rather than the account. */
 export function modelScoped(rule: ClassificationRule): ClassificationRule {
   return { ...rule, modelScoped: true }
+}
+
+/** The same rule, its refusal about this vendor's wire rather than the request or the account. */
+export function providerScoped(rule: ClassificationRule): ClassificationRule {
+  return { ...rule, providerScoped: true }
 }
 
 /** The same rule, carrying an estimated reset for responses that name none. */

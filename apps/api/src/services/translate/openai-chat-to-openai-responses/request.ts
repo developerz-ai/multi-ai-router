@@ -24,6 +24,14 @@ import { toolChoiceToOpenAiResponses, toolsToOpenAiResponses } from "../shared/t
  * openai-chat message becomes exactly one item, plus one `function_call` item per `tool_calls[]`
  * entry, in the order they arrived.
  *
+ * **Only the leading run of `system` / `developer` messages is `instructions`.** A later one stays
+ * where the caller wrote it, as a `developer` item of its own, so the translation of message *i*
+ * depends on messages `0..i` alone and the upstream's prompt cache extends through the history. All
+ * of them joined into `instructions` put each per-turn note ahead of the whole transcript, and the
+ * cached prefix ended at the previous request's `instructions` (#489: 43.3% cached on warm step 0
+ * against 94.2% later). The leading prompt's own placement toward GPT-6.2+ is decided after the
+ * alias (`shared/responses-model-dials.ts`) and lands on the same shape.
+ *
  * Where role *does* matter is the text part: an input turn spells its text `input_text` and the
  * model's own earlier output spells it `output_text`. Responses states the two apart, so this
  * translator has to as well.
@@ -48,7 +56,7 @@ import { toolChoiceToOpenAiResponses, toolsToOpenAiResponses } from "../shared/t
  * `presence_penalty`, `logit_bias`, `user`, `strict`, and image `detail`.
  */
 
-/** Several system turns become one `instructions` string, and multi-part text joins the same way. */
+/** Leading system turns become one `instructions` string, and multi-part text joins the same way. */
 const TEXT_JOIN = "\n\n"
 
 /** @throws TranslationError (400) naming the field that has no openai-responses representation. */
@@ -65,6 +73,9 @@ export function openAiChatToOpenAiResponsesRequestFromParsed(
 
   const instructions: string[] = []
   const input: OpenAiResponsesItem[] = []
+  // Ends at the first message of any other role, by position — whether or not that message
+  // translated to an item — so one transcript always splits at the same place.
+  let leading = true
   // Ids seen on an assistant message, so a result naming a call that never happened is refused
   // rather than handed upstream to fail there with a message about a body we wrote.
   const calls = new Set<string>()
@@ -74,15 +85,18 @@ export function openAiChatToOpenAiResponsesRequestFromParsed(
     switch (message.role) {
       case "system":
       case "developer": {
-        // Responses has one top-level `instructions`, wherever openai-chat put its system turns.
         const text = contentText(message.content, at, "instruction")
-        if (text.length > 0) instructions.push(text)
+        if (text.length === 0) break
+        if (leading) instructions.push(text)
+        else input.push(developerItem(text))
         break
       }
       case "user":
+        leading = false
         pushMessage(input, "user", contentParts(message.content, "input_text", at))
         break
       case "assistant": {
+        leading = false
         const parts = contentParts(message.content ?? undefined, "output_text", at)
         pushMessage(input, "assistant", parts)
         for (const call of message.tool_calls ?? []) {
@@ -92,6 +106,7 @@ export function openAiChatToOpenAiResponsesRequestFromParsed(
         break
       }
       case "tool":
+        leading = false
         if (!calls.has(message.tool_call_id)) {
           rejectField(
             `${at}.tool_call_id`,
@@ -163,6 +178,11 @@ function assertTranslatableToOpenAiResponses(request: ParsedOpenAiChatRequest): 
     )
   }
   assertNoStopSequence(request.stop, "stop")
+}
+
+/** `developer`, the role the leading prompt itself takes on GPT-6.2+ and the anthropic sibling uses. */
+function developerItem(text: string): OpenAiResponsesItem {
+  return { type: "message", role: "developer", content: [{ type: "input_text", text }] }
 }
 
 function functionCall(call: ParsedOpenAiChatToolCall): OpenAiResponsesItem {
@@ -243,8 +263,6 @@ function contentText(
   }
   return texts.join(TEXT_JOIN)
 }
-
-/** `stop: []` and `stop: ""` name no sequence at all; only a stated one is worth a refusal. */
 
 /** `response_format` as `text.format` and the caller's `verbosity` beside it; absent when neither. */
 function responsesText(request: ParsedOpenAiChatRequest): OpenAiResponsesRequest["text"] {

@@ -9,7 +9,7 @@ import {
   anthropicToOpenAiChatStream,
   anthropicToOpenAiResponsesStream,
 } from "../../../src/services/translate/index"
-import { anthropicFrame, anthropicUsageWire, payloads } from "./fixtures"
+import { anthropicFrame, anthropicUsageWire, isTruncationOnly, payloads } from "./fixtures"
 
 const CREATED = 1_700_000_000
 
@@ -295,7 +295,7 @@ describe("the terminal events", () => {
         delta: { type: "text_delta", text: "par" },
       }),
     )
-    expect(stream.flush()).toEqual([])
+    expect(isTruncationOnly(stream.flush())).toBe(true)
   })
 })
 

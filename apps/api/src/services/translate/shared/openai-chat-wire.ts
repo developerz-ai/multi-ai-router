@@ -73,6 +73,7 @@ function turnSchema<T extends z.ZodType>(toolCall: T) {
       foldArrayContent,
       z.looseObject({
         content: z.string().nullish().catch(null),
+        refusal: z.string().nullish().catch(null),
         ...openAiChatReasoningSchema,
         tool_calls: z.array(toolCall).nullish().catch(null),
       }),
@@ -112,3 +113,40 @@ export const openAiChatCompletionSchema = z.looseObject({
     .catch(null),
   usage: z.unknown().optional(),
 })
+
+interface AnswerSource {
+  readonly content?: string | null | undefined
+  readonly refusal?: string | null | undefined
+}
+
+/** A refusal joins the answer on a newline — the join the Responses reading uses for its parts. */
+const REFUSAL_JOIN = "\n"
+
+/**
+ * What the model said out loud in one completion: `content`, then `refusal`.
+ *
+ * openai-chat states a refusal in a field of its own, and neither dialect translated *out* of it
+ * has one on the shapes this build emits, so it travels as answer text. Read as absent it was
+ * dropped: the model declined in a sentence and the client got an empty answer under a clean stop
+ * (`responses-read.ts` makes the same call for a Responses `refusal` part).
+ */
+export function openAiChatAnswerText(message: AnswerSource | null | undefined): string {
+  const content = message?.content ?? ""
+  const refusal = message?.refusal ?? ""
+  if (content.length === 0 || refusal.length === 0) return content + refusal
+  return `${content}${REFUSAL_JOIN}${refusal}`
+}
+
+/** The streamed form of {@link openAiChatAnswerText}: one delta in, the text it adds out. */
+export function createOpenAiChatAnswerReader(): (delta: AnswerSource | null | undefined) => string {
+  let content = false
+  let refusal = false
+  return (delta) => {
+    const text = delta?.content ?? ""
+    const declined = delta?.refusal ?? ""
+    const join = declined.length > 0 && !refusal && (content || text.length > 0)
+    content ||= text.length > 0
+    refusal ||= declined.length > 0
+    return `${text}${join ? REFUSAL_JOIN : ""}${declined}`
+  }
+}

@@ -16,6 +16,7 @@ import {
 import type { OpenAiFinishReason } from "../shared/stop-reason"
 import { chatFinishFromResponses } from "../shared/stop-reason"
 import { TranslationStreamError } from "../shared/stream-error"
+import { createTruncationWatch } from "../shared/stream-truncated"
 import { parseOpenAiResponsesUsage, responsesUsageToOpenAiChat } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
 import { DONE, NO_EVENTS } from "../sse/emit"
@@ -58,6 +59,8 @@ export interface OpenAiResponsesToOpenAiChatStreamOptions extends ResponsesRecov
   readonly id?: string | undefined
   /** Used until `response.created` names the model. The client's requested name is the right value. */
   readonly model?: string | undefined
+  /** The request id an error event this translator authors carries (`shared/stream-truncated.ts`). */
+  readonly requestId?: string | undefined
 }
 
 export function openAiResponsesToOpenAiChatStream(
@@ -70,6 +73,7 @@ export function openAiResponsesToOpenAiChatStream(
   let nextToolCall = 0
   let finished = false
   let closed = false
+  const watch = createTruncationWatch("openai-chat", options.requestId)
   /** Responses item key — its `item.id`, or the `output_index` — → the openai call ordinal. */
   const toolCalls = new Map<string | number, number>()
 
@@ -260,20 +264,21 @@ export function openAiResponsesToOpenAiChatStream(
 
   return {
     push(frame) {
-      return responsesFinalEvents(frameJson(frame)).flatMap((payload) =>
-        process(payload, frame.event),
+      return watch.saw(
+        responsesFinalEvents(frameJson(frame)).flatMap((payload) => process(payload, frame.event)),
       )
     },
 
     flush() {
-      // A truncated stream is never given a synthesized ending: a manufactured terminator would
-      // report a completion that did not happen. The reverse is owed — a stated completion normally
-      // takes the sentinel out with it, and this is the only path left if it ever did not.
-      if (closed || !finished) return NO_EVENTS
+      if (closed) return NO_EVENTS
       closed = true
-      return [DONE]
+      // A stated completion normally takes the sentinel out with it; this is the only path left if
+      // it ever did not. A truncated stream is never given a synthesized ending — it is told it
+      // was truncated (`shared/stream-truncated.ts`).
+      return finished ? [DONE] : watch.end()
     },
 
+    truncated: watch.truncated,
     unrecognizedStopReason: () => unrecognized,
     translationFailure: () => failure,
   }

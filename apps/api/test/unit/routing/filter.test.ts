@@ -130,11 +130,46 @@ describe("exactly one probe — the gate, not the label", () => {
 
 describe("quota headroom", () => {
   test("a spent window drops the account and names the window", () => {
+    // Asked for Opus: through 2.76.1 this asked for `sonnet` and still expected the drop, which is
+    // the rule T3 forbids (below).
     const spent = account("a", { quotaWindows: [continuous(1, "seven_day_opus")] })
-    const rejected = run([spent]).rejected[0]
+    const rejected = run([spent], "claude-opus-5").rejected[0]
 
     expect(rejected?.reason).toBe("quota-window-spent")
     expect(rejected?.window).toBe("seven_day_opus")
+  })
+
+  // `05-routing-and-failover.md` T3: filtering is per requested model and per window.
+  test("a spent Opus window leaves the account serving Sonnet and Haiku", () => {
+    const spent = account("a", { quotaWindows: [continuous(1, "seven_day_opus")] })
+    for (const model of ["claude-sonnet-5-5", "claude-haiku-4-5", "sonnet"]) {
+      expect(run([spent], model).eligible.map((c) => c.account.id)).toEqual(["a"])
+    }
+  })
+
+  test("a spent Sonnet window drops Sonnet and leaves Opus and Haiku", () => {
+    const spent = account("a", { quotaWindows: [continuous(1, "seven_day_sonnet")] })
+    expect(run([spent], "claude-sonnet-5-5").rejected[0]?.window).toBe("seven_day_sonnet")
+    expect(run([spent], "claude-opus-5").eligible).toHaveLength(1)
+    expect(run([spent], "claude-haiku-4-5").eligible).toHaveLength(1)
+  })
+
+  test("the window is matched on the upstream name, after the alias map", () => {
+    const spent = account("a", {
+      quotaWindows: [continuous(1, "seven_day_opus")],
+      modelAliases: { best: "claude-opus-5", cheap: "claude-haiku-4-5" },
+    })
+    expect(run([spent], "best").rejected[0]?.window).toBe("seven_day_opus")
+    expect(run([spent], "cheap").eligible).toHaveLength(1)
+  })
+
+  test("an account-wide window still drops every model, whatever the family windows say", () => {
+    const spent = account("a", {
+      quotaWindows: [continuous(0.2, "seven_day_opus"), continuous(1, "seven_day")],
+    })
+    for (const model of ["claude-opus-5", "claude-sonnet-5-5", "claude-haiku-4-5"]) {
+      expect(run([spent], model).rejected[0]?.window).toBe("seven_day")
+    }
   })
 
   test("a threshold-triggered alarm at the limit blocks just as well as a continuous one", () => {

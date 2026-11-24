@@ -252,6 +252,36 @@ describe("refreshing one account's catalog", () => {
   })
 })
 
+describe("an account holding nothing to ask with", () => {
+  test("an unfinished ChatGPT login is skipped, never a failure that keeps the sweep partial", async () => {
+    const { deps, writes, calls } = harness({ data: [] })
+    const pending = accountRow({
+      provider: "openai-oauth",
+      status: "needs_reauth",
+      authMaterial: null,
+    })
+
+    expect(await refreshAccountCatalog(deps, pending, NOW)).toEqual({
+      kind: "skipped",
+      reason: "http:no-credential",
+    })
+    expect(calls()).toBe(0)
+    expect(writes).toHaveLength(0)
+  })
+
+  test("a provider that authenticates nobody is still asked", async () => {
+    const { deps, calls } = harness({ data: [{ id: "llama3.2" }] })
+    const local = accountRow({
+      provider: "ollama",
+      authMaterial: null,
+      baseUrl: "http://ollama:11434/v1",
+    })
+
+    expect((await refreshAccountCatalog(deps, local, NOW)).kind).toBe("refreshed")
+    expect(calls()).toBe(1)
+  })
+})
+
 describe("which accounts are refreshable at all", () => {
   test("an ordinary HTTP account is", () => {
     expect(isRefreshable({ provider: "zai", status: "active" })).toBe(true)

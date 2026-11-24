@@ -11,6 +11,7 @@ import {
 import type { ResponsesRecoveryOptions } from "../shared/responses-snapshot-recovery"
 import { createResponsesStreamEmitter } from "../shared/responses-stream"
 import { toOpenAiFinishReason, toResponsesCompletion } from "../shared/stop-reason"
+import { createTruncationWatch } from "../shared/stream-truncated"
 import type { AnthropicUsage } from "../shared/usage"
 import { openAiChatUsageToResponses, parseAnthropicUsage, usageToOpenAiChat } from "../shared/usage"
 import type { SseEvent, StreamTranslator } from "../sse/emit"
@@ -49,6 +50,8 @@ export interface AnthropicToOpenAiResponsesStreamOptions extends ResponsesRecove
   readonly id?: string | undefined
   /** Used until `message_start` names the model. The client's requested name is the right value. */
   readonly model?: string | undefined
+  /** The request id an error event this translator authors carries (`shared/stream-truncated.ts`). */
+  readonly requestId?: string | undefined
 }
 
 export function anthropicToOpenAiResponsesStream(
@@ -59,6 +62,7 @@ export function anthropicToOpenAiResponsesStream(
   const emptyTools = new Map<number, string>()
   let startUsage: AnthropicUsage | null = null
   let unrecognized: string | null = null
+  const watch = createTruncationWatch("openai-responses", options.requestId)
 
   function onMessageStart(out: SseEvent[], payload: unknown): void {
     const parsed = messageStartSchema.safeParse(payload)
@@ -140,7 +144,7 @@ export function anthropicToOpenAiResponsesStream(
 
   return {
     push(frame) {
-      if (emitter.isTerminated()) return NO_EVENTS
+      if (emitter.isTerminated() || watch.truncated()) return NO_EVENTS
       const payload = frameJson(frame)
       const out: SseEvent[] = []
 
@@ -176,17 +180,15 @@ export function anthropicToOpenAiResponsesStream(
           // `ping`, and anything Anthropic adds after this was written.
           break
       }
-      return out
+      return watch.saw(out)
     },
 
-    flush() {
-      // Nothing is ever owed here, unlike the openai-chat direction: `[DONE]` is a separate sentinel
-      // that can go missing on its own, while the Responses terminator *is* `response.completed` —
-      // already emitted the moment the finish reason landed. A stream that ended before stating one
-      // was truncated, and a synthesized ending would report a completion that never happened.
-      return NO_EVENTS
-    },
+    // Never a terminator: the Responses one *is* `response.completed`, already emitted the moment
+    // the finish reason landed. A stream that ended before stating one was truncated, and is told
+    // so (`shared/stream-truncated.ts`) rather than handed a completion that never happened.
+    flush: () => (emitter.isTerminated() ? NO_EVENTS : watch.end()),
 
+    truncated: watch.truncated,
     unrecognizedStopReason: () => unrecognized,
     translationFailure: () => emitter.translationFailure(),
   }

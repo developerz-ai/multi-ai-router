@@ -4,7 +4,7 @@ import type {
   AnthropicToolUseBlock,
 } from "../shared/anthropic"
 import { readOpenAiChatReasoning } from "../shared/openai-chat-reasoning"
-import { openAiChatCompletionSchema } from "../shared/openai-chat-wire"
+import { openAiChatAnswerText, openAiChatCompletionSchema } from "../shared/openai-chat-wire"
 import { type TranslatedResponse, undecodableToolArguments } from "../shared/response"
 import { ROUTER_THINKING_SIGNATURE } from "../shared/router-thinking"
 import { toAnthropicStopReason } from "../shared/stop-reason"
@@ -53,7 +53,7 @@ export function openAiChatToAnthropicResponse(
   const thinking = readOpenAiChatReasoning(choice?.message)
   if (thinking.length > 0)
     content.push({ type: "thinking", thinking, signature: ROUTER_THINKING_SIGNATURE })
-  const text = choice?.message?.content ?? ""
+  const text = openAiChatAnswerText(choice?.message)
   // Anthropic rejects an empty text block, and a completion that was only a tool call said nothing.
   if (text.length > 0) content.push({ type: "text", text })
   let translationFailure: TranslatedResponse["translationFailure"]

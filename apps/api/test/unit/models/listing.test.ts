@@ -60,6 +60,70 @@ async function entries(body: unknown, account = accountRow()) {
   return result.entries
 }
 
+describe("an account that cannot be asked", () => {
+  // Thrown, these ended `model_catalog_refresh` at this account, unstamped and so first in line on
+  // the next tick: one ChatGPT login nobody finished and no account was listed again.
+  test.each([
+    ["holds no credential", accountRow({ provider: "openai-oauth", authMaterial: null })],
+    ["holds one that will not decrypt", accountRow()],
+  ])("%s: a failed listing, never a throw", async (_label, account) => {
+    const asked: Request[] = []
+    const listed = await listUpstreamModels(
+      {
+        cipher: {
+          decrypt: () => {
+            throw new Error("wrong key")
+          },
+        },
+        timeoutMs: 5_000,
+        fetch: async (request: Request) => {
+          asked.push(request)
+          return new Response("{}")
+        },
+      },
+      account,
+    )
+
+    expect(listed).toMatchObject({ ok: false, code: "discovery_failed" })
+    expect(asked).toHaveLength(0)
+  })
+
+  test("an upstream that drops a long listing half way is a failed listing too", async () => {
+    let sent = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += 1
+        if (sent > 3) controller.error(new Error("ECONNRESET"))
+        else controller.enqueue(new Uint8Array(64 * 1024).fill(32))
+      },
+    })
+    const listed = await listUpstreamModels(
+      deps(async () => new Response(body, { headers: { "content-type": "application/json" } })),
+      accountRow(),
+    )
+
+    expect(listed).toMatchObject({ ok: false, code: "discovery_failed" })
+  })
+})
+
+describe("a listing whose endpoint refuses query parameters", () => {
+  // Prod 2026-11-23/24: Google answered the stock `?limit=1000` with `400` on every sweep.
+  test("gemini is asked with none, and its ids are the names a request uses", async () => {
+    const asked: string[] = []
+    const fetch = async (request: Request) => {
+      asked.push(request.url)
+      return new Response(JSON.stringify({ data: [{ id: "models/gemini-3.8-flash" }] }))
+    }
+    const listed = await listUpstreamModels(
+      { cipher: { decrypt: (envelope: string) => envelope }, timeoutMs: 5_000, fetch },
+      accountRow({ provider: "gemini" }),
+    )
+
+    expect(asked).toEqual(["https://generativelanguage.googleapis.com/v1beta/openai/models"])
+    expect(listed.ok && listed.entries.map(({ id }) => id)).toEqual(["gemini-3.8-flash"])
+  })
+})
+
 describe("reading a provider's model listing", () => {
   test("the ordinary case: an id and nothing else, which is what most vendors send", async () => {
     // Verbatim shape of z.ai's live answer.

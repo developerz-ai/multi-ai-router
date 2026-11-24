@@ -223,3 +223,20 @@ export function payloads(events: readonly SseEvent[]): unknown[] {
 export function eventNames(events: readonly SseEvent[]): (string | undefined)[] {
   return events.map((event) => event.event)
 }
+
+/**
+ * What a truncated stream's `flush()` owes: the one router error event, and no ending of any kind
+ * (`shared/stream-truncated.ts`). Through 2.76.1 these tests asserted `[]` — silence, which a
+ * client reads as a finished answer.
+ */
+export function isTruncationOnly(events: readonly SseEvent[]): boolean {
+  const [event] = events
+  return (
+    events.length === 1 &&
+    event !== undefined &&
+    event.data.includes('"signal":"upstream_incomplete"') &&
+    !event.data.includes('"finish_reason":"') &&
+    event.event !== "message_stop" &&
+    event.event !== "response.completed"
+  )
+}

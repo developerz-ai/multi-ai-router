@@ -2,8 +2,7 @@ import { UpstreamAuthError } from "@multi-ai-router/core"
 import { z } from "zod"
 import type { ResponsesEgressRules } from "../../services/translate/shared/responses-egress"
 import { createHttpDriver } from "../driver"
-import { codeRule, messageRule, onStatus, typeRule } from "../failure/classify"
-import { readErrorFacts } from "../failure/error-body"
+import { ErrorFields, factsOf, readErrorFacts } from "../failure/error-body"
 import { parseRateLimitHeaders } from "../rate-limit/parse"
 import type {
   DriverAccount,
@@ -16,12 +15,8 @@ import type {
 import { openAiDeviceFlow } from "./openai-oauth-device"
 import { CODEX_MODEL_FAMILY, codexModelListing } from "./openai-oauth-models"
 import { codexSignal } from "./openai-oauth-quota"
-import {
-  CODEX_DEACTIVATED_CODES,
-  CODEX_LIMIT_CODES,
-  CODEX_QUOTA_CODES,
-  CODEX_RESPONSE_OBSERVATION,
-} from "./openai-oauth-stream-errors"
+import { CODEX_HTTP_RULES } from "./openai-oauth-rules"
+import { CODEX_RESPONSE_OBSERVATION } from "./openai-oauth-stream-errors"
 
 // Pinned from the first-party Codex CLI (openai/codex `codex-rs/login`), cross-checked against
 // opencode's `plugin/openai/codex.ts` (2026-10-04). Blast radius for each: every ChatGPT account.
@@ -209,25 +204,14 @@ function requireChatGptAccountId(
   )
 }
 
-const DetailFacts = z.object({
-  type: z.string().optional(),
-  code: z.string().optional(),
-  message: z.string().optional(),
-})
-const DetailEnvelope = z.object({ detail: z.union([z.string(), DetailFacts]) })
+const DetailEnvelope = z.object({ detail: z.union([z.string(), ErrorFields]) })
 
 export function readCodexFacts(body: unknown): UpstreamErrorFacts {
   const parsed = DetailEnvelope.safeParse(body)
   if (!parsed.success) return readErrorFacts(body)
   const detail = parsed.data.detail
-  return typeof detail === "string" ? { message: detail } : detail
+  return typeof detail === "string" ? { message: detail } : factsOf(detail)
 }
-
-const LIMIT_CODES = CODEX_LIMIT_CODES
-const DEACTIVATED_CODES = CODEX_DEACTIVATED_CODES
-const QUOTA_CODES = CODEX_QUOTA_CODES
-
-const CODEX_MODEL_REFUSED = /model is not supported when using codex/i
 
 const codex = createHttpDriver({
   id: "openai-oauth",
@@ -246,23 +230,7 @@ const codex = createHttpDriver({
   ],
   readFacts: readCodexFacts,
   parseRateLimit: (response) => codexSignal(parseRateLimitHeaders(response), response),
-  rules: [
-    typeRule("rate-limited", "openai-oauth:usage_limit_reached", LIMIT_CODES),
-    codeRule("rate-limited", "openai-oauth:usage_limit_reached", LIMIT_CODES),
-    typeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
-    codeRule("credits-exhausted", "openai-oauth:account_deactivated", DEACTIVATED_CODES),
-    // A spent balance on a 429; scope and the differences from the Codex CLI: CODEX_QUOTA_CODES.
-    onStatus(
-      [429],
-      typeRule("credits-exhausted", "openai-oauth:insufficient_quota", ["insufficient_quota"]),
-    ),
-    onStatus([429], codeRule("credits-exhausted", "openai-oauth:insufficient_quota", QUOTA_CODES)),
-    // "The '<model>' model is not supported when using Codex with a ChatGPT account." (prod
-    // 2026-10-04): the model is wrong, not the request, so fail over instead of `invalid-request`.
-    messageRule("model-unsupported", "openai-oauth:model-unsupported", CODEX_MODEL_REFUSED, {
-      statuses: [400, 404],
-    }),
-  ],
+  rules: CODEX_HTTP_RULES,
 })
 
 export const openAiOAuthDriver: ProviderDriver = {

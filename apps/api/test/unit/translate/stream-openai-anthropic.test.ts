@@ -11,6 +11,7 @@ import type { SseEvent, SseFrame } from "../../../src/services/translate"
 import { openAiChatToAnthropicStream } from "../../../src/services/translate"
 import {
   eventNames,
+  isTruncationOnly,
   openAiChatChunk,
   openAiChatFrame,
   openAiChatUsageWire,
@@ -190,7 +191,7 @@ describe("the terminal events", () => {
   test("a truncated stream is not given a synthesized finish", () => {
     const stream = translator()
     stream.push(openAiChatChunk({ content: "partial" }))
-    expect(stream.flush()).toEqual([])
+    expect(isTruncationOnly(stream.flush())).toBe(true)
   })
 
   test("nothing is emitted after termination", () => {
@@ -425,10 +426,12 @@ describe("tool calls the upstream keys loosely", () => {
       events.push(...stream.push(frame))
     events.push(...stream.flush())
     expect(toolNames(events)).toEqual(["get_weather"])
+    // The last event is the truncation's own error event, never a stop for a call left open.
     expect(eventNames(events)).toEqual([
       "message_start",
       "content_block_start",
       "content_block_delta",
+      "error",
     ])
   })
 })

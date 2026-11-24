@@ -56,7 +56,7 @@ export function resolveModel(account: AccountSnapshot, requestedModel: string): 
   if (exact.aliased || account.understandsContextTags === true) return exact
   const tagged = splitContextTag(requestedModel)
   // An operator who listed the tagged spelling itself said this upstream answers to it.
-  if (tagged === null || account.supportedModels?.includes(requestedModel) === true) return exact
+  if (tagged === null || declares(account.supportedModels, requestedModel)) return exact
   return { ...resolveExact(account, tagged.base), strippedContextTag: tagged.tag }
 }
 
@@ -74,12 +74,31 @@ function resolveExact(account: AccountSnapshot, requestedModel: string): ModelRe
 function serves(account: AccountSnapshot, upstreamModel: string): boolean {
   const declared = account.supportedModels
   if (declared !== undefined && declared.length > 0) {
-    if (declared.includes(upstreamModel)) return true
+    if (declares(declared, upstreamModel)) return true
     const base = routingVariantBase(account, upstreamModel)
-    return base !== null && declared.includes(base)
+    return base !== null && declares(declared, base)
   }
   if (account.modelFamily !== undefined) return inModelFamily(account.modelFamily, upstreamModel)
   return true
+}
+
+/**
+ * Membership in a declared list, through a set built once per list. The catalog replaces an
+ * account's list and never mutates it, so the list's identity is the key and a replaced list is
+ * collected with its set. An OpenRouter account declares 442 names (prod, 2026-11-23): scanned per
+ * candidate on every selection, and once per name by {@link advertisedModels}, which made the
+ * listing quadratic.
+ */
+const DECLARED = new WeakMap<readonly string[], ReadonlySet<string>>()
+
+function declares(declared: readonly string[] | undefined, model: string): boolean {
+  if (declared === undefined) return false
+  let names = DECLARED.get(declared)
+  if (names === undefined) {
+    names = new Set(declared)
+    DECLARED.set(declared, names)
+  }
+  return names.has(model)
 }
 
 /**

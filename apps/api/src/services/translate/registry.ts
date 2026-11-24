@@ -75,6 +75,7 @@ const ANTHROPIC_TO_OPENAI_CHAT: PairDefinition = {
       maximumPendingBytes: context.maximumPendingBytes,
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      requestId: context.fallbackId,
     }),
 }
 
@@ -99,6 +100,7 @@ const OPENAI_CHAT_TO_ANTHROPIC: PairDefinition = {
       created: context.created,
       id: `${OPENAI_CHAT_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      requestId: context.fallbackId,
     }),
 }
 
@@ -127,6 +129,7 @@ const ANTHROPIC_TO_OPENAI_RESPONSES: PairDefinition = {
       maximumPendingBytes: context.maximumPendingBytes,
       id: `${ANTHROPIC_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      requestId: context.fallbackId,
       reasoningSeal: context.reasoningSeal,
     }),
 }
@@ -152,6 +155,7 @@ const OPENAI_RESPONSES_TO_ANTHROPIC: PairDefinition = {
       created: context.created,
       id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      requestId: context.fallbackId,
     }),
 }
 
@@ -193,6 +197,7 @@ const OPENAI_CHAT_TO_OPENAI_RESPONSES: PairDefinition = {
       created: context.created,
       id: `${OPENAI_CHAT_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      requestId: context.fallbackId,
     }),
 }
 
@@ -217,6 +222,7 @@ const OPENAI_RESPONSES_TO_OPENAI_CHAT: PairDefinition = {
       created: context.created,
       id: `${OPENAI_RESPONSES_ID_PREFIX}${context.fallbackId}`,
       model: context.model,
+      requestId: context.fallbackId,
     }),
 }
 

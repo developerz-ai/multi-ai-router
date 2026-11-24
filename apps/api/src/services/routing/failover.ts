@@ -8,6 +8,7 @@
  * | `402` / out-of-credits body | Retry the next candidate; the account becomes `exhausted`. |
  * | `5xx`, connection failure, timeout | Retry the next candidate; counts toward the failure streak. |
  * | other `4xx` | **Do not retry.** A bad request is bad at every account. |
+ * | a `4xx` about the vendor's wire (`providerScoped`) | Skip that **provider's** remaining candidates and retry the next one of another provider. No strike, no hold. With none left, stop as `provider-wall`: the upstream's own `4xx` is the answer. |
  * | model not served (driver-classified) | Retry the next candidate. No breaker strike: the account answered, about a name it never served. |
  * | `401` / `403` | Retry the next candidate. The account is parked `needs_reauth`, where a refreshable credential earns one off-path refresh, or cools `credential-rejected`; a rejected credential is *this account's* problem, not the request's. |
  *
@@ -77,6 +78,11 @@ export interface FailoverProgress {
   readonly overloadedAccountId?: string
   /** Request-attributable refusals so far ({@link noteRequestAttributable}). Absent: none. */
   readonly requestAttributable?: number
+  /**
+   * Providers that refused this body for their own wire ({@link noteProviderScoped}). None of their
+   * candidates is offered again in this chain, whatever a later attempt says. Absent: none.
+   */
+  readonly refusedProviders?: readonly string[]
 }
 
 export const NO_ATTEMPTS: FailoverProgress = {
@@ -93,6 +99,12 @@ export type FailoverStopReason =
   | "candidates-exhausted"
   /** The request itself is refused wherever it goes ({@link AttemptFailure.requestAttributable}). */
   | "request-wall"
+  /**
+   * The last answer was a provider-scoped `4xx` ({@link AttemptFailure.providerScoped}) and no
+   * candidate of another provider is left: that upstream `4xx` is the client's answer, as it is
+   * for `not-retryable`.
+   */
+  | "provider-wall"
 
 export type FailoverDecision =
   | {
@@ -129,20 +141,31 @@ export function planNextAttempt(
   if (progress.bytesStreamed) return { action: "stop", reason: "bytes-streamed" }
 
   if (lastFailure.kind === "stale-session") return replayInPlace(ordered, progress, options)
-  if (!isRetryable(lastFailure.kind)) return { action: "stop", reason: "not-retryable" }
+  const providerScoped = lastFailure.providerScoped === true
+  if (!providerScoped && !isRetryable(lastFailure.kind))
+    return { action: "stop", reason: "not-retryable" }
   if (lastFailure.requestAttributable === true && walled(ordered, progress, lastFailure, options))
     return { action: "stop", reason: "request-wall" }
+  // Nothing waits out a vendor's wire: the same body draws the same refusal after any pause. Only
+  // another account that said `overloaded` earlier in the chain is still worth asking again.
+  const stop = (exhausted: FailoverStopReason): FailoverDecision =>
+    providerScoped && progress.overloadedAccountId === undefined
+      ? { action: "stop", reason: "provider-wall" }
+      : waitOutOverload(ordered, progress, lastFailure, options, exhausted)
+
   if (
     progress.attemptedAccountIds.length >= attemptCeiling(plannedCount(ordered, progress), options)
   ) {
-    return waitOutOverload(ordered, progress, lastFailure, options, "attempts-exhausted")
+    return stop("attempts-exhausted")
   }
 
   const attempted = new Set(progress.attemptedAccountIds)
-  const next = ordered.find((candidate) => !attempted.has(candidate.account.id))
-  if (next === undefined) {
-    return waitOutOverload(ordered, progress, lastFailure, options, "candidates-exhausted")
-  }
+  const refused = progress.refusedProviders ?? []
+  const next = ordered.find(
+    (candidate) =>
+      !attempted.has(candidate.account.id) && !refused.includes(candidate.account.provider),
+  )
+  if (next === undefined) return stop("candidates-exhausted")
 
   return attemptOn(next, ordered, progress, options)
 }
@@ -152,8 +175,14 @@ export function planNextAttempt(
  * refusal no clock clears ({@link AttemptFailure.permanentForRequest}), every attempt refused that
  * way with no untried candidate left. The second clause is the one-account pool (developerz.ai plan
  * 101 slice 09, R1): structured output the Agent SDK cannot carry never succeeds there, so it ends as
- * the typed `400`, never a capacity `503`. A refusal that clears with time (`extra-usage-gated`)
- * keeps its held `429` on that pool: the same request succeeds later.
+ * the typed `400`, never a capacity `503`.
+ *
+ * `claude-sdk:extra-usage-gated` carries the flag too, since 2.77.0. It was read as clearing with
+ * time and kept a held `429` on a one-account pool; prod 2026-11-23 falsified that: one session's
+ * body was refused 873 times over seven hours, each retry a fresh upstream turn recorded as
+ * `quota_exhausted`, because the `429` told the client to try again. The body's harness
+ * fingerprint is what is refused, on any clock. With siblings in the pool the first refusal still
+ * fails over; a second ends the walk by the count.
  */
 function walled(
   ordered: readonly Candidate[],

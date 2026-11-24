@@ -195,41 +195,57 @@ function kindFromMinutes(minutes: number): QuotaWindowKind | null {
   return null
 }
 
-const ResetsIn = z.object({
-  error: z.object({ resets_in_seconds: z.number().nonnegative() }).optional(),
-  resets_in_seconds: z.number().nonnegative().optional(),
+/**
+ * How a `429` body states its reset: `resets_in_seconds`, or `resets_at` in epoch seconds — the only
+ * one the Codex CLI reads (`codex-rs/codex-api/src/api_bridge.rs` `UsageErrorBody`, main,
+ * 2026-11-23). Each field on its own, so a null beside the other costs nothing.
+ */
+const ResetFields = z.object({
+  resets_in_seconds: z.number().nonnegative().nullish().catch(undefined),
+  resets_at: z.number().nullish().catch(undefined),
 })
+const ResetBody = ResetFields.extend({ error: ResetFields.optional().catch(undefined) })
 
-function resetsInSeconds(body: unknown): number | null {
-  const parsed = ResetsIn.safeParse(body)
-  if (!parsed.success) return null
-  return parsed.data.error?.resets_in_seconds ?? parsed.data.resets_in_seconds ?? null
+interface BodyReset {
+  readonly seconds: number | null
+  readonly at: Date | null
+}
+
+function bodyReset(response: UpstreamResponse): BodyReset {
+  const parsed = ResetBody.safeParse(response.body)
+  if (!parsed.success) return { seconds: null, at: null }
+  const seconds = parsed.data.error?.resets_in_seconds ?? parsed.data.resets_in_seconds ?? null
+  if (seconds !== null) return { seconds, at: null }
+  const epoch = parsed.data.error?.resets_at ?? parsed.data.resets_at ?? null
+  if (epoch === null || response.status !== 429) return { seconds: null, at: null }
+  const valid = parseEpochSeconds(String(epoch))
+  return { seconds: null, at: valid === null ? null : new Date(valid * 1000) }
 }
 
 /**
  * Assembles the Codex driver's full rate-limit signal: the x-ratelimit header reading (already
- * parsed by {@link parseRateLimitHeaders}), the x-codex usage gauge, and any `resets_in_seconds`
- * the 429 body carried.
+ * parsed by {@link parseRateLimitHeaders}), the x-codex usage gauge, and any reset the body stated.
  *
  * Returns `null` when nothing meaningful was reported — no x-ratelimit headers, no x-codex
- * usage gauge, and no `resets_in_seconds`. `applyRateLimit` short-circuits on null, so a
+ * usage gauge, and no body reset. `applyRateLimit` short-circuits on null, so a
  * 200 with none of these is a no-op (the prior behaviour).
  */
 export function codexSignal(
   fromHeaders: RateLimitSignal | null,
   response: UpstreamResponse,
 ): RateLimitSignal | null {
-  const seconds = resetsInSeconds(response.body)
+  const stated = bodyReset(response)
   const { quotaWindows, windows: extraWindows } = parseCodexQuotaHeaders(response)
 
-  // No header signal, no quota windows, no extra windows, no resets_in_seconds → nothing to say.
+  // No header signal, no quota windows, no extra windows, no body reset → nothing to say.
   // Returning null preserves the prior contract: a 200 carrying none of these signals does not
   // fold into the breaker's reading, so an idle account stays idle.
   if (
     fromHeaders === null &&
     quotaWindows.length === 0 &&
     extraWindows.length === 0 &&
-    seconds === null
+    stated.seconds === null &&
+    stated.at === null
   ) {
     return null
   }
@@ -242,12 +258,14 @@ export function codexSignal(
       : { ...fromHeaders, windows: [...fromHeaders.windows, ...extraWindows] }
   const signalWithQuota: RateLimitSignal =
     quotaWindows.length === 0 ? baseSignal : { ...baseSignal, quotaWindows }
-  if (seconds === null) return signalWithQuota
+  if (stated.seconds === null && stated.at === null) return signalWithQuota
 
   return {
     ...signalWithQuota,
     limited: true,
-    retryAfterSeconds: signalWithQuota.retryAfterSeconds ?? seconds,
+    ...(stated.seconds === null
+      ? { resetsAt: signalWithQuota.resetsAt ?? stated.at ?? undefined }
+      : { retryAfterSeconds: signalWithQuota.retryAfterSeconds ?? stated.seconds }),
     resetSource: "provider-reported",
   }
 }

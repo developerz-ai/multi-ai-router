@@ -1,5 +1,5 @@
 import { createHttpDriver } from "../driver"
-import { type ClassificationRule, codeRule } from "../failure/classify"
+import { type ClassificationRule, codeRule, messageRule, providerScoped } from "../failure/classify"
 import { genericCreditsRule, throttleStatusRule } from "./compatible-rules"
 
 /**
@@ -48,10 +48,39 @@ const flexCapacityRule: ClassificationRule = {
   when: (_facts, status) => status === FLEX_CAPACITY_STATUS,
 }
 
+/**
+ * Provenance: `413 "Request too large for model … on tokens per minute (TPM): Limit 8000, Requested
+ * 33128"` (community.groq.com/t/1411): one request over the tier's per-minute allowance, so no wait
+ * clears it. Another vendor takes the same prompt. Read ahead of the throttle code, which Groq may put
+ * beside it. Blast radius: read as a throttle, every long prompt cooled a healthy key.
+ */
+const REQUEST_TOO_LARGE = /^request too large for model/i
+
+/**
+ * Provenance: `model_decommissioned` (400) and `model_not_found` (404), console.groq.com/docs/changelog
+ * (the batch error file "uses the same codes as the synchronous API"). Blast radius: without them a
+ * retired id ends the chain as the client's mistake.
+ */
+const MODEL_CODES = ["model_not_found", "model_decommissioned"]
+
+/**
+ * Provenance: console.groq.com/docs/rate-limits states each limit per model, and the `429` names the
+ * model it was for ("Rate limit reached for model …"). Blast radius: a `429` holds that model and the
+ * key's others keep serving.
+ */
+const PER_MODEL_LIMITS = /./
+
 export const groqDriver = createHttpDriver({
   id: "groq",
   surfaces: [{ dialect: "openai-chat", baseUrl: BASE_URL }],
+  modelScopedRateLimits: PER_MODEL_LIMITS,
   rules: [
+    providerScoped(
+      messageRule("invalid-request", "groq:request-too-large", REQUEST_TOO_LARGE, {
+        statuses: [413],
+      }),
+    ),
+    codeRule("model-unsupported", "groq:model-code", MODEL_CODES),
     codeRule("credits-exhausted", "groq:blocked_api_access", BLOCKED_CODES),
     codeRule("rate-limited", "groq:rate_limit_exceeded", RATE_LIMIT_CODES),
     codeRule("auth", "groq:invalid_api_key", AUTH_CODES),

@@ -98,3 +98,20 @@ export function noteRequestAttributable(
   if (failure.requestAttributable !== true) return progress
   return { ...progress, requestAttributable: (progress.requestAttributable ?? 0) + 1 }
 }
+
+/**
+ * Folds one failed attempt's provider into the progress when the refusal was about that vendor's
+ * wire ({@link AttemptFailure.providerScoped}): the planner then offers none of its other accounts.
+ * Pure; returns a new value. The planner reads only this, so a chain that skips the fold walks the
+ * provider's remaining accounts into the same `4xx`.
+ */
+export function noteProviderScoped(
+  progress: FailoverProgress,
+  provider: string,
+  failure: Pick<AttemptFailure, "providerScoped">,
+): FailoverProgress {
+  if (failure.providerScoped !== true) return progress
+  const refused = progress.refusedProviders ?? []
+  if (refused.includes(provider)) return progress
+  return { ...progress, refusedProviders: [...refused, provider] }
+}

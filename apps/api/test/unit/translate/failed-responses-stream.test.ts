@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { openAiResponsesToOpenAiChatStream as make } from "../../../src/services/translate/openai-responses-to-openai-chat/stream"
+import { isTruncationOnly } from "./fixtures"
 
 for (const kind of ["response.failed", "error"] as const) {
   test(`${kind} closes failed Chat protocol once with error, conservative finish and sentinel`, () => {
@@ -46,5 +47,5 @@ test("EOF without stated terminal failure does not fabricate a finish", () => {
     event: "response.output_text.delta",
     data: JSON.stringify({ type: "response.output_text.delta", delta: "partial" }),
   })
-  expect(stream.flush()).toEqual([])
+  expect(isTruncationOnly(stream.flush())).toBe(true)
 })

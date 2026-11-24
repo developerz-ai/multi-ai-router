@@ -62,6 +62,7 @@ export {
   inPlaceReason,
   markStreamed,
   noteOverload,
+  noteProviderScoped,
   noteRequestAttributable,
   recordAttempt,
 } from "./failover-progress"
@@ -93,7 +94,12 @@ export {
   reconnectDetail,
 } from "./no-candidates"
 export { poolNames } from "./no-candidates-wording"
-export { spentPlanReset, withPlanReset } from "./plan-reset"
+export {
+  DEFAULT_KEY_CAP_NEAR_UTILIZATION,
+  spentPlanReset,
+  verifiedKeyCapReset,
+  withPlanReset,
+} from "./plan-reset"
 export {
   leastUsed,
   POLICIES,
@@ -115,6 +121,7 @@ export {
   findSpentWindow,
   isWindowSpent,
   mergeQuotaWindows,
+  windowCoversModel,
 } from "./quota"
 export { retiredEvidence, toQuotaEvidence } from "./quota-evidence"
 export type {
