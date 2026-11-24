@@ -244,12 +244,15 @@ name is served as that model and nothing else. What to add, and what each needs:
 
 ## Errors, retries and timeouts
 
-The router walks every eligible account before it answers with an error. A failure that reaches
-you has already been tried across the pool. A Claude subscription request queues for a subprocess slot
-for up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next account; when
-every eligible account was full for the whole wait you get `429 account_at_capacity` (or, when the
-replica itself was full, `503 no_healthy_account` with signal `router-at-capacity`) after about that
-long, never a silent wait. What follows is what the code does today
+The router walks the eligible accounts before it answers with an error, so a failure that reaches
+you was tried across the pool, with one exception: a full replica ends the walk over Claude
+subscription accounts early (below). A Claude subscription request queues for a subprocess slot for
+up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next account. When an
+account stayed at its in-flight limit through the wait and nothing could serve the request you get
+`429 account_at_capacity`. When the replica's own ceiling refused a candidate, the remaining Claude
+accounts are not asked (an account of another kind still is), and unless an account at its limit
+already decided the answer, it is `503 no_healthy_account` with signal `router-at-capacity`. Either
+arrives after about that long, never a silent wait. What follows is what the code does today
 (`packages/core/src/errors.ts`, `packages/core/src/wall.ts`, `apps/api/src/errors/`,
 `apps/api/src/services/dataplane/`).
 
@@ -267,7 +270,7 @@ long, never a silent wait. What follows is what the code does today
 | `413` | `request_too_large` | `request` | Body over `MAX_REQUEST_BODY_BYTES` (32 MiB default) | No. Send less |
 | `415` | `unsupported_content_encoding` | `request` | The body is compressed with an encoding the router does not decode | No. Send it uncompressed |
 | `429` | `quota_exhausted` | `clock` | Every account that could serve has a spent window. **Always** has `Retry-After`: the earliest reset, or a 30 s floor when the reset is unknown | Yes, after `Retry-After` |
-| `429` | `account_at_capacity` | `clock` | Every eligible Claude subscription account was at its in-flight limit for the whole bounded gate wait (`CLAUDE_SDK_QUEUE_WAIT_MS`). No account is out of anything and none was cooled. `Retry-After` is 30 s (`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): a full gate names no instant. Arrives after about one wait, not one per account. `signal` is `account-at-capacity` | Yes, after `Retry-After` |
+| `429` | `account_at_capacity` | `clock` | At least one eligible Claude subscription account stayed at its in-flight limit through the bounded gate wait (`CLAUDE_SDK_QUEUE_WAIT_MS`) and no account took the request. It is that account's verdict, not proof that every account was full throughout: a later candidate may instead have been refused by the replica's ceiling, and this answer still outranks `router-at-capacity`. No account is out of anything and none was cooled. `Retry-After` is 30 s (`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): a full gate names no instant. Arrives after about one wait, not one per account. `signal` is `account-at-capacity` | Yes, after `Retry-After` |
 | `429` | `key_rate_limited` | `clock` | **Your key** exceeded its own rate limit. No account is out of anything | Yes, after `Retry-After`. Slow down. Switching to another key on the same router only moves the load |
 | `500` | `credential_decrypt_failed` | `human` | A stored credential cannot be read | No. Ask the operator |
 | `500` | none | `internal` | Unexpected router failure. The detail is logged, not returned | Once, with backoff |
@@ -275,7 +278,7 @@ long, never a silent wait. What follows is what the code does today
 | `502` | `translation_protocol_error` | `internal` | A non-streamed cross-dialect answer could not be translated faithfully (e.g. an upstream tool call whose `arguments` are not a JSON object). Never relayed as a tool call with `input: {}`. `retryable: false` | No automatic retry; the same request usually reproduces it. Report it |
 | `503` | `upstream_overloaded` | `clock` | The provider's shared backend is busy. Has `Retry-After` (the upstream's own value, or 30 s) | Yes, after `Retry-After` |
 | `503` | `key_verification_unavailable` | `capacity` | Key verification is briefly busy, or the router's database is unreachable and your key has no recently verified copy in memory (a warm key keeps working through a short outage). `Retry-After: 1` | Yes, a bounded number of times |
-| `503` | `no_healthy_account` | `capacity`, `human` or `scope` | Nothing in scope can serve. When **every attempt failed on capacity** (overloaded, server error, connection, timeout) it has `Retry-After` (and `error.router.retry_after_s`): the soonest account cooldown, or 30 s when unknown. Other `capacity` endings carry no `Retry-After`. The ending `scope: router`, `signal: router-at-capacity` is a Claude subscription request that waited the whole `CLAUDE_SDK_QUEUE_WAIT_MS` for this replica's subprocess ceiling (`CLAUDE_SDK_MAX_CONCURRENCY`) and found it full; it carries `Retry-After` (30 s by default) and is `retryable`. A `429 account_at_capacity` outranks it when both happened in one request. `human` (accounts disabled or needing re-auth) and `scope` (no account serves this operation) never carry one and will not clear on a retry | When `retryable` is `true`: after `Retry-After` if present, else bounded exponential backoff |
+| `503` | `no_healthy_account` | `capacity`, `human` or `scope` | Nothing in scope can serve. When **every attempt failed on capacity** (overloaded, server error, connection, timeout) it has `Retry-After` (and `error.router.retry_after_s`): the soonest account cooldown, or 30 s when unknown. Other `capacity` endings carry no `Retry-After`. The ending `scope: router`, `signal: router-at-capacity` is a Claude subscription request that exhausted what remained of its `CLAUDE_SDK_QUEUE_WAIT_MS` budget at this replica's subprocess ceiling (`CLAUDE_SDK_MAX_CONCURRENCY`), possibly after spending part of it on an account's own gate. The remaining Claude accounts were then skipped, not tried; it carries `Retry-After` (30 s by default) and is `retryable`. A `429 account_at_capacity` outranks it when both happened in one request. `human` (accounts disabled or needing re-auth) and `scope` (no account serves this operation) never carry one and will not clear on a retry | When `retryable` is `true`: after `Retry-After` if present, else bounded exponential backoff |
 | `503` | `router_shutdown`, `request_admission_unavailable` | `capacity` | The router is restarting, or its request admission is closed or full. No `Retry-After` | Yes, after a few seconds with backoff. A restart usually takes seconds |
 | `504` | `upstream_timeout` | `capacity` | The upstream was reached and missed its deadline | Yes, with backoff. Prefer streaming for long calls |
 
@@ -312,7 +315,7 @@ The OpenAI dialects use the same object: `{"error":{"message":…,"type":…,"pa
 | `scope` | Who the verdict is about: `pool`, `account`, `session`, `key`, `request`, `router` |
 | `accounts`, `pools` | Opaque account references (`acct_…`) and pool names, for the operator |
 | `signal` | The machine token that decided it (`anthropic:rate_limit_error`, `cooling-down`, `account-at-capacity`, `router-at-capacity`, …) |
-| `attempts`, `request_id` | Upstream attempts made, and the id to quote to the operator |
+| `attempts`, `request_id` | Candidates attempted, and the id to quote to the operator. It counts a candidate refused by the router's own Claude gate (`account-at-capacity`, `router-at-capacity`) before any upstream was contacted, so it can exceed the number of upstream calls made |
 | `reconnect` | Accounts in your scope that lost their login and must be reconnected by a router admin, as `{account, label, provider, url}` (`url` is the console's Accounts page, `null` without `PUBLIC_URL`); `[]` when none. The message ends with the same instruction in words, so relay it to your human |
 
 Match on `code` and `error.router`, never on the English `message`. The sentences are kept stable
@@ -350,7 +353,7 @@ On every data-plane answer, success or failure, stream or not, before the first 
 | Header | Value |
 |---|---|
 | `x-router-request-id` (also `x-request-id`) | The request id. Log it; it is what an operator searches for. Send your own `x-request-id` (`[A-Za-z0-9_.:-]`, ≤128 chars) to correlate your own traces with it |
-| `x-router-attempts` | Upstream attempts this request made (`0` when refused before any) |
+| `x-router-attempts` | Candidates this request attempted (`0` when refused before any). It includes a candidate refused by the router's own Claude gate before an upstream was contacted, so it can exceed the number of upstream calls made |
 | `x-router-served-model` | The model the upstream was asked for, after the account's alias map |
 | `x-router-provider` | The serving account's provider id |
 | `x-router-account` | The serving account, opaque (`acct_…`) |
@@ -360,7 +363,8 @@ On every data-plane answer, success or failure, stream or not, before the first 
 ### Retries: let the router do it
 
 - **Set your SDK's own retries to `0` or `1`** (`maxRetries` in the OpenAI, Anthropic and Vercel AI
-  SDKs). One request to the router already tries every eligible account. Three SDK retries
+  SDKs). One request to the router already tries the eligible accounts (a full replica ends the
+  walk over Claude subscription accounts early, see above). Three SDK retries
   multiplied by several keys on the same router send the same failing request 4×K times, all to a
   pool that already said no.
 - **Never retry automatically on `401`, `402`, `403`, `413`, `415`**, or a `502`/`503` whose

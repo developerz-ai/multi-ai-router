@@ -168,9 +168,12 @@ export class UpstreamOverloadedError extends RetryableRouterError {
 }
 
 /**
- * Every eligible Claude subscription account was at its in-flight limit for the whole bounded gate
- * wait (`CLAUDE_SDK_QUEUE_WAIT_MS`), so the walk ended without any of them taking the request. `429`
- * plus a `Retry-After`: a clock clears it, and no account is out of anything, so none was cooled.
+ * At least one eligible Claude subscription account stayed at its in-flight limit through the
+ * bounded gate wait (`CLAUDE_SDK_QUEUE_WAIT_MS`), and the walk ended without any account taking the
+ * request. It is the account gate's verdict, not proof that every account was full throughout: a
+ * later candidate may have been refused by the replica's own ceiling instead, and this answer
+ * outranks that one. `429` plus a `Retry-After`: a clock clears it, and no account is out of
+ * anything, so none was cooled.
  *
  * The router's own answer while eligible accounts are in scope, by design and by an owner-authorized
  * narrowing of the "never a router-made 429" rule (CLAUDE.md, developerz-ai/developerz.ai#10277).

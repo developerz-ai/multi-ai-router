@@ -22,8 +22,9 @@ describe("the capacity-answer exception", () => {
     expect(read("apps/api/src/providers/claude-sdk/concurrency.ts")).not.toContain(
       "Excess callers **queue** rather than",
     )
+    // Without a trailing newline: the claim must not survive with another sentence on its line.
     expect(read("docs/clients.md")).not.toContain(
-      "The router walks every eligible account before it answers with an error. A failure that reaches\nyou has already been tried across the pool.\n",
+      "A failure that reaches\nyou has already been tried across the pool.",
     )
     expect(read("docs/clients.md")).toContain("CLAUDE_SDK_QUEUE_WAIT_MS")
   })
