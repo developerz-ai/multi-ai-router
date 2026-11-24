@@ -27,7 +27,7 @@ export const DEADLINE = "the Agent SDK did not answer within its deadline"
 export const ACCOUNT_FULL_MESSAGE =
   "the Claude subscription account is at its in-flight limit (account-at-capacity)"
 export const ROUTER_FULL_MESSAGE =
-  "this router replica is at its Claude subprocess limit (router-at-capacity)"
+  "this router replica is at its Claude concurrency limit (router-at-capacity)"
 
 /**
  * A full gate, as an attempt failure and the router's own verdict. Both kinds are blameless
