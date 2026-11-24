@@ -512,3 +512,36 @@ Published [Fable 5.2](https://platform.claude.com/docs/en/models/fable-5-2/overv
 writes (5m/1h). Haiku is $0.10/$0.50 through 100,000 prompt tokens and $0.50/$2.50
 above it, including the published cache cards. Prices describe API spend or subscription
 notional cost; availability and extra-usage requirements remain account-specific.
+
+
+### Subagent and forced-tool follow-up, 2026-11-24
+
+A fresh `bin/claude-trace subagents --model claude-opus-5-5 --private-wire`
+capture actually started the arithmetic Agent, completed its child turn and returned
+to the parent: three 200 responses and **3/3** matching checksums. The child
+retained `cc_is_subagent=true`; first-party/code classes remain
+`blocking-subagent` / `subagent`. The worker has no tools; all other host tools
+remain explicitly denied.
+
+Selected-account direct HTTP replays of the calibrated 2.1.331 envelope tested
+native `tool_choice:any`, named forcing and the adapted form independently:
+
+| Model | Native any | Native named | Auto adaptation with explicit tool prompt |
+| --- | --- | --- | --- |
+| Opus 5.5 | 400 | 400 | 200 tool_use |
+| Sonnet 5.5 | 400 | 400 | 200 tool_use |
+| Fable 5.2 | 400 | 400 | 200 tool_use |
+| Haiku 5.5 | 200 tool_use | 200 tool_use | 200 tool_use |
+
+The refusals name tool choice, without a thinking block. Haiku's native any also
+returned 200 with disabled and adaptive thinking; enabled thinking with an explicit
+1024-token budget returned 400 naming both thinking and tool choice. Preserve
+Haiku's native force and let upstream validate incompatible combinations; do not
+weaken every model based on the other families' refusal. These are live operator
+diagnostics, never CI tests. Private captures remain outside git.
+
+A real SDK client using an isolated empty config directory and a temporary
+Claude-account-scoped router key also completed Agent delegation through the
+deployed router: task-started observed, tool-free child computed 42, parent
+returned 42. Agent execution stayed in the diagnostic client; the router only
+forwarded inference/tool traffic. The temporary key was revoked afterward.

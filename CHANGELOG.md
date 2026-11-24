@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.78.1] — 2026-11-24
+
+### Fixed
+
+- Preserve native forced named/any tool choice on Claude Haiku 5.5 instead of weakening it to auto. Opus, Sonnet and Fable retain their required adaptation; SDK host-tool isolation stays unchanged.
+
 ## [2.78.0] — 2026-11-24
 
 ### Changed
@@ -2548,3 +2554,4 @@ your tooling config.
 [2.76.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.1
 [2.77.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.77.0
 [2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0
+[2.78.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.1
