@@ -57,6 +57,8 @@ export function toAttemptFailure(
     ...(classification?.permanentForRequest === true ? { permanentForRequest: true } : {}),
     ...(classification?.modelScoped === true ? { modelScoped: true } : {}),
     ...(classification?.providerScoped === true ? { providerScoped: true } : {}),
+    ...(classification?.accountScoped === true ? { accountScoped: true } : {}),
+    ...(classification?.keyCap === true ? { keyCap: true } : {}),
   }
 }
 

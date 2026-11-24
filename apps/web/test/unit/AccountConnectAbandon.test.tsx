@@ -135,6 +135,22 @@ test("closing while a code is being redeemed cancels only if the redemption fail
     expect(s.calls).toContain(DELETE)
   }))
 
+test("closing while a code is being redeemed leaves a login that succeeds alone", () =>
+  stage(async (s) => {
+    s.press("Start re-authorization")
+    s.press("Start login")
+    await settle()
+    s.begin[0]?.resolve(s.started())
+    await settle()
+    submitPaste()
+    await settle()
+    s.press("Cancel")
+    s.complete[0]?.resolve(Response.json({ accountId: "acc-1", connected: true }))
+    await settle()
+    expect(s.calls.some((call) => call.endsWith("/connect/complete"))).toBe(true)
+    expect(s.calls).not.toContain(DELETE)
+  }))
+
 test("starting again drops the refused code and its message", () =>
   stage(async (s) => {
     s.press("Start re-authorization")

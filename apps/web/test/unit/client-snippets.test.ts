@@ -82,6 +82,13 @@ describe("clientRecipes", () => {
     expect(launcher?.text).toContain("git clone https://github.com/developerz-ai/claudes.git")
     expect(launcher?.text).toContain(`claudes login --url "${BASE}"`)
     expect(launcher?.text).not.toContain(KEY)
+    // One && chain: a clone refused because `claudes` exists must not run whatever is in there.
+    expect(
+      launcher?.text
+        .split("\n")
+        .slice(0, -1)
+        .every((line) => line.endsWith("&& \\")),
+    ).toBe(true)
     expect(env?.text).toContain(KEY)
   })
 

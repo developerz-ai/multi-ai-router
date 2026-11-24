@@ -243,10 +243,15 @@ describe("the runtime stage carries no node_modules", () => {
 
   test("the build asserts its absence and that bun cannot auto-install in its place", () => {
     // Without node_modules bun fetches an unresolved bare import from the registry at run time.
-    // Off, for every bun started in /app — and proved by an import that must fail.
+    // Off, for every bun started in /app.
     expect(runtime).toContain(`auto = "disable"`)
     expect(runtime).toMatch(/test ! -e node_modules/)
-    expect(runtime).toMatch(/! bun -e 'await import\("[a-z-]+"\)'/)
+    // Proved by the probe, which has a positive control: a bare "this import fails" also passes
+    // when the registry is unreachable. Against the file the image ships, in the image.
+    expect(runtime).toMatch(/^RUN bun \/tmp\/auto-install-probe\.ts \/app\/bunfig\.toml/m)
+    expect(runtime).not.toMatch(/! bun -e/)
+    expect(CI_WORKFLOW).toMatch(/auto-install-probe\.ts \/app\/bunfig\.toml/)
+    expect(CI_WORKFLOW).not.toContain("is-number")
   })
 
   test("bin/build refuses a bundle that still imports a package by name", () => {

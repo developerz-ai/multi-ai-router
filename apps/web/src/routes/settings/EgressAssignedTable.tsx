@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js"
+import { createMemo, Show } from "solid-js"
 import { StatusDot } from "../../components/StatusDot"
 import { type Column, Table } from "../../components/Table"
 import type { EgressAssignment, EgressOverview, ProxyCheck } from "../../lib/api/egress"
@@ -11,6 +11,9 @@ import { ProxyHealth } from "../egress/ProxyHealth"
 import { ProxyTest } from "../egress/ProxyTest"
 import { ReplaceModeField } from "../egress/ReplaceModeField"
 
+/** An account and the proxy it has now: a replaced one takes its test result with it. */
+const runKey = (row: EgressAssignment) => `${row.account.id} ${row.address}`
+
 /** Every account that leaves through a proxy, and how that proxy is doing. */
 export function EgressAssignedTable(props: {
   readonly overview: EgressOverview
@@ -18,15 +21,12 @@ export function EgressAssignedTable(props: {
 }) {
   const test = useTestAccountProxy()
   const runs = createRowRuns<ProxyCheck>()
-  const [checks, setChecks] = createSignal<Readonly<Record<string, ProxyCheck | undefined>>>({})
-  const [errors, setErrors] = createSignal<Readonly<Record<string, unknown>>>({})
+  const listed = createMemo(() => new Set(props.overview.proxies.map((proxy) => proxy.address)))
 
-  const press = (id: string) => {
-    setErrors((current) => ({ ...current, [id]: undefined }))
-    void runs.run(id, () => test.mutateAsync(id), {
-      onSuccess: (check) => setChecks((current) => ({ ...current, [id]: check })),
-      onError: (error) => setErrors((current) => ({ ...current, [id]: error })),
-    })
+  const press = (row: EgressAssignment) => {
+    // Read now: `row` follows the poll, and this answer is about the proxy that was tested.
+    const tested = { accountId: row.account.id, address: row.address }
+    void runs.run(runKey(row), () => test.mutateAsync(tested))
   }
 
   const columns: readonly Column<EgressAssignment>[] = [
@@ -68,7 +68,7 @@ export function EgressAssignedTable(props: {
           accountId={row.account.id}
           accountLabel={row.account.label}
           mode={row.replace}
-          replaceable={replaceable(row, props.overview.proxies)}
+          replaceable={replaceable(row, listed())}
         />
       ),
     },
@@ -77,12 +77,12 @@ export function EgressAssignedTable(props: {
       header: "Test",
       cell: (row) => (
         <ProxyTest
-          busy={runs.pending().has(row.account.id)}
-          error={errors()[row.account.id]}
+          busy={runs.pending().has(runKey(row))}
+          error={runs.errors().get(runKey(row))}
           label={`Test the proxy of ${row.account.label} now`}
           nowMs={props.nowMs}
-          onTest={() => press(row.account.id)}
-          result={checks()[row.account.id]}
+          onTest={() => press(row)}
+          result={runs.results().get(runKey(row))}
         />
       ),
     },

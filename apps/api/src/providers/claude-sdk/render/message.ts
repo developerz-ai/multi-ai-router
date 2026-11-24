@@ -22,6 +22,8 @@ import type { ClientFrame } from "./envelope"
 interface PendingBlock {
   readonly block: Record<string, unknown>
   json: string
+  /** The block's `citations`, once this fold owns the list: appended to, never copied again. */
+  citations?: unknown[]
 }
 
 export interface MessageFold {
@@ -127,7 +129,10 @@ function applyDelta(pending: PendingBlock, delta: Record<string, unknown>): void
       // The one delta that appends to a list under another name: the block carries `citations`.
       if (delta.citation !== undefined) {
         const held = pending.block.citations
-        pending.block.citations = [...(Array.isArray(held) ? held : []), delta.citation]
+        if (pending.citations === undefined || held !== pending.citations)
+          pending.citations = Array.isArray(held) ? [...held] : []
+        pending.citations.push(delta.citation)
+        pending.block.citations = pending.citations
       }
       break
     case "signature_delta":

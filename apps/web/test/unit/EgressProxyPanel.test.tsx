@@ -3,7 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { render } from "solid-js/web"
 import { clearSession } from "../../src/lib/api/session"
 import type { AccountView } from "../../src/lib/api/types"
+import { AccountEditDialog } from "../../src/routes/accounts/AccountEditDialog"
 import { EgressProxyPanel } from "../../src/routes/accounts/EgressProxyPanel"
+import { base as editDialog } from "../support/account-edit"
 import { fire, selectOption, typeInto } from "../support/dom"
 import { assignment, overview } from "../support/egress"
 
@@ -23,6 +25,7 @@ async function mount(
   run: (root: HTMLElement, calls: string[]) => void | Promise<void>,
   held = assignment({ id: "a" }),
   client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } }),
+  saved: Promise<void> = Promise.resolve(),
 ) {
   const calls: string[] = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -30,6 +33,7 @@ async function mount(
     if (url.includes("/auth/session")) return Response.json({ username: "a", csrfToken: "t" })
     if (init?.method !== undefined && init.method !== "GET") {
       calls.push(`${init.method} ${url.replace("/api/admin", "")} ${init.body ?? ""}`.trim())
+      if (!url.endsWith("/test")) await saved
       return url.endsWith("/test")
         ? Response.json({
             outcome: "auth",
@@ -148,20 +152,95 @@ test("choosing another proxy sends no mode: the router keeps the stored one", ()
 
 test("a saved proxy URL is not kept by the mutation that sent it", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } })
+  const variables = () =>
+    JSON.stringify(
+      client
+        .getMutationCache()
+        .getAll()
+        .map((one) => one.state.variables),
+    )
+  const gate = Promise.withResolvers<void>()
   await mount(
     account(null),
     true,
-    async (root) => {
+    async (root, calls) => {
       open(root)
       typeInto(urlBox(root), "http://u:hunter2@p.test:8080")
       const form = urlBox(root).form
       if (form !== null) fire(form, "submit")
       await settle()
+      expect(calls).toHaveLength(1)
+      expect(variables()).toContain("hunter2")
+      gate.resolve()
       await settle()
-      const held = client.getMutationCache().getAll()
-      expect(JSON.stringify(held.map((one) => one.state.variables))).not.toContain("hunter2")
+      await settle()
+      expect(variables()).not.toContain("hunter2")
     },
     assignment({ id: "a" }),
     client,
+    gate.promise,
   )
+})
+
+test("a save clears the draft it sent, not one typed while it was in flight", async () => {
+  const gate = Promise.withResolvers<void>()
+  await mount(
+    account(null),
+    true,
+    async (root) => {
+      open(root)
+      typeInto(urlBox(root), "http://u:p@first.test:1")
+      const form = urlBox(root).form
+      if (form !== null) fire(form, "submit")
+      await settle()
+      typeInto(urlBox(root), "http://u:p@second.test:2")
+      gate.resolve()
+      await settle()
+      expect(urlBox(root).value).toBe("http://u:p@second.test:2")
+    },
+    assignment({ id: "a" }),
+    new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } }),
+    gate.promise,
+  )
+})
+
+test("inside the account dialog, the proxy box submits the proxy and never the account", async () => {
+  const calls: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.includes("/auth/session")) return Response.json({ username: "a", csrfToken: "t" })
+    if ((init?.method ?? "GET") !== "GET") calls.push(`${init?.method} ${url}`)
+    return Response.json(url.includes("/accounts/") ? { id: "a", egressProxy: null } : overview())
+  }) as typeof fetch
+  let accountSaves = 0
+  const dispose = render(
+    () => (
+      <QueryClientProvider client={new QueryClient()}>
+        <AccountEditDialog {...editDialog({ onSubmit: () => (accountSaves += 1) })} />
+      </QueryClientProvider>
+    ),
+    document.body,
+  )
+  try {
+    const change = [...document.querySelectorAll("button")].find(
+      (node) => node.textContent === "Change egress proxy",
+    )
+    change?.click()
+    await settle()
+    const label = [...document.querySelectorAll("label")].find((node) =>
+      node.textContent?.startsWith("Proxy URL"),
+    )
+    const box = document.getElementById(label?.htmlFor ?? "") as HTMLInputElement
+    typeInto(box, "http://u:p@p.test:8080")
+    // What Enter submits is the field's form owner, and nothing above it may be a form too.
+    expect(box.form?.id).not.toBe("account-edit-form")
+    expect(box.form?.parentElement?.closest("form")).toBeNull()
+    box.form?.requestSubmit()
+    await settle()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toContain("/egress-proxies/accounts/")
+    expect(accountSaves).toBe(0)
+  } finally {
+    dispose()
+  }
 })

@@ -49,14 +49,16 @@ export function EgressProxyEditor(props: {
     test.reset()
   }
 
-  const submit = (proxy: (EgressProxyInput & { replace?: ReplaceMode }) | null) =>
+  const submit = (proxy: (EgressProxyInput & { replace?: ReplaceMode }) | null) => {
+    const sent = { url: url(), choice: choice(), replace: replace() }
     save.mutate(
       { accountId: props.accountId, proxy },
       {
         onSuccess: (row) => {
-          setUrl("")
-          setChoice("")
-          setReplace(null)
+          // Only what was sent: a draft typed while the save was in flight is the operator's next.
+          if (url() === sent.url) setUrl("")
+          if (choice() === sent.choice) setChoice("")
+          if (replace() === sent.replace) setReplace(null)
           // The typed URL holds a password, and a mutation keeps what it was called with.
           save.reset()
           test.reset()
@@ -64,6 +66,7 @@ export function EgressProxyEditor(props: {
         },
       },
     )
+  }
 
   const onSubmit = (event: SubmitEvent) => {
     event.preventDefault()
@@ -83,7 +86,7 @@ export function EgressProxyEditor(props: {
               accountId={props.accountId}
               accountLabel={props.accountLabel}
               mode={row().replace}
-              replaceable={replaceable(row(), listed())}
+              replaceable={replaceable(row(), new Set(listed().map((proxy) => proxy.address)))}
             />
           </div>
         )}

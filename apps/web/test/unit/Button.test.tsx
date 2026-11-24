@@ -39,6 +39,7 @@ test("a busy button keeps focus and swallows the press", () => {
 test("a busy submit button does not submit its form again", () => {
   const root = document.createElement("div")
   document.body.appendChild(root)
+  const [busy, setBusy] = createSignal(false)
   let submits = 0
   const dispose = render(
     () => (
@@ -48,7 +49,7 @@ test("a busy submit button does not submit its form again", () => {
           submits += 1
         }}
       >
-        <Button busy type="submit">
+        <Button busy={busy()} type="submit">
           Save
         </Button>
       </form>
@@ -57,7 +58,10 @@ test("a busy submit button does not submit its form again", () => {
   )
   try {
     root.querySelector("button")?.click()
-    expect(submits).toBe(0)
+    expect(submits).toBe(1)
+    setBusy(true)
+    root.querySelector("button")?.click()
+    expect(submits).toBe(1)
   } finally {
     dispose()
     root.remove()

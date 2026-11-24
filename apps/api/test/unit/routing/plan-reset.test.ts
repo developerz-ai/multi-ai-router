@@ -4,6 +4,7 @@ import {
   type AttemptFailure,
   DEFAULT_KEY_CAP_NEAR_UTILIZATION,
   HEALTHY,
+  keyCapResetFor,
   recordFailure,
   spentPlanReset,
   verifiedKeyCapReset,
@@ -129,8 +130,7 @@ describe("verifiedKeyCapReset, the client path's key-cap evidence", () => {
 
   test("headroom, estimated/unknown reset, past reset and stale reading invent no instant", () => {
     for (const held of [
-      // Under the near-cap bound: the refusal is not this cap's (it encoded `< 1` through 2.76.1).
-      cap({ utilization: DEFAULT_KEY_CAP_NEAR_UTILIZATION - 0.01 }),
+      cap({ utilization: 0.99 }),
       cap({ resetSource: "estimated" }),
       cap({ resetSource: "unknown", resetsAt: undefined }),
       cap({ resetsAt: new Date(NOW.getTime() - 1) }),
@@ -152,6 +152,10 @@ describe("verifiedKeyCapReset, the client path's key-cap evidence", () => {
  * OpenRouter refuses a request the cap's remainder cannot cover, so the `402` landed while the
  * reading stood under 100 %; the account parked `exhausted` and answered `402 needs a top-up` until
  * 03:03Z, three hours past its own 00:00Z reset.
+ *
+ * Which refusal that is, is the driver's to say (`openrouter:key-limit-window`: `rate-limited`,
+ * estimated re-test). A `402` that names no cap is the prepaid balance, whatever the cap reads.
+ * The data-plane proof of both is `test/integration/openrouter-key-cap.test.ts`.
  */
 describe("a key cap refuses before its reading says spent", () => {
   const AT = new Date("2026-11-23T17:00:00.000Z")
@@ -164,61 +168,105 @@ describe("a key cap refuses before its reading says spent", () => {
       lastCheckedAt: new Date(AT.getTime() - 10 * 60_000),
       ...overrides,
     })
-  const afford: AttemptFailure = {
+  /** What the OpenRouter driver makes of `… create a key with a higher daily limit`. */
+  const capNamed: AttemptFailure = {
+    kind: "rate-limited",
+    status: 402,
+    retryAfterSeconds: 3600,
+    resetSource: "estimated",
+    message: "openrouter:key-limit-window",
+    keyCap: true,
+  }
+  /** `402 Insufficient credits`: nothing in it names the key's cap. */
+  const balance: AttemptFailure = {
     kind: "credits-exhausted",
     status: 402,
-    message: "This request requires more credits, or fewer max_tokens.",
+    message: "openrouter:insufficient-credits",
   }
 
-  test("a 402 on a cap at 97 % cools until the cap's reset instead of parking exhausted", () => {
-    const planned = withPlanReset(afford, [nearCap()], AT, FRESH)
+  test("a refusal naming the cap, at 97 %, cools until the cap's own reset", () => {
+    const planned = withPlanReset(capNamed, [nearCap()], AT, FRESH)
     expect(planned.kind).toBe("rate-limited")
     expect(planned.resetsAt).toEqual(MIDNIGHT)
+    expect(planned.retryAfterSeconds).toBeUndefined()
     expect(planned.resetSource).toBe("provider-reported")
     const breaker = recordFailure(HEALTHY, planned, AT)
     expect(breaker.status).toBe("cooling_down")
     expect(breaker.cooldownUntil).toEqual(MIDNIGHT)
   })
 
-  test("the client path reads the same evidence", () => {
-    expect(verifiedKeyCapReset([nearCap()], AT, FRESH)).toEqual(MIDNIGHT)
+  // Review of #504: a key at 97 % of its daily cap can sit on an empty prepaid balance. Lending
+  // the cap's reset to that 402 answered `429` until midnight for a wall only a top-up clears.
+  test("a 402 naming the balance, on that same key, stays exhausted", () => {
+    expect(withPlanReset(balance, [nearCap()], AT, FRESH)).toBe(balance)
+    expect(recordFailure(HEALTHY, balance, AT).status).toBe("exhausted")
+    // The client path reads the same rule, so it does not say `429` for an exhausted account.
+    expect(verifiedKeyCapReset([nearCap()], AT, FRESH)).toBeNull()
   })
 
-  test("the bound is the caller's: at 1 only a fully spent cap lends", () => {
-    expect(withPlanReset(afford, [nearCap()], AT, FRESH, 1)).toBe(afford)
-    expect(withPlanReset(afford, [nearCap({ utilization: 1 })], AT, FRESH, 1).kind).toBe(
-      "rate-limited",
-    )
+  // E's driver flag: the sentence names the key's cap but no window (`Key limit exceeded`,
+  // `limit_source: openrouter_key_limit`), so it stays `credits-exhausted` and carries `keyCap`.
+  test("a credits refusal flagged as the key's cap borrows the near-spent cap's reset", () => {
+    const flagged: AttemptFailure = { ...balance, message: "openrouter:key-limit", keyCap: true }
+    const planned = withPlanReset(flagged, [nearCap()], AT, FRESH)
+    expect(planned.kind).toBe("rate-limited")
+    expect(planned.resetsAt).toEqual(MIDNIGHT)
+    // A total cap names no reset: flagged or not, it stays a human's.
+    const total = nearCap({ resetsAt: undefined, resetSource: "unknown" })
+    expect(withPlanReset(flagged, [total], AT, FRESH)).toBe(flagged)
+  })
+
+  test("the client path's predicate is the breaker's, refusal by refusal", () => {
+    const flagged: AttemptFailure = { ...balance, keyCap: true }
+    const perMinute: AttemptFailure = { kind: "rate-limited", status: 429, message: "slow down" }
+    expect(keyCapResetFor(capNamed, [nearCap()], AT, FRESH)).toEqual(MIDNIGHT)
+    expect(keyCapResetFor(flagged, [nearCap()], AT, FRESH)).toEqual(MIDNIGHT)
+    expect(keyCapResetFor(balance, [nearCap()], AT, FRESH)).toBeNull()
+    expect(keyCapResetFor(balance, [nearCap({ utilization: 1 })], AT, FRESH)).toEqual(MIDNIGHT)
+    expect(keyCapResetFor(perMinute, [nearCap({ utilization: 1 })], AT, FRESH)).toBeNull()
+  })
+
+  test("a credits refusal borrows only from a cap the reading says is fully spent", () => {
+    const spent = nearCap({ utilization: 1 })
+    const planned = withPlanReset(balance, [spent], AT, FRESH)
+    expect(planned.kind).toBe("rate-limited")
+    expect(planned.resetsAt).toEqual(MIDNIGHT)
+    expect(verifiedKeyCapReset([spent], AT, FRESH)).toEqual(MIDNIGHT)
+  })
+
+  test("the near-cap bound is the caller's, and applies to the cap-named refusal alone", () => {
+    expect(withPlanReset(capNamed, [nearCap()], AT, FRESH, 1)).toBe(capNamed)
+    expect(withPlanReset(capNamed, [nearCap()], AT, FRESH, 0.95).resetsAt).toEqual(MIDNIGHT)
+    expect(withPlanReset(balance, [nearCap()], AT, FRESH, 0.5)).toBe(balance)
+    expect(DEFAULT_KEY_CAP_NEAR_UTILIZATION).toBeLessThan(1)
   })
 
   test("a bound outside (0, 1] never lends on an idle cap", () => {
     for (const bound of [0, -1, 2, Number.NaN]) {
       expect(verifiedKeyCapReset([nearCap({ utilization: 0.1 })], AT, FRESH, bound)).toBeNull()
+      expect(withPlanReset(capNamed, [nearCap({ utilization: 0.1 })], AT, FRESH, bound)).toBe(
+        capNamed,
+      )
     }
   })
 
-  test("a cap with real headroom, or a total cap with no reset, stays a human's", () => {
-    expect(withPlanReset(afford, [nearCap({ utilization: 0.5 })], AT, FRESH)).toBe(afford)
+  test("a cap with real headroom, or a total cap with no reset, lends to neither", () => {
     const total = nearCap({ resetsAt: undefined, resetSource: "unknown" })
-    expect(withPlanReset(afford, [total], AT, FRESH)).toBe(afford)
-  })
-
-  test("the driver's estimated key-limit re-test takes the cap's real reset", () => {
-    const windowed: AttemptFailure = {
-      kind: "rate-limited",
-      status: 402,
-      retryAfterSeconds: 3600,
-      resetSource: "estimated",
-      message: "create a key with a higher daily limit",
+    for (const failure of [capNamed, balance]) {
+      expect(withPlanReset(failure, [nearCap({ utilization: 0.5 })], AT, FRESH)).toBe(failure)
+      expect(withPlanReset(failure, [total], AT, FRESH)).toBe(failure)
     }
-    const planned = withPlanReset(windowed, [nearCap()], AT, FRESH)
-    expect(planned.resetsAt).toEqual(MIDNIGHT)
-    expect(planned.retryAfterSeconds).toBeUndefined()
-    expect(planned.resetSource).toBe("provider-reported")
   })
 
-  test("a reset-less 429 on a near-cap key is not the cap: it keeps the breaker's backoff", () => {
+  test("a 429 on a near-cap key that the driver did not flag is not the cap", () => {
     const perMinute: AttemptFailure = { kind: "rate-limited", status: 429, message: "slow down" }
     expect(withPlanReset(perMinute, [nearCap()], AT, FRESH)).toBe(perMinute)
+    // Nor is another provider's estimated re-test (Kimi's weekly 403): estimated is not the flag.
+    const estimated: AttemptFailure = {
+      ...perMinute,
+      retryAfterSeconds: 3600,
+      resetSource: "estimated",
+    }
+    expect(withPlanReset(estimated, [nearCap()], AT, FRESH)).toBe(estimated)
   })
 })

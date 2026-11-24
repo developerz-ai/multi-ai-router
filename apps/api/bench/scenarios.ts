@@ -8,18 +8,21 @@ import { stubUpstream } from "./upstream"
  *
  * CLAUDE.md non-negotiable 8 makes two separate promises, and they need two separate measurements:
  *
- * 1. **< 5 ms added p99 overhead.** Measured per request, unrounded: the time the client waited,
- *    minus the time the stub upstream held the request (from the router calling it to its last
- *    byte). That is everything the router added on either side of the wait. The router's own
+ * 1. **< 5 ms added p99 overhead.** Measured per request, unrounded: how late the router made it —
+ *    its time before calling the upstream, plus the worse of its time after the upstream's last
+ *    byte and the latest any stream token reached the client after the stub released it
+ *    (`clocks.ts`). The router's own
  *    `router_overhead_seconds` histogram is scraped beside it and must have recorded every request —
  *    the series is what alerts — but it is fed whole milliseconds into eight buckets, so it cannot
  *    tell 0.1 ms from 0.9 ms, and its interpolated p99 reads a bucket's upper edge. The verdict
  *    needs the measurement; the series is the cross-check.
  * 2. **Zero added time-to-first-token.** No series records this, and none can: `ttfbMs` is measured
  *    from when the request entered the *router*, so it necessarily contains the upstream's own think
- *    time and cannot say how much of it the router added. The only honest form of "added" is a
- *    difference between two clocks that both exist in this process — when the stub let its first
- *    byte go, and when the client saw one.
+ *    time and cannot say how much of it the router added. The honest form of "added" is a
+ *    difference between clocks that all exist in this process: how long the client waited for its
+ *    first byte from the moment it sent the request, less how long the stub took to produce one
+ *    once it was called. From the request's start, so the work the router does before it calls the
+ *    upstream counts — it delays the first token as surely as a slow relay does.
  *
  * Both non-SDK egress paths are covered, streamed and not. The Agent-SDK path is excluded by
  * design: it spawns a `claude` subprocess per request and is the budget's labeled exception.
@@ -180,12 +183,21 @@ export interface ScenarioResult {
   /** The `/metrics` body, scraped after the usage queue drained. */
   readonly exposition: string
   /**
-   * Per-request router overhead, ms, ascending and unrounded: client wall time minus the time the
-   * stub held the request. One per measured request that reached the upstream.
+   * Per-request router overhead, ms, ascending and unrounded: how late the router made the request
+   * (`clocks.ts`). One per measured request that reached the upstream.
    */
   readonly overheadMs: readonly number[]
-  /** Added time-to-first-token, ms, ascending. Empty for a non-streamed scenario. */
+  /**
+   * Added time-to-first-token, ms, ascending: the client's wait for a first byte from the request's
+   * start, less the upstream's own time to produce one. Empty for a non-streamed scenario.
+   */
   readonly addedTtftMs: readonly number[]
+  /**
+   * For a scenario with `backgroundStreams`: the fewest and the most of them in flight when a
+   * measured request reached the upstream. Null otherwise. A scenario that claims load and measured
+   * an idle router is the failure this exists to name.
+   */
+  readonly backgroundOverlap: { readonly min: number; readonly max: number } | null
   /** Streams whose first client byte landed after the upstream's last one — a buffered relay. */
   readonly buffered: number
 }
@@ -206,7 +218,9 @@ export async function runScenario(
 
   const built = build(scenario, shaped)
   const background = startBackground(built, scenario, shaped)
-  const driven = await drive(built, scenario, shaped, requests).finally(() => background.stop())
+  const driven = await background.ready
+    .then(() => drive(built, scenario, shaped, requests))
+    .finally(() => background.stop())
   await background.settled
 
   return {
@@ -215,6 +229,13 @@ export async function runScenario(
     failures: driven.failures + background.failures(),
     exposition: await scrape(built.bench),
     overheadMs: [...driven.overheadMs].sort((a, b) => a - b),
+    backgroundOverlap:
+      scenario.backgroundStreams === undefined || driven.backgroundActive.length === 0
+        ? null
+        : {
+            min: Math.min(...driven.backgroundActive),
+            max: Math.max(...driven.backgroundActive),
+          },
     addedTtftMs: [...driven.addedTtftMs].sort((a, b) => a - b),
     buffered: driven.buffered,
   }
@@ -242,5 +263,6 @@ function build(scenario: Scenario, options: DriveOptions): Built {
       ...(scenario.fleet === undefined ? {} : { fleet: scenario.fleet }),
     }),
     open: upstream.open,
+    backgroundActive: upstream.backgroundActive,
   }
 }

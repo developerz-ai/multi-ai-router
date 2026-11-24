@@ -9,8 +9,11 @@ import { createDispatcher, createHealthStore } from "../../../src/services/datap
 import { account, catalog, cipher, usageSink } from "./fixtures"
 
 const CRYPTOR = cipher()
+// Gemini's own wire: a tool call another vendor's model made carries no thought signature. (Through
+// 2.76 this file used OpenRouter's "No endpoints found that support tool use", which is now read as
+// that *account's* filter and walks to a sibling: `test/integration/account-scoped-failover.test.ts`.)
 const REFUSAL =
-  "No endpoints found that support tool use. To learn more about provider routing, visit: https://openrouter.ai/docs/provider-routing"
+  "Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly."
 
 async function walk(accounts: readonly (readonly [string, ProviderId])[]) {
   const usage = usageSink()
@@ -18,23 +21,29 @@ async function walk(accounts: readonly (readonly [string, ProviderId])[]) {
   const hosts: string[] = []
   const dispatcher = createDispatcher({
     catalog: catalog(
-      accounts.map(([id, provider]) =>
-        account(id, {
+      accounts.map(([id, provider], index) => {
+        const entry = account(id, {
           provider,
           dialect: "openai-chat",
           cipher: CRYPTOR,
           baseUrl: `https://${provider}.test/v1`,
-        }),
-      ),
+        })
+        // Asked in the order listed: an unpinned walk can start at the last one and prove nothing.
+        return { ...entry, snapshot: { ...entry.snapshot, priority: index } }
+      }),
     ),
+    options: { selection: { unpooledPolicy: "priority-failover" } },
     cipher: CRYPTOR,
     health,
     usage,
     fetch: async (request) => {
       const host = new URL((request as Request).url).host
       hosts.push(host)
-      return host.includes("openrouter")
-        ? Response.json({ error: { code: 404, message: REFUSAL } }, { status: 404 })
+      return host.includes("gemini")
+        ? Response.json(
+            { error: { code: 400, message: REFUSAL, status: "INVALID_ARGUMENT" } },
+            { status: 400 },
+          )
         : Response.json({ id: "ok", choices: [] })
     },
   })
@@ -71,24 +80,25 @@ async function walk(accounts: readonly (readonly [string, ProviderId])[]) {
 
 test("with no other provider left the upstream's own 4xx is the answer, after one attempt", async () => {
   const r = await walk([
-    ["a", "openrouter"],
-    ["b", "openrouter"],
+    ["a", "gemini"],
+    ["b", "gemini"],
   ])
 
-  expect(r.status).toBe(404)
-  expect(r.text).toContain("support tool use")
-  expect(r.hosts).toHaveLength(1)
+  expect(r.status).toBe(400)
+  expect(r.text).toContain("thought_signature")
+  expect(r.hosts).toEqual(["gemini.test"])
   expect(r.active).toBe(true)
 })
 
 test("another provider's account is tried, and no account is struck", async () => {
   const r = await walk([
-    ["a", "openrouter"],
-    ["b", "openrouter"],
+    ["a", "gemini"],
+    ["b", "gemini"],
     ["c", "zai"],
   ])
 
   expect(r.status).toBe(200)
-  expect(r.hosts.filter((host) => host.includes("openrouter")).length).toBeLessThanOrEqual(1)
+  // One refusal, the second Gemini account skipped, then the other provider.
+  expect(r.hosts).toEqual(["gemini.test", "zai.test"])
   expect(r.active).toBe(true)
 })

@@ -52,3 +52,31 @@ test("a lease release that rejects while preparing is a refusal, never a throw",
   expect(claim.refused).toBe("unavailable")
   claim.release()
 })
+
+test("a turn released before its conversation lock is granted never waits on the SDK lock", async () => {
+  const conversation = Promise.withResolvers<void>()
+  const asked: number[] = []
+  let returned = false
+  const claim = claimSessionTurnDurable(createSessionClaims(), "key", "account", "sdk", {
+    tryAcquire: async (id) => {
+      asked.push(id)
+      // The second lock is held by a turn that does not end: waiting on it held the first.
+      if (asked.length === 2) return new Promise(() => {})
+      await conversation.promise
+      return {
+        acquired: true,
+        value: {
+          release: async () => {
+            returned = true
+          },
+        },
+      }
+    },
+  })
+  const preparing = claim.prepare()
+  claim.release()
+  conversation.resolve()
+  expect(await Promise.race([preparing, Bun.sleep(100).then(() => "waiting")])).toBe(false)
+  expect(asked).toHaveLength(1)
+  expect(returned).toBe(true)
+})

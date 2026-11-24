@@ -1,4 +1,3 @@
-import { createSignal } from "solid-js"
 import { Badge } from "../../components/Badge"
 import { type Column, Table } from "../../components/Table"
 import type { EgressProxyChoice, ProxyCheck } from "../../lib/api/egress"
@@ -17,16 +16,10 @@ export function EgressInventoryTable(props: {
 }) {
   const test = useTestProxy()
   const runs = createRowRuns<ProxyCheck>()
-  const [checks, setChecks] = createSignal<Readonly<Record<string, ProxyCheck | undefined>>>({})
-  const [errors, setErrors] = createSignal<Readonly<Record<string, unknown>>>({})
 
   const press = (proxy: EgressProxyChoice) => {
-    const key = rowKey(proxy)
-    setErrors((current) => ({ ...current, [key]: undefined }))
-    void runs.run(key, () => test.mutateAsync({ vendor: proxy.vendor, id: proxy.id }), {
-      onSuccess: (check) => setChecks((current) => ({ ...current, [key]: check })),
-      onError: (error) => setErrors((current) => ({ ...current, [key]: error })),
-    })
+    const named = { vendor: proxy.vendor, id: proxy.id }
+    void runs.run(rowKey(proxy), () => test.mutateAsync(named))
   }
 
   const columns: readonly Column<EgressProxyChoice>[] = [
@@ -70,11 +63,11 @@ export function EgressInventoryTable(props: {
       cell: (proxy) => (
         <ProxyTest
           busy={runs.pending().has(rowKey(proxy))}
-          error={errors()[rowKey(proxy)]}
+          error={runs.errors().get(rowKey(proxy))}
           label={`Test proxy ${proxy.address} now`}
           nowMs={props.nowMs}
           onTest={() => press(proxy)}
-          result={checks()[rowKey(proxy)]}
+          result={runs.results().get(rowKey(proxy))}
         />
       ),
     },

@@ -132,7 +132,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
             ? undefined
             : setTimeout(() => stall.abort(new Error("native schema stalled")), headerTimeoutMs)
         try {
-          const response = await call(
+          return await call(
             new Request(FAST_URL, {
               method: "POST",
               signal: AbortSignal.any([input.signal, stall.signal]),
@@ -151,10 +151,6 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
               body: meta.text,
             }),
           )
-          // A refusal's verdict waits for its classification: one the request provoked must not
-          // cool the Account through the headers it came with.
-          if (response.ok) reportFastQuota(response.headers, input.onRateLimit)
-          return response
         } catch (error) {
           if (stall.signal.aborted && !input.signal.aborted) return "stalled"
           throw error
@@ -162,6 +158,8 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
           clearTimeout(timer)
         }
       }
+      // A refusal's verdict waits for its classification: one the request provoked must not cool the
+      // Account through the headers it came with. Inside a 200 that is known only after the fold.
       const refuse = (
         upstream: { readonly status: number; readonly headers: Headers },
         text: string,
@@ -229,12 +227,14 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
         }
       }
       const upstreamHeaders = response.headers
+      if (prepared.streaming) reportFastQuota(upstreamHeaders, input.onRateLimit)
       response = await validateFastResponse(response)
       if (!response.ok) {
         release()
         return response
       }
       if (!prepared.streaming) {
+        let refusedInStream = false
         try {
           // A relaxed force (`tool-choice.ts`) is checked on a non-streaming turn only, as on the
           // Agent-SDK transport: a streaming answer is already the client's as it arrives.
@@ -242,18 +242,21 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
             response,
             input.signal,
             prepared.forcedTool === "forced-tool",
-            (error) =>
-              refuse(
+            (error) => {
+              refusedInStream = true
+              return refuse(
                 { status: error.status, headers: upstreamHeaders },
                 // Redacted, then cut: a cut can leave half a token no pattern matches.
                 sanitizeErrorBody(error.body, [credential.accessToken]).slice(
                   0,
                   deps.errorMaxBytes,
                 ),
-              ),
+              )
+            },
           )
         } finally {
           release()
+          if (!refusedInStream) reportFastQuota(upstreamHeaders, input.onRateLimit)
         }
       }
       return releasingWith(response, release)

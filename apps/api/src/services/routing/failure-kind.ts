@@ -66,6 +66,21 @@ export interface AttemptFailure {
    * it skips that provider's remaining candidates and goes on ({@link planNextAttempt}).
    */
   readonly providerScoped?: boolean
+  /**
+   * The refusal names the **key's own spend cap** (`FailureClassification.keyCap`: OpenRouter's
+   * `limit_source: openrouter_key_limit`, `Key limit exceeded`, `… a key with a higher … limit`),
+   * never the prepaid balance. The evidence `plan-reset.ts` requires before a `credits-exhausted`
+   * refusal borrows the reset of a cap its reading says is only *nearly* spent.
+   */
+  readonly keyCap?: boolean
+  /**
+   * A `client-error` about **this account's own settings** (`FailureClassification.accountScoped`:
+   * an OpenRouter provider filter or data policy that leaves no endpoint, one request larger than
+   * the account's in-flight budget). The next account may serve the body as it stands, one of the
+   * same provider included, so the chain walks on without skipping anything
+   * ({@link planNextAttempt}). No strike and no hold: `client-error` never earns either.
+   */
+  readonly accountScoped?: boolean
 }
 
 /**

@@ -5,7 +5,8 @@
 #   bin/check --fast      NOT the gate: lint, typecheck and only the tests your changes affect
 #                         (`bin/test --changed=origin/main`), no build. The inner loop while
 #                         working; a commit still wants the plain `bin/check`.
-#   bin/check --verbose   stream every stage's full output instead of the summary below
+#   bin/check --verbose   every stage's full output, live: the suite streams as it runs (every
+#                         passing test included) and typecheck prints the moment it finishes
 #
 # OUTPUT. One line per stage — its name, its verdict, how long it took — and nothing else when the
 # stage passed. A stage that fails prints its own output in full (the test stage's is already only
@@ -75,8 +76,9 @@ trap 'rm -rf "$logs"' EXIT
 # shares its caller's process group, and signalling the group would signal the caller too.
 typecheck_pid=""
 test_pid=""
+# Killed and then waited for, so nothing of this run is still on the database when it exits.
 # shellcheck disable=SC2086  # each is one pid or empty
-trap 'kill $typecheck_pid $test_pid 2>/dev/null; exit 130' INT TERM
+trap 'kill $typecheck_pid $test_pid 2>/dev/null; wait $typecheck_pid $test_pid 2>/dev/null || true; exit 130' INT TERM
 
 seconds_since() { echo $(($(date +%s) - $1)); }
 
@@ -113,33 +115,61 @@ stage lint bun run lint
 
 # Typecheck and the suite share nothing — tsc reads the sources, the suite runs them — so they run
 # at the same time and the gate costs max(typecheck, test) instead of their sum. Same script as CI's
-# typecheck job. Its verdict is read first below: it finishes first, and a type error is the cheaper
-# thing to be told about.
-typecheck_started=$(date +%s)
-bun run typecheck >"$logs/typecheck.log" 2>&1 &
-typecheck_pid=$!
-
-# In the background and waited for, so a signal reaches the trap above while the suite runs (a
-# shell does not run a trap until its foreground child returns).
+# typecheck job.
+#
+# The suite first, in the background and waited for, so a signal reaches the trap above while it
+# runs (a shell runs no trap until its foreground child returns). --verbose hands it the terminal
+# and asks it to stream; otherwise its output is kept for the failure report.
 test_started=$(date +%s)
 test_status=0
 if [ -n "$fast" ]; then
   # Only the test files git says the change reaches, in one process. Proves less than the gate, on
   # purpose — and says so at the end.
-  bin/test --changed="${CHECK_FAST_BASE:-origin/main}" >"$logs/test.log" 2>&1 &
+  set -- --changed="${CHECK_FAST_BASE:-origin/main}"
 else
-  bin/test >"$logs/test.log" 2>&1 &
+  set --
+fi
+if [ -n "$verbose" ]; then
+  printf '\n▸ test (typecheck runs beside it and prints when it finishes)\n'
+  ROUTER_TEST_VERBOSE=1 bin/test "$@" &
+else
+  bin/test "$@" >"$logs/test.log" 2>&1 &
 fi
 test_pid=$!
+
+# Typecheck beside it, in a subshell that acts on its own verdict the moment it has one: a type
+# error known in ten seconds should not wait two minutes for the suite to finish before it is
+# reported. On failure it stops the suite — bin/test's own trap stops and reaps its shards — and
+# the wait below returns at once. Its status crosses back through a file; a subshell cannot set a
+# variable here.
+typecheck_started=$(date +%s)
+(
+  compiler=""
+  trap 'kill "$compiler" 2>/dev/null; wait "$compiler" 2>/dev/null || true; exit 143' INT TERM
+  bun run typecheck >"$logs/typecheck.log" 2>&1 &
+  compiler=$!
+  code=0
+  wait "$compiler" || code=$?
+  echo "$code" >"$logs/typecheck.status"
+  [ -z "$verbose" ] || { printf '\n▸ typecheck — exit %s\n' "$code"; cat "$logs/typecheck.log"; }
+  [ "$code" -eq 0 ] || kill "$test_pid" 2>/dev/null
+) &
+typecheck_pid=$!
+
 wait "$test_pid" || test_status=$?
 test_pid=""
 test_seconds="$(seconds_since "$test_started")"
 
-typecheck_status=0
-wait "$typecheck_pid" || typecheck_status=$?
+wait "$typecheck_pid" || true
 typecheck_pid=""
-[ -z "$verbose" ] || { printf '\n▸ typecheck\n'; cat "$logs/typecheck.log"; printf '\n▸ test\n'; cat "$logs/test.log"; }
-[ "$typecheck_status" -eq 0 ] || failed typecheck "$(seconds_since "$typecheck_started")"
+typecheck_status="$(cat "$logs/typecheck.status" 2>/dev/null || echo 1)"
+
+# Typecheck's verdict is read first: when it failed, the suite's exit is only the echo of being
+# stopped, and the type errors are the finding.
+if [ "$typecheck_status" -ne 0 ]; then
+  # --verbose already printed the log when the compiler exited; `failed` prints it otherwise.
+  failed typecheck "$(seconds_since "$typecheck_started")"
+fi
 passed typecheck "$(seconds_since "$typecheck_started")"
 [ "$test_status" -eq 0 ] || failed test "$test_seconds"
 passed test "$test_seconds"

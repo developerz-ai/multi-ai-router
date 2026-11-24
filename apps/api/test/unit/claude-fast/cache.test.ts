@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { placeCacheBreakpoints } from "../../../src/providers/claude-fast/cache"
 import { prepareFastRequest, readFastRequest } from "../../../src/providers/claude-fast/request"
 
 /**
@@ -143,4 +144,22 @@ test("with no marker anywhere the native-style hour-long ones are unchanged", ()
   expect(body.system[1]?.cache_control).toEqual(hour)
   expect(body.system.at(-1)?.cache_control).toEqual(hour)
   expect(tailOf(body)).toEqual({ type: "text", text: "start", cache_control: hour })
+})
+
+test("a native request with a marked prefix never has its history walked", () => {
+  const history = {
+    role: "user",
+    get content(): string {
+      throw new Error("walked")
+    },
+  }
+  expect(() =>
+    placeCacheBreakpoints({
+      system: [{ type: "text", text: "rules", cache_control: marked }],
+      messages: [history],
+      tools: undefined,
+      unmarked: false,
+      native: true,
+    }),
+  ).not.toThrow()
 })

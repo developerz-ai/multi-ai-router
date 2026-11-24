@@ -134,6 +134,54 @@ describe("a translated stream truncated at a clean upstream EOF", () => {
     expect(translator.truncated?.()).toBe(false)
   })
 
+  /**
+   * dz review of #504: Anthropic's `message_stop` with no `message_delta` before it states no stop
+   * reason. After partial output the chat client got `[DONE]` with no `finish_reason` chunk, a
+   * terminator over an answer nobody called finished.
+   */
+  test("anthropic `message_stop` with no `message_delta`: the truncation event, never a bare `[DONE]`", () => {
+    const stop = frame({ type: "message_stop" })
+    const chat = stream("openai-chat", "anthropic")
+    for (const f of UPSTREAM.anthropic.started) chat.push(f)
+    const ended = [...chat.push(stop), ...chat.flush()]
+    expect(ended).toHaveLength(1)
+    expect(ended.some((event) => event.data === "[DONE]")).toBe(false)
+    expect(routerOf("openai-chat", ended[0])).toMatchObject({ signal: "upstream_incomplete" })
+    expect(chat.truncated?.()).toBe(true)
+    expect(chat.push(frame({ type: "message_delta", delta: { stop_reason: "end_turn" } }))).toEqual(
+      [],
+    )
+
+    // The Responses client of the same upstream: nothing on `message_stop`, the one event at EOF.
+    const responses = stream("openai-responses", "anthropic")
+    for (const f of UPSTREAM.anthropic.started) responses.push(f)
+    expect(responses.push(stop)).toEqual([])
+    const end = responses.flush()
+    expect(end).toHaveLength(1)
+    expect(end[0]?.data.includes("response.completed")).toBe(false)
+    expect(responses.truncated?.()).toBe(true)
+  })
+
+  test("anthropic `message_stop` as the very first event owes nothing: no `[DONE]` over silence", () => {
+    const chat = stream("openai-chat", "anthropic")
+    expect([...chat.push(frame({ type: "message_stop" })), ...chat.flush()]).toEqual([])
+    expect(chat.truncated?.()).toBe(false)
+  })
+
+  test("a terminal is emitted only with a stated finish, in every translator", () => {
+    for (const [ingress, egress] of PAIRS) {
+      const translator = stream(ingress, egress)
+      const events = [
+        ...UPSTREAM[egress].started.flatMap((f) => translator.push(f)),
+        ...(egress === "anthropic" ? translator.push(frame({ type: "message_stop" })) : []),
+      ]
+      const text = events.map((event) => `${event.event ?? ""} ${event.data}`).join("\n")
+      for (const marker of ["[DONE]", "message_stop", "response.completed"]) {
+        expect(text.includes(marker), `${ingress} <- ${egress}: ${marker}`).toBe(false)
+      }
+    }
+  })
+
   test("a finish reason with no `[DONE]` is a whole completion, not a truncation", () => {
     const translator = stream("anthropic", "openai-chat")
     const [finish] = UPSTREAM["openai-chat"].terminal

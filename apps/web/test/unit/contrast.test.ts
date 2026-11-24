@@ -43,6 +43,16 @@ function ratio(a: Rgb, b: Rgb): number {
   return (light + 0.05) / (dark + 0.05)
 }
 
+test("a button's resting edge is the one that clears 3:1", () => {
+  const button = readFileSync(
+    join(import.meta.dir, "../../src/components/Button.module.scss"),
+    "utf8",
+  )
+  const neutral = /\n\.neutral \{([^}]*)\}/.exec(button)?.[1] ?? ""
+  expect(neutral).toContain("background: var(--surface-raised)")
+  expect(neutral).toContain("border-color: var(--border-strong)")
+})
+
 const SURFACES = ["surface", "surface-raised", "surface-overlay", "surface-sunken"] as const
 const TEXT = ["text", "text-muted", "accent", "ok", "warn", "danger"] as const
 

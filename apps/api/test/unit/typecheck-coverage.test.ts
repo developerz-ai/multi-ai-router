@@ -142,8 +142,10 @@ export function unused(parameter: string) { const local = 1; return 0 }
     // suite — so each reports its own verdict and time. Same package scripts as CI's jobs.
     expect(commands("bin/check")).toContain("stage lint bun run lint")
     expect(commands("bin/check")).toContain('bun run typecheck >"$logs/typecheck.log" 2>&1 &')
+    // Its verdict is judged, and judged before the suite's: a type error is never outvoted.
+    expect(commands("bin/check")).toContain('if [ "$typecheck_status" -ne 0 ]; then')
     expect(commands("bin/check")).toContain(
-      '[ "$typecheck_status" -eq 0 ] || failed typecheck "$(seconds_since "$typecheck_started")"',
+      'failed typecheck "$(seconds_since "$typecheck_started")"',
     )
     expect(commands("bin/lint")).toContain("bun run lint")
     expect(commands("bin/lint")).toContain("bun run typecheck")

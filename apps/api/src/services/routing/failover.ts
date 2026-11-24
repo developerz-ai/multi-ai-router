@@ -8,6 +8,7 @@
  * | `402` / out-of-credits body | Retry the next candidate; the account becomes `exhausted`. |
  * | `5xx`, connection failure, timeout | Retry the next candidate; counts toward the failure streak. |
  * | other `4xx` | **Do not retry.** A bad request is bad at every account. |
+ * | a `4xx` about this account's own settings (`accountScoped`) | Retry the next candidate, the same provider's included. No strike, no hold. With none left, stop as `provider-wall`: the upstream's own `4xx` is the answer. |
  * | a `4xx` about the vendor's wire (`providerScoped`) | Skip that **provider's** remaining candidates and retry the next one of another provider. No strike, no hold. With none left, stop as `provider-wall`: the upstream's own `4xx` is the answer. |
  * | model not served (driver-classified) | Retry the next candidate. No breaker strike: the account answered, about a name it never served. |
  * | `401` / `403` | Retry the next candidate. The account is parked `needs_reauth`, where a refreshable credential earns one off-path refresh, or cools `credential-rejected`; a rejected credential is *this account's* problem, not the request's. |
@@ -100,9 +101,10 @@ export type FailoverStopReason =
   /** The request itself is refused wherever it goes ({@link AttemptFailure.requestAttributable}). */
   | "request-wall"
   /**
-   * The last answer was a provider-scoped `4xx` ({@link AttemptFailure.providerScoped}) and no
-   * candidate of another provider is left: that upstream `4xx` is the client's answer, as it is
-   * for `not-retryable`.
+   * The last answer was a `4xx` the chain walks past — about the vendor's wire
+   * ({@link AttemptFailure.providerScoped}) or about that account's own settings
+   * ({@link AttemptFailure.accountScoped}) — and no candidate that could answer differently is
+   * left: that upstream `4xx` is the client's answer, as it is for `not-retryable`.
    */
   | "provider-wall"
 
@@ -141,15 +143,18 @@ export function planNextAttempt(
   if (progress.bytesStreamed) return { action: "stop", reason: "bytes-streamed" }
 
   if (lastFailure.kind === "stale-session") return replayInPlace(ordered, progress, options)
-  const providerScoped = lastFailure.providerScoped === true
-  if (!providerScoped && !isRetryable(lastFailure.kind))
+  // The two refusals of a request that are not the request's fault everywhere: another vendor, or
+  // just another account, serves the same body.
+  const walkedPast = lastFailure.providerScoped === true || lastFailure.accountScoped === true
+  if (!walkedPast && !isRetryable(lastFailure.kind))
     return { action: "stop", reason: "not-retryable" }
   if (lastFailure.requestAttributable === true && walled(ordered, progress, lastFailure, options))
     return { action: "stop", reason: "request-wall" }
-  // Nothing waits out a vendor's wire: the same body draws the same refusal after any pause. Only
-  // another account that said `overloaded` earlier in the chain is still worth asking again.
+  // Nothing waits out a vendor's wire or an account's settings: the same body draws the same
+  // refusal after any pause. Only another account that said `overloaded` earlier in the chain is
+  // still worth asking again.
   const stop = (exhausted: FailoverStopReason): FailoverDecision =>
-    providerScoped && progress.overloadedAccountId === undefined
+    walkedPast && progress.overloadedAccountId === undefined
       ? { action: "stop", reason: "provider-wall" }
       : waitOutOverload(ordered, progress, lastFailure, options, exhausted)
 

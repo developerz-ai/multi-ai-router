@@ -54,13 +54,13 @@
 
 .neutral {
   background: var(--surface-raised);
-  border-color: var(--border);
+  border-color: var(--border-strong);
   color: var(--text);
 }
 
 .neutral:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--surface-overlay);
-  border-color: var(--border-strong);
+  border-color: var(--text-muted);
 }
 
 .ghost {

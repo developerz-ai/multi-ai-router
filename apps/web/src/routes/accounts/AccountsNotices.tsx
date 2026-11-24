@@ -1,27 +1,22 @@
-import { Show } from "solid-js"
+import { For, Show } from "solid-js"
 import { Banner } from "../../components/Banner"
+import { Button } from "../../components/Button"
+import type { DiscoverModelsResult } from "../../lib/api/accounts"
 import { errorMessage } from "../../lib/api/errors"
+import type { RowRuns } from "../../lib/row-runs"
 import { DiscoverKeptNotice } from "./DiscoverKeptNotice"
 
-interface Outcome<T> {
-  readonly isError: boolean
-  readonly error: unknown
-  readonly isSuccess: boolean
-  readonly data: T | undefined
-}
+/** A row action's failures, by account. */
+type Failures = Pick<RowRuns<unknown>, "errors" | "reset">
 
 export interface AccountsNoticesProps {
-  readonly recheck: Outcome<unknown>
-  readonly recheckAll: Outcome<unknown>
-  readonly test: Outcome<unknown>
+  readonly recheck: Failures
+  readonly recheckAll: { readonly isError: boolean; readonly error: unknown }
+  readonly test: Failures
   /** A row's Enable. Null while the edit dialog is open, which shows its own errors. */
   readonly enableError: unknown
-  readonly discover: Outcome<{
-    readonly accountId: string
-    readonly saved: boolean
-    readonly message: string
-    readonly notInCatalogue: readonly string[]
-  }> & { readonly reset: () => void }
+  readonly discover: Failures & Pick<RowRuns<DiscoverModelsResult>, "results">
+  readonly labelFor: (accountId: string) => string
 }
 
 /**
@@ -32,53 +27,76 @@ export interface AccountsNoticesProps {
 export function AccountsNotices(props: AccountsNoticesProps) {
   return (
     <>
-      <Show when={props.recheck.isError}>
-        <Banner title="Re-check failed" tone="danger">
-          {errorMessage(props.recheck.error)}
-        </Banner>
-      </Show>
-
-      <Show when={props.test.isError}>
-        <Banner title="Test could not run" tone="danger">
-          {errorMessage(props.test.error)}
-        </Banner>
-      </Show>
-
+      <RowFailures labelFor={props.labelFor} of={props.recheck} title="Re-check failed" />
+      <RowFailures labelFor={props.labelFor} of={props.test} title="Test could not run" />
       <Show when={props.enableError !== null && props.enableError !== undefined}>
         <Banner title="Enable failed" tone="danger">
           {errorMessage(props.enableError)}
         </Banner>
       </Show>
-
       <Show when={props.recheckAll.isError}>
         <Banner title="Re-check all failed" tone="danger">
           {errorMessage(props.recheckAll.error)}
         </Banner>
       </Show>
-
-      <Show when={props.discover.isError}>
-        <Banner title="Model discovery failed" tone="danger">
-          {errorMessage(props.discover.error)}
-        </Banner>
-      </Show>
-
-      {/* Mounted only with ids to show, so the removal it owns exists only while it is offered. */}
-      <Show when={props.discover.data?.notInCatalogue.length ? props.discover.data : undefined}>
-        {(kept) => (
-          <DiscoverKeptNotice
-            accountId={kept().accountId}
-            message={kept().message}
-            notInCatalogue={kept().notInCatalogue}
-            onRemoved={() => props.discover.reset()}
-          />
+      <RowFailures labelFor={props.labelFor} of={props.discover} title="Model discovery failed" />
+      <For each={[...props.discover.results().values()]}>
+        {(result) => (
+          <>
+            {/* Mounted only with ids to show, so the removal it owns exists only while offered. */}
+            <Show when={result.notInCatalogue.length > 0}>
+              <DiscoverKeptNotice
+                accountId={result.accountId}
+                message={`${props.labelFor(result.accountId)} — ${result.message}`}
+                notInCatalogue={result.notInCatalogue}
+                onRemoved={() => props.discover.reset(result.accountId)}
+              />
+            </Show>
+            <Show when={!result.saved}>
+              <Banner
+                action={
+                  <Button
+                    onClick={() => props.discover.reset(result.accountId)}
+                    size="sm"
+                    tone="neutral"
+                  >
+                    Dismiss
+                  </Button>
+                }
+                title={`The upstream listed no models: ${props.labelFor(result.accountId)}`}
+                tone="warn"
+              >
+                {result.message}
+              </Banner>
+            </Show>
+          </>
         )}
-      </Show>
-
-      <Show when={props.discover.isSuccess && props.discover.data?.saved === false}>
-        <Banner title="The upstream listed no models" tone="warn">
-          {props.discover.data?.message}
-        </Banner>
-      </Show>
+      </For>
     </>
+  )
+}
+
+/** One banner per account, each with its own way off the screen. */
+function RowFailures(props: {
+  readonly title: string
+  readonly of: Failures
+  readonly labelFor: (accountId: string) => string
+}) {
+  return (
+    <For each={[...props.of.errors().keys()]}>
+      {(id) => (
+        <Banner
+          action={
+            <Button onClick={() => props.of.reset(id)} size="sm" tone="neutral">
+              Dismiss
+            </Button>
+          }
+          title={`${props.title}: ${props.labelFor(id)}`}
+          tone="danger"
+        >
+          {errorMessage(props.of.errors().get(id))}
+        </Banner>
+      )}
+    </For>
   )
 }

@@ -272,7 +272,8 @@ export function anthropicToOpenAiChatStream(
         return onMessageDelta(payload)
       case "message_stop":
         closed = true
-        return [DONE]
+        // Only after a stated finish: with no `message_delta`, `[DONE]` would close a cut answer.
+        return finished ? [DONE] : watch.end()
       case "error":
         return onError(payload)
       default:

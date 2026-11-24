@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { createRoot, createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import type { PriceOverride, PriceTable } from "../../src/lib/api/settings"
+import type { ProviderDescriptor } from "../../src/lib/api/types"
 import { PriceOverridesSection } from "../../src/routes/settings/PriceOverridesSection"
 import { createPriceState } from "../../src/routes/settings/price-state"
 import { fire, selectOption, typeInto } from "../support/dom"
@@ -87,6 +88,23 @@ test("a cleared rate can be discarded, as the message says", async () => {
     button(root, "Discard changes")?.click()
     expect(root.querySelector('[role="alert"]')).toBeNull()
     expect(rate.value).toBe("1")
+  })
+})
+
+test("a re-added override and its rates survive another admin deleting the stored one", () => {
+  createRoot((dispose) => {
+    const [table, setTable] = createSignal(prices([STORED]))
+    const state = createPriceState(table)
+    const stored = state.rows().find((row) => row.id === "openrouter:x")
+    if (stored === undefined) throw new Error("stored row missing")
+    state.revert(stored)
+    expect(state.add({ id: "openrouter" } as ProviderDescriptor, "x", "")).toBeNull()
+    expect(state.rows().filter((row) => row.id === "openrouter:x")).toHaveLength(1)
+    state.edit(stored, "inputPerMtok", "7")
+    setTable(prices([]))
+    expect(state.rows().filter((row) => row.id === "openrouter:x")).toHaveLength(1)
+    expect(state.cellValue(stored, "inputPerMtok")).toBe("7")
+    dispose()
   })
 })
 

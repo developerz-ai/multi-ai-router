@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import {
   ESTIMATE_BASIS,
   ESTIMATE_CHARS_PER_TOKEN,
@@ -272,5 +272,30 @@ describe("totality", () => {
 
     // Keys "messages" (8), "role" (4), "content" (7); values "user" (4) and 3 characters — 26.
     expect(estimate.inputTokens).toBe(Math.ceil(26 / ESTIMATE_CHARS_PER_TOKEN))
+  })
+
+  test("a surrogate pair is one character, a lone half is one too, and no pair is collected", () => {
+    // Every arrangement a string can hold, against the iterator's own idea of a code point.
+    for (const text of [
+      "😀😀",
+      "a😀b",
+      "\ud83d",
+      "\ude00\ud83d",
+      "\ud83d\ud83d\ude00",
+      "\ud83d😀\ude00",
+    ]) {
+      const body = encode(JSON.stringify({ messages: [{ role: "user", content: text }] }))
+      expect(estimateTokenCount(body).inputTokens).toBe(
+        Math.ceil((8 + 4 + 7 + 4 + [...text].length) / ESTIMATE_CHARS_PER_TOKEN),
+      )
+    }
+    // Collecting them cost 213 MB and 400 ms of event loop on one 4M-emoji prompt.
+    const collect = spyOn(String.prototype, "match")
+    try {
+      estimateTokenCount(request("😀".repeat(1_000)))
+      expect(collect).not.toHaveBeenCalled()
+    } finally {
+      collect.mockRestore()
+    }
   })
 })

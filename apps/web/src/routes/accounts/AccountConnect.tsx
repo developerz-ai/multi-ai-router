@@ -17,6 +17,7 @@ import { useProviders } from "../../lib/queries/providers"
 import { connectLabel } from "./account-cells"
 import { ConnectDialog, type ConnectProgress } from "./ConnectDialog"
 import { DeviceSignIn } from "./DeviceSignIn"
+import { createLoginAttempts } from "./login-attempts"
 
 export interface AccountConnectProps {
   /** Null while no account is selected. The dialog stays shut. */
@@ -74,27 +75,21 @@ export function AccountConnect(props: AccountConnectProps) {
     )
   }
 
-  // A start resolves after the operator may have left. The screen shows only the one it still
-  // awaits; one it left is cancelled when it lands, unless a newer start on that account has
-  // already replaced it on the router.
-  let starts = 0
+  // A start resolves after the operator may have left: the screen shows only the one it awaits.
   let awaited = 0
-  const newest = new Map<string, number>()
+  const attempts = createLoginAttempts((id) => cancel.mutate(id))
   let redeeming: Promise<unknown> | null = null
 
-  const isNewest = (id: string, start: number) => newest.get(id) === start
-
   function launch<T>(id: string, request: Promise<T>, show: (result: T) => void) {
-    starts += 1
-    const mine = starts
+    const mine = attempts.begin(id)
     awaited = mine
-    newest.set(id, mine)
     request.then(
       (result) => {
-        if (awaited === mine) show(result)
-        else if (isNewest(id, mine)) cancel.mutate(id)
+        if (awaited !== mine) return attempts.orphaned(id, mine)
+        attempts.shown(id, mine)
+        show(result)
       },
-      () => {}, // Rendered from the mutation's own `error`.
+      () => attempts.failed(id, mine), // Rendered from the mutation's own `error`.
     )
   }
 
@@ -185,9 +180,9 @@ export function AccountConnect(props: AccountConnectProps) {
     // Completed logins have nothing left to abandon; an unfinished one does.
     if (account !== null && completed() === null) {
       const { id } = account
-      const left = newest.get(id) ?? 0
+      const left = attempts.newest(id)
       // A code being redeemed may be about to succeed: cancelled only if it does not.
-      if (redeeming !== null) redeeming.catch(() => isNewest(id, left) && cancel.mutate(id))
+      if (redeeming !== null) redeeming.catch(() => attempts.orphaned(id, left))
       else if (pending) cancel.mutate(id)
     }
     clear()

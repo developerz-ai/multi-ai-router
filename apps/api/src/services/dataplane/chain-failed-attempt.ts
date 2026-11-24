@@ -66,9 +66,11 @@ export function finishFailedAttempt(
     ctx.reasonMaxChars ?? DEFAULT_LOG_REASON_MAX_CHARS,
   )
   const now = runtime.clock.now()
-  // The same verified, fresh spend_limit reset the breaker already used to cool this refusal. Read
-  // once; absent evidence yields null and leaves the client's credits-exhausted answer untouched.
-  const keyCapResetsAt = runtime.health.keyCapResetAt(servable.account.id, now)
+  // The same verified, fresh spend_limit reset the breaker already used to cool this refusal, asked
+  // of this refusal: one that names the key's cap borrows from a near-spent cap, one that names
+  // nothing only from a fully spent one (`routing/plan-reset.ts`, `keyCapResetFor`). Read once;
+  // absent evidence yields null and leaves the client's credits-exhausted answer untouched.
+  const keyCapResetsAt = runtime.health.keyCapResetAt(servable.account.id, now, outcome.failure)
   const failure = answeredFailure(
     outcome.classification,
     outcome.upstream,

@@ -96,6 +96,7 @@ export {
 export { poolNames } from "./no-candidates-wording"
 export {
   DEFAULT_KEY_CAP_NEAR_UTILIZATION,
+  keyCapResetFor,
   spentPlanReset,
   verifiedKeyCapReset,
   withPlanReset,
