@@ -149,6 +149,10 @@ export function recordFailure(
     // Go's `[overloaded]` `429` cooled both Go seats and the router answered 199 requests `429
     // quota_exhausted` while neither account was out of anything).
     case "overloaded":
+    // `account-full` and `router-full` are this router's own gate being full: the account is
+    // healthy and busy, so no cooldown, no strike and no recovery probe follows from either.
+    case "account-full":
+    case "router-full":
       return state
 
     // No clock refills a drained balance. No reset instant is recorded, deliberately.

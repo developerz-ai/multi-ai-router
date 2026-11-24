@@ -39,7 +39,13 @@ export function recordChainFailure(
   // The provider's shared backend was busy: nothing about this account either way. No strike, no
   // limiter reading folded in (Go's overloaded `429` would otherwise cool the seat), and a
   // designated probe settles `uncertain` so its permit is not spent on someone else's outage.
-  if (outcome.failure.kind === "overloaded") {
+  // The router's own gate was full (`account-full`, `router-full`): equally blameless, and the same
+  // settlement. No strike, no limiter reading, and a designated probe's permit is not spent on it.
+  if (
+    outcome.failure.kind === "overloaded" ||
+    outcome.failure.kind === "account-full" ||
+    outcome.failure.kind === "router-full"
+  ) {
     recovery?.finish("uncertain")
     return
   }

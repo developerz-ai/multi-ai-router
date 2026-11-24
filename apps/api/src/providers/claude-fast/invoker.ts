@@ -63,7 +63,7 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
     const model = deps.resolveModel(input.accountId, input.model)
     if (!model) return fallback(input, "model")
     const body = readFastRequest(input.body)
-    const slot = await deps.concurrency.acquire(input.accountId, input.signal)
+    const slot = await deps.concurrency.acquire(input.accountId, input.signal, input.queueWait)
     let released = false
     const release = () => {
       if (released) return

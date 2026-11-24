@@ -168,6 +168,19 @@ export class UpstreamOverloadedError extends RetryableRouterError {
 }
 
 /**
+ * Every eligible Claude subscription account was at its in-flight limit for the whole bounded gate
+ * wait (`CLAUDE_SDK_QUEUE_WAIT_MS`), so the walk ended without any of them taking the request. `429`
+ * plus a `Retry-After`: a clock clears it, and no account is out of anything, so none was cooled.
+ *
+ * The router's own answer while eligible accounts are in scope, by design and by an owner-authorized
+ * narrowing of the "never a router-made 429" rule (CLAUDE.md, developerz-ai/developerz.ai#10277).
+ */
+export class AccountAtCapacityError extends RetryableRouterError {
+  readonly code = "account_at_capacity"
+  readonly status = 429
+}
+
+/**
  * Stored credential material could not be decrypted — a wrong or rotated `ENCRYPTION_KEY`, or a
  * corrupt record. The message never carries ciphertext, key material, or plaintext.
  */

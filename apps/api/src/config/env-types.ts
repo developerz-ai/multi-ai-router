@@ -144,11 +144,17 @@ export interface Env {
   /**
    * `claude` subprocesses in flight on this replica — every `query()` spawns a ~245 MB native
    * binary (measured, see docs/idea/09-deployment.md#sizing), so this is a memory bound, not a
-   * throughput one. Excess requests queue rather than fail. The per-account ceiling is what stops
-   * one Account's burst starving the pool.
+   * throughput one. Excess requests queue for up to `claudeSdkQueueWaitMs`, then try the next
+   * account. The per-account ceiling is what stops one Account's burst starving the pool.
    */
   readonly claudeSdkMaxConcurrency: number
   readonly claudeSdkMaxConcurrencyPerAccount: number
+  /**
+   * `CLAUDE_SDK_QUEUE_WAIT_MS`: the most one request waits at the subprocess gate, in total across
+   * every account it tries, before it is told the account (`account_at_capacity`) or the replica
+   * (`router-at-capacity`) is full. Probes and the credential keepalive are not bound by it.
+   */
+  readonly claudeSdkQueueWaitMs: number
   /**
    * The refresh-window guard (`providers/claude-sdk/credential-freshness.ts`). Inside `skew` of an
    * access token's expiry only one subprocess may cross; the rest wait up to `WaitMs`, re-reading

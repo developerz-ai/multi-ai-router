@@ -1,12 +1,23 @@
 import { abortReason, throwIfAborted } from "./abort"
+import {
+  REAL_GATE_TIMER,
+  type SdkGateClocks,
+  type SdkGateHalf,
+  type SdkGateTimer,
+  SdkGateWaitExpiredError,
+  type SdkWaitBudget,
+} from "./gate-wait"
 
 /**
  * How many `claude` subprocesses may run at once, globally and per Account.
  *
  * Every `query()` spawns a process running a ~200 MB native binary, so this is a memory bound, not
  * a connection pool: exceeding it does not slow the router down, it exhausts the container
- * (docs/idea/11-anthropic-agent-sdk.md#1-why-the-sdk-path). Excess callers **queue** rather than
- * fail — a subscription request that waited 400 ms is a served request, and a 503 is not.
+ * (docs/idea/11-anthropic-agent-sdk.md#1-why-the-sdk-path). Excess callers **queue**, but only up
+ * to `CLAUDE_SDK_QUEUE_WAIT_MS` per request, then try the next account (`gate-wait.ts`): a request
+ * that waited 400 ms is a served request, while one that waits out its whole attempt deadline is a
+ * client-side timeout nobody can read. A caller that passes no budget (the probes, the credential
+ * keepalive) keeps the unbounded queue.
  *
  * **Two gates, and the order between them is the design.** A caller takes its Account's slot first
  * and the global slot second. Reversed, an Account bursting past its own limit would sit on global
@@ -60,11 +71,16 @@ export interface SdkConcurrency {
   /**
    * Waits for a slot for `accountId`, then holds it until the returned slot is released.
    *
+   * With a `budget`, the wait is bounded by what the request has left: a free slot is taken at
+   * once and a full gate refuses at once when nothing is left. Without one the queue is unbounded.
+   *
    * @throws the signal's own abort reason when the caller goes away while queued — a `TimeoutError`
    * for an attempt deadline, an `AbortError` for a client disconnect, so `runSdkAttempt` classifies
    * the wait exactly as it classifies the call.
+   * @throws {SdkGateWaitExpiredError} when a budgeted caller ran out of wait, naming the half it was
+   * still queued on.
    */
-  acquire(accountId: string, signal: AbortSignal): Promise<SdkSlot>
+  acquire(accountId: string, signal: AbortSignal, budget?: SdkWaitBudget): Promise<SdkSlot>
   /** Subprocess slots held across all Accounts. Observability and tests; nothing routes on it. */
   readonly inFlight: number
   /** Callers waiting on either gate. */
@@ -72,7 +88,14 @@ export interface SdkConcurrency {
   inFlightFor(accountId: string): number
 }
 
-export function createSdkConcurrency(limits: SdkConcurrencyLimits): SdkConcurrency {
+export function createSdkConcurrency(
+  limits: SdkConcurrencyLimits,
+  clocks: SdkGateClocks = {},
+): SdkConcurrency {
+  const measure = {
+    now: clocks.now ?? (() => performance.now()),
+    timer: clocks.timer ?? REAL_GATE_TIMER,
+  }
   const global = createGate(limits.global)
   // One gate per Account, created on first use and dropped when it falls idle: an Account that is
   // deleted, or simply quiet, must not hold a map entry for the life of the process.
@@ -91,13 +114,20 @@ export function createSdkConcurrency(limits: SdkConcurrencyLimits): SdkConcurren
   }
 
   return {
-    acquire: async (accountId, signal) => {
+    acquire: async (accountId, signal, budget) => {
       const account = gateFor(accountId)
-      const releaseAccount = await account.acquire(signal)
+      let releaseAccount: () => void
+      try {
+        releaseAccount = await account.acquire(signal, waitOn(budget, "account", measure))
+      } catch (error) {
+        // A refused or expired caller may have created the gate: do not keep an idle entry.
+        forget(accountId, account)
+        throw error
+      }
 
       let releaseGlobal: () => void
       try {
-        releaseGlobal = await global.acquire(signal)
+        releaseGlobal = await global.acquire(signal, waitOn(budget, "global", measure))
       } catch (error) {
         // The Account permit is already ours; a caller that never gets a slot must not keep it.
         releaseAccount()
@@ -128,8 +158,24 @@ export function createSdkConcurrency(limits: SdkConcurrencyLimits): SdkConcurren
   }
 }
 
+/** What a budgeted acquire waits with on one gate. Absent: the unbounded queue. */
+interface GateWait {
+  readonly budget: SdkWaitBudget
+  readonly half: SdkGateHalf
+  readonly now: () => number
+  readonly timer: SdkGateTimer
+}
+
+function waitOn(
+  budget: SdkWaitBudget | undefined,
+  half: SdkGateHalf,
+  measure: { readonly now: () => number; readonly timer: SdkGateTimer },
+): GateWait | undefined {
+  return budget === undefined ? undefined : { budget, half, ...measure }
+}
+
 interface Gate {
-  acquire(signal: AbortSignal): Promise<() => void>
+  acquire(signal: AbortSignal, wait?: GateWait): Promise<() => void>
   readonly held: number
   readonly waiting: number
   readonly idle: boolean
@@ -151,25 +197,47 @@ function createGate(limit: number): Gate {
   }
 
   return {
-    acquire: async (signal) => {
+    acquire: async (signal, wait) => {
       throwIfAborted(signal, NOT_GRANTED)
       if (held < permits) {
         held += 1
         return once(release)
       }
+      // Nothing left to wait with: a full gate refuses at once, and queues nobody.
+      if (wait !== undefined && wait.budget.remaining() <= 0)
+        throw new SdkGateWaitExpiredError(wait.half)
 
       await new Promise<void>((resolve, reject) => {
-        const admit = (): void => {
+        const queuedAt = wait?.now() ?? 0
+        let timer: unknown
+        // Every way out of the queue charges the time spent in it and disarms the timer.
+        const leave = (): void => {
           signal.removeEventListener("abort", onAbort)
+          if (wait === undefined) return
+          wait.timer.clear(timer)
+          wait.budget.spend(wait.now() - queuedAt)
+        }
+        const dequeue = (): void => {
+          const at = queue.indexOf(admit)
+          if (at >= 0) queue.splice(at, 1)
+        }
+        const admit = (): void => {
+          leave()
           resolve()
         }
         const onAbort = (): void => {
-          const at = queue.indexOf(admit)
-          if (at >= 0) queue.splice(at, 1)
+          dequeue()
+          leave()
           reject(abortReason(signal, NOT_GRANTED))
         }
         signal.addEventListener("abort", onAbort, { once: true })
         queue.push(admit)
+        if (wait !== undefined)
+          timer = wait.timer.set(() => {
+            dequeue()
+            leave()
+            reject(new SdkGateWaitExpiredError(wait.half))
+          }, wait.budget.remaining())
       })
 
       return once(release)

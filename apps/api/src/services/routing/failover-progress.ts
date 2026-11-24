@@ -85,6 +85,22 @@ export function noteOverload(
   return rest
 }
 
+/**
+ * Folds a `router-full` refusal into the progress: the replica's one global gate is full for the
+ * whole request, so no further candidate that dispatches through it is offered. Reuses
+ * {@link FailoverProgress.refusedProviders}: the Claude subscription provider is the only one served
+ * by the Agent-SDK transport, so refusing it refuses exactly the candidates behind that gate, and an
+ * account of another kind is still tried. Pure; returns a new value.
+ */
+export function noteGateFull(
+  progress: FailoverProgress,
+  provider: string,
+  failure: Pick<AttemptFailure, "kind">,
+): FailoverProgress {
+  if (failure.kind !== "router-full") return progress
+  return noteProviderScoped(progress, provider, { providerScoped: true })
+}
+
 /** Called the instant the first byte reaches the client. From here nothing may be retried. */
 export function markStreamed(progress: FailoverProgress): FailoverProgress {
   return { ...progress, bytesStreamed: true }

@@ -1,26 +1,26 @@
 import type { Logger } from "../../logging/logger"
-import {
-  classifySdkFailure,
-  type RateLimitSignal,
-  type SdkFailure,
-  type SdkInvoker,
-  type SdkQuotaStore,
-  type SessionStore,
-  type SessionTurn,
+import type {
+  RateLimitSignal,
+  SdkFailure,
+  SdkInvoker,
+  SdkQuotaStore,
+  SdkWaitBudget,
+  SessionStore,
+  SessionTurn,
 } from "../../providers"
 import {
   UpstreamAdmissionRefused,
   type UpstreamStartGuard,
 } from "../../providers/upstream-admission"
-import { type AttemptOutcome, attemptDeadline, failoverKind } from "./attempt"
+import { type AttemptOutcome, attemptDeadline } from "./attempt"
 import type { SdkServableCandidate } from "./plan"
+import { failure, invocationFailure, NO_TRANSPORT } from "./sdk-attempt-failure"
 import {
   errorResponseFailure,
   rateLimitCapture,
   releasingWith,
   truncatedTurnLog,
 } from "./sdk-attempt-response"
-import { sdkCancellation } from "./sdk-cancellation"
 import { type StreamDeadlines, upstreamDeadline } from "./upstream-deadline"
 
 /**
@@ -61,6 +61,11 @@ export interface SdkAttemptInput {
   readonly beforeUpstreamStart?: UpstreamStartGuard
   readonly onUpstreamStarted?: () => void
   readonly timeoutMs: number
+  /**
+   * The request's bounded wait at the subprocess gate (`CLAUDE_SDK_QUEUE_WAIT_MS`), shared by every
+   * attempt of the request so a walk over full accounts costs one knob. Absent: the unbounded queue.
+   */
+  readonly gateWait?: SdkGateWait
   /** First-byte and idle clocks for a streamed turn, from the moment the upstream starts. */
   readonly stream?: StreamDeadlines
   /** The client's own abort signal, so a client that goes away terminates the subprocess. */
@@ -83,6 +88,12 @@ export interface SdkAttemptInput {
   readonly sessionGone?: boolean
 }
 
+export interface SdkGateWait {
+  readonly budget: SdkWaitBudget
+  /** The `Retry-After` a full gate answers with: the router's wait for a wall naming no instant. */
+  readonly retryAfterSeconds: number
+}
+
 /** The request's own session identity, plus the store that turns it into a plan. */
 export interface SdkSessionContext {
   readonly store: SessionStore
@@ -101,11 +112,6 @@ const NO_SESSION: SessionTurn = {
   remember: () => {},
   release: () => {},
 }
-
-const NO_TRANSPORT =
-  "no Claude Agent SDK transport is configured on this router: a subscription account cannot be dispatched to"
-
-const DEADLINE = "the Agent SDK did not answer within its deadline"
 
 export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutcome> {
   const { invoke, plan } = input
@@ -148,6 +154,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       model: plan.upstreamModel,
       body: input.body,
       signal: attemptSignal,
+      ...(input.gateWait === undefined ? {} : { queueWait: input.gateWait.budget }),
       session: turn.plan,
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
       onRateLimit: rateLimit.capture,
@@ -228,71 +235,4 @@ function resolveTurn(input: SdkAttemptInput, accountId: string): SessionTurn {
     body: input.body,
     ...(input.sessionGone === undefined ? {} : { sessionGone: input.sessionGone }),
   })
-}
-
-/** Abort-shaped throws use the first signal cause; provider failures retain their classification. */
-function invocationFailure(
-  error: unknown,
-  input: SdkAttemptInput,
-  turn: SessionTurn,
-  rateLimit: RateLimitSignal | null,
-  attemptSignal: AbortSignal,
-): AttemptOutcome {
-  const cancellation = sdkCancellation(error, attemptSignal, input.signal)
-  if (cancellation === "caller")
-    return {
-      kind: "failure",
-      failure: { kind: "client-error", status: 499, message: "client cancelled the request" },
-      classification: null,
-      rateLimit: null,
-      upstream: null,
-    }
-  if (cancellation === "deadline") return failure("timeout", DEADLINE)
-
-  const { classification, clientMessage } = classifySdkFailure(error)
-  if (classification.kind === "stale-session") evictBinding(input, turn)
-
-  return {
-    kind: "failure",
-    failure: {
-      kind: failoverKind(classification.kind, classification.status),
-      status: classification.status,
-      // Router-authored: this is the sentence a client reads when no account could serve, and the
-      // SDK's own wording never becomes one (docs/idea/07-security.md).
-      message: clientMessage,
-      ...(classification.requestAttributable === true ? { requestAttributable: true } : {}),
-      ...(classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
-      ...(classification.modelScoped === true ? { modelScoped: true } : {}),
-    },
-    classification,
-    // The account's quota state rides `rate_limit_event`, never the throw (§5) — `classifySdkFailure`
-    // never invents one (`classification.rateLimit` is always null), so whatever this attempt's own
-    // stream reported is the only source.
-    rateLimit,
-    upstream: null,
-  }
-}
-
-/**
- * The SDK says it has never heard of the session we resumed, so the binding that named it is wrong
- * and stays wrong. Dropped rather than moved: an SDK session id resumes nowhere but the Account that
- * minted it, and this one resumes nowhere at all.
- */
-function evictBinding(input: SdkAttemptInput, turn: SessionTurn): void {
-  const session = input.session
-  // A fresh turn resumed nothing, so there is no binding this failure discredits.
-  if (session === undefined || turn.plan.kind === "fresh") return
-  session.store.invalidate(session.apiKeyId, session.sessionKey)
-}
-
-function failure(kind: "timeout" | "server-error", message: string): AttemptOutcome {
-  return {
-    kind: "failure",
-    failure: { kind, message },
-    classification: null,
-    rateLimit: null,
-    // Nothing answered, so there is no upstream body to relay. The chain surfaces a router-shaped
-    // error instead of inventing a provider-shaped one.
-    upstream: null,
-  }
 }

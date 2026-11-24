@@ -61,6 +61,7 @@ export {
   type InPlaceReason,
   inPlaceReason,
   markStreamed,
+  noteGateFull,
   noteOverload,
   noteProviderScoped,
   noteRequestAttributable,
@@ -71,6 +72,7 @@ export {
   classifyStatus,
   type FailureKind,
   isRetryable,
+  isUnstartedVerdict,
   RETRYABLE_FAILURE_KINDS,
 } from "./failure-kind"
 export {

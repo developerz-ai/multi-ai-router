@@ -32,6 +32,18 @@ export type FailureKind =
    * breaker never strikes for it, so no account cools or waits on a recovery permit over it.
    */
   | "overloaded"
+  /**
+   * SDK path: this account's in-flight limit held for the whole bounded gate wait
+   * (`CLAUDE_SDK_QUEUE_WAIT_MS`), so the request could not take a slot on it. Retryable and
+   * blameless: the account is healthy and busy, so nothing cools, strikes or probes for it.
+   */
+  | "account-full"
+  /**
+   * SDK path: this replica's whole subprocess ceiling held for the bounded gate wait. One gate is
+   * shared by every Claude subscription account, so the chain offers no further subscription
+   * candidate in this request (`noteGateFull`); an account of another kind is still tried.
+   */
+  | "router-full"
 
 export interface AttemptFailure {
   readonly kind: FailureKind
@@ -117,7 +129,24 @@ export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
   "busy-session",
   "model-unsupported",
   "overloaded",
+  "account-full",
+  "router-full",
 ]
+
+/**
+ * A failure that is a verdict even though the upstream never started: the request's own refusal
+ * ({@link AttemptFailure.requestAttributable}), or this router's full gate (`account-full`,
+ * `router-full`), which fires before any upstream is asked. Such an attempt takes the failure tail
+ * (a usage row, a log line, a fold into the held answer) instead of being dropped as a preparation
+ * fault, which would end a walk of full accounts as "could not be prepared".
+ */
+export function isUnstartedVerdict(failure: Pick<AttemptFailure, "kind" | "requestAttributable">) {
+  return (
+    failure.requestAttributable === true ||
+    failure.kind === "account-full" ||
+    failure.kind === "router-full"
+  )
+}
 
 export function isRetryable(kind: FailureKind): boolean {
   return RETRYABLE_FAILURE_KINDS.includes(kind)

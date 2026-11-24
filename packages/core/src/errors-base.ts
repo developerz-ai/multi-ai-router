@@ -15,6 +15,7 @@ export const ROUTER_ERROR_CODES = [
   "upstream_auth_failed",
   "upstream_timeout",
   "upstream_overloaded",
+  "account_at_capacity",
   "credential_decrypt_failed",
   "translation_failed",
   "model_not_found",

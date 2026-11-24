@@ -40,6 +40,14 @@ export {
   readSdkFailure,
   STDERR_TAIL_LIMIT,
 } from "./claude-sdk/errors"
+export {
+  createSdkWaitBudget,
+  type SdkGateClocks,
+  type SdkGateHalf,
+  type SdkGateTimer,
+  SdkGateWaitExpiredError,
+  type SdkWaitBudget,
+} from "./claude-sdk/gate-wait"
 export type {
   IdleQuery,
   IdleQueryFn,

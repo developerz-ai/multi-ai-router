@@ -79,6 +79,8 @@ const RANK: Readonly<Record<RouterErrorCode, number>> = {
   // A spent window refills on a clock.
   quota_exhausted: 70,
   key_rate_limited: 70,
+  // The same shape of answer: a clock clears a full gate, and the sooner wait wins between them.
+  account_at_capacity: 70,
   // The provider's shared backend is busy: a short wait is the whole remedy, and no account is out
   // of anything — so above a human action, below a clock that names its instant.
   upstream_overloaded: 65,
