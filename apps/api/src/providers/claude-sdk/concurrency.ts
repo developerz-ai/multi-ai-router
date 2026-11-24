@@ -187,14 +187,23 @@ function createGate(limit: number): Gate {
   // and a zero-permit semaphore would wedge every subscription request on this replica forever.
   const permits = Math.max(1, Math.floor(limit))
   let held = 0
-  const queue = createWaiterQueue<() => void>()
+  // A waiter's `admit` takes the permit and answers true, or finds its own deadline already past,
+  // refuses itself and answers false.
+  const queue = createWaiterQueue<() => boolean>()
 
   const release = (): void => {
-    const next = queue.shift()
-    // The permit is handed straight to the next waiter instead of being returned and re-taken:
-    // `held` never dips, so a fresh caller cannot slip past the queue in between.
-    if (next === undefined) held -= 1
-    else next()
+    for (;;) {
+      const next = queue.shift()
+      // The permit is handed straight to the next waiter instead of being returned and re-taken:
+      // `held` never dips, so a fresh caller cannot slip past the queue in between. A waiter whose
+      // deadline passed before its timer got to run is not served (its client is owed the full-gate
+      // answer it was promised): the permit goes to the next one.
+      if (next === undefined) {
+        held -= 1
+        return
+      }
+      if (next()) return
+    }
   }
 
   return {
@@ -218,9 +227,20 @@ function createGate(limit: number): Gate {
           wait.timer.clear(timer)
           wait.budget.spend(wait.now() - queuedAt)
         }
-        const admit = (): void => {
+        const deadline = queuedAt + (wait?.budget.remaining() ?? 0)
+        const expire = (half: SdkGateHalf): void => {
+          place.remove()
+          leave()
+          reject(new SdkGateWaitExpiredError(half))
+        }
+        const admit = (): boolean => {
+          if (wait !== undefined && wait.now() >= deadline) {
+            expire(wait.half)
+            return false
+          }
           leave()
           resolve()
+          return true
         }
         const onAbort = (): void => {
           place.remove()
@@ -230,11 +250,7 @@ function createGate(limit: number): Gate {
         signal.addEventListener("abort", onAbort, { once: true })
         const place = queue.push(admit)
         if (wait !== undefined)
-          timer = wait.timer.set(() => {
-            place.remove()
-            leave()
-            reject(new SdkGateWaitExpiredError(wait.half))
-          }, wait.budget.remaining())
+          timer = wait.timer.set(() => expire(wait.half), wait.budget.remaining())
       })
 
       return once(release)

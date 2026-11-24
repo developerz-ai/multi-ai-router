@@ -207,6 +207,114 @@ describe("a caller with a wait budget", () => {
   })
 })
 
+describe("the handoff of a freed slot to a budgeted waiter", () => {
+  test("a slot freed past a waiter's deadline, before its timer ran, goes to the next waiter", async () => {
+    // A clock the test holds still: the deadline passes while the expiry timer has not yet run,
+    // which is exactly the window between a deadline and its timer callback on a busy event loop.
+    let current = 0
+    const armed = new Map<number, () => void>()
+    let handles = 0
+    const concurrency = createSdkConcurrency(
+      { global: 4, perAccount: 1 },
+      {
+        now: () => current,
+        timer: {
+          set: (fire) => {
+            handles += 1
+            armed.set(handles, fire)
+            return handles
+          },
+          clear: (handle) => {
+            armed.delete(handle as number)
+          },
+        },
+      },
+    )
+    const holder = await concurrency.acquire("acct-a", live())
+
+    const late = expiry(concurrency.acquire("acct-a", live(), createSdkWaitBudget(10_000)))
+    await turns()
+    const next = concurrency.acquire("acct-a", live(), createSdkWaitBudget(KNOB))
+    await turns()
+    expect(concurrency.queued).toBe(2)
+
+    current = 10_000
+    holder.release()
+
+    // The expired waiter is refused, not served: it spent its whole budget and its client has
+    // been told the gate was full.
+    expect((await late).half).toBe("account")
+    const slot = await next
+    expect(concurrency.inFlightFor("acct-a")).toBe(1)
+    expect(concurrency.queued).toBe(0)
+    expect(armed.size).toBe(0)
+    slot.release()
+    expect(concurrency.inFlight).toBe(0)
+  })
+
+  test("a slot freed past the only waiter's deadline returns to the gate", async () => {
+    let current = 0
+    const concurrency = createSdkConcurrency(
+      { global: 4, perAccount: 1 },
+      {
+        now: () => current,
+        timer: { set: () => 0, clear: () => {} },
+      },
+    )
+    const holder = await concurrency.acquire("acct-a", live())
+    const late = expiry(concurrency.acquire("acct-a", live(), createSdkWaitBudget(10_000)))
+    await turns()
+
+    current = 10_000
+    holder.release()
+    await late
+
+    expect(concurrency.inFlightFor("acct-a")).toBe(0)
+    expect(concurrency.inFlight).toBe(0)
+    const fresh = await concurrency.acquire("acct-a", live())
+    expect(concurrency.inFlightFor("acct-a")).toBe(1)
+    fresh.release()
+  })
+
+  test("a request moved from the account gate to a still-full global gate waits only what is left", async () => {
+    const { time, concurrency } = gate({ global: 2, perAccount: 1 })
+    const holderA = await concurrency.acquire("acct-a", live())
+    const holderB = await concurrency.acquire("acct-b", live())
+    // C holds its own account permit and queues on the full global gate, ahead of the request below:
+    // it takes the global permit A hands back.
+    const ahead = concurrency.acquire("acct-c", live())
+    await turns()
+    const budget = createSdkWaitBudget(KNOB)
+    const moving = concurrency.acquire("acct-a", live(), budget)
+    const settled = expiry(moving)
+    await turns()
+    expect(concurrency.queued).toBe(2)
+
+    // 40 s queued on A's own gate, then A's slot frees: the request is admitted there and moves on
+    // to the global gate, which C has just taken back and so is still full.
+    time.advance(40_000)
+    holderA.release()
+    await turns()
+    expect(budget.remaining()).toBe(KNOB - 40_000)
+    expect(concurrency.inFlightFor("acct-a")).toBe(1)
+
+    time.advance(KNOB - 40_000 - 1)
+    await turns()
+    expect(concurrency.inFlightFor("acct-a")).toBe(1)
+
+    time.advance(1)
+    const error = await settled
+    expect(error.half).toBe("global")
+    expect(budget.remaining()).toBe(0)
+    // It gave its account permit back; the two global holders keep theirs.
+    expect(concurrency.inFlightFor("acct-a")).toBe(0)
+    expect(concurrency.inFlight).toBe(2)
+    expect(time.armed).toBe(0)
+    holderB.release()
+    ;(await ahead).release()
+  })
+})
+
 describe("a caller without a wait budget", () => {
   test("still waits past any amount of injected time: the probe path is unchanged", async () => {
     const { time, concurrency } = gate({ global: 4, perAccount: 1 })
