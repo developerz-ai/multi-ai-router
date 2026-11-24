@@ -29,7 +29,7 @@ const anthropicError = (status: number, type: string, message: string) =>
     headers: { "content-type": "application/json" },
   })
 
-function fastRouter(upstream: () => Response) {
+function fastRouter(upstream: (request: Request) => Response) {
   const lines: Record<string, unknown>[] = []
   const signal = new AbortController().signal
   const lease = {
@@ -54,7 +54,7 @@ function fastRouter(upstream: () => Response) {
     }),
     resolveModel: (_, model) => model,
     sdk: async () => new Response("unexpected SDK fallback", { status: 500 }),
-    fetch: async () => upstream(),
+    fetch: async (request) => upstream(request),
   })
   const invokeSdk = ownedInvoker(lease, fast)
   const h = harness({
@@ -129,4 +129,23 @@ describe("a fast-transport extra-usage-gated refusal", () => {
     const line = h.lines.find((entry) => entry.msg === "upstream attempt failed")
     expect(line?.signal).toBe("claude-sdk:api-status-429")
   })
+})
+
+test("first-party request classes survive HTTP ingress and fast transport", async () => {
+  for (const [client, expected] of [
+    [{ "x-claude-code-request-class": "compaction" }, "main"],
+    [{ "x-claude-1p-request-class": "background-task" }, "background-task"],
+    [{ "x-claude-1p-request-class": "untrusted" }, "main"],
+  ] as const) {
+    let received = 0
+    const h = fastRouter((request) => {
+      received++
+      expect(request.headers.get("x-claude-1p-request-class")).toBe(expected)
+      return anthropicError(400, "invalid_request_error", GATED)
+    })
+    const response = await h.app.request("/v1/messages", post(messages, { ...bearer(), ...client }))
+    await settle()
+    expect(response.status).toBe(400)
+    expect(received).toBe(1)
+  }
 })

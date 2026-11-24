@@ -156,7 +156,8 @@ Haiku 5.5 is $0.10/$0.50 through 100,000 total prompt tokens and $0.50/$2.50 abo
 threshold. The higher card prices the entire request, including cache tokens and output.
 Both include the published 5m/1h cache-write rates and apply to subscription notional cost too.
 
-Price provenance: the Anthropic and OpenAI rows for `claude-sonnet-5-5`, `gpt-6.2-sol` and
+Price provenance: the Anthropic and OpenAI rows for `claude-fable-5-2`, `claude-haiku-5-5`,
+`claude-sonnet-5-5`, `gpt-6.2-sol` and
 `gpt-6.1-terra` were read 2026-11-24; the rest of both tables keep 2026-11-03. Sonnet 5.5 cache
 reads are the published 0.05x ($0.10 / MTok), not the standard 0.1x. GPT-5.6 Sol's $4 / $20 is
 promotional "until November 30, 2026" and is due a re-read in December.

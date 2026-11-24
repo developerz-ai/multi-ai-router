@@ -117,6 +117,17 @@ describe("pricing a metered attempt", () => {
     expect(price(10_001)).toMatchObject({ costEstimate: "0.048000", costBasis: "notional" })
   })
 
+  test("Haiku 5.5 one-hour cache writes use the published card on both sides of 100k", () => {
+    const price = (written: number) =>
+      estimateCost({
+        provider: "anthropic-api",
+        model: "claude-haiku-5-5",
+        tokens: tokens({ cacheWriteTokens: written, cacheWrite1hTokens: written }),
+      }).costEstimate
+    expect(price(100_000)).toBe("0.020000")
+    expect(price(100_001)).toBe("0.100001")
+  })
+
   test("a subscription values the current lineup too, rather than recording NULL", () => {
     for (const model of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]) {
       const cost = estimateCost({

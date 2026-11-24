@@ -81,6 +81,13 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(headers['x-claude-1p-request-class'], '<redacted>')
         self.assertEqual(headers['x-cc-atis'], '<redacted>')
 
+    def test_first_party_request_class_retains_foreground_agent_enum(self):
+        flow = self.flow()
+        flow.request.headers['x-claude-1p-request-class'] = 'blocking-subagent'
+        self.module.request(flow)
+        self.assertEqual(flow.metadata['trace']['headers']['x-claude-1p-request-class'],
+                         'blocking-subagent')
+
     def test_gzip_stream_is_forwarded_compressed_but_analyzed_decoded(self):
         flow = self.flow()
         flow.response.headers['content-encoding'] = 'gzip'
