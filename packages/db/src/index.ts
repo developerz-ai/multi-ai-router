@@ -35,7 +35,7 @@ export type {
   ProbeHoldObservation,
 } from "./repositories/account-breaker"
 export { createAccountBreakerRepository } from "./repositories/account-breaker"
-export type { EgressAccountRow, SwapEgressProxyInput } from "./repositories/account-egress"
+export type * from "./repositories/account-egress"
 export * from "./repositories/account-egress-health-repository"
 export type {
   AccountAuthorizationMethods,

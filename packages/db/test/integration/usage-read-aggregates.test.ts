@@ -272,11 +272,25 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
   })
 
   // The summary read these as six statements (prod: 340-450 ms each inside a 9 s usage page). One
-  // GROUPING SETS statement must answer every dimension with exactly the numbers the six did.
+  // statement must answer every dimension with exactly the numbers the six did.
   test("groupLatency: one statement equals the six per-dimension breakdowns", async () => {
+    // A key the seeded attempts really use, so the owner and tool groups carry real rows: with an
+    // id no attempt used, the parity below held even if every label was lost.
+    const labelled = crypto.randomUUID()
+    const unlabelled = crypto.randomUUID()
+    const keyed = (apiKeyId: string, time: string, latencyMs: number, routerOverheadMs: number) =>
+      attempt(accountA, crypto.randomUUID(), time, { apiKeyId, latencyMs, routerOverheadMs })
+    await db
+      .insert(usageRecords)
+      .values([
+        keyed(labelled, "20:00:00.000Z", 1000, 7),
+        keyed(labelled, "20:01:00.000Z", 3000, 9),
+        keyed(labelled, "20:02:00.000Z", 2000, 8),
+        keyed(unlabelled, "20:03:00.000Z", 5000, 1),
+      ])
     const attribution = {
-      ids: [crypto.randomUUID()],
-      owners: ["someone"],
+      ids: [labelled],
+      owners: ["alice"],
       ownerKinds: ["person"],
       tools: ["a-tool"],
     }
@@ -310,6 +324,24 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
       for (const dimension of [...columns, "owner", "tool"] as const)
         expect(latency(grouped[dimension])).toEqual(latency(expected[dimension]))
     }
+    const named = await usage.groupLatency?.(WINDOW, {}, attribution, {
+      apiKeyId: [labelled],
+      accountId: [],
+      poolId: [],
+      model: [],
+      owner: ["person/alice", "#deleted", "#none"],
+      tool: ["a-tool"],
+    })
+    const alice = { latencyP50Ms: 2000, latencyP95Ms: 3000, routerOverheadP95Ms: 9 }
+    expect(named?.apiKeyId).toEqual([{ id: labelled, ...alice }])
+    expect(named?.owner.find((row) => row.id === "person/alice")).toEqual({
+      id: "person/alice",
+      ...alice,
+    })
+    expect(named?.tool).toEqual([{ id: "a-tool", ...alice }])
+    // The key with no label and the keyless attempts are their own groups, not alice's.
+    expect(named?.owner.find((row) => row.id === "#deleted")).toMatchObject({ latencyP95Ms: 5000 })
+    expect(named?.owner.find((row) => row.id === "#none")).toMatchObject({ latencyP95Ms: 400 })
     // Only the selected ids come back: `model` is client-typed, so "every group" has no ceiling.
     const none: (string | null)[] = []
     const only = await usage.groupLatency?.(WINDOW, {}, attribution, {
@@ -320,7 +352,8 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
       owner: none,
       tool: none,
     })
-    expect(only?.accountId).toEqual([expect.objectContaining({ id: accountA, latencyP95Ms: 300 })])
+    // Account A's own rows, the four added above included (its slowest is the 5000 ms one).
+    expect(only?.accountId).toEqual([expect.objectContaining({ id: accountA, latencyP95Ms: 5000 })])
     expect(only?.model).toEqual([])
     expect(only?.apiKeyId).toEqual([])
     expect(only?.poolId.map((row) => row.id)).toEqual([null])

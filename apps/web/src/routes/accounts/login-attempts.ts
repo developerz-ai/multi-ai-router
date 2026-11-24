@@ -19,6 +19,12 @@ export interface LoginAttempts {
  * A start counts until it fails, ends, or is covered by a cancel sent after it landed. One still in
  * flight always counts: requests can overtake each other, so it may yet become the login the router
  * holds, whatever happened to the starts after it.
+ *
+ * **It errs towards cancelling.** The API names no attempt, so the order requests reached the router
+ * is unknown here; a cancel with nothing pending does nothing, and one after a finished login leaves
+ * its credential alone. What that cannot cover: a login started for the same account from another
+ * tab may be cancelled with ours and has to be started again, and one whose answer never reaches
+ * this tab is left to the router's own TTL.
  */
 export function createLoginAttempts(cancel: (id: string) => void): LoginAttempts {
   /** Oldest first, per account. */
@@ -65,7 +71,11 @@ export function createLoginAttempts(cancel: (id: string) => void): LoginAttempts
       drop(id, (other) => other === attempt)
       settle(id)
     },
-    // Those that landed before it were replaced by it on the router.
-    finished: (id, attempt) => drop(id, (other) => other <= attempt && landed.has(other)),
+    // Abandoned ones that landed stay for `settle`: the router may have taken one after it finished
+    // this, whatever order the answers came back in.
+    finished: (id, attempt) => {
+      drop(id, (other) => other <= attempt && landed.has(other) && !orphans.has(other))
+      settle(id)
+    },
   }
 }

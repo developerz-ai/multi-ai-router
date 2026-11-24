@@ -53,7 +53,12 @@ export interface EgressProxyService {
 export interface EgressServiceDeps {
   readonly accounts: Pick<
     AccountRepository,
-    "findById" | "updateOperatorAccount" | "listWithEgressProxy" | "swapEgressProxy"
+    | "findById"
+    | "assignEgressProxy"
+    | "listWithEgressProxy"
+    | "listDueEgressChecks"
+    | "listHeldEgressProxies"
+    | "swapEgressProxy"
   >
   readonly health: AccountEgressHealthRepository
   readonly cipher: Pick<CredentialCipher, "encrypt" | "decrypt">
@@ -102,11 +107,13 @@ export function createEgressService(deps: EgressServiceDeps): EgressProxyService
 
   const assign = async (
     id: string,
-    egressProxy: StoredEgressProxy | null,
+    next: StoredEgressProxy | null,
+    inheritReplace: boolean,
   ): Promise<AdminResult<AccountView>> => {
-    const row = await deps.accounts.updateOperatorAccount({
+    const row = await deps.accounts.assignEgressProxy({
       id,
-      patch: { egressProxy },
+      next,
+      inheritReplace,
       now: deps.now(),
     })
     return row === undefined ? notFound(`no account with id "${id}"`) : written(row)
@@ -177,10 +184,11 @@ export function createEgressService(deps: EgressServiceDeps): EgressProxyService
       if (!allowed.ok) return allowed
       const proxy = await resolveProxy(deps.vendors, body)
       if (!proxy.ok) return proxy
-      // Unstated, the mode survives a change of proxy wherever the new one can carry it.
-      const kept = proxy.value.from === null ? undefined : account.value.egressProxy?.replace
-      const next = toStored(deps.cipher, proxy.value, body.replace ?? kept)
-      return next.ok ? assign(id, next.value) : next
+      const next = toStored(deps.cipher, proxy.value, body.replace)
+      if (!next.ok) return next
+      // Unstated, the mode survives a change of proxy wherever the new one can carry it, as the row
+      // has it when it is written: the operator may have changed it while the vendor was asked.
+      return assign(id, next.value, body.replace === undefined && proxy.value.from !== null)
     },
 
     setReplace: async (id, body) => {
@@ -213,7 +221,7 @@ export function createEgressService(deps: EgressServiceDeps): EgressProxyService
 
     clear: async (id) => {
       const account = await load(id)
-      return account.ok ? assign(id, null) : account
+      return account.ok ? assign(id, null, false) : account
     },
 
     test: async (body) => {

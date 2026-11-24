@@ -10,14 +10,17 @@ import type { ProxyVendor, VendorListing, VendorProxy } from "./vendor"
 const WEBSHARE_PROXIES_URL = "https://proxy.webshare.io/api/v2/proxy/list/"
 const PAGE_SIZE = 100
 
+/** Goes into a URL, where a lone surrogate throws. */
+const CREDENTIAL = z.string().refine((value) => value.isWellFormed())
+
 const listing = z.object({
   // Read for whether it is there, never followed: the key would go wherever it points.
   next: z.string().nullish(),
   results: z.array(
     z.object({
       id: z.string().min(1),
-      username: z.string(),
-      password: z.string(),
+      username: CREDENTIAL,
+      password: CREDENTIAL,
       proxy_address: z.string().min(1),
       port: z.number().int().positive(),
       valid: z.boolean(),

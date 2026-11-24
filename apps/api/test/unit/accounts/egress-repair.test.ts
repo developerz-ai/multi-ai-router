@@ -93,16 +93,14 @@ describe("a dead proxy is replaced", () => {
   })
 
   test("new credentials for the same proxy are stored in place: no swap, no cooldown spent", async () => {
-    const h = await dead({ alive: [] })
+    const h = await dead({ alive: [D1.address] })
     const fresh = { ...D1, url: D1.url.replace(PASSWORD, "rotated") }
     h.world.listing = listed(fresh, D2, D3)
-    h.world.onProbe = () => {
-      // Dead under the old password, alive under the new one.
-      // Two probes per dead check: its upstream, then the neutral control.
-      if (h.world.probes.length === 7) h.world.alive.add(D1.address)
-    }
+    h.world.accepts[D1.address] = fresh.url
     for (let i = 0; i < 2; i++) await h.sweep()
+    expect(h.world.probes.map((probe) => probe.url)).toEqual([D1.url, D1.url])
     expect(await h.sweep()).toMatchObject({ reseals: 1, swaps: 0 })
+    expect(h.world.probes.at(-1)?.url).toBe(fresh.url)
     const stored = await h.proxyOf(h.row.id)
     expect(stored?.vendorId).toBe("d-1")
     expect(h.cipher.decrypt(stored?.sealed ?? "")).toContain("rotated")
@@ -218,6 +216,48 @@ describe("and stays put when it must", () => {
     expect(h.egress.health.get(h.row.id)?.lastSwapAt).not.toBeNull()
   })
 
+  test("dead candidates make way for untried ones, still three per sweep", async () => {
+    const spares = ["d-2", "d-3", "d-4", "d-5", "d-6"].map((id) => vendorProxy(id))
+    const last = vendorProxy("d-7")
+    const h = await dead({ listing: listed(D1, ...spares, last), alive: [last.address] })
+    for (let i = 0; i < 3; i++) await h.sweep()
+    expect((await h.proxyOf(h.row.id))?.vendorId).toBe("d-1")
+    const before = h.world.probes.length
+    expect(await h.sweep()).toMatchObject({ swaps: 1 })
+    const tried = h.world.probes.slice(before).map((probe) => probe.address)
+    expect(new Set(tried).size).toBeLessThanOrEqual(4)
+    expect((await h.proxyOf(h.row.id))?.vendorId).toBe("d-7")
+  })
+
+  test("a proxy that cannot be read gives up its turn instead of holding the batch", async () => {
+    const h = egressHarness({ listing: listed(D1, D2), alive: [D2.address], batchSize: 1 })
+    const broken = await h.add()
+    const behind = await h.add()
+    await h.service.set(broken.id, { vendor: "webshare", id: "d-1" })
+    await h.service.set(behind.id, { vendor: "webshare", id: "d-2" })
+    const row = h.store.rows.accounts.find((account) => account.id === broken.id)
+    if (row?.egressProxy) row.egressProxy = { ...row.egressProxy, sealed: "not a ciphertext" }
+    expect(await h.sweep()).toMatchObject({ checked: 0, failed: 1, partial: true })
+    expect(await h.sweep()).toMatchObject({ checked: 1, failed: 0, partial: true })
+    expect(h.egress.health.get(behind.id)?.lastOutcome).toBe("ok")
+    expect(h.egress.health.get(broken.id)).toMatchObject({
+      consecutiveFailures: 0,
+      lastOutcome: null,
+      lastCheckedAt: null,
+    })
+  })
+
+  test("a swap is refused once the account's endpoint is not the one it was tested against", async () => {
+    const h = await dead()
+    for (let i = 0; i < 2; i++) await h.sweep()
+    h.world.onProbe = (address) => {
+      const row = h.store.rows.accounts.find((account) => account.id === h.row.id)
+      if (address === D3.address && row !== undefined) row.baseUrl = "https://moved.test/v1"
+    }
+    expect(await h.sweep()).toMatchObject({ swaps: 0 })
+    expect((await h.proxyOf(h.row.id))?.vendorId).toBe("d-1")
+  })
+
   test("an incomplete or failed listing is no evidence and no inventory", async () => {
     for (const listing of [
       { ok: true as const, proxies: [D2, D3], complete: false },
@@ -309,6 +349,7 @@ test("a decision has no field an AI provider's answer could arrive in", () => {
     },
     url: D1.url,
     consecutiveFailures: 0,
+    repair: "idle",
     lastSwapAt: null,
     listing: listed(D1, D3),
     taken: { addresses: new Set(), ids: new Set() },
@@ -324,6 +365,7 @@ test("a decision has no field an AI provider's answer could arrive in", () => {
     "listing",
     "now",
     "proxy",
+    "repair",
     "taken",
     "threshold",
     "url",

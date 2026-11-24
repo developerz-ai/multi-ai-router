@@ -58,7 +58,7 @@ type GroupLatencies = Awaited<ReturnType<NonNullable<UsageReadRepository["groupL
 
 /**
  * Per-group latency for the rows each breakdown selected, one list per dimension in request order.
- * One `GROUPING SETS` statement where the repository has it; six id-narrowed `breakdown` reads
+ * One statement where the repository has it; six id-narrowed `breakdown` reads
  * otherwise (a hand-built repository). Both answer the same numbers for the same group.
  */
 export async function groupLatencies(
@@ -105,7 +105,7 @@ type GroupSeries = Awaited<ReturnType<NonNullable<UsageHistoryRepository["series
 
 /**
  * The sparkline series for the rows each breakdown selected, one list per dimension in request
- * order. One `GROUPING SETS` statement where the repository has it; six `seriesByDimension` reads
+ * order. One statement where the repository has it; six `seriesByDimension` reads
  * otherwise (a hand-built repository). Both answer the same points for the same group.
  */
 export async function groupSeriesBy(

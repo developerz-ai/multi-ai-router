@@ -80,3 +80,33 @@ test("one that lands after the newer was left, or finished, is cancelled; before
   log.orphaned("a", quick)
   expect(cancelled).toEqual(["a"])
 })
+
+test("one that landed before the newer one's success was heard is cancelled with it", () => {
+  const { cancelled, log } = attempts()
+  const slow = log.begin("a")
+  const quick = log.begin("a")
+  log.shown("a", quick)
+  // The router may have finished `quick` already, and held `slow` since.
+  log.orphaned("a", slow)
+  expect(cancelled).toEqual([])
+  log.finished("a", quick)
+  expect(cancelled).toEqual(["a"])
+})
+
+test("finishing never cancels a newer start, nor anything when nothing was abandoned", () => {
+  const { cancelled, log } = attempts()
+  const slow = log.begin("a")
+  const quick = log.begin("a")
+  log.shown("a", quick)
+  log.orphaned("a", slow)
+  const next = log.begin("a")
+  log.finished("a", quick)
+  expect(cancelled).toEqual([])
+  log.failed("a", next)
+  expect(cancelled).toEqual(["a"])
+
+  const only = log.begin("b")
+  log.shown("b", only)
+  log.finished("b", only)
+  expect(cancelled).toEqual(["a"])
+})

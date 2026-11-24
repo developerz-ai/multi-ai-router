@@ -35,6 +35,8 @@ const CREDENTIAL = z.string().min(1).max(8192)
 const BASE_URL = z
   .url({ protocol: /^https?$/, error: "must be an absolute http(s) URL" })
   .max(2048)
+  // On the text as sent: parsing drops or escapes a NUL, and the text is what is stored.
+  .refine(noNul, NO_NUL)
   .refine((value) => {
     const url = URL.parse(value)
     return url !== null && `${url.username}${url.password}${url.search}${url.hash}` === ""

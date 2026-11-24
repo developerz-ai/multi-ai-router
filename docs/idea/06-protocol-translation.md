@@ -1259,16 +1259,17 @@ requirements, not preferences — a violation is a bug, not a tuning opportunity
 | **Request parsing dispatches on type** | Block, part and item unions are `discriminatedUnion("type")` with the catch-all last, so a block pays for its own parser only; a plain union ran every failing branch first (~4 ms of Zod on an 800-message transcript, the whole budget). A malformed known block still names its deepest field in the `400`. The parse is spent once per request: `parseIngressRequest` validates the body, and each target shape converts from that value through the pair's `requestFromParsed` (`dataplane/translate-body.ts`) |
 | **The Agent-SDK path is the labeled exception** | A subprocess per request is inherently heavier than an HTTP hop. Document the cost; do not pretend the budget applies uniformly ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)) |
 
-**Translation cost is proportional to body size, and the 5 ms budget does not hold for a large
-translated body.** A cross-dialect request is decoded, parsed, converted and serialized once: about
+**Translation cost is proportional to body size, and a large translated body is over the 5 ms
+budget, not exempt from it.** A cross-dialect request is decoded, parsed, converted and serialized once: about
 2.5 ms per MB to decode and `JSON.parse`, about 2.7 ms per MB to `JSON.stringify` and encode, and
 under 1 ms per MB for schema validation and conversion together (Bun 1.4, measured 2026-11-23).
 Nothing in it is superlinear. A 1.2 MB transcript costs about 8 ms and a 4.8 MB one about 30 ms,
 which is the prod p99 of 19–33 ms on translated paths against 11 ms on passthrough (24 h to
-2026-11-23; overhead correlates 0.92 with input size on Codex). Read
-`router_overhead_seconds` on the translate path against request size, not against the flat budget;
-passthrough is the path the budget binds. Stream translation is outside that metric: 5–12 µs of CPU
-per upstream delta.
+2026-11-23; overhead correlates 0.92 with input size on Codex). The budget binds
+every HTTP path; only the Agent-SDK path is the labeled exception. These figures are the known,
+measured overage on large bodies, and a regression in `router_overhead_seconds` on the translate
+path is a bug like any other: read it against request size to tell a regression from a larger
+body. Stream translation is outside that metric: 5–12 µs of CPU per upstream delta.
 
 ## Design rules
 

@@ -206,8 +206,8 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
   }
 
   // Commits with bounded concurrency, installs the catalog once, then publishes: one five-table
-  // reload for the fleet instead of one per account (plan 101, 03.4). One account's failure is
-  // raised only after every account that did commit has been published.
+  // reload for the fleet instead of one per account (plan 101, 03.4). One account's failure,
+  // to commit or to publish, is raised only after every account that committed has been tried.
   const recheckAll = async (): Promise<AdminResult<readonly RecheckResult[]>> => {
     const accounts = await deps.accounts.list({})
     const phases = await mapBounded(
@@ -222,13 +222,19 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
     if (phases.some((phase) => phase.kind === "committed")) await deps.refreshCatalog()
     const results: RecheckResult[] = []
     let refused: AdminResult<never> | null = null
-    let failure: CommitFailure | null = null
+    let failure: { readonly error: unknown } | null = null
     for (const phase of phases) {
       if (phase.kind === "failed") {
         failure ??= phase
         continue
       }
-      const result = phase.kind === "done" ? phase.result : await publish(phase)
+      let result: AdminResult<RecheckResult>
+      try {
+        result = phase.kind === "done" ? phase.result : await publish(phase)
+      } catch (error) {
+        failure ??= { error }
+        continue
+      }
       if (result.ok) results.push(result.value)
       else if (result.failure.status !== 404) refused ??= result
     }

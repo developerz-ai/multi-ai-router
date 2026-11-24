@@ -390,4 +390,81 @@ describe.skipIf(historyUrl === "")("full-scan backfill and the history lock", ()
     // The lock-free pass certifies nothing: the watermark is exactly where the locked sweep left it.
     expect(await state()).toEqual(before)
   })
+
+  // With one stray row and a batch limit above one, the locked statement repeated the whole
+  // anti-join to prove there was no second match, with every usage admission waiting behind it.
+  test("under the lock a full sweep reads only the candidates it chose before taking it", async () => {
+    await reset()
+    await fixture.usage().insertBatch({
+      attempts: Array.from({ length: 50 }, (_, i) =>
+        historyAttempt({ createdAt: new Date(Date.UTC(1984, 0, 2, 0, i)) }),
+      ),
+      terminals: [],
+    })
+    await sweep()
+    const stray = crypto.randomUUID()
+    await rawInsert("1984-01-01T00:00:00Z", stray)
+    const captured: string[] = []
+    const logged = drizzle(fixture.get().sql, {
+      schema,
+      logger: { logQuery: (query) => captured.push(query) },
+    })
+    expect(
+      await createUsageHistoryRepository(logged).backfill({ limit: 1000, fullScan: true }),
+    ).toEqual({ processed: 1, remaining: false })
+    const locked = captured.findIndex((query) => query.includes("for update"))
+    expect(locked).toBeGreaterThan(0)
+    const scans = (queries: readonly string[]) =>
+      queries.filter((query) => query.includes("not exists (select 1 from"))
+    // Before the lock: the one bounded search of the table.
+    expect(scans(captured.slice(0, locked))).toHaveLength(1)
+    // Under it: only a revalidation of those ids, never a second walk of the table.
+    const under = scans(captured.slice(locked))
+    expect(under).toHaveLength(1)
+    expect(under[0]).toContain("= any(")
+  })
+
+  test("a full sweep adopts in batches and resumes past the candidates it has taken", async () => {
+    await reset()
+    await admit("1984-01-05T12:00:00Z", LOW)
+    await sweep()
+    for (const hour of [1, 2, 3]) await rawInsert(`1984-01-03T0${hour}:00:00Z`, crypto.randomUUID())
+    const history = fixture.history()
+    expect(await history.backfill({ limit: 2, fullScan: true })).toEqual({
+      processed: 2,
+      remaining: true,
+    })
+    expect(await history.backfill({ limit: 2, fullScan: true })).toEqual({
+      processed: 1,
+      remaining: false,
+    })
+    expect(await history.backfill({ limit: 2, fullScan: true })).toEqual({
+      processed: 0,
+      remaining: false,
+    })
+  })
+
+  test("a candidate banked while the sweep waited for the lock is not adopted twice", async () => {
+    await reset()
+    await admit("1984-01-05T12:00:00Z", LOW)
+    await sweep()
+    const stray = crypto.randomUUID()
+    await rawInsert("1984-01-03T00:00:00Z", stray)
+    const other = createDatabase({ url: fixture.url(), maxConnections: 1 })
+    let pending: Promise<{ processed: number; remaining: boolean }> | undefined
+    try {
+      await other.sql.begin(async (holder) => {
+        await holder`select id from usage_history_state where id = 'v2' for update`
+        pending = fixture.history().backfill({ limit: 1000, fullScan: true })
+        // Long enough for the sweep to have chosen its candidate and be waiting on the lock.
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        await holder`insert into usage_contributions (id, kind, day, source, payload_hash, payload)
+          values (${stray}::uuid, 'attempt', '1984-01-03', 'legacy_baseline', 'x', '{}'::jsonb)`
+      })
+      expect(await pending).toEqual({ processed: 0, remaining: false })
+    } finally {
+      await pending?.catch(() => undefined)
+      await other.close()
+    }
+  })
 })

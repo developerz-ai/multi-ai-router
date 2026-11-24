@@ -1,7 +1,7 @@
 import type { EgressProxyOutcome, EgressRepairState, StoredEgressProxy } from "@multi-ai-router/db"
 import type { VendorListing, VendorProxy } from "./vendor"
 
-/** How many candidates one repair may probe. */
+/** How many candidates one repair may probe; the next repair starts after them. */
 export const MAX_CANDIDATES = 3
 
 /** The outcomes that say the proxy itself is dead. `refused` is a live proxy declining a target. */
@@ -47,6 +47,8 @@ export interface RepairFacts {
   /** The proxy URL as it is sealed now. */
   readonly url: string
   readonly consecutiveFailures: number
+  /** Where the previous repair of this proxy ended. */
+  readonly repair: EgressRepairState
   readonly lastSwapAt: Date | null
   readonly listing: VendorListing
   /** What every other account leaves through. */
@@ -106,8 +108,17 @@ export function decideRepair(facts: RepairFacts): RepairStep {
         Number(b.country === proxy.country) - Number(a.country === proxy.country) ||
         (a.id < b.id ? -1 : 1),
     )
-    .slice(0, MAX_CANDIDATES)
   return candidates.length === 0
     ? { kind: "hold", repair: "no_candidate" }
-    : { kind: "swap", candidates }
+    : { kind: "swap", candidates: turn(candidates, facts) }
+}
+
+/**
+ * This repair's share of the candidates, best first. While a repair finds none alive, each failed
+ * check after it moves one full share on and around, so every candidate gets its turn.
+ */
+function turn(candidates: readonly VendorProxy[], facts: RepairFacts): readonly VendorProxy[] {
+  const tried = facts.repair === "no_candidate" ? facts.consecutiveFailures - facts.threshold : 0
+  const start = (tried * MAX_CANDIDATES) % candidates.length
+  return [...candidates.slice(start), ...candidates.slice(0, start)].slice(0, MAX_CANDIDATES)
 }

@@ -48,6 +48,7 @@ export function egressHarness(
     alive?: readonly string[]
     outcomes?: Record<string, ProbeResult["outcome"]>
     cooldownSeconds?: number
+    batchSize?: number
   } = {},
 ) {
   const store = createMemoryStore()
@@ -60,8 +61,11 @@ export function egressHarness(
     /** Alive, and dropped by the account's upstream. */
     blocked: new Set<string>(),
     outcomes: { ...options.outcomes },
+    /** The only URL an address accepts; any other is its `407`. */
+    accepts: {},
     listings: 0,
-    probes: [] as { address: string; target: string }[],
+    onList: undefined as (() => void | Promise<void>) | undefined,
+    probes: [] as { address: string; target: string; url: string }[],
     onProbe: undefined as ((address: string) => void | Promise<void>) | undefined,
     refreshed: 0,
   } as {
@@ -69,8 +73,10 @@ export function egressHarness(
     alive: Set<string>
     blocked: Set<string>
     outcomes: Record<string, ProbeResult["outcome"]>
+    accepts: Record<string, string>
     listings: number
-    probes: { address: string; target: string }[]
+    onList: (() => void | Promise<void>) | undefined
+    probes: { address: string; target: string; url: string }[]
     onProbe: ((address: string) => void | Promise<void>) | undefined
     refreshed: number
   }
@@ -79,6 +85,7 @@ export function egressHarness(
     configured: () => world.listing.ok || world.listing.code !== "off",
     list: async () => {
       world.listings += 1
+      await world.onList?.()
       return world.listing
     },
   }
@@ -86,7 +93,12 @@ export function egressHarness(
   const line = (msg: string, fields: Record<string, unknown> = {}) =>
     void lines.push({ msg, fields })
   const service = createEgressService({
-    accounts: { ...store.accounts, ...egress.methods },
+    accounts: {
+      ...store.accounts,
+      ...egress.methods,
+      // What a read answered does not follow the row, as a query's does not.
+      findById: async (id) => structuredClone(await store.accounts.findById(id)),
+    },
     health: egress.repository,
     cipher,
     audit: createAuditRecorder(store.audit, silentLogger()),
@@ -95,9 +107,12 @@ export function egressHarness(
     // Under the real control: a proxy silent to its upstream is asked for a neutral host too.
     probe: withNeutralControl(async (url, target) => {
       const address = new URL(url).host
-      world.probes.push({ address, target })
+      world.probes.push({ address, target, url })
       await world.onProbe?.(address)
       const blocked = target !== NEUTRAL_TARGET && world.blocked.has(address)
+      const accepted = world.accepts[address]
+      if (accepted !== undefined && accepted !== url)
+        return { outcome: "auth", status: 407, latencyMs: 12 }
       const outcome = blocked
         ? "timeout"
         : (world.outcomes[address] ?? (world.alive.has(address) ? "ok" : "unreachable"))
@@ -107,7 +122,11 @@ export function egressHarness(
       world.refreshed += 1
     },
     testCooldownSeconds: options.cooldownSeconds ?? 60,
-    policy: { batchSize: 50, failureThreshold: 3, swapCooldownMs: 6 * 3_600_000 },
+    policy: {
+      batchSize: options.batchSize ?? 50,
+      failureThreshold: 3,
+      swapCooldownMs: 6 * 3_600_000,
+    },
   })
   const add = (provider: "openrouter" | "anthropic-oauth" | "openai-oauth" = "openrouter") =>
     store.accounts.create({ label: provider, provider, authMaterial: "sealed" })

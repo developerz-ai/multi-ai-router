@@ -11,6 +11,7 @@ import {
   LOCAL_ADMIN_USERNAME,
   UNKNOWN_ADMIN_SUBJECT,
 } from "./login-outcomes"
+import type { OIDCCallback } from "./oidc/flow"
 import { createCachedLocalConfigured, sessionPrincipalAdmitted } from "./principal"
 import type {
   AdminAuthDeps,
@@ -94,21 +95,20 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     }
   }
 
-  async function completeLogin(input: {
-    code: string
-    state: string
-    ip: string
-  }): Promise<LoginCompleteResult> {
+  async function completeLogin({
+    ip,
+    ...callback
+  }: OIDCCallback & { readonly ip: string }): Promise<LoginCompleteResult> {
     if (deps.oidc == null) throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
     // Before the state is consumed: an unthrottled callback was one `oauth_states` query and one
     // audit row per unauthenticated hit.
-    const key = ipThrottleKey(input.ip)
+    const key = ipThrottleKey(ip)
     const decision = await throttle.consume("oidc-callback", key)
     if (!decision.allowed) {
       if (decision.firstDenial) {
         fireAudit(
           AUDIT_KINDS.adminLoginFailed,
-          { ip: input.ip, method: "oidc", reason: "throttled" },
+          { ip, method: "oidc", reason: "throttled" },
           UNKNOWN_ADMIN_SUBJECT,
         )
       }
@@ -116,7 +116,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
     }
     let principal: { readonly email: string; readonly subject: string }
     try {
-      principal = await deps.oidc.complete({ code: input.code, state: input.state })
+      principal = await deps.oidc.complete(callback)
     } catch (err) {
       // Symmetry with `completeLocalLogin`, which has always audited its rejections. Without this
       // the audit feed showed OIDC logins that succeeded and nothing at all for the ones that did
@@ -125,7 +125,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       fireAudit(
         AUDIT_KINDS.adminLoginFailed,
         {
-          ip: input.ip,
+          ip,
           method: "oidc",
           // The diagnostic kind, not the wording — the same value the transport logs.
           ...((err instanceof AdminAuthError || err instanceof AdminAuthUnavailableError) &&
@@ -146,7 +146,7 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
       // revoke-sessions --user` finds it whatever case the IdP asserted.
       username: principal.email.toLowerCase(),
       subjectId: principal.email,
-      ip: input.ip,
+      ip,
       auditDetail: { subject: principal.subject, email: principal.email, method: "oidc" },
     })
   }
