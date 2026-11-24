@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# CI only: make sure a C compiler and static libc are present, without paying for apt when they are.
+#
+# bin/build-cli-owner links native/config-owner statically (`cc -static`), so the job needs gcc and
+# libc6-dev. GitHub's ubuntu-24.04 runner image ships both, and the workflow used to ask apt to
+# confirm it on every run: an `apt-get update` that installed nothing and cost 7–99 seconds
+# depending on the mirror's mood. This proves the toolchain the direct way — it compiles and runs a
+# static program — and only falls back to apt when that fails.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+probe="$(mktemp -d)"
+trap 'rm -rf "$probe"' EXIT
+printf '#include <stdio.h>\nint main(void) { puts("static ok"); return 0; }\n' >"$probe/probe.c"
+
+toolchain_works() {
+  command -v "${CC:-cc}" >/dev/null 2>&1 &&
+    "${CC:-cc}" -static -O2 "$probe/probe.c" -o "$probe/probe" >/dev/null 2>&1 &&
+    [ "$("$probe/probe")" = "static ok" ]
+}
+
+if toolchain_works; then
+  echo "ci-native-prereqs: ${CC:-cc} builds a static binary; nothing to install"
+  exit 0
+fi
+
+echo "ci-native-prereqs: no working static toolchain; installing gcc and libc6-dev"
+bin/ci-apt-mirror
+sudo apt-get update -o Acquire::Retries=3
+sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends gcc libc6-dev
+toolchain_works || { echo "ci-native-prereqs: still cannot build a static binary after installing" >&2; exit 1; }

@@ -143,7 +143,7 @@ export async function bench(options: Options): Promise<ScenarioResult[]> {
 }
 
 /** Bumped when the file gains a number the comparison needs — see `./baseline`. */
-const BASELINE_VERSION = 2
+const BASELINE_VERSION = 3
 
 /**
  * Loads a `bench/baseline.json` written by a prior `--write-baseline` run. Missing file or a

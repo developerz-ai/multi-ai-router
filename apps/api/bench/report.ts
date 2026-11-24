@@ -1,4 +1,4 @@
-import { histogramMean, histogramQuantile, parseHistogram, sampleQuantile } from "./quantiles"
+import { histogramMean, parseHistogram, sampleQuantile } from "./quantiles"
 import type { ScenarioResult } from "./scenarios"
 
 /**
@@ -7,12 +7,15 @@ import type { ScenarioResult } from "./scenarios"
  * Pure: results in, rows and a pass/fail out. No app, no clock, no printing — `run.ts` decides
  * where the text goes and what the process exits with.
  *
- * The row carries `overheadQuantized` because the honesty of the report depends on it.
- * `router_overhead_seconds` is fed `UsageRecord.routerOverheadMs`, which is whole milliseconds, so
- * every sample below half a millisecond lands in the same bucket and *every* quantile under 1 ms is
- * a bucket bound rather than a measurement. Printing `p99 0.50 ms` without saying so would invite
- * exactly the false precision this file exists to avoid; the mean, which divides an accumulated sum
- * by the sample count, is the number that actually has sub-millisecond resolution.
+ * Two sources per row, on purpose. The overhead quantiles are the bench's own per-request
+ * measurement (`ScenarioResult.overheadMs`: client wall time minus the upstream's hold), unrounded,
+ * and they are what the budget is held to. Beside them sits what `router_overhead_seconds` recorded
+ * for the same requests: its sample count and its mean. The series is fed
+ * `UsageRecord.routerOverheadMs`, whole milliseconds, into eight buckets — a quantile read off it is
+ * a bucket edge (0.495 ms for every fast scenario, whatever they cost; ~5 ms for anything landing in
+ * the 2–5 ms bucket), which reads as a stable number and measures nothing. It stays in the report
+ * because it is what an operator alerts on: a series that stopped recording, or whose mean walked
+ * away from the measurement, is a finding of its own.
  */
 
 export const OVERHEAD_METRIC = "router_overhead_seconds"
@@ -20,15 +23,18 @@ export const OVERHEAD_METRIC = "router_overhead_seconds"
 export interface Row {
   readonly scenario: string
   readonly path: string
+  /** Requests the bench measured an overhead for. */
   readonly samples: number
   readonly failures: number
-  /** Milliseconds. NaN when the scenario recorded nothing. */
+  /** Measured per request, milliseconds, unrounded. NaN when nothing was measured. */
   readonly overheadMeanMs: number
   readonly overheadP50Ms: number
   readonly overheadP95Ms: number
   readonly overheadP99Ms: number
-  /** True while the samples mostly round into the first bucket, making the quantiles bounds. */
-  readonly overheadQuantized: boolean
+  /** What `router_overhead_seconds` recorded on this scenario's path: the cross-check. */
+  readonly seriesSamples: number
+  /** Its `_sum / _count`, milliseconds — the one number the series carries below 1 ms. */
+  readonly seriesMeanMs: number
   /** Added time-to-first-token, milliseconds. NaN for a non-streamed scenario. */
   readonly addedTtftSamples: number
   readonly addedTtftP50Ms: number
@@ -42,12 +48,12 @@ export interface Row {
  * The two ceilings non-negotiable 8 promises, as two separate numbers.
  *
  * They are read at different quantiles on purpose, and the asymmetry is measured rather than
- * stylistic. `router_overhead_seconds` is a bucketed histogram fed whole-millisecond samples, so its
- * tail is bounded by the bucket edges and a p99 read off it is stable run to run. Added TTFT is a
- * raw sample series timed across an async relay on a single event loop: its p50 and p95 move under
- * 15% between runs on an idle box, while its **p99 moved 0.56 → 4.03 ms across four consecutive
- * runs of the same unmodified code** — that tail is the scheduler and the collector, not the router.
- * Gating it would be gating noise, and this file's own comment says why that is worse than no gate.
+ * stylistic. Both are raw sample series timed on a single event loop. Overhead is a whole-request
+ * difference of two long spans, and its p99 is the number the non-negotiable names. Added TTFT is
+ * one short interval across an async relay: its p50 and p95 move under 15% between runs on an idle
+ * box, while its **p99 moved 0.56 → 4.03 ms across four consecutive runs of the same unmodified
+ * code** — that tail is the scheduler and the collector, not the router. Gating it would be gating
+ * noise, and this file's own comment says why that is worse than no gate.
  *
  * p95 loses nothing, because every way the router can actually add time-to-first-token is
  * *systematic* rather than tail-only: buffering the relay, awaiting Postgres or a body parse before
@@ -56,7 +62,7 @@ export interface Row {
  * the failure modes the budget is about.
  */
 export interface Budgets {
-  /** `router_overhead_seconds` p99 ceiling, milliseconds. */
+  /** Measured per-request overhead p99 ceiling, milliseconds. */
   readonly overheadP99Ms: number
   /** Added time-to-first-token p95 ceiling, milliseconds. */
   readonly addedTtftP95Ms: number
@@ -69,9 +75,6 @@ export interface Verdict {
   readonly violations: readonly string[]
 }
 
-/** Below this, a quantile is the bucket bound the samples were rounded into, not a measurement. */
-const QUANTIZED_BELOW_MS = 1
-
 export function verdict(results: readonly ScenarioResult[], budgets: Budgets): Verdict {
   const rows = results.map(row)
   const violations: string[] = []
@@ -80,8 +83,12 @@ export function verdict(results: readonly ScenarioResult[], budgets: Budgets): V
     if (entry.failures > 0) {
       violations.push(`${entry.scenario}: ${entry.failures} of ${entry.samples} requests failed`)
     }
-    if (entry.samples === 0 || Number.isNaN(entry.overheadP99Ms)) {
+    if (entry.seriesSamples === 0) {
       violations.push(`${entry.scenario}: ${OVERHEAD_METRIC} recorded no samples`)
+      continue
+    }
+    if (entry.samples === 0 || Number.isNaN(entry.overheadP99Ms)) {
+      violations.push(`${entry.scenario}: no request's overhead was measured`)
       continue
     }
     if (entry.overheadP99Ms > budgets.overheadP99Ms) {
@@ -125,20 +132,23 @@ function row(result: ScenarioResult): Row {
   const series = parseHistogram(result.exposition, OVERHEAD_METRIC).find(
     (candidate) => candidate.labels.path === result.scenario.path,
   )
-  const empty = { labels: {}, buckets: [], sum: 0, count: 0 }
-  const found = series ?? empty
-  const mean = histogramMean(found) * 1_000
+  const found = series ?? { labels: {}, buckets: [], sum: 0, count: 0 }
+  const measured = result.overheadMs
 
   return {
     scenario: result.scenario.name,
     path: result.scenario.path,
-    samples: found.count,
+    samples: measured.length,
     failures: result.failures,
-    overheadMeanMs: mean,
-    overheadP50Ms: histogramQuantile(found, 0.5) * 1_000,
-    overheadP95Ms: histogramQuantile(found, 0.95) * 1_000,
-    overheadP99Ms: histogramQuantile(found, 0.99) * 1_000,
-    overheadQuantized: Number.isFinite(mean) && mean < QUANTIZED_BELOW_MS,
+    overheadMeanMs:
+      measured.length === 0
+        ? Number.NaN
+        : measured.reduce((sum, value) => sum + value, 0) / measured.length,
+    overheadP50Ms: sampleQuantile(measured, 0.5),
+    overheadP95Ms: sampleQuantile(measured, 0.95),
+    overheadP99Ms: sampleQuantile(measured, 0.99),
+    seriesSamples: found.count,
+    seriesMeanMs: histogramMean(found) * 1_000,
     addedTtftSamples: result.addedTtftMs.length,
     addedTtftP50Ms: sampleQuantile(result.addedTtftMs, 0.5),
     addedTtftP95Ms: sampleQuantile(result.addedTtftMs, 0.95),
@@ -148,7 +158,17 @@ function row(result: ScenarioResult): Row {
   }
 }
 
-const OVERHEAD_HEADERS = ["scenario", "path", "samples", "mean", "p50", "p95", "p99", "budget"]
+const OVERHEAD_HEADERS = [
+  "scenario",
+  "path",
+  "samples",
+  "mean",
+  "p50",
+  "p95",
+  "p99",
+  "budget",
+  "series mean",
+]
 const TTFT_HEADERS = ["scenario", "streams", "p50", "p95", "p99", "budget", "buffered"]
 
 export function render(result: Verdict): string {
@@ -165,6 +185,7 @@ export function render(result: Verdict): string {
       : entry.overheadP99Ms <= result.budgets.overheadP99Ms
         ? "ok"
         : "OVER",
+    ms(entry.seriesMeanMs),
   ])
 
   const streams = result.rows.filter((entry) => entry.streamed)
@@ -182,22 +203,15 @@ export function render(result: Verdict): string {
     entry.buffered === 0 ? "no" : `YES (${entry.buffered})`,
   ])
 
-  const quantized = result.rows.some((entry) => entry.overheadQuantized)
   const lines = [
-    `${OVERHEAD_METRIC} — scraped from GET /metrics, budget ${result.budgets.overheadP99Ms} ms p99`,
+    `router overhead — measured per request (client wall time minus the upstream's hold), budget ${result.budgets.overheadP99Ms} ms p99`,
     "",
     table(OVERHEAD_HEADERS, overhead),
+    "",
+    `  "series mean" is what ${OVERHEAD_METRIC} recorded for the same requests, scraped from GET`,
+    "  /metrics. It is fed whole milliseconds, so it under-reads a sub-millisecond cost and its",
+    "  percentiles are bucket edges; it is shown to prove the series still records, not as the cost.",
   ]
-  if (quantized) {
-    lines.push(
-      "",
-      "  The percentiles above are bucket bounds, not measurements: the series is fed whole",
-      "  millisecond samples, so a sub-millisecond overhead rounds into the first bucket and every",
-      "  quantile inside it reports that bucket's edge. The mean divides an accumulated sum by the",
-      "  sample count and does have sub-millisecond resolution — read it for the cost, and the",
-      "  percentiles for the ceiling.",
-    )
-  }
 
   lines.push(
     "",

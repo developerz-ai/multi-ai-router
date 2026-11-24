@@ -35,7 +35,7 @@ export interface Baseline {
    * silently report "no TTFT drift" for the exact number that had until then gone unwatched.
    * Refusing it and asking for `--write-baseline` is the honest outcome.
    */
-  readonly version: 2
+  readonly version: 3
   readonly budgets: Budgets
   readonly rows: readonly BaselineRow[]
 }
@@ -65,7 +65,7 @@ export interface DeltaRow {
 /** What a bench run commits as tomorrow's baseline — the report's own numbers, nothing derived. */
 export function toBaseline(verdict: Verdict): Baseline {
   return {
-    version: 2,
+    version: 3,
     budgets: verdict.budgets,
     rows: verdict.rows.map((row) => ({
       scenario: row.scenario,
@@ -172,7 +172,7 @@ export function renderDelta(rows: readonly DeltaRow[]): string {
   return [
     "this run vs bench/baseline.json (report only, never fails the build)",
     "",
-    "router_overhead_seconds",
+    "router overhead, measured per request",
     "",
     table(OVERHEAD_HEADERS, overhead),
     "",

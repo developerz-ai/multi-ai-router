@@ -225,21 +225,22 @@ and `bin/bench`, `bin/advisory` and `bin/ui-geometry` refuse a mismatched Bun be
 their own work; all of them report a missing or mismatched version without installing a runtime
 for you.
 
-Dependency updates track stable versions supported by their parents. The Solid JSX build compiles on
-two Babel majors, and the split is a recorded constraint rather than a choice: the **test-side**
-compile already runs **Babel 8** (`@babel/core@8.0.10` with `babel-preset-solid@1.9.16`), while the
-**shipped Vite build** still compiles JSX on **Babel 7** — `vite-plugin-solid@2.11.14` depends on
-`@babel/core@^7.23.3`, `babel-preset-solid@1.9.16` peers `@babel/core@^7.0.0`, and
-`babel-plugin-jsx-dom-expressions@0.40.11` peers `^7.20.12`. The shipped build is therefore
-**re-deferred**, and it moves only when upstream ships a `vite-plugin-solid` that takes
-`@babel/core@^8` and a `babel-preset-solid` whose peer range admits Babel 8: the stable lines are
-`vite-plugin-solid@2.11.14` and `babel-preset-solid@1.9.16`, and the next tags (`3.0.0-next.27`,
-`2.0.0-rc.2`) are prereleases. `apps/web/test/unit/solid-jsx-build.test.ts` is the guard on the
-side that works — it compiles JSX through the repository's own compile step, so the demonstrated
-combination cannot quietly slide back onto a Babel 7 core. The scoped esbuild override replaces
-Drizzle Kit's deprecated loader dependency with a patched version; its TypeScript transforms and
-migration generation/checks are verified alongside the full gate. Keep that override until the
-loader's upstream dependency is patched or replaced.
+Dependency updates track stable versions supported by their parents, and wait out the same 14-day
+cooldown Dependabot is configured with (`.github/dependabot.yml`); install one by hand with
+`bun install --minimum-release-age=1209600`. The Solid JSX build compiles on two Babel majors, and
+the split is a recorded constraint rather than a choice: the **test-side** compile runs **Babel 8**,
+while the **shipped Vite build** still compiles JSX on **Babel 7**, because the stable
+`vite-plugin-solid` and `babel-preset-solid` lines both require it. The shipped build moves only
+when upstream ships stable releases that take `@babel/core@^8`. The versions are whatever
+`bun.lock` says — they are deliberately not restated here, where every update would leave them
+wrong. `apps/web/test/unit/solid-jsx-build.test.ts` is the guard on the side that works — it
+compiles JSX through the repository's own compile step, so the demonstrated combination cannot
+quietly slide back onto a Babel 7 core. The scoped esbuild override replaces Drizzle Kit's
+deprecated loader dependency with a patched version; its TypeScript transforms and migration
+generation/checks are verified alongside the full gate. Keep that override until the loader's
+upstream dependency is patched or replaced. The other `overrides` in the root `package.json` are
+security pins on transitive packages: `bun outdated` does not list them, so check them by hand when
+updating, and let `bin/advisory` judge the result.
 
 `bin/` is the interface — three commands are the whole contract:
 
@@ -249,9 +250,16 @@ bin/dev       # each session: API + web, watch mode
 bin/check     # before committing: lint, typecheck, test, build — the offline half of the CI gate
 ```
 
+`bin/check` prints one line per stage (name, verdict, seconds) and a failing stage's own output,
+nothing else; `bin/check --verbose` streams everything. While you work, `bin/check --fast` runs
+lint, typecheck and only the tests your changes reach (`bin/test --changed=origin/main`) — it says
+itself that it is not the gate. A bare `bin/test` runs the suite as two shards at once, each on its
+own database (`router`, and `router_shard2`, created on demand); `bin/test <pattern>` and
+`bin/test --changed` run one process. Off a terminal, test output is failures and the summary only.
+
 `bin/check` needs a database and refuses to start without one, because CI's test job uses real
-PostgreSQL 18.6, and the bundled and development Compose files both pin PostgreSQL 18.4. The
-migration, advisory-lock, retention
+PostgreSQL — the same pinned build, digest included, as the bundled and development Compose files.
+The migration, advisory-lock, retention
 and readiness-probe suites gate themselves on
 `DATABASE_URL`. Without it they skip, `bun test` folds the skips into the same green summary as a
 pass, and the gate goes green having proved less than the PR will. `bin/setup` writes the dev
@@ -266,8 +274,11 @@ wave through exactly the silent skip it exists to stop. `bin/lib/database-url` p
 run will use if you ever need to see it.
 
 One more when you touch the request path: `bin/bench` drives the real router against an in-process
-stub upstream and reports what its own `router_overhead_seconds` histogram recorded, plus added
-time-to-first-token measured separately. It exits non-zero when either half of the budget breaks —
+stub upstream and reports the overhead it measured per request — client wall time minus the time the
+upstream held the request, unrounded — beside what the router's own `router_overhead_seconds`
+recorded, plus added time-to-first-token measured separately. Its scenarios include prod-shaped
+350 KB and 1 MB transcripts, a 31-account / 11-pool roster, a Responses-API account, and short
+requests under 32 long streams. It exits non-zero when either half of the budget breaks —
 overhead p99 over `--budget-ms`, or added TTFT p95 over `--ttft-budget-ms`.
 
 `bin/advisory` asks the live advisory database (OSV.dev) about the resolved dependency set in

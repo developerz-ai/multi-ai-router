@@ -67,6 +67,9 @@ describe("the container base image", () => {
     const pin = /image: (postgres:18\.\d+@sha256:[a-f0-9]{64})/
     expect(COMPOSE.match(pin)?.[1]).toBeDefined()
     expect(development.match(pin)?.[1]).toBe(COMPOSE.match(pin)?.[1])
+    // The digest too: CI once tested an older rebuild of the same `18.6` tag than the compose
+    // files shipped, which is a different server under the same name.
+    expect(CI_WORKFLOW.match(pin)?.[1]).toBe(COMPOSE.match(pin)?.[1])
   })
 
   test("mounts PostgreSQL 18 above a fresh, major-specific data volume", () => {
@@ -199,12 +202,12 @@ describe("the local Bun prerequisite", () => {
   }
 })
 
-describe("the node_modules prune", () => {
+describe("the duplicate claude binaries", () => {
   test("fails the build when its size heuristic stops matching", () => {
     // `find … -size +100M -delete` succeeds when it matches nothing. The day the SDK's platform
-    // binary drops under the threshold, ~500 MB of duplicate `claude` copies quietly return and
-    // every layer downstream still builds green. Nothing else weighs the image, so the delete has
-    // to assert its own match.
+    // binary drops under the threshold, ~500 MB of duplicate `claude` copies quietly return to the
+    // layer cache and every layer downstream still builds green. Nothing else weighs the layers,
+    // so the delete has to assert its own match.
     const prune = DOCKERFILE.match(
       /^RUN[^\n]*(?:\\\n[^\n]*)*claude -size \+100M[^\n]*(?:\\\n[^\n]*)*/m,
     )
@@ -215,6 +218,46 @@ describe("the node_modules prune", () => {
     // A count, compared. Not a bare delete whose zero-match case is a success.
     expect(step).toMatch(/\[\s*"\$pruned"\s*-gt\s*0\s*\]/)
     expect(step).toContain("exit 1")
+    // Installed, staged and deleted in ONE layer: a copy deleted by a later RUN still sits in the
+    // earlier layer's blob, which is what put the Actions cache over its 10 GB quota.
+    expect(step).toContain("bun install --frozen-lockfile --ignore-scripts")
+    expect(step).toContain("/opt/claude-cli/claude")
+    expect(DOCKERFILE.match(/^RUN[^\n]*bun install/gm)?.length ?? 0).toBe(0)
+  })
+})
+
+describe("the runtime stage carries no node_modules", () => {
+  // Releases through 2.76.1 copied the builder's whole tree — `bun install --production` over an
+  // existing install removes nothing — and shipped 636 MB of Biome, TypeScript, Playwright and Vite
+  // next to every upstream credential. The bundles are self-contained; the tree is not copied.
+  const runtime = DOCKERFILE.slice(DOCKERFILE.indexOf(" AS runtime"))
+
+  test("nothing copies a dependency tree into it", () => {
+    expect(runtime.length).toBeGreaterThan(0)
+    for (const line of runtime.split("\n").filter((l) => /^(COPY|ADD)\s/.test(l))) {
+      expect(line).not.toContain("node_modules")
+    }
+    const instructions = DOCKERFILE.split("\n").filter((l) => !l.trimStart().startsWith("#"))
+    expect(instructions.join("\n")).not.toContain("--production")
+  })
+
+  test("the build asserts its absence and that bun cannot auto-install in its place", () => {
+    // Without node_modules bun fetches an unresolved bare import from the registry at run time.
+    // Off, for every bun started in /app — and proved by an import that must fail.
+    expect(runtime).toContain(`auto = "disable"`)
+    expect(runtime).toMatch(/test ! -e node_modules/)
+    expect(runtime).toMatch(/! bun -e 'await import\("[a-z-]+"\)'/)
+  })
+
+  test("bin/build refuses a bundle that still imports a package by name", () => {
+    const build = readFileSync(`${ROOT}bin/build`, "utf8")
+    expect(build).toMatch(
+      /assert-bundles-self-contained\.ts \\\n\s+dist\/api\/index\.js dist\/api\/admin\.js dist\/libexec\/claude-profile-check\.js/,
+    )
+  })
+
+  test("the CI image job checks the built image, not only the Dockerfile text", () => {
+    expect(CI_WORKFLOW).toContain("test ! -e /app/node_modules")
   })
 })
 

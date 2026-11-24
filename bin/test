@@ -1,5 +1,30 @@
 #!/bin/sh
-# Run the test suite; any extra args are passed straight to `bun test`.
+# Run the test suite.
+#
+#   bin/test                       the whole suite, as parallel shards (see below)
+#   bin/test <pattern> [flags…]    anything else goes straight to one `bun test`
+#   bin/test --changed             only the test files affected by what you changed (git); takes a
+#                                  base too: `bin/test --changed=origin/main`
+#   bin/test --watch               …and every other `bun test` flag, unchanged
+#
+# Environment:
+#   ROUTER_TEST_SHARDS=N    how many shards a bare `bin/test` runs (default 2; 1 = one process)
+#   ROUTER_TEST_VERBOSE=1   print every passing test, even when no terminal is attached
+#
+# OUTPUT. On a terminal, or in CI, every test is printed as before. Anywhere else — a pipe, a file,
+# an agent reading the result — only failures and the summary are (`bun test --only-failures`): a
+# green run of this suite is thirteen thousand lines, and the three that matter are at the bottom.
+#
+# SHARDS. A bare `bin/test` splits the files across N `bun test --shard=k/N` processes that run at
+# the same time, balanced by the per-file durations in bin/lib/test-timings.json. Each shard after
+# the first gets its own database on the same server (`router_shard2`, created on demand by
+# bin/lib/ensure-test-database.ts), because the live-Postgres suites own the database they are
+# pointed at. Each shard's output is captured and printed whole when all have finished, in shard
+# order, so two interleaved runs never have to be untangled. ANY shard failing fails the run.
+#
+# Refresh the timings after adding or reshaping slow suites — a normal sharded run that also
+# rewrites bin/lib/test-timings.json from what it measured (commit the result):
+#   ROUTER_TEST_UPDATE_TIMINGS=1 bin/test
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -7,7 +32,8 @@ cd "$(dirname "$0")/.."
 # Same runtime as CI and the image, or say so: a different bun runs these silently.
 bin/lib/require-bun
 
-# Native ownership tests must exercise the current C source, including on a fresh clone.
+# Native ownership tests must exercise the current C source, including on a fresh clone. Built once,
+# here, before any shard starts: two shards compiling into the same path would race.
 if [ "$(uname -s)" = Linux ]; then
   bin/build-cli-owner
 else
@@ -16,7 +42,7 @@ fi
 
 # tmp/ (cloned upstream repos and their thousands of tests) is excluded by
 # `pathIgnorePatterns` in bunfig.toml, so a raw `bun test` at the root honours it
-# too. Extra args pass straight through: `bin/test apps/api`, `bin/test --watch`.
+# too.
 
 # The suites that need a real Postgres gate themselves on DATABASE_URL, and
 # `bun test` folds their skips into the same green summary as a pass — a run
@@ -49,8 +75,90 @@ skipped_suites() {
     done | sort
 }
 
+quiet=""
+if [ ! -t 1 ] && [ -z "${CI:-}" ] && [ "${ROUTER_TEST_VERBOSE:-}" != "1" ]; then
+  quiet="--only-failures"
+fi
+
+shards="${ROUTER_TEST_SHARDS:-2}"
+case "$shards" in
+  '' | *[!0-9]* | 0) echo "bin/test: ROUTER_TEST_SHARDS must be a positive integer, got '$shards'" >&2; exit 64 ;;
+esac
+
+timings="bin/lib/test-timings.json"
+
+run_sharded() {
+  logs="$(mktemp -d "${TMPDIR:-/tmp}/router-test.XXXXXX")"
+  # shellcheck disable=SC2064  # expand now: the directory is this run's, not whatever $logs is later
+  trap "rm -rf '$logs'" EXIT
+  # A Ctrl-C must take the shards with it, not leave N suites running against the dev database.
+  # The shards by pid, never `kill 0`: run from CI, `timeout`, or bin/check, this script shares its
+  # caller's process group, and signalling the group would take the caller down with it.
+  pids=""
+  # shellcheck disable=SC2086  # one pid per word
+  trap 'kill $pids 2>/dev/null; exit 130' INT TERM
+
+  shard=1
+  while [ "$shard" -le "$shards" ]; do
+    (
+      if [ -n "$database_url" ]; then
+        # `|| exit 1`, spelled out: this function is called as `run_sharded || …`, where errexit is
+        # off, and bash (macOS's /bin/sh) would carry on with an EMPTY DATABASE_URL — which outranks
+        # .env, skips every live-Postgres suite, and exits green. A shard with no database fails.
+        DATABASE_URL="$(bun bin/lib/ensure-test-database.ts "$database_url" "$shard")" || {
+          echo "bin/test: could not prepare shard $shard's database" >&2
+          exit 1
+        }
+        [ -n "$DATABASE_URL" ] || { echo "bin/test: shard $shard got an empty DATABASE_URL" >&2; exit 1; }
+        export DATABASE_URL
+      fi
+      if [ "${ROUTER_TEST_UPDATE_TIMINGS:-}" = "1" ]; then
+        # `--update-timings` writes the FIRST file, and only this shard's files: a scratch file per
+        # shard, merged below, so two shards never write the committed one at the same time.
+        printf '{"version":1,"files":{}}' >"$logs/$shard.timings.json"
+        # shellcheck disable=SC2086  # $quiet is one flag or nothing
+        exec bun test --shard="$shard/$shards" --timings="$logs/$shard.timings.json" \
+          --timings="$timings" --update-timings $quiet
+      fi
+      # shellcheck disable=SC2086  # $quiet is one flag or nothing
+      exec bun test --shard="$shard/$shards" --timings="$timings" $quiet
+    ) >"$logs/$shard.log" 2>&1 &
+    pids="$pids $!"
+    shard=$((shard + 1))
+  done
+
+  failed=""
+  shard=1
+  for pid in $pids; do
+    code=0
+    wait "$pid" || code=$?
+    printf '\n── shard %s/%s — exit %s ──\n' "$shard" "$shards" "$code"
+    cat "$logs/$shard.log"
+    [ "$code" -eq 0 ] || failed="$failed $shard"
+    shard=$((shard + 1))
+  done
+
+  # Even after a failure: a red test still took the time it took, and the table is only a balance
+  # hint. A shard that died before measuring anything leaves the committed table alone.
+  if [ "${ROUTER_TEST_UPDATE_TIMINGS:-}" = "1" ]; then
+    bun bin/lib/merge-test-timings.ts "$timings" "$logs"/*.timings.json ||
+      echo "bin/test: timings not refreshed" >&2
+  fi
+
+  if [ -n "$failed" ]; then
+    printf '\n\033[0;31m✘\033[0m  bin/test: shard(s)%s of %s failed — the failures are listed under each shard above.\n' "$failed" "$shards" >&2
+    return 1
+  fi
+  printf '\n\033[0;32m✔\033[0m  bin/test: all %s shards passed.\n' "$shards"
+}
+
 status=0
-bun test "$@" || status=$?
+if [ "$#" -eq 0 ] && [ "$shards" -gt 1 ]; then
+  run_sharded || status=$?
+else
+  # shellcheck disable=SC2086  # $quiet is one flag or nothing
+  bun test $quiet "$@" || status=$?
+fi
 
 # Only when nothing promised a database. If something did, the run refused before
 # its first test file and already said why — and claiming these suites "skipped"

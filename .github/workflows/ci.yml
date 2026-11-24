@@ -85,9 +85,9 @@ jobs:
     # the only service container this repo needs.
     services:
       postgres:
-        # PostgreSQL 18, the major both compose files ship. No other major is
-        # exercised here; image-pins.test.ts holds this to the compose pin's major.
-        image: postgres:18.6@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+        # The exact PostgreSQL build both compose files ship, digest included, so the suite runs
+        # on the server an operator gets. image-pins.test.ts holds the three pins together.
+        image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
         env:
           POSTGRES_USER: router
           POSTGRES_PASSWORD: router
@@ -123,11 +123,14 @@ jobs:
       # GitHub gates the job on the service's health check before any step runs,
       # so no wait-for-postgres loop is needed here. Migrations are applied by the
       # test bootstrap itself (idempotent, same code path as boot).
-      - name: install native test prerequisites
-        run: |
-          bin/ci-apt-mirror
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends gcc libc6-dev
+      # The runner image already ships gcc and libc6-dev, and asking apt to confirm that cost 7–99 s
+      # of `apt-get update` per job. bin/ci-native-prereqs compiles a static hello-world first and
+      # only reaches for apt when that fails, so a runner image that drops them still builds.
+      - name: native test prerequisites
+        run: bin/ci-native-prereqs
+      # A bare `bin/test` runs the suite as two shards at once, each against its own database on
+      # the service container above (`router`, and `router_shard2`, which bin/test creates). Still
+      # one job and one check named `test`: either shard failing fails it.
       - run: bin/test
 
   advisory:
@@ -233,19 +236,34 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
       - run: bun install --frozen-lockfile
-      # Determinism inputs, installed explicitly rather than inherited from the
-      # runner image: DejaVu is the font stack bin/ui-geometry pins text metrics
-      # to, and the browser build is whatever the pinned playwright in
-      # package.json resolves to — never `latest`.
-      # A dead mirror in the runner's apt list costs a DNS timeout per file, which outlasts the job
-      # timeout; bin/ci-apt-mirror pins apt to archive.ubuntu.com when one does not resolve. The
-      # installs below fail the step if a package is unreachable. `--with-deps` calls the same apt.
-      - name: install pinned fonts and headless Chromium
+      # Determinism inputs: DejaVu is the font stack bin/ui-geometry pins text metrics to, and the
+      # browser build is whatever the pinned playwright in package.json resolves to — never
+      # `latest`.
+      #
+      # `--only-shell`: the gate launches headless, which is the headless shell; the full Chrome
+      # for Testing build was a second download nothing ran.
+      #
+      # No `--with-deps`. On this runner image it installed nine fallback font packages (the gate
+      # overrides every font to DejaVu and fails when DejaVu is missing) and upgraded four mesa
+      # libraries, through an `apt-get update` that took 24–420 s for a six-second check. apt now
+      # runs only when something is actually missing: the font, or a shared library the shell
+      # links against. Either way the gate itself is fail-closed — it refuses to measure without
+      # the pinned fonts, and a browser that cannot start fails the launch.
+      - name: install the pinned headless Chromium, and fonts or libraries only if missing
         run: |
-          bin/ci-apt-mirror
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends fonts-dejavu-core
-          bunx playwright install --with-deps chromium
+          bunx playwright install --only-shell chromium
+          shell="$(find "$HOME/.cache/ms-playwright" -type f -name 'chrome-headless-shell' | head -n 1)"
+          [ -n "$shell" ] || { echo "playwright installed no chrome-headless-shell" >&2; exit 1; }
+          missing_fonts=""
+          fc-list | grep -q 'DejaVu Sans Mono' || missing_fonts=1
+          missing_libs="$(ldd "$shell" | grep 'not found' || true)"
+          if [ -n "$missing_fonts" ] || [ -n "$missing_libs" ]; then
+            echo "missing: ${missing_fonts:+fonts-dejavu-core }${missing_libs}"
+            bin/ci-apt-mirror
+            sudo apt-get update -o Acquire::Retries=3
+            sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends fonts-dejavu-core
+            [ -z "$missing_libs" ] || bunx playwright install-deps chromium
+          fi
       - run: bin/ui-geometry
 
   build:
@@ -264,11 +282,8 @@ jobs:
       # process serves as static assets. Runs on PRs too — a broken Vite build
       # or an unresolvable import must fail here, not inside the image job where
       # only main-branch pushes would notice.
-      - name: install native build prerequisites
-        run: |
-          bin/ci-apt-mirror
-          sudo apt-get update -o Acquire::Retries=3
-          sudo apt-get install -y -o Acquire::Retries=3 --no-install-recommends gcc libc6-dev
+      - name: native build prerequisites
+        run: bin/ci-native-prereqs
       - run: bun run build
 
   image:
@@ -306,6 +321,21 @@ jobs:
       # start in the runtime layer, not just exist in the builder.
       - name: the shipped claude CLI runs
         run: docker run --rm --entrypoint claude multi-ai-router:ci --version
+      # The built image, not the Dockerfile's text: no dependency tree beside the bundles, bun
+      # cannot fetch one in its place, and the bundles still load without it. `set -e` and no
+      # `|| true` — any one of these failing fails the job. The import must FAIL (auto-install
+      # off); the server must get as far as refusing its (absent) configuration, which is past
+      # every import the bundle makes at load.
+      - name: the image carries no node_modules and cannot auto-install one
+        run: |
+          docker run --rm --entrypoint sh multi-ai-router:ci -ec '
+            test ! -e /app/node_modules
+            test -z "$(find / -xdev -type d -name node_modules -not -path "/proc/*" 2>/dev/null)"
+            if bun -e "await import(\"is-number\")" 2>/dev/null; then echo "bun auto-installed a package" >&2; exit 1; fi
+            bun dist/libexec/claude-profile-check.js
+            bun dist/api/admin.js 2>&1 | grep -q "set-password"
+            bun dist/api/index.js 2>&1 | grep -q "Invalid environment configuration"
+          '
 # NOTE: this workflow deliberately publishes NOTHING.
 #
 # Image pushes happen only on a tagged release (.github/workflows/release.yml,

@@ -18,7 +18,8 @@ function row(overrides: Partial<Row> = {}): Row {
     overheadP50Ms: 1,
     overheadP95Ms: 2,
     overheadP99Ms: 3,
-    overheadQuantized: false,
+    seriesSamples: 1_000,
+    seriesMeanMs: 1,
     addedTtftSamples: 0,
     addedTtftP50Ms: Number.NaN,
     addedTtftP95Ms: Number.NaN,
@@ -53,7 +54,7 @@ describe("toBaseline", () => {
     const baseline = toBaseline(verdictOf([row()]))
 
     expect(baseline).toEqual({
-      version: 2,
+      version: 3,
       budgets: BUDGETS,
       rows: [
         {
@@ -94,7 +95,7 @@ describe("compareToBaseline", () => {
   })
 
   test("flags a scenario absent from the baseline as new, not as an infinite regression", () => {
-    const baseline: Baseline = { version: 2, budgets: BUDGETS, rows: [] }
+    const baseline: Baseline = { version: 3, budgets: BUDGETS, rows: [] }
     const current = verdictOf([row({ scenario: "translate" })])
 
     const [delta] = compareToBaseline(baseline, current)
@@ -169,7 +170,7 @@ describe("renderDelta", () => {
       compareToBaseline(baseline, verdictOf([streamRow({ addedTtftP95Ms: 0.8 })])),
     )
 
-    expect(text).toContain("router_overhead_seconds")
+    expect(text).toContain("router overhead, measured per request")
     expect(text).toContain("added time-to-first-token")
     expect(text).toContain("0.40 ms")
     expect(text).toContain("0.80 ms")
@@ -177,7 +178,7 @@ describe("renderDelta", () => {
 
   test("marks a new scenario instead of printing a bogus delta", () => {
     const text = renderDelta(
-      compareToBaseline({ version: 2, budgets: BUDGETS, rows: [] }, verdictOf([row()])),
+      compareToBaseline({ version: 3, budgets: BUDGETS, rows: [] }, verdictOf([row()])),
     )
 
     expect(text).toContain("passthrough (new)")

@@ -4,17 +4,28 @@ set -eu
 
 IFS= read -r required < "${0%/*}/../../.bun-version"
 
+# How to get there, said every time: "select the pinned version" is not an instruction to someone
+# (or something) that has never set this machine up.
+how() {
+  printf '  with mise:     mise install bun@%s && mise use bun@%s\n' "$required" "$required" >&2
+  printf '  without one:   curl -fsSL https://bun.sh/install | bash -s "bun-v%s"   (then put ~/.bun/bin first in PATH)\n' "$required" >&2
+  printf '  why exact:     CI and the image run this version; see README.md#working-on-it\n' >&2
+}
+
 if ! command -v bun >/dev/null 2>&1; then
-  printf 'Bun %s is required but bun is not in PATH. Select the version in .bun-version, then retry. See README.md#working-on-it.\n' "$required" >&2
+  printf 'Bun %s is required (.bun-version) but bun is not in PATH.\n' "$required" >&2
+  how
   exit 1
 fi
 
 if ! actual=$(bun --version); then
-  printf 'Could not read the Bun version. Select Bun %s in PATH, then retry.\n' "$required" >&2
+  printf 'Could not read the Bun version; Bun %s is required (.bun-version).\n' "$required" >&2
+  how
   exit 1
 fi
 
 if [ "$actual" != "$required" ]; then
-  printf 'Bun %s is required by .bun-version; found %s. Select the pinned version in PATH, then retry. See README.md#working-on-it.\n' "$required" "$actual" >&2
+  printf 'Bun %s is required by .bun-version; found %s (%s).\n' "$required" "$actual" "$(command -v bun)" >&2
+  how
   exit 1
 fi

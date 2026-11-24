@@ -21,12 +21,16 @@ admin settings endpoint, and the console footer. Every workspace
 - `Dockerfile` — the `org.opencontainers.image.version` label, which is what
   `docker inspect` answers without running the container
 
-Bump every one to the same semver, then prove it:
+`bun.lock` restates the workspace versions too. One command moves all of them, opens the
+changelog section (§2) and runs the check:
 
 ```sh
-bin/verify-version          # the tree agrees with itself
+bin/bump 1.0.0              # every file above, bun.lock, the CHANGELOG heading + footer link
+bin/verify-version          # (bin/bump already ran it) the tree agrees with itself
 bin/verify-version v1.0.0   # …and the tag you are about to push names it
 ```
+
+`bin/bump` writes no changelog prose, commits nothing and tags nothing.
 
 `bin/check` catches a mismatch too (a drift test in `packages/core` walks the
 workspace globs), and `release.yml` runs `bin/verify-version` against the tag
@@ -36,8 +40,9 @@ what it is.
 
 ## 2. Update the changelog
 
-Add a new section to `CHANGELOG.md` under `## [X.Y.Z] — YYYY-MM-DD`, above
-the previous release. Follow [Keep a Changelog](https://keepachangelog.com/):
+`bin/bump` inserts the `## [X.Y.Z] — YYYY-MM-DD` heading directly under `## [Unreleased]` (so
+whatever was written there becomes the release's section) and appends the footer link; by hand,
+add the section above the previous release. Follow [Keep a Changelog](https://keepachangelog.com/):
 group entries under `Added` / `Changed` / `Fixed` / `Documentation` as
 applicable. Pull the entries from the merged PRs since the last tag —
 `git log --oneline <last-tag>..HEAD` and `gh pr list --state merged` are
@@ -74,8 +79,8 @@ that it cannot: `ui-geometry` (headless Chromium against the built SPA, which ne
 `advisory` (the live OSV.dev dependency assessment, which needs the network). A green `bin/check`
 is not a stand-in for them.
 
-Branch protection on `main` requires `lint`, `typecheck`, `test`, `build`, `ui-geometry` and
-`bench` (a report: the job is `continue-on-error`, though a red `bench` check can still hold a
+Branch protection on `main` requires `lint`, `typecheck`, `test`, `build`, `ui-geometry`, `image`
+and `bench` (a report: the job is `continue-on-error`, though a red `bench` check can still hold a
 merge until it is re-run green). `advisory` is deliberately not required for
 a merge — a newly published advisory would otherwise block every unrelated PR — but it colours
 `main`, and the release gate (§5) requires it, together with `image`, on the tagged commit.
@@ -162,7 +167,9 @@ Nothing here is manual or ad hoc — if a step needs to change, it changes in
   ```
 
 - **Roll the deployments — a release is not done until they run it.** Nothing
-  automates this. Open an image-pin PR in every deployment repository that pins
+  automates this. `bin/bump --print-pin` (or `bin/bump --print-pin X.Y.Z`) prints the published
+  manifest-list pin, `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z@sha256:…`, once `release.yml`
+  has pushed it. Open an image-pin PR in every deployment repository that pins
   the router (the `ghcr.io/developerz-ai/multi-ai-router:X.Y.Z` image line in its
   deployment manifest; the operator keeps the list of those repositories, and this
   public document does not name them), update each stack README's "deployed" version in the same PR, and link the
@@ -204,10 +211,10 @@ Artifact upload and download move together: keep `archive: true` on digest uploa
 `digest-mismatch: error` on downloads so the manifest merge receives the same named files.
 
 The Dockerfile frontend and PostgreSQL images also carry version and index digest pins.
-CI uses PostgreSQL 18.6; the bundled and development Compose files both pin PostgreSQL 18.4,
-on a fresh per-major volume (`postgres-data-18` / `dev-postgres-data-18`) mounted at
-`/var/lib/postgresql`. Validate the migration/repository suites against both
-before moving database pins. A Compose database major bump requires a separate data
+CI's service container and both Compose files pin the same PostgreSQL build, tag and digest
+(`image-pins.test.ts` fails when the three disagree), on a fresh per-major volume (`postgres-data-18` / `dev-postgres-data-18`) mounted at
+`/var/lib/postgresql`. Move the three pins in one commit and let the suite run on the new
+build before merging. A Compose database major bump requires a separate data
 migration, including the newer image's data-directory layout — the 16 → 18 move is
 `bin/pg-upgrade-16-to-18`, which dumps the 16 volume and restores it into the 18 one.
 
