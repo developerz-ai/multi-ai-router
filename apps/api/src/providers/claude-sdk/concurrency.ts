@@ -7,6 +7,7 @@ import {
   SdkGateWaitExpiredError,
   type SdkWaitBudget,
 } from "./gate-wait"
+import { createWaiterQueue } from "./waiter-queue"
 
 /**
  * How many `claude` subprocesses may run at once, globally and per Account.
@@ -186,7 +187,7 @@ function createGate(limit: number): Gate {
   // and a zero-permit semaphore would wedge every subscription request on this replica forever.
   const permits = Math.max(1, Math.floor(limit))
   let held = 0
-  const queue: Array<() => void> = []
+  const queue = createWaiterQueue<() => void>()
 
   const release = (): void => {
     const next = queue.shift()
@@ -217,24 +218,20 @@ function createGate(limit: number): Gate {
           wait.timer.clear(timer)
           wait.budget.spend(wait.now() - queuedAt)
         }
-        const dequeue = (): void => {
-          const at = queue.indexOf(admit)
-          if (at >= 0) queue.splice(at, 1)
-        }
         const admit = (): void => {
           leave()
           resolve()
         }
         const onAbort = (): void => {
-          dequeue()
+          place.remove()
           leave()
           reject(abortReason(signal, NOT_GRANTED))
         }
         signal.addEventListener("abort", onAbort, { once: true })
-        queue.push(admit)
+        const place = queue.push(admit)
         if (wait !== undefined)
           timer = wait.timer.set(() => {
-            dequeue()
+            place.remove()
             leave()
             reject(new SdkGateWaitExpiredError(wait.half))
           }, wait.budget.remaining())
@@ -247,10 +244,10 @@ function createGate(limit: number): Gate {
       return held
     },
     get waiting() {
-      return queue.length
+      return queue.size
     },
     get idle() {
-      return held === 0 && queue.length === 0
+      return held === 0 && queue.size === 0
     },
   }
 }
