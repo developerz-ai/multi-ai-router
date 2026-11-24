@@ -4,6 +4,7 @@ import { createSseParser, frameJson } from "../../services/translate/sse/parse"
 import { classifySdkFailure, type SdkFailure } from "../claude-sdk/errors"
 import { FORCED_TOOL_UNMET } from "../claude-sdk/failure-rules-request"
 import { createMessageFold } from "../claude-sdk/render/message"
+import { refusedModelClaim } from "./quota"
 
 const frame = z.looseObject({
   type: z.string(),
@@ -29,11 +30,25 @@ export class FastForcedToolUnmet extends Error {
   }
 }
 
-/** Only a non-streaming caller pays for a fold. Streaming callers receive the upstream body. */
+/** An `error` frame the upstream sent in place of the rest of an answer it had begun with a `200`. */
+export interface FastStreamError {
+  /** The HTTP status Anthropic answers the same error with when it refuses before the stream. */
+  readonly status: number
+  readonly body: string
+}
+
+/**
+ * Only a non-streaming caller pays for a fold. Streaming callers receive the upstream body.
+ *
+ * `onStreamError` answers an upstream `error` frame: no byte has reached this client, so it is the
+ * refusal the same error would have been as a status — an `overloaded_error` read as a generic `502`
+ * struck the breaker of an Account that was never at fault.
+ */
 export async function collectFastResponse(
   response: Response,
   signal: AbortSignal,
   requireToolUse = false,
+  onStreamError?: (error: FastStreamError) => Response,
 ): Promise<Response> {
   const reader = response.body?.getReader()
   if (!reader) return safeError(502, "Claude returned no response body")
@@ -42,6 +57,7 @@ export async function collectFastResponse(
   let stopped = false
   let started = false
   let invalid = false
+  let streamError: FastStreamError | null = null
   const seenBlocks = new Set<number>()
   const openBlocks = new Set<number>()
   const consume = (frames: ReturnType<typeof parser.push>) => {
@@ -53,6 +69,10 @@ export async function collectFastResponse(
       }
       const data = parsed.data
       if (data.type === "ping") continue
+      if (data.type === "error") {
+        streamError ??= readStreamError(data)
+        continue
+      }
       if (stopped) invalid = true
       if (data.type === "message_start") {
         if (started || !message.safeParse(data.message).success) invalid = true
@@ -92,11 +112,37 @@ export async function collectFastResponse(
     await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
-  if (invalid || !started || !stopped || openBlocks.size > 0 || fold.failed())
+  if (streamError !== null && !stopped && onStreamError !== undefined)
+    return onStreamError(streamError)
+  if (streamError !== null || invalid || !started || !stopped || openBlocks.size > 0)
     return safeError(502, "Claude ended the response before completion")
   const body = fold.body()
   if (requireToolUse && !hasToolUse(body.content)) throw new FastForcedToolUnmet()
   return Response.json(body)
+}
+
+/**
+ * Anthropic's error types and the status each is documented to answer with. An unlisted one is the
+ * `500` its own `api_error` is.
+ */
+const STREAM_ERROR_STATUS: Readonly<Record<string, number>> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  billing_error: 402,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429,
+  api_error: 500,
+  timeout_error: 504,
+  overloaded_error: 529,
+}
+
+function readStreamError(data: Record<string, unknown>): FastStreamError {
+  const type: unknown =
+    typeof data.error === "object" && data.error !== null ? Reflect.get(data.error, "type") : null
+  const status = typeof type === "string" ? STREAM_ERROR_STATUS[type] : undefined
+  return { status: status ?? 500, body: JSON.stringify(data) }
 }
 
 function hasToolUse(content: unknown): boolean {
@@ -108,21 +154,6 @@ function hasToolUse(content: unknown): boolean {
   )
 }
 
-/**
- * Provider error prose can echo credentials. Classify privately and expose only router-authored
- * text. The classification — whose `message` is the upstream's words with the selected Account's
- * own token and every pattern-shaped credential redacted — rides beside the Response
- * ({@link fastFailureOf}) so the attempt log can quote it (`dataplane/attempt-log.ts`) while the
- * client body stays the router's sentence.
- */
-export async function sanitizeFastError(
-  response: Response,
-  maxBytes: number,
-  secrets: readonly string[] = [],
-): Promise<Response> {
-  return fastErrorResponse(response, await readFastErrorText(response, maxBytes, secrets))
-}
-
 /** The upstream's error prose, bounded and with the Account's token and credential shapes redacted. */
 export async function readFastErrorText(
   response: Response,
@@ -132,14 +163,47 @@ export async function readFastErrorText(
   return sanitizeErrorBody(await readErrorBody(response, maxBytes), secrets)
 }
 
-/** The client-safe Response for an already-read, already-redacted upstream error. */
-export function fastErrorResponse(response: Response, text: string): Response {
-  const failure = classifySdkFailure({ message: text, apiErrorStatus: response.status })
-  const status =
-    failure.classification.kind === "unknown" ? response.status : failure.classification.status
-  const safe = safeError(status, failure.clientMessage, response.headers.get("retry-after"))
-  FAST_FAILURES.set(safe, failure)
-  return safe
+/**
+ * An already-read, already-redacted upstream error: the private classification, whose `message` is
+ * the upstream's scrubbed words for the attempt log, and the client-safe Response carrying only
+ * router-authored text — provider error prose can echo credentials. The classification travels by
+ * `SdkInvocation.onRefusal`, never on the Response.
+ */
+export function fastRefusal(
+  upstream: { readonly status: number; readonly headers: Headers },
+  text: string,
+): { readonly failure: SdkFailure; readonly response: Response } {
+  const read = classifySdkFailure({ message: text, apiErrorStatus: upstream.status })
+  const failure = withModelScope(read, upstream.headers)
+  const { classification } = failure
+  const status = classification.kind === "unknown" ? upstream.status : failure.classification.status
+  return {
+    failure,
+    response: safeError(status, failure.clientMessage, upstream.headers.get("retry-after")),
+  }
+}
+
+/** A spent model-family window holds that model on this Account, never the Account. */
+function withModelScope(failure: SdkFailure, headers: Headers): SdkFailure {
+  const { classification } = failure
+  if (classification.kind !== "rate-limited" || classification.requestAttributable === true)
+    return failure
+  const refused = refusedModelClaim(headers)
+  if (refused === null) return failure
+  const reset = refused.resetsAt
+  return {
+    ...failure,
+    classification: {
+      ...classification,
+      modelScoped: true,
+      rateLimit: {
+        limited: false,
+        resetSource: reset === undefined ? "unknown" : "provider-reported",
+        windows: [],
+        ...(reset === undefined ? {} : { resetsAt: reset }),
+      },
+    },
+  }
 }
 
 /**
@@ -154,16 +218,6 @@ export function isNativeSchemaRejection(status: number, text: string): boolean {
 const NATIVE_SCHEMA_REJECTION =
   /schema is too complex|grammar compilation|output_config\.format(?:\.schema)?\b/i
 
-/**
- * Keyed weakly by the sanitized Response the invoker returned, so nothing outlives the attempt that
- * produced it — the pattern of `errors/router-object.ts`'s request facts. The `SdkInvoker` contract
- * stays a plain `Response`; only the attempt seam (`dataplane/sdk-attempt-response.ts`) reads this.
- */
-const FAST_FAILURES = new WeakMap<Response, SdkFailure>()
-
-export function fastFailureOf(response: Response): SdkFailure | undefined {
-  return FAST_FAILURES.get(response)
-}
 function safeError(status: number, message: string, retryAfter?: string | null): Response {
   return Response.json(
     { type: "error", error: { type: "api_error", message } },

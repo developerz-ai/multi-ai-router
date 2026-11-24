@@ -1,10 +1,22 @@
+import { accountLevelReading } from "../../providers"
 import type { AttemptOutcome } from "./attempt"
+import type { attemptQuota } from "./attempt-quota"
 import type { ChainContext } from "./chain"
 import { relaySuccess, type SuccessClock } from "./chain-relay"
 import type { ServableCandidate } from "./plan"
 import { decidedTranslation } from "./relay-translate-held"
 import { droppedParamsHeaders, servedByHeaders, withHeaders } from "./router-headers"
 import { withSessionRestart } from "./session-restart"
+
+/** Whether this answer arrived rate limited: a live SDK observer says so late, an HTTP head at once. */
+export function rateEvidence(
+  quota: ReturnType<typeof attemptQuota> | undefined,
+  outcome: Extract<AttemptOutcome, { kind: "success" }>,
+): Pick<SuccessClock, "rateLimited" | "isRateLimited" | "onSettled"> {
+  const limited = outcome.rateLimit?.limited ?? false
+  if (quota === undefined) return { rateLimited: limited }
+  return { isRateLimited: () => quota.limited() || limited, onSettled: quota.close }
+}
 
 /** Header evidence, the served-by headers and session restart framing precede body settlement. */
 export function finishSuccessfulAttempt(
@@ -19,7 +31,11 @@ export function finishSuccessfulAttempt(
   if (servable.kind !== "sdk")
     ctx.runtime.health.applyRateLimit(
       servable.account.id,
-      outcome.rateLimit,
+      // A limit on this model alone is not the account's (`rate-limit/scope.ts`).
+      accountLevelReading(outcome.rateLimit, {
+        driver: servable.driver,
+        upstreamModel: servable.upstreamModel,
+      }),
       ctx.runtime.clock.now(),
       at.observation,
     )

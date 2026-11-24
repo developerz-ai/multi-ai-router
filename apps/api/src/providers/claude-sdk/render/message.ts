@@ -123,6 +123,13 @@ function applyDelta(pending: PendingBlock, delta: Record<string, unknown>): void
         pending.block.thinking = text(pending.block.thinking) + delta.thinking
       }
       break
+    case "citations_delta":
+      // The one delta that appends to a list under another name: the block carries `citations`.
+      if (delta.citation !== undefined) {
+        const held = pending.block.citations
+        pending.block.citations = [...(Array.isArray(held) ? held : []), delta.citation]
+      }
+      break
     case "signature_delta":
       if (typeof delta.signature === "string") pending.block.signature = delta.signature
       break

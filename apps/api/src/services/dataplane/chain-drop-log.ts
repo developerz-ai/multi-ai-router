@@ -10,6 +10,26 @@ export type CandidateDropReason =
   | "recovery-admission-refused"
   | "preparation-failed"
 
+/** Drops already named for a request, so one waiting on a permit says so once, not once per poll. */
+const named = new WeakMap<object, Set<string>>()
+
+/**
+ * A candidate whose recovery permit is not here. One `info` line per request and account: a request
+ * re-selecting every 250 ms wrote 20 identical ones (prod 2026-11-23, 185 lines in five hours).
+ */
+export function logAwaitingPermit(
+  log: Logger | undefined,
+  request: object,
+  accountId: string,
+  attempt: number,
+): void {
+  const seen = named.get(request) ?? new Set<string>()
+  if (seen.has(accountId)) return
+  seen.add(accountId)
+  named.set(request, seen)
+  logCandidateDropped(log, accountId, attempt, "recovery-admission-refused")
+}
+
 /** One info line per dropped candidate. Fixed vocabulary only — never an error message. */
 export function logCandidateDropped(
   log: Logger | undefined,

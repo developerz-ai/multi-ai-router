@@ -16,6 +16,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
   let usageInvalid = false
   let usageStated = false
   let evidenceUnavailable = false
+  let unavailableReason: ResponseObservationFacts["unavailableReason"] = null
   let terminal: ResponseObservationFacts["terminal"] = "none"
   let failure: ResponseObservationFacts["failure"] = null
   let incompleteReason: ResponseObservationFacts["incompleteReason"] = null
@@ -37,6 +38,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
       usageInvalid,
       usageStated,
       evidenceUnavailable,
+      unavailableReason,
       terminal,
       failure: failure === null ? null : Object.freeze({ ...failure }),
       incompleteReason,
@@ -48,9 +50,10 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
     contentType: spec.contentType,
     maximumBytes: spec.maximumObservationBytes,
     skip: responseFrameSkip(spec),
-    unavailable: () => {
+    unavailable: (reason) => {
       changed()
       evidenceUnavailable = true
+      unavailableReason ??= reason
     },
     done: () => {
       changed()

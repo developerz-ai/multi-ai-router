@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { ownedInvoker } from "../../src/composition/owned-invoker"
 import { createLogger } from "../../src/logging/logger"
 import { createFastInvoker } from "../../src/providers/claude-fast/invoker"
-import { fastErrorResponse } from "../../src/providers/claude-fast/response"
+import { fastRefusal } from "../../src/providers/claude-fast/response"
 import { createSdkConcurrency } from "../../src/providers/claude-sdk/concurrency"
-import { EXTRA_USAGE_GATED } from "../../src/providers/claude-sdk/failure-rules-vocabulary"
 import { errorResponseFailure } from "../../src/services/dataplane/sdk-attempt-response"
 import { subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, harness, post, settle } from "./harness"
@@ -15,6 +15,10 @@ import { bearer, harness, post, settle } from "./harness"
  * refusal `requestAttributable` (`failure-rules-quota.ts`) and the breaker skips it, but the fast
  * transport dropped the flag on its way to the failure (`sdk-attempt-response.ts`), so the breaker
  * saw a bare `429` and tripped a cooldown plus a recovery probe.
+ *
+ * Prod 2026-11-23: 2.70.1's fix was void. The flag rode a `WeakMap` keyed by the Response and
+ * `ownedInvoker` (2.75.0) answers with another one, so these tests compose the transport exactly as
+ * `composition/request-services.ts` does. 795 conversations drew the refusal seven times each.
  */
 
 const GATED =
@@ -27,7 +31,19 @@ const anthropicError = (status: number, type: string, message: string) =>
 
 function fastRouter(upstream: () => Response) {
   const lines: Record<string, unknown>[] = []
-  const invokeSdk = createFastInvoker({
+  const signal = new AbortController().signal
+  const lease = {
+    handle: (accountId: string) => ({
+      accountId,
+      owner: "owner",
+      generation: 1n,
+      signal,
+      valid: () => true,
+      assert() {},
+      remainingMs: () => 60_000,
+    }),
+  }
+  const fast = createFastInvoker({
     concurrency: createSdkConcurrency({ global: 2, perAccount: 2 }),
     errorMaxBytes: 4096,
     credential: async () => ({
@@ -40,6 +56,7 @@ function fastRouter(upstream: () => Response) {
     sdk: async () => new Response("unexpected SDK fallback", { status: 500 }),
     fetch: async () => upstream(),
   })
+  const invokeSdk = ownedInvoker(lease, fast)
   const h = harness({
     accounts: [subscriptionAccount("sub")],
     responses: [],
@@ -64,15 +81,18 @@ const messages = JSON.stringify({
 describe("a fast-transport extra-usage-gated refusal", () => {
   for (const status of [429, 400]) {
     test(`a ${status} carries requestAttributable and its signal onto the failure`, async () => {
-      const safe = fastErrorResponse(anthropicError(status, "invalid_request_error", GATED), GATED)
-      const outcome = await errorResponseFailure(safe, null)
+      const { response, failure } = fastRefusal(
+        anthropicError(status, "invalid_request_error", GATED),
+        GATED,
+      )
+      const outcome = await errorResponseFailure(response, null, failure)
       if (outcome.kind !== "failure") throw new Error(`expected a failure, got ${outcome.kind}`)
       expect(outcome.failure.requestAttributable).toBe(true)
-      expect(outcome.failure).not.toHaveProperty("permanentForRequest")
+      expect(outcome.failure.permanentForRequest).toBe(true)
       expect(outcome.upstreamSignal).toBe("claude-sdk:extra-usage-gated")
     })
 
-    test(`a ${status} leaves the account active and the client answer unchanged`, async () => {
+    test(`a ${status} leaves the account active and ends as the request wall`, async () => {
       const h = fastRouter(() => {
         const refused = anthropicError(status, "invalid_request_error", GATED)
         refused.headers.set("retry-after", "17")
@@ -80,13 +100,18 @@ describe("a fast-transport extra-usage-gated refusal", () => {
       })
       const response = await h.app.request("/v1/messages", post(messages, bearer()))
       await settle()
-      expect(response.status).toBe(429)
-      // Still the fast transport's status-shaped relay, Anthropic's wait included.
-      expect(response.headers.get("retry-after")).toBe("17")
-      expect(await response.json()).toEqual({
+      // The request wall, not a 429 the client's retry policy repeats: waiting cannot clear it.
+      expect(response.status).toBe(400)
+      expect(response.headers.get("retry-after")).toBeNull()
+      const body: unknown = await response.json()
+      expect(body).toMatchObject({
         type: "error",
-        error: { type: "api_error", message: EXTRA_USAGE_GATED },
+        error: {
+          type: "invalid_request_error",
+          router: { wall: "request", retryable: false, retry_after_s: null },
+        },
       })
+      expect(JSON.stringify(body)).not.toContain("Third-party apps")
       expect(h.health.stateOf("sub").breaker.status).toBe("active")
       const line = h.lines.find((entry) => entry.msg === "upstream attempt failed")
       expect(line?.signal).toBe("claude-sdk:extra-usage-gated")

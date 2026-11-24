@@ -42,6 +42,8 @@ export interface SdkRule {
   readonly requestAttributable?: true
   /** Copied onto the classification: see `FailureClassification.permanentForRequest`. */
   readonly permanentForRequest?: true
+  /** Copied onto the classification: see `FailureClassification.modelScoped`. */
+  readonly modelScoped?: true
 }
 
 export type Matcher = (text: Haystack) => boolean
@@ -88,11 +90,14 @@ export const WINDOW_SPENT = "the account's Claude subscription window is spent"
 /**
  * Extra Usage, and the one client-facing sentence about it. Router-authored like every other
  * `clientMessage`, and deliberately says nothing about *which* account, how many were tried, or how
- * long any of them is cooling down — the rotation is the router's business, and a caller only ever
- * hears this when nothing in the pool could serve. What it does name is the remedy, because that is
- * the one thing a caller (or the operator reading their report) can act on.
+ * long any of them is cooling down — the rotation is the router's business. What it does name is
+ * what a caller can act on: it is this request, resending it unchanged is refused again, and what
+ * would change that.
  */
 export const EXTRA_USAGE_GATED =
+  "Claude metered this request against Extra Usage instead of the subscription's plan, and Extra Usage is spent: the request's own content provokes it, so resending it unchanged is refused again — change the request or the model, or add Extra Usage at claude.ai/settings/usage"
+/** The same, where the account's own Extra Usage ran out and the request is not what provoked it. */
+export const EXTRA_USAGE_SPENT =
   "no Claude subscription capacity is available right now — this request was metered against Extra Usage, which is spent; add more at claude.ai/settings/usage"
 export const NEEDS_REAUTH = "the account's Claude subscription needs re-authenticating"
 export const CREDITS_SPENT =

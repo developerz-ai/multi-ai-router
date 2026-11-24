@@ -7,6 +7,13 @@ const DATA_FIELD = [100, 97, 116, 97, 58] // "data:"
 const encoder = new TextEncoder()
 
 /**
+ * Why a frame's evidence was lost: bytes that are not UTF-8, a frame that is not JSON, an over-cap
+ * frame the scanner could not close, a stream cut inside its last frame, or a body that is neither
+ * SSE nor JSON. Closed vocabulary, so it can go on a log line as is.
+ */
+export type ObservationLoss = "decode" | "json" | "salvage" | "trailing" | "content-type"
+
+/**
  * Observes complete bounded frames independently of the already-forwarded byte stream.
  *
  * This runs on the shared event loop for every relayed chunk, so it never walks bytes in JS where a
@@ -19,7 +26,8 @@ export function createResponseFraming(input: {
   readonly maximumBytes: number
   readonly payload: (body: unknown, event: string | undefined) => void
   readonly done: () => void
-  readonly unavailable: () => void
+  /** Evidence was lost, and to what: the first reason is the one worth a log field. */
+  readonly unavailable: (reason: ObservationLoss) => void
   /**
    * Frames the caller has no use for, decided before their bytes are decoded (by `event:` name)
    * or parsed (by the decoded `data` text). A skipped frame is counted, never held or reported.
@@ -50,17 +58,17 @@ export function createResponseFraming(input: {
   let salvageField: "pending" | "data" | "skip" = "pending"
   let salvageDataSeen = false
   let salvageSpace = false
-  const parse = (text: string, name?: string) => {
+  const parse = (text: string, name?: string, loss: ObservationLoss = "json") => {
     if (text === "[DONE]") {
       if (sse) input.done()
-      else input.unavailable()
+      else input.unavailable(loss)
       return
     }
     if (sse && input.skip?.data?.(text) === true) return
     try {
       input.payload(JSON.parse(text), name)
     } catch {
-      input.unavailable()
+      input.unavailable(loss)
     }
   }
   const reset = () => {
@@ -80,7 +88,7 @@ export function createResponseFraming(input: {
   }
   const settleSalvage = (scanner: ResponseSalvage) => {
     const body = scanner.finish()
-    if (body === null) input.unavailable()
+    if (body === null) input.unavailable("salvage")
     else input.payload(body, event)
   }
   /** SSE field handling while salvaging: only `data:` values reach the scanner, joined by LF. */
@@ -181,7 +189,7 @@ export function createResponseFraming(input: {
     try {
       text = decoder.decode(takeLine())
     } catch {
-      input.unavailable()
+      input.unavailable("decode")
       dropping = true
       return
     }
@@ -223,11 +231,30 @@ export function createResponseFraming(input: {
       }
     }
   }
+  /**
+   * The upstream closed on a frame it never ended with a blank line. That is still a frame: the
+   * translator's parser dispatches it (`relay-translate.ts`, `parser.flush()`), so a client can be
+   * handed a completion whose usage this observer threw away. Read here the same way; only a frame
+   * that is not whole JSON — a stream cut mid-frame — is lost evidence.
+   */
+  const finishSse = () => {
+    if (salvage !== null) {
+      settleSalvage(salvage)
+      return
+    }
+    const tail = partBytes > 0
+    if (tail) consumeLine()
+    // Completing the line can itself tip the frame over the bound and into the scanner.
+    if (salvage !== null) settleSalvage(salvage)
+    else if (dropping) input.unavailable("decode")
+    else if (!skipping && data.length > 0) parse(data.join("\n"), event, "trailing")
+    else if (tail && !skipping) input.unavailable("trailing")
+  }
   return {
     observe(chunk: Uint8Array) {
       if (ended) return
       if (!sse && !json) {
-        input.unavailable()
+        input.unavailable("content-type")
         return
       }
       if (sse) observeSse(chunk)
@@ -242,11 +269,12 @@ export function createResponseFraming(input: {
         try {
           text = decoder.decode(takeLine())
         } catch {
-          input.unavailable()
+          input.unavailable("decode")
         }
         if (text !== undefined) parse(text)
-      } else if (!sse && !json) input.unavailable()
-      else if (partBytes > 0 || data.length > 0 || dropping || salvage !== null) input.unavailable()
+      } else if (!sse && !json) input.unavailable("content-type")
+      else if (sse) finishSse()
+      else if (dropping) input.unavailable("decode")
       parts = []
       partBytes = 0
       reset()

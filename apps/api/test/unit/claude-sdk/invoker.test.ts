@@ -501,16 +501,17 @@ describe("the subprocess slot", () => {
 
   test("a caller aborted while queued throws the signal's own reason and spawns nothing", async () => {
     const concurrency = createSdkConcurrency({ global: 1, perAccount: 1 })
+    const hold = Promise.withResolvers<void>()
     const spy = spyQuery(() => ({
       async *[Symbol.asyncIterator]() {
-        // Never ends on its own: the first caller holds the only slot for the whole test.
-        await new Promise(() => {})
+        // The first caller holds the only slot until the assertions are done.
+        await hold.promise
         yield undefined
       },
     }))
 
     const { invoke } = invoker(spy, concurrency)
-    void invoke(
+    const first = invoke(
       invocation({ body: body({ messages: [{ role: "user", content: "hello" }], stream: true }) }),
     )
     await Promise.resolve()
@@ -521,6 +522,11 @@ describe("the subprocess slot", () => {
 
     await expect(queued).rejects.toMatchObject({ name: "TimeoutError" })
     expect(spy.options).toHaveLength(1)
+
+    // Settled here: abandoned, it met the 90 s idle guard in whichever file was running by then.
+    hold.resolve()
+    await (await first).text()
+    expect(concurrency.inFlight).toBe(0)
   })
 
   test("two accounts invoked concurrently never share a directory or a slot", async () => {

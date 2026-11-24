@@ -2,6 +2,13 @@ import type { RejectedCandidate } from "../routing"
 import { resolveModel } from "../routing"
 import type { RecoveryAccess } from "./recovery-access"
 
+/** The only refusals a recovery can clear; most of a fleet is refused as `model-unsupported`. */
+const HINTED: ReadonlySet<RejectedCandidate["reason"]> = new Set([
+  "probe-in-flight",
+  "cooling-down",
+  "quota-window-spent",
+])
+
 /** Scope was already intersected; unsupported models never create a recovery request. */
 export function hintRecoveryRejections(
   rejected: readonly RejectedCandidate[],
@@ -12,7 +19,7 @@ export function hintRecoveryRejections(
   if (recovery === undefined || rejected.length === 0) return
   const seen = new Set<string>()
   for (const refusal of rejected) {
-    if (seen.has(refusal.accountId)) continue
+    if (!HINTED.has(refusal.reason) || seen.has(refusal.accountId)) continue
     seen.add(refusal.accountId)
     const account = recovery.currentSnapshot(refusal.accountId)
     if (account === undefined || !resolveModel(account, model).supported) continue

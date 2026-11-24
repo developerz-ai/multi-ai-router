@@ -22,6 +22,11 @@ const EVENT_TYPE = /^[a-z0-9_.]{1,64}$/
  */
 export function createEventTally() {
   const counts = new Map<string, number>()
+  const count = (name: string): void => {
+    let type = EVENT_TYPE.test(name) ? name : "other"
+    if (!counts.has(type) && counts.size >= MAX_EVENT_TYPES) type = "other"
+    counts.set(type, (counts.get(type) ?? 0) + 1)
+  }
   return {
     note(payload: unknown, event: string | undefined): void {
       const named =
@@ -29,12 +34,26 @@ export function createEventTally() {
         (typeof payload === "object" && payload !== null && "type" in payload
           ? payload.type
           : undefined)
-      let type = typeof named === "string" && EVENT_TYPE.test(named) ? named : "other"
-      if (!counts.has(type) && counts.size >= MAX_EVENT_TYPES) type = "other"
-      counts.set(type, (counts.get(type) ?? 0) + 1)
+      count(typeof named === "string" ? named : "")
+      // What a response is made of, by item kind: the evidence behind an unrecognised stop reason.
+      const item = itemType(payload)
+      if (item !== undefined) count(`item.${item}`)
     },
     counts: (): Readonly<Record<string, number>> => Object.fromEntries(counts),
   }
+}
+
+/** The `type` of the output item a Responses frame announces. */
+function itemType(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined
+  if (!("type" in payload) || payload.type !== "response.output_item.added") return undefined
+  const item = "item" in payload ? payload.item : undefined
+  return typeof item === "object" &&
+    item !== null &&
+    "type" in item &&
+    typeof item.type === "string"
+    ? item.type
+    : undefined
 }
 
 export type EventTally = ReturnType<typeof createEventTally>

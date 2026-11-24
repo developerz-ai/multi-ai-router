@@ -50,6 +50,7 @@ export interface HealthStore {
   acknowledgeBreaker(accountId: string, breaker: BreakerState, row: AccountBreakerRow): void
   acceptsObservation(accountId: string, observation: HealthObservation): boolean
   captureAttempt(accountId: string, facts: HealthAccountFacts): HealthObservation
+  followAttempt?(accountId: string, observation: HealthObservation): HealthObservation
   beginAttempt(accountId: string): void
   endAttempt(accountId: string, tokens?: number): void
   recordSuccess(accountId: string, observation?: HealthObservation): void
@@ -148,6 +149,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
     reconcile: durability.reconcile,
     captureAttempt: durability.captureAttempt,
     acceptsObservation: observations.accepts,
+    followAttempt: observations.follow,
 
     beginAttempt(accountId) {
       write(accountId, { inFlight: read(accountId).inFlight + 1 })

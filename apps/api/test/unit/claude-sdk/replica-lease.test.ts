@@ -157,14 +157,45 @@ describe("replica-lease conservative local authority", () => {
     expect(handle?.valid()).toBe(false)
     expect((await f.manager.ensure("a"))?.generation).toBe(2n)
   })
-  test("database errors and backward clocks fail closed", async () => {
-    for (const failure of ["database", "clock"]) {
+  test("a failed renewal keeps the earned deadline, and reaching it fails closed", async () => {
+    const f = fixture(200)
+    const handle = await f.manager.ensure("a")
+    f.renewal(async () => {
+      throw new Error("database unavailable")
+    })
+    for (const at of [100, 200, 799]) {
+      f.clock(at)
+      await f.manager.renew()
+      expect(handle?.valid()).toBe(true)
+      expect(handle?.signal.aborted).toBe(false)
+    }
+    // Never extended by the failures: the acquire-time margin still ends it.
+    f.clock(800)
+    await f.manager.renew()
+    expect(handle?.valid()).toBe(false)
+    expect(handle?.signal.aborted).toBe(true)
+    expect(() => handle?.assert()).toThrow("account replica ownership unavailable")
+  })
+  test("a renewal that succeeds after a failed one extends the same generation", async () => {
+    const f = fixture(200)
+    const handle = await f.manager.ensure("a")
+    f.renewal(async () => {
+      throw new Error("connection reset")
+    })
+    f.clock(100)
+    await f.manager.renew()
+    f.renewal(async () => true)
+    f.clock(200)
+    await f.manager.renew()
+    expect(handle?.remainingMs()).toBe(800)
+    expect(f.calls).toEqual(["acquire:a", "attach", "ready"])
+  })
+  test("a refused renewal and a backward clock fail closed at once", async () => {
+    for (const failure of ["refused", "clock"]) {
       const f = fixture()
       const handle = await f.manager.ensure("a")
-      if (failure === "database") {
-        f.renewal(async () => {
-          throw new Error("database unavailable")
-        })
+      if (failure === "refused") {
+        f.renewal(async () => false)
         await f.manager.renew()
       } else {
         f.clock(-1)
@@ -247,4 +278,69 @@ describe("replica-lease conservative local authority", () => {
     expect(drained).toBe(true)
     expect(f.calls).not.toContain("ready")
   })
+})
+
+test("authority ends at the deadline even when nothing asks", async () => {
+  // A heartbeat that throws or hangs used to leave the signal open until a later beat looked.
+  for (const heartbeat of [
+    () => Promise.reject(new Error("connection lost")),
+    () => new Promise<boolean>(() => {}),
+  ]) {
+    const manager = createReplicaLeaseManager(
+      {
+        acquire: async (accountId, owner) => ({
+          accountId,
+          owner,
+          generation: 1n,
+          expiresAt: new Date(),
+          storageIdentity: null,
+          state: "attaching",
+        }),
+        heartbeat,
+        ready: async () => true,
+        drain: async () => true,
+        release: async () => true,
+      },
+      { identity: "volume", attach: async () => {} },
+      { ttlMs: 300, heartbeatMs: 80, safetyMarginMs: 50, batchSize: 1 },
+    )
+    const started = performance.now()
+    const handle = await manager.ensure("a")
+    if (handle === undefined) throw new Error("not acquired")
+    manager.start()
+    const aborted = new Promise<number>((resolve) =>
+      handle.signal.addEventListener("abort", () => resolve(performance.now() - started)),
+    )
+    const at = await Promise.race([aborted, Bun.sleep(1_000).then(() => Number.NaN)])
+    expect(at).toBeGreaterThanOrEqual(245)
+    // Before the row's own TTL, which is when another replica may take it.
+    expect(at).toBeLessThan(300)
+  }
+})
+
+test("a renewal moves the deadline the signal ends at", async () => {
+  const manager = createReplicaLeaseManager(
+    {
+      acquire: async (accountId, owner) => ({
+        accountId,
+        owner,
+        generation: 1n,
+        expiresAt: new Date(),
+        storageIdentity: null,
+        state: "attaching",
+      }),
+      heartbeat: async () => true,
+      ready: async () => true,
+      drain: async () => true,
+      release: async () => true,
+    },
+    { identity: "volume", attach: async () => {} },
+    { ttlMs: 200, heartbeatMs: 40, safetyMarginMs: 20, batchSize: 1 },
+  )
+  const handle = await manager.ensure("a")
+  manager.start()
+  await Bun.sleep(500)
+  expect(handle?.signal.aborted).toBe(false)
+  await manager.stop(async () => {})
+  expect(handle?.signal.aborted).toBe(true)
 })

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Dialect } from "@multi-ai-router/core"
-import { endsWithRouterError } from "../../../src/services/dataplane/relay-stream-end"
+import { relayResponse } from "../../../src/services/dataplane/relay"
+import { routerErrorEnding } from "../../../src/services/dataplane/relay-stream-end"
 
 /**
  * Plan 101, 13.5: a stream that breaks after its first byte ends with one router error event whose
@@ -24,12 +25,9 @@ function breaking(): Response {
 }
 
 async function lastData(ingress: Dialect): Promise<Record<string, unknown>> {
-  const response = endsWithRouterError(
-    breaking(),
-    ingress,
-    { requestId: "req-1", attempt: 1, accountId: "acct-1" },
-    undefined,
-  )
+  const facts = { requestId: "req-1", attempt: 1, accountId: "acct-1" }
+  const ending = routerErrorEnding(ingress, facts, undefined)
+  const response = relayResponse(breaking(), {}, undefined, ending)
   const data = (await response.text())
     .split("\n")
     .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]" && line !== "data: {}")

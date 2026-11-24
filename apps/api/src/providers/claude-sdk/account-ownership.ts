@@ -184,7 +184,8 @@ export function createAccountCliOwnership(
     },
     isRevoked: (id) => revoked.has(id) || failedRetirements.has(id),
     async revokeDeletedAccount({ id, configDir }) {
-      config.generation?.(id).assert()
+      // No directory, no replica lease: asserting one failed the delete of an HTTP Account.
+      if (configDir !== null) config.generation?.(id).assert()
       validate(id, configDir)
       // Before the operation: a revoke that fails half-way still must not keep serving a cache.
       revoked.add(id)
@@ -193,9 +194,9 @@ export function createAccountCliOwnership(
         throw new Error("credential directory revocation unavailable")
     },
     async cleanupDeletedAccount({ id, configDir }) {
+      if (configDir === null) return "not_applicable"
       config.generation?.(id).assert()
       validate(id, configDir)
-      if (configDir === null) return "not_applicable"
       const result = await operation(config, "cleanup", id, [
         String(config.cleanupMaximumEntries),
         String(config.cleanupMaximumDepth),

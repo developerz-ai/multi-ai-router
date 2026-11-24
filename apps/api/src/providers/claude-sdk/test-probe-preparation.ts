@@ -45,19 +45,40 @@ export async function prepareSdkProbe(
       },
     }
   }
+  const freshness = deps.freshness ?? ALWAYS_FRESH
   let claim: CredentialRefreshClaim
   try {
-    claim = await (deps.freshness ?? ALWAYS_FRESH).ensureFresh(input.accountId, input.signal)
+    claim = await freshness.ensureFresh(input.accountId, input.signal)
   } catch (error) {
     if (background) throw new UpstreamAdmissionRefused("SDK probe preparation unavailable")
     throw error
   }
+  let slot: SdkSlot
   try {
-    const slot = await deps.concurrency.acquire(input.accountId, input.signal)
-    return { ok: true, path: resolution.path, slot, releaseRefreshClaim: claim.release }
+    slot = await deps.concurrency.acquire(input.accountId, input.signal)
   } catch {
     claim.release()
     if (background) throw new UpstreamAdmissionRefused("SDK probe preparation unavailable")
     return { ok: false, result: { ok: false, message: deps.ceilingMessage, rateLimitInfos: [] } }
+  }
+  // Re-asked with the slot in hand, as a client's turn does (`turn-admission.ts`): a token warm when
+  // this probe queued can be inside the CLI's refresh lead by the time it spawns, and spawning then
+  // without the window is a second spender of a rotating refresh token.
+  try {
+    const rechecked = await freshness.ensureFresh(input.accountId, input.signal, claim)
+    return {
+      ok: true,
+      path: resolution.path,
+      slot,
+      releaseRefreshClaim: () => {
+        rechecked.release()
+        claim.release()
+      },
+    }
+  } catch (error) {
+    slot.release()
+    claim.release()
+    if (background) throw new UpstreamAdmissionRefused("SDK probe preparation unavailable")
+    throw error
   }
 }

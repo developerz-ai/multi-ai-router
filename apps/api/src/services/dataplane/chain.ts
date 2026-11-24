@@ -4,10 +4,7 @@ import {
   type Candidate,
   type FailureKind,
   inPlaceReason,
-  markStreamed,
   NO_ATTEMPTS,
-  noteOverload,
-  noteRequestAttributable,
   planNextAttempt,
   recordAttempt,
 } from "../routing"
@@ -23,14 +20,19 @@ import {
 } from "./chain-cancellation"
 import { capacityRetryAfterSeconds } from "./chain-capacity"
 import type { ChainContext } from "./chain-context"
-import { logCandidateDropped, logPreparationThrew, logUnstartedDrop } from "./chain-drop-log"
+import {
+  logAwaitingPermit,
+  logCandidateDropped,
+  logPreparationThrew,
+  logUnstartedDrop,
+} from "./chain-drop-log"
 import { type ChainFailure, foldChainFailure, routerFailure } from "./chain-error"
-import { finishFailedAttempt } from "./chain-failed-attempt"
+import { finishFailedAttempt, noteFailure } from "./chain-failed-attempt"
 import { finishChain } from "./chain-finish"
 import { invalidPreparation, recordUnrepresentable } from "./chain-preparation"
 import { recordChainFailure } from "./chain-recovery"
 import { createChainRefusals } from "./chain-refusals"
-import { finishSuccessfulAttempt } from "./chain-success"
+import { finishSuccessfulAttempt, rateEvidence } from "./chain-success"
 import { dispatch } from "./dispatch"
 import { forcedToolOn } from "./forced-tool-coercion"
 import { accountHealthFacts } from "./health-observation"
@@ -42,8 +44,7 @@ import { ClientCancelledError } from "./relay-cancellation"
  * The failover chain: dispatch to the head, advance on a retryable failure, stop honestly.
  * **Once any byte has been written to the client, failover is over.** That is enforced by
  * structure, not by a flag someone has to remember to check: the success branch returns the relayed
- * response and never re-enters the loop. `markStreamed` records the same fact for the failover
- * planner, which refuses every retry from that point on.
+ * response and never re-enters the loop.
  *
  * Attempts are bounded, each one a distinct account — except the single in-place replay a stale SDK
  * session earns — and every one writes its own `UsageRecord`, sharing the request's correlation id.
@@ -53,8 +54,7 @@ import { ClientCancelledError } from "./relay-cancellation"
  * answer an account earlier in it already gave.
  *
  * A candidate the breaker offered as a half-open probe is admitted one at a time (`probe.ts`). A
- * refusal drops it from this chain's candidate list — no attempt, no record, no upstream — because
- * another request is already spending the single probe that account earns.
+ * refusal drops it from this chain's list — no attempt, no record — as another request spends it.
  */
 
 export type { ChainContext } from "./chain-context"
@@ -89,7 +89,9 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     }
     // An `overloaded` retry waits out the provider's busy backend first (`routing/failover.ts`).
     if (decision.action === "retry-in-place" && decision.delayMs !== undefined) {
+      const before = runtime.clock.elapsed()
       await pause(decision.delayMs, ctx.request.signal)
+      runtime.onWaited?.(Math.max(0, runtime.clock.elapsed() - before))
       if (ctx.request.signal.aborted) continue
     }
 
@@ -119,6 +121,14 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       decision.candidate,
       runtime.quotaSpentThreshold,
     )
+    // Its start guard would refuse it: drop it before a body or a turn is prepared for nothing.
+    if (recovery?.awaitsPermit?.() === true) {
+      probe.release()
+      refusals.record(accountId)
+      ordered = ordered.filter((candidate) => candidate.account.id !== accountId)
+      logAwaitingPermit(ctx.log, runtime, accountId, decision.attempt)
+      continue
+    }
     progress = recordAttempt(progress, accountId, inPlaceReason(decision))
 
     const attemptStarted = runtime.clock.elapsed()
@@ -138,13 +148,12 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     }
 
     // Conversion is router work; the upstream wait starts only after the body exists.
-    const upstreamStarted = runtime.clock.elapsed()
     const lifetime = attemptLifetime(
       runtime,
       servable,
       decision.attempt,
       at,
-      upstreamStarted,
+      runtime.clock.elapsed(),
       recovery,
       probe.release,
     )
@@ -221,7 +230,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
       recovery?.finish("uncertain")
       lifetime.end()
       probe.release()
-      upstreamMs += runtime.clock.elapsed() - upstreamStarted
+      upstreamMs += runtime.clock.elapsed() - lifetime.opened()
       return cancelledBeforeRelay(runtime, servable, decision.attempt, outcome, {
         ...at,
         upstreamMs,
@@ -229,7 +238,6 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     }
 
     if (outcome.kind === "success") {
-      progress = markStreamed(progress)
       // Relay settlement closes the upstream span after the last byte.
       return finishSuccessfulAttempt(
         ctx,
@@ -238,16 +246,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
         outcome,
         {
           ...at,
-          upstreamStarted,
+          upstreamStarted: lifetime.opened(),
           observation,
           ...forcedToolOn(servable, upstreamBody),
           releaseProbe: probe.release,
-          ...(quota === undefined
-            ? { rateLimited: outcome.rateLimit?.limited ?? false }
-            : {
-                isRateLimited: () => quota.limited() || (outcome.rateLimit?.limited ?? false),
-                onSettled: quota.close,
-              }),
+          ...rateEvidence(quota, outcome),
           ...(recovery === undefined ? {} : { recovery }),
         },
         ctx.bindingRefused ??
@@ -270,12 +273,11 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     lifetime.end()
     // Release only after cooling the account, preventing another immediate probe.
     probe.release()
-    upstreamMs += runtime.clock.elapsed() - upstreamStarted
+    upstreamMs += runtime.clock.elapsed() - lifetime.opened()
 
     lastFailure = outcome.failure
     failureKinds.push(outcome.failure.kind)
-    progress = noteRequestAttributable(progress, outcome.failure)
-    progress = noteOverload(progress, accountId, outcome.failure.kind)
+    progress = noteFailure(progress, servable, outcome.failure)
     held = finishFailedAttempt(
       ctx,
       servable,
@@ -289,12 +291,10 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
   runtime.activeRequest?.release()
   return finishChain(held, lastFailure, refusals.failIfAny, runtime.selectTerminal, {
     requestWall,
-    capacityRetryAfterSeconds: capacityRetryAfterSeconds({
-      kinds: failureKinds,
-      triedAccountIds: progress.attemptedAccountIds,
-      health: runtime.health,
-      now: runtime.clock.now(),
-      unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds,
-    }),
+    capacityRetryAfterSeconds: capacityRetryAfterSeconds(
+      runtime,
+      failureKinds,
+      progress.attemptedAccountIds,
+    ),
   })
 }

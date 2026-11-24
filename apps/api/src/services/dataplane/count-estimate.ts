@@ -69,13 +69,12 @@ interface WalkItem {
 
 /** Characters of a string, counted the way a tokenizer meets them: one code point each. */
 function codePoints(text: string): number {
-  let count = 0
-  const characters = text[Symbol.iterator]()
-  for (let step = characters.next(); !step.done; step = characters.next()) {
-    count += 1
-  }
-  return count
+  // A pair of surrogates is one code point. Counting the low halves is a regex pass over two-byte
+  // text and nothing at all over the Latin-1 text nearly every prompt is.
+  return text.length - (text.match(SURROGATE_PAIR)?.length ?? 0)
 }
+
+const SURROGATE_PAIR = /[\ud800-\udbff][\udc00-\udfff]/g
 
 /**
  * The request's **envelope**: top-level fields that configure the call rather than carry context.

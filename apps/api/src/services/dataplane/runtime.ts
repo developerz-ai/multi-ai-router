@@ -11,6 +11,7 @@ import type { ServableCandidate } from "./plan"
 import type { AttemptRecordInput, AttemptTiming } from "./records"
 import type { RecoveryAccess } from "./recovery-access"
 import type { SdkSessionContext } from "./sdk-attempt"
+import { createSilentHold, type SilentHold } from "./silent-hold"
 import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
 import type { StreamDeadlines } from "./upstream-deadline"
 
@@ -61,11 +62,15 @@ export interface RuntimeInput {
   readonly timeoutMs: number
   /** A streamed HTTP attempt's clocks (`upstream-deadline.ts`). Absent: `timeoutMs` bounds it all. */
   readonly streamDeadlines?: StreamDeadlines
+  /** The same clocks for a streamed Agent-SDK attempt; set when its transport is direct HTTP. */
+  readonly sdkStreamDeadlines?: StreamDeadlines
   /** Binds an upstream's encrypted reasoning to the account that issued it (`crypto/reasoning-seal.ts`). */
   readonly reasoningSealer?: ReasoningSealer
   readonly bodyReadMs?: number
   /** Time spent asleep in the recovery wait so far; read at record time, since it accrues later. */
   readonly recoveryWaitMs?: () => number
+  /** Adds a deliberate wait (an overload pause) to {@link recoveryWaitMs}: asleep is not router work. */
+  readonly onWaited?: (milliseconds: number) => void
   readonly errorMaxBytes?: number
   readonly responseObservationMaxBytes?: number
   /** `UPSTREAM_STREAM_CAP_MIN_SECONDS` in ms (`stream-cap.ts`). Absent: the module default. */
@@ -106,6 +111,8 @@ export type AttemptAttribution = Omit<
 export interface DispatchRuntime extends RuntimeInput {
   /** This request's session identity, assembled once. Undefined when no store is wired. */
   readonly session: SdkSessionContext | undefined
+  /** One per request, so every attempt and every recovery re-run of its chain shares it. */
+  readonly silentHold: SilentHold | undefined
   attribution(attempt: number, servable: ServableCandidate): AttemptAttribution
   /**
    * Router overhead is total router time minus time spent waiting on upstreams.
@@ -145,6 +152,9 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
 
   return {
     ...input,
+
+    silentHold:
+      input.streamDeadlines === undefined ? undefined : createSilentHold(input.streamDeadlines),
 
     session:
       store === undefined || input.sessionKeySource === "unbound"

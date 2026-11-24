@@ -1,6 +1,6 @@
 import { fastProfileState } from "./availability"
 
-// Run against the final image layout, after dependency pruning and COPYs.
+// Run against the final image layout: bundles, the staged CLI and its manifest, no node_modules.
 const expected = process.platform === "linux" && process.arch === "x64"
 const state = fastProfileState(null)
 const available = state === "verified"

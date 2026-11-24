@@ -2,6 +2,7 @@ import { InvalidRequestError } from "@multi-ai-router/core"
 import { z } from "zod"
 import type { DropSink } from "../../services/translate/shared/drops"
 import { scrubSystemPrompt } from "../claude-sdk/scrub"
+import { placeCacheBreakpoints } from "./cache"
 import type { FastCredential } from "./credential"
 import { CLAUDE_FAST_CLI_VERSION, stableUuid, stampIntegrity, versionSuffix } from "./integrity"
 import { HUMAN_IDENTITY, SDK_IDENTITY } from "./profile"
@@ -197,25 +198,14 @@ export function prepareFastRequest(input: {
     ...(input.onDrop === undefined ? {} : { onDrop: input.onDrop }),
   })
   const body: Record<string, unknown> = { ...adaptation.body }
-  if (
-    body.cache_control === undefined &&
-    (WITHOUT_CACHE_CONTROL.has(original) ||
-      !hasCacheControl({ system: outputSystem, messages, tools: body.tools }))
-  ) {
-    const cache = { type: "ephemeral", ttl: "1h" }
-    const identityEntry = outputSystem[1]
-    if (identityEntry) identityEntry.cache_control = cache
-    const lastSystem = outputSystem.at(-1)
-    if (lastSystem && lastSystem.type === "text" && lastSystem.text !== "")
-      lastSystem.cache_control = cache
-    // Native system breakpoints cache the tools prefix too. Do not spend a breakpoint on tools.
-    const last = messages.at(-1)
-    if (last) {
-      if (typeof last.content === "string") last.content = [{ type: "text", text: last.content }]
-      const tail = last.content.at(-1)
-      if (tail && !["thinking", "redacted_thinking"].includes(tail.type)) tail.cache_control = cache
-    }
-  }
+  if (body.cache_control === undefined)
+    placeCacheBreakpoints({
+      system: outputSystem,
+      messages,
+      tools: body.tools,
+      unmarked: WITHOUT_CACHE_CONTROL.has(original),
+      native: nativeText !== null,
+    })
   body.stream = true
   return {
     text: stampIntegrity(body, CLAUDE_FAST_CLI_VERSION),
@@ -231,13 +221,6 @@ export function prepareFastRequest(input: {
   }
 }
 
-function hasCacheControl(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(hasCacheControl)
-  if (value === null || typeof value !== "object") return false
-  return Object.entries(value).some(
-    ([key, nested]) => key === "cache_control" || hasCacheControl(nested),
-  )
-}
 function textOf(value: FastRequest["messages"][number]["content"] | undefined): string {
   if (typeof value === "string") return value
   const text = value?.find(

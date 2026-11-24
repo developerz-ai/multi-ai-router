@@ -1,3 +1,5 @@
+import { removeLines, replaceSpans, type SpanRule } from "./scrub-spans"
+
 /**
  * Harness fingerprints, removed from the client's system prompt on the way into `query()`.
  *
@@ -45,8 +47,13 @@
  * Extra Usage. Global: a prompt carrying two copies is precisely the condition being removed, and
  * leaving the second one standing would leave the `400` standing with it.
  */
-const ENV_PREAMBLE_BLOCK =
-  /\n?Here is some useful information about the environment you are running in:\n<env>[\s\S]*?<\/env>\n?/g
+const ENV_PREAMBLE_BLOCK: SpanRule = {
+  open: "Here is some useful information about the environment you are running in:\n<env>",
+  close: "</env>",
+  tail: "newline",
+  leadingNewline: true,
+  replacement: "\n",
+}
 
 /**
  * opencode's `environment()` builder appends this line. Claude Code never phrases a model that
@@ -62,7 +69,6 @@ const POWERED_BY_LINE = /You are powered by the model named [^\n]*(?:\n|$)/g
  * for the older builds a fleet still runs, and it costs nothing when absent, which is the whole
  * point of the rules being independent.
  */
-const OPENCODE_IDENTITY_LINE = /You are OpenCode, the best coding agent on the planet\.[^\n]*\n+/g
 
 /**
  * A generic stand-in rather than a deletion: the opening line is what anchors the model's role,
@@ -70,14 +76,28 @@ const OPENCODE_IDENTITY_LINE = /You are OpenCode, the best coding agent on the p
  */
 const GENERIC_IDENTITY =
   "You are an expert coding assistant. You help users with software engineering tasks by reading files, executing commands, editing code, and writing new files.\n"
+const OPENCODE_IDENTITY_LINE: SpanRule = {
+  open: "You are OpenCode, the best coding agent on the planet.",
+  close: "",
+  tail: "line",
+  replacement: GENERIC_IDENTITY,
+}
 
 /** The feedback block, which names the harness's own repository. */
-const OPENCODE_FEEDBACK_BLOCK =
-  /If the user asks for help or wants to give feedback[\s\S]*?github\.com\/anomalyco\/opencode[^\n]*\n+/g
+const OPENCODE_FEEDBACK_BLOCK: SpanRule = {
+  open: "If the user asks for help or wants to give feedback",
+  close: "github.com/anomalyco/opencode",
+  tail: "line",
+  replacement: "",
+}
 
 /** The "When the user directly asks about OpenCode…" documentation paragraph. */
-const OPENCODE_DOCS_PARAGRAPH =
-  /When the user directly asks about OpenCode[\s\S]*?opencode\.ai\/docs[^\n]*\n+/g
+const OPENCODE_DOCS_PARAGRAPH: SpanRule = {
+  open: "When the user directly asks about OpenCode",
+  close: "opencode.ai/docs",
+  tail: "line",
+  replacement: "",
+}
 
 /** The professional-objectivity sentence, whose subject is the harness by name. */
 const OPENCODE_OBJECTIVITY_BRAND = /It is best for the user if OpenCode honestly applies/g
@@ -87,10 +107,21 @@ const GENERIC_OBJECTIVITY = "It is best for the user if the assistant honestly a
  * OhMyOpenCode's `<agent-identity>` wrapper, injected ahead of every persona variant, and the
  * Sisyphus identity line inside it — quoted in the default persona, bold on Claude-routed prompts.
  */
-const OMO_AGENT_IDENTITY_BLOCK = /<agent-identity>[\s\S]*?<\/agent-identity>\n*/g
-const OMO_IDENTITY_LINE = /You are ("|\*\*)Sisyphus("|\*\*)[^\n]*OhMyOpenCode[^\n]*\n+/g
+const OMO_AGENT_IDENTITY_BLOCK: SpanRule = {
+  open: "<agent-identity>",
+  close: "</agent-identity>",
+  tail: "newlines",
+  replacement: "",
+}
+const OMO_IDENTITY_OPENER = /You are (?:"|\*\*)Sisyphus(?:"|\*\*)/
+const OMO_IDENTITY_MARKER = "OhMyOpenCode"
 /** Its runtime environment block — the same shape as `<env>`, under its own tag. */
-const OMO_ENV_BLOCK = /<omo-env>[\s\S]*?<\/omo-env>\n*/g
+const OMO_ENV_BLOCK: SpanRule = {
+  open: "<omo-env>",
+  close: "</omo-env>",
+  tail: "newlines",
+  replacement: "",
+}
 
 /**
  * Residual brand tokens in prose the rules above deliberately preserved. Rewritten rather than
@@ -108,9 +139,8 @@ const OMO_ENV_BLOCK = /<omo-env>[\s\S]*?<\/omo-env>\n*/g
 const BRAND_TOKENS = /\bOhMyOpenCode\b|\bOpenCode\b/gi
 const GENERIC_BRAND = "the assistant"
 
-/** Collapse and trim, so a removed block does not leave a hole where a paragraph break belongs. */
+/** Collapsed, then trimmed, so a removed block does not leave a hole where a paragraph break belongs. */
 const BLANK_RUN = /\n{3,}/g
-const TRAILING_SPACE = /\s+$/
 
 /**
  * One system-prompt string, scrubbed. Returns the input unchanged when it carries no fingerprint,
@@ -119,19 +149,16 @@ const TRAILING_SPACE = /\s+$/
  */
 export function scrubHarnessFingerprints(prompt: string): string {
   if (prompt === "") return prompt
-  return prompt
-    .replace(OPENCODE_IDENTITY_LINE, GENERIC_IDENTITY)
-    .replace(OPENCODE_FEEDBACK_BLOCK, "")
-    .replace(OPENCODE_DOCS_PARAGRAPH, "")
-    .replace(OPENCODE_OBJECTIVITY_BRAND, GENERIC_OBJECTIVITY)
-    .replace(OMO_AGENT_IDENTITY_BLOCK, "")
-    .replace(OMO_IDENTITY_LINE, "")
-    .replace(OMO_ENV_BLOCK, "")
-    .replace(POWERED_BY_LINE, "")
-    .replace(ENV_PREAMBLE_BLOCK, "\n")
-    .replace(BRAND_TOKENS, GENERIC_BRAND)
-    .replace(BLANK_RUN, "\n\n")
-    .replace(TRAILING_SPACE, "")
+  let text = replaceSpans(prompt, OPENCODE_IDENTITY_LINE)
+  text = replaceSpans(text, OPENCODE_FEEDBACK_BLOCK)
+  text = replaceSpans(text, OPENCODE_DOCS_PARAGRAPH)
+  text = text.replace(OPENCODE_OBJECTIVITY_BRAND, GENERIC_OBJECTIVITY)
+  text = replaceSpans(text, OMO_AGENT_IDENTITY_BLOCK)
+  text = removeLines(text, OMO_IDENTITY_OPENER, OMO_IDENTITY_MARKER)
+  text = replaceSpans(text, OMO_ENV_BLOCK)
+  text = text.replace(POWERED_BY_LINE, "")
+  text = replaceSpans(text, ENV_PREAMBLE_BLOCK)
+  return text.replace(BRAND_TOKENS, GENERIC_BRAND).replace(BLANK_RUN, "\n\n").trimEnd()
 }
 
 /**

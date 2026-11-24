@@ -1,4 +1,5 @@
 import type { AsyncBackgroundStartGuard, UpstreamStartGuard } from "../upstream-admission"
+import type { SdkFailure } from "./errors"
 import type { TruncatedTurn } from "./render"
 import type { SessionPlan } from "./session"
 import type { SdkUsageGaugeObservation } from "./usage-gauge"
@@ -64,6 +65,18 @@ export interface SdkInvocation {
    * answers, just without cooling the account down ahead of the next `429`.
    */
   readonly onRateLimit?: (info: unknown) => void
+  /**
+   * Called when the transport answers with an error `Response` whose private classification it
+   * knows: the rule that matched, its `requestAttributable` / `permanentForRequest` / `modelScoped`
+   * facts, and the upstream's own scrubbed words for the attempt log. The last call before the
+   * Response is the one that describes it.
+   *
+   * A callback rather than something attached to the Response, because wrappers rebuild Responses:
+   * the classification once rode a `WeakMap` keyed by the object, `ownedInvoker` returned a new one,
+   * and every fact was silently lost in production while each half still passed its own test. Every
+   * wrapper spreads the invocation, so none can drop this.
+   */
+  readonly onRefusal?: (failure: SdkFailure) => void
   /**
    * Called at most once per turn, when it ended with content blocks still open — the turn stopped
    * mid-answer, and the renderer answered with an error rather than a completion. The detail is

@@ -54,6 +54,12 @@ function breaksAfter(parts: readonly string[]): () => Response {
   }
 }
 
+function driverOf(provider: "anthropic-api" | "openai-oauth") {
+  const driver = httpDriver(provider)
+  if (driver === null || driver === undefined) throw new Error(`${provider} has no HTTP driver`)
+  return driver
+}
+
 function accountOf(headers: Headers): string {
   return (headers.get("x-api-key") ?? "").replace(/^sk-/, "")
 }
@@ -128,6 +134,76 @@ describe("a streaming client, wall before any content", () => {
     const body = JSON.parse(result.text) as { error: { router: { wall: string } } }
     expect(body.error.router.wall).toBe("clock")
   })
+})
+
+describe("an upstream that is silent past the hold", () => {
+  const DRIVER = driverOf("anthropic-api")
+  /** A clock whose hold has already expired. */
+  const EXPIRED: DeadlineClock = {
+    after: (_ms, fn) => {
+      queueMicrotask(fn)
+      return () => {}
+    },
+    now: () => 0,
+  }
+  const silentFor = (
+    ticks: number,
+    end: (c: ReadableStreamDefaultController<Uint8Array>) => void,
+  ) =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        async start(controller) {
+          for (let i = 0; i < ticks; i++) await Bun.sleep(1)
+          end(controller)
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    )
+
+  test("no byte at all is not committed: the idle clock's error fails the attempt over", async () => {
+    const idle = new DOMException("upstream stream went silent", "TimeoutError")
+    const peek = peekSuccess(
+      silentFor(5, (c) => c.error(idle)),
+      { dialect: "anthropic", driver: DRIVER, maxBytes: 4096, hold: { ms: 1, clock: EXPIRED } },
+    )
+
+    await expect(peek).rejects.toBe(idle)
+  })
+
+  test("a first byte past the hold still decides a wall, and preamble alone then commits", async () => {
+    const wall = await peekSuccess(
+      silentFor(3, (c) => {
+        c.enqueue(encoder.encode(RATE_LIMITED))
+        c.close()
+      }),
+      { dialect: "anthropic", driver: DRIVER, maxBytes: 4096, hold: { ms: 1, clock: EXPIRED } },
+    )
+    expect(wall.kind).toBe("wall")
+
+    const clear = await peekSuccess(
+      silentFor(3, (c) => {
+        c.enqueue(encoder.encode(START))
+      }),
+      { dialect: "anthropic", driver: DRIVER, maxBytes: 4096, hold: { ms: 1, clock: EXPIRED } },
+    )
+    expect(clear.kind).toBe("clear")
+  })
+})
+
+test("codex metadata is a preamble: the overload behind it is a wall, not a committed stream", async () => {
+  const frame = (type: string, extra: object = {}) =>
+    `event: ${type}\ndata: ${JSON.stringify({ type, ...extra })}\n\n`
+  for (const name of ["response.metadata", "codex.response.metadata"]) {
+    const peek = await peekSuccess(
+      sse(
+        frame("response.created", { response: {} }) +
+          frame(name) +
+          frame("response.failed", { response: { error: { code: "server_is_overloaded" } } }),
+      )(),
+      { dialect: "openai-responses", driver: driverOf("openai-oauth"), maxBytes: 4096 },
+    )
+    expect(peek.kind).toBe("wall")
+  }
 })
 
 describe("a streaming client, upstream breaks after content", () => {

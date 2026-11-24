@@ -1,5 +1,11 @@
-import { type createPrimitive, endsPrimitive, isWhitespace } from "./primitive"
-import type { createStringValidation } from "./string-validation"
+import { type createPrimitive, endsPrimitive } from "./primitive"
+import {
+  type createStringValidation,
+  ESCAPE_CLASS,
+  NATIVE_RUN_BYTES,
+  PLAIN,
+  STRING_CLASS,
+} from "./string-validation"
 
 /**
  * Grammar validation of one nested value nothing is captured from.
@@ -19,6 +25,22 @@ const COLON = 2
 const VALUE = 3 // `:` or an array's `,` read: a value
 const AFTER_VALUE = 4 // `,` or the container's close
 const ARRAY_FIRST = 5 // `[` read: a value or `]`
+
+// What a byte outside a string is, so the token loop branches once instead of comparing seven times.
+// 0 is everything else: the first byte of a number or literal.
+const WHITESPACE = 1
+const QUOTE = 2
+const COMMA = 3
+const COLON_MARK = 4
+const OPEN = 5
+const CLOSE = 6
+const TOKEN = new Uint8Array(256)
+for (const byte of [32, 9, 10, 13]) TOKEN[byte] = WHITESPACE
+TOKEN[34] = QUOTE
+TOKEN[44] = COMMA
+TOKEN[58] = COLON_MARK
+TOKEN[91] = TOKEN[123] = OPEN
+TOKEN[93] = TOKEN[125] = CLOSE
 
 export function createSkim(input: {
   readonly strings: ReturnType<typeof createStringValidation>
@@ -64,8 +86,22 @@ export function createSkim(input: {
       while (i < n) {
         if (str) {
           if (!strings.pending) {
-            i = strings.skipString(chunk, i)
+            // Inline: most strings end, and most escapes are two bytes, before a native search pays.
+            const limit = Math.min(n, i + NATIVE_RUN_BYTES)
+            for (;;) {
+              while (i < limit && STRING_CLASS[chunk[i] ?? 0] === PLAIN) i++
+              if (i + 1 >= n || i >= limit || chunk[i] !== 92) break
+              if (ESCAPE_CLASS[chunk[i + 1] ?? 0] !== 1) break
+              i += 2
+            }
+            if (i < n && chunk[i] !== 34) i = strings.skipString(chunk, i)
             if (i >= n) break
+            if (chunk[i] === 34) {
+              i++
+              str = false
+              states[d] = isKey ? COLON : AFTER_VALUE
+              continue
+            }
           }
           const b = chunk[i] ?? 0
           i++
@@ -89,10 +125,11 @@ export function createSkim(input: {
           states[d] = AFTER_VALUE
         }
         i++
-        if (isWhitespace(b)) continue
+        const token = TOKEN[b]
+        if (token === WHITESPACE) continue
         const state = states[d]
         const expectsValue = state === VALUE || state === ARRAY_FIRST
-        if (b === 34) {
+        if (token === QUOTE) {
           isKey = state === OBJECT_FIRST || state === OBJECT_KEY
           if (!isKey && !expectsValue) {
             failed = true
@@ -100,19 +137,19 @@ export function createSkim(input: {
           }
           str = true
           strings.reset()
-        } else if (b === 44) {
+        } else if (token === COMMA) {
           if (state !== AFTER_VALUE) {
             failed = true
             break
           }
           states[d] = arrays[d] === 1 ? VALUE : OBJECT_KEY
-        } else if (b === 58) {
+        } else if (token === COLON_MARK) {
           if (state !== COLON) {
             failed = true
             break
           }
           states[d] = VALUE
-        } else if (b === 123 || b === 91) {
+        } else if (token === OPEN) {
           if (!expectsValue) {
             failed = true
             break
@@ -125,7 +162,7 @@ export function createSkim(input: {
           d++
           arrays[d] = b === 91 ? 1 : 0
           states[d] = b === 91 ? ARRAY_FIRST : OBJECT_FIRST
-        } else if (b === 125 || b === 93) {
+        } else if (token === CLOSE) {
           const closes =
             (b === 93) === (arrays[d] === 1) &&
             (state === AFTER_VALUE || state === (b === 93 ? ARRAY_FIRST : OBJECT_FIRST))
@@ -149,7 +186,7 @@ export function createSkim(input: {
       inString = str
       key = isKey
       primitive = prim
-      if (!failed) return i >= n ? n : i
+      if (!failed) return Math.min(i, n)
       // A grammar error is final: the body is refused, so the rest only needs consuming.
       this.invalid = true
       dead = true

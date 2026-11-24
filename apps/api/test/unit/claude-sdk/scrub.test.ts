@@ -189,3 +189,39 @@ describe("the brand token, however it is spelled", () => {
     expect(scrubHarnessFingerprints(prompt)).toBe(prompt)
   })
 })
+
+/**
+ * A lazy `OPEN[\s\S]*?CLOSE` re-scans to the end for every opener that never closes: 133 KB of
+ * `<agent-identity>` held the event loop 1.2 s and 266 KB held it 4.6 s, so one key could stall
+ * every stream on the replica. Each rule now makes one pass.
+ */
+describe("an adversarial prompt cannot stall the event loop", () => {
+  const openers: readonly string[] = [
+    "<agent-identity>\n",
+    "<omo-env>",
+    "If the user asks for help or wants to give feedback ",
+    "When the user directly asks about OpenCode opencode.ai/docs",
+    "Here is some useful information about the environment you are running in:\n<env>",
+    "You are OpenCode, the best coding agent on the planet.",
+    'You are "Sisyphus" OhMyOpenCode',
+    'You are "Sisyphus" ',
+  ]
+  for (const opener of openers) {
+    test(`1 MB of ${JSON.stringify(opener.slice(0, 32))}`, () => {
+      const prompt = `${opener.repeat(Math.ceil(1_000_000 / opener.length))}x`
+      const started = performance.now()
+      scrubHarnessFingerprints(prompt)
+      // Milliseconds in practice; the regexes it replaces needed minutes.
+      expect(performance.now() - started).toBeLessThan(500)
+    })
+  }
+
+  test("a closed span still goes, and an unclosed opener before the text still stays", () => {
+    expect(scrubHarnessFingerprints("a\n<omo-env>x</omo-env>\n\nb\n<agent-identity>c")).toBe(
+      "a\nb\n<agent-identity>c",
+    )
+    expect(
+      scrubHarnessFingerprints('keep\nYou are "Sisyphus" - from OhMyOpenCode, today\n\nrest'),
+    ).toBe("keep\nrest")
+  })
+})

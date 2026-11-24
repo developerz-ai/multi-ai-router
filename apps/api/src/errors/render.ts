@@ -234,13 +234,19 @@ export function refusalBody(
 /** The wall of a refusal whose request itself is wrong: sending it again unchanged fails alike. */
 export const REQUEST_WALL: RouterVerdict = { wall: "request", scope: "request" }
 
+/** What an agent guessing admin paths needs next: where the real ones are written down. */
+const ADMIN_NOT_FOUND =
+  "Not found: admin routes live under /api/admin and are listed in docs/idea/04-api-keys-and-access.md#admin-api-route-groups"
+
 export function notFoundResponse(
   dialect: Dialect | null,
   requestId: string | null = null,
+  path = "",
 ): ErrorResponse {
+  const message = path.startsWith("/api/") ? ADMIN_NOT_FOUND : "Not found"
   return {
     status: 404,
-    body: refusalBody(dialect, 404, "Not found", "not_found", REQUEST_WALL, requestId),
+    body: refusalBody(dialect, 404, message, "not_found", REQUEST_WALL, requestId),
     retryAfterSeconds: null,
   }
 }

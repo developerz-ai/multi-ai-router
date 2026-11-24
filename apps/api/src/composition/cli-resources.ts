@@ -151,12 +151,13 @@ export function createCliResources(
       handle.assert()
       return path
     },
+    // No directory, no replica lease: an HTTP Account's delete has nothing here to fence.
     revokeDeletedAccount(input) {
-      replicaLease.handle(input.id).assert()
+      if (input.configDir !== null) replicaLease.handle(input.id).assert()
       return localOwnership.revokeDeletedAccount(input)
     },
     cleanupDeletedAccount(input) {
-      replicaLease.handle(input.id).assert()
+      if (input.configDir !== null) replicaLease.handle(input.id).assert()
       return localOwnership.cleanupDeletedAccount(input)
     },
     isRevoked: (id) => !replicaLease.eligible(id) || (localOwnership.isRevoked?.(id) ?? false),

@@ -3,6 +3,7 @@ import {
   coerceStream,
   forcedToolFromRequest,
 } from "../translate/shared/forced-tool-coercion"
+import { memberValue, topLevelMembers } from "./body/members"
 import type { ServableCandidate } from "./plan"
 import { DEFAULT_BUFFERED_BODY_MAX_BYTES, join, readRelayBody } from "./relay-body-read"
 import { DEFAULT_TRANSLATED_KEEPALIVE_MS } from "./relay-translate"
@@ -42,11 +43,22 @@ export function forcedToolOfBody(bytes: Uint8Array | null): string | undefined {
   if (!Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).includes(MARKER)) {
     return undefined
   }
-  try {
-    return forcedToolFromRequest(JSON.parse(new TextDecoder().decode(bytes))) ?? undefined
-  } catch {
-    return undefined
-  }
+  const top = topLevelMembers(bytes, ["tool_choice", "tools"])
+  if (top === null) return undefined
+  const tool_choice = memberValue(bytes, top.values.get("tool_choice"))
+  // `any` names its tool by being the only one declared; nothing else needs the tool list parsed.
+  const named = forcedToolFromRequest({ tool_choice })
+  if (named !== null) return named
+  return (
+    forcedToolFromRequest({
+      tool_choice,
+      tools: memberValue(bytes, isAny(tool_choice) ? top.values.get("tools") : undefined),
+    }) ?? undefined
+  )
+}
+
+function isAny(choice: unknown): boolean {
+  return typeof choice === "object" && choice !== null && "type" in choice && choice.type === "any"
 }
 
 /** The coercion target, only for a vendor that thinks by default and ignores a forced tool. */

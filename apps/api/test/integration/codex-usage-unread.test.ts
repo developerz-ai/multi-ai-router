@@ -131,11 +131,15 @@ const UNKNOWN_USAGE = {
 }
 
 describe("a translated Codex success whose usage was never read", () => {
-  test("a stream that ends without response.completed is recorded as unreported, not as free", async () => {
+  test("a stream that ends without response.completed is recorded as incomplete, never as a success", async () => {
     const { row, lines } = await drive(() => "")
-    expect(row).toMatchObject({ ...UNKNOWN_USAGE, errorClass: "usage_unreported" })
-    const line = lines.find((entry) => entry.msg === "upstream usage unread")
-    expect(line).toMatchObject({ reason: "usage_unreported", terminal: "none" })
+    expect(row).toMatchObject({
+      ...UNKNOWN_USAGE,
+      outcome: "upstream_error",
+      errorClass: "upstream_incomplete",
+    })
+    const line = lines.find((entry) => entry.msg === "upstream response incomplete")
+    expect(line).toMatchObject({ reason: "no-terminal-event" })
     // The upstream's event tally is the evidence an operator reads to tell the shapes apart.
     expect(line?.eventTypes).toMatchObject({ "response.output_item.done": 1 })
   })

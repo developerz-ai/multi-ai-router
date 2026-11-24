@@ -1,5 +1,5 @@
 import { isUtf8 } from "node:buffer"
-/** Native validation of the complete middle; only a split codepoint retains ≤4 bytes. */
+/** Native validation of each chunk; only a codepoint split across chunks retains ≤4 bytes. */
 export function createUtf8Validation() {
   let tail: number[] = [],
     expected = 0
@@ -57,13 +57,6 @@ export function createUtf8Validation() {
       const split = length && end - last < length ? last : end
       if (!isUtf8(chunk.subarray(start, split))) this.invalid = true
       for (let i = split; i < end; i++) this.byte(chunk[i] ?? 0)
-    },
-    boundary() {
-      if (expected) {
-        this.invalid = true
-        tail = []
-        expected = 0
-      }
     },
   }
 }

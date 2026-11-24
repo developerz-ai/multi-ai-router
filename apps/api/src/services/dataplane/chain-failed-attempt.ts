@@ -1,4 +1,10 @@
-import type { AttemptFailure } from "../routing"
+import {
+  type AttemptFailure,
+  type FailoverProgress,
+  noteOverload,
+  noteProviderScoped,
+  noteRequestAttributable,
+} from "../routing"
 import type { UsageRecord } from "../usage"
 import type { AttemptOutcome, UpstreamError } from "./attempt"
 import { logAttemptFailure } from "./attempt-log"
@@ -8,6 +14,29 @@ import type { AttemptClock, AttemptRelay } from "./chain-relay"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome } from "./records"
+import { HOOK_SIGNAL } from "./relay-terminal"
+
+/** What one failed attempt teaches the planner about the rest of this chain. */
+export function noteFailure(
+  progress: FailoverProgress,
+  servable: ServableCandidate,
+  failure: AttemptFailure,
+): FailoverProgress {
+  const { account } = servable
+  const attributed = noteRequestAttributable(progress, failure)
+  const scoped = noteProviderScoped(attributed, account.driver.provider, failure)
+  return noteOverload(scoped, account.id, failure.kind)
+}
+
+/**
+ * A refusal of the request itself keeps the signal that says so as its row's class: booked under the
+ * outcome alone it read as a spent account (`quota_exhausted`, prod 2026-11-23, 1058 rows).
+ */
+function attributableClass(outcome: Extract<AttemptOutcome, { kind: "failure" }>): string | null {
+  if (outcome.failure.requestAttributable !== true) return null
+  const signal = outcome.classification?.signal ?? outcome.upstreamSignal
+  return signal !== undefined && HOOK_SIGNAL.test(signal) ? signal : null
+}
 
 /** Preserve the most actionable provider verdict while recording every failed attempt. */
 export function finishFailedAttempt(
@@ -26,7 +55,7 @@ export function finishFailedAttempt(
     outcome.failure,
     outcome.upstream,
     at,
-    outcome.errorClass ?? null,
+    outcome.errorClass ?? attributableClass(outcome),
     outcome.answeredStatus ?? outcome.upstream?.status ?? null,
   )
   logAttemptFailure(

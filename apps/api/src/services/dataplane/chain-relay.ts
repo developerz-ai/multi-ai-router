@@ -1,11 +1,10 @@
 import { createResponseObserver, USAGE_SUCCESS, usageUnread } from "../usage"
 import { RouterShutdownError } from "./active-requests"
-import { logStreamFailure, logUsageUnread } from "./attempt-log"
+import { logIncomplete, logStreamFailure, logUsageUnread } from "./attempt-log"
 import { reasoningSealFor } from "./chain-body"
 import type { AttemptRelay, SuccessClock } from "./chain-relay-types"
 import { DEFAULT_LOG_REASON_MAX_CHARS } from "./dispatcher-config"
 import { coerceForcedToolResponse } from "./forced-tool-coercion"
-import { breakerOptionsFor } from "./health"
 import { observingModelOutput } from "./model-output"
 import { forcesUpstreamStream, type ServableCandidate } from "./plan"
 import { withReasoningSeal } from "./reasoning-seal-context"
@@ -14,8 +13,9 @@ import { relayResponse } from "./relay"
 import { cancellationError } from "./relay-cancellation"
 import { type CostReport, usageCostFields } from "./relay-cost"
 import { costRequested, restampingPair } from "./relay-cost-optin"
-import { endsWithRouterError } from "./relay-stream-end"
-import { createRelayTerminal } from "./relay-terminal"
+import { createRelayHealth } from "./relay-health"
+import { routerErrorEnding } from "./relay-stream-end"
+import { createRelayTerminal, UPSTREAM_INCOMPLETE } from "./relay-terminal"
 import { relayTranslatedResponse } from "./relay-translate"
 import { refusedStatus } from "./relay-translate-held"
 import { streamCapSignal } from "./stream-cap"
@@ -51,6 +51,7 @@ export function relaySuccess(
   // Whether the body is SSE whatever its `content-type` says: the driver declares a surface that
   // answers only as a stream (Codex sends one with no `content-type` at all), translated or not.
   const sendsSse = servable.responsesEgress.requireStream
+  const accountHealth = createRelayHealth(ctx, servable, at)
   let modelOutput = false
   // Usage is read off the upstream's frames; a forced stream is SSE whether or not it said so.
   const observedType = sendsSse ? "text/event-stream" : response.headers.get("content-type")
@@ -60,6 +61,7 @@ export function relaySuccess(
     servable.driver.responseObservation,
     () => {
       modelOutput = true
+      accountHealth.firstOutput()
     },
   )
   const observation = createResponseObserver({
@@ -103,23 +105,7 @@ export function relaySuccess(
         : null
     ctx.runtime.health.endAttempt(servable.account.id, counts.tokensOut)
     try {
-      const rateLimited = at.isRateLimited?.() ?? at.rateLimited ?? false
-      at.recovery?.finish(rateLimited ? "failed" : verdict.recovery)
-      if (verdict.failure !== null) {
-        ctx.runtime.health.recordFailure(
-          servable.account.id,
-          { ...verdict.failure, message: "upstream response stream failed" },
-          ctx.runtime.clock.now(),
-          {
-            ...breakerOptionsFor(servable.driver.authKind),
-            recoveryProbe: at.recovery?.designated ?? false,
-          },
-          at.observation,
-        )
-      } else if (verdict.recovery === "succeeded" && !rateLimited) {
-        // A clean finish, or a client cancel after the model already produced output.
-        ctx.runtime.health.recordSuccess(servable.account.id, at.observation)
-      }
+      accountHealth.settle(verdict)
       const upstreamMs = at.upstreamMs + (ctx.runtime.clock.elapsed() - at.upstreamStarted)
       ;(ctx.runtime.recordTerminal ?? ctx.runtime.record)(
         attemptRecord({
@@ -128,7 +114,9 @@ export function relaySuccess(
           // unread response measured nothing, and its row says null rather than zero.
           tokens: facts.usageStated ? counts : undefined,
           priced: ctx.runtime.operation !== "count-tokens",
-          usageRead: unread === null,
+          // An answer cut short with no usage stated was still generated: unknown, never free.
+          usageRead:
+            unread === null && (verdict.errorClass !== UPSTREAM_INCOMPLETE || facts.usageStated),
           timing: ctx.runtime.timing(at.startedAt, at.started, upstreamMs, firstByteAt),
           outcome: verdict.outcome,
           streamed,
@@ -147,6 +135,14 @@ export function relaySuccess(
           servable.account.id,
           unread,
           facts.terminal,
+          descriptor.eventTypes?.(),
+          facts.unavailableReason,
+        )
+      if (verdict.errorClass === UPSTREAM_INCOMPLETE)
+        logIncomplete(
+          ctx.log,
+          servable.account.id,
+          facts.incompleteReason,
           descriptor.eventTypes?.(),
         )
       if (verdict.failure !== null) {
@@ -210,22 +206,20 @@ export function relaySuccess(
     priced &&
     (servable.kind === "sdk" || (ctx.request !== undefined && costRequested(ctx.request.headers)))
   // A client stream that breaks after its first byte ends with the router's error event.
-  const ended = (relayed: Response): Response =>
-    relayed.headers.get("content-type")?.includes("text/event-stream") === true ||
-    (sendsSse && servable.translation === null)
-      ? endsWithRouterError(
-          relayed,
-          ctx.runtime.ingressDialect,
-          {
-            requestId: ctx.runtime.requestId ?? null,
-            attempt,
-            accountId: servable.account.id,
-          },
-          ctx.request?.signal,
-        )
-      : relayed
+  const lastWords = routerErrorEnding(
+    ctx.runtime.ingressDialect,
+    { requestId: ctx.runtime.requestId ?? null, attempt, accountId: servable.account.id },
+    ctx.request?.signal,
+  )
   if (servable.translation === null && !restamp)
-    return ended(relayResponse(response, observer, relaySignal))
+    return relayResponse(
+      response,
+      observer,
+      relaySignal,
+      sendsSse || response.headers.get("content-type")?.includes("text/event-stream") === true
+        ? lastWords
+        : undefined,
+    )
   const cost: CostReport = {
     ingress: ctx.runtime.ingressDialect,
     fields: (whole) => {
@@ -235,44 +229,41 @@ export function relaySuccess(
       return usageCostFields(facts, attemptCost({ ...attribution, tokens: facts.counts }))
     },
   }
-  return ended(
-    relayTranslatedResponse({
-      upstream: response,
-      refusal: {
-        ingress: ctx.runtime.ingressDialect,
-        requestId: ctx.runtime.requestId ?? null,
+  return relayTranslatedResponse({
+    lastWords,
+    upstream: response,
+    refusal: {
+      ingress: ctx.runtime.ingressDialect,
+      requestId: ctx.runtime.requestId ?? null,
+      accountId: servable.account.id,
+      attempt,
+    },
+    pair: servable.translation ?? restampingPair(servable.dialect),
+    // The same account's seal the request was converted under, so reasoning this upstream issues
+    // is sealed to it and only it.
+    context: withReasoningSeal(
+      { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
+      reasoningSealFor(ctx, servable),
+    ),
+    // Only for a client that did not ask to stream; one that did is forwarded event by event. A
+    // restamped passthrough keeps the upstream's framing, so it is never collected.
+    collectStream:
+      servable.translation !== null && upstreamStreams && ctx.translated?.clientStreams() !== true,
+    upstreamStreams: sendsSse,
+    ...(ctx.runtime.bufferedBodyMaxBytes === undefined
+      ? {}
+      : { bufferedBodyMaxBytes: ctx.runtime.bufferedBodyMaxBytes }),
+    ...(ctx.runtime.translationFrameMaxBytes === undefined
+      ? {}
+      : { maximumFrameLength: ctx.runtime.translationFrameMaxBytes }),
+    ...(priced ? { cost } : {}),
+    observer,
+    ...(relaySignal === undefined ? {} : { signal: relaySignal }),
+    onUnrecognizedStopReason: (reason) =>
+      ctx.log?.warn("upstream reported an unrecognized stop reason", {
         accountId: servable.account.id,
-        attempt,
-      },
-      pair: servable.translation ?? restampingPair(servable.dialect),
-      // The same account's seal the request was converted under, so reasoning this upstream issues
-      // is sealed to it and only it.
-      context: withReasoningSeal(
-        { ...ctx.translation, includeUsage: ctx.translated?.includeUsage() === true },
-        reasoningSealFor(ctx, servable),
-      ),
-      // Only for a client that did not ask to stream; one that did is forwarded event by event. A
-      // restamped passthrough keeps the upstream's framing, so it is never collected.
-      collectStream:
-        servable.translation !== null &&
-        upstreamStreams &&
-        ctx.translated?.clientStreams() !== true,
-      upstreamStreams: sendsSse,
-      ...(ctx.runtime.bufferedBodyMaxBytes === undefined
-        ? {}
-        : { bufferedBodyMaxBytes: ctx.runtime.bufferedBodyMaxBytes }),
-      ...(ctx.runtime.translationFrameMaxBytes === undefined
-        ? {}
-        : { maximumFrameLength: ctx.runtime.translationFrameMaxBytes }),
-      ...(priced ? { cost } : {}),
-      observer,
-      ...(relaySignal === undefined ? {} : { signal: relaySignal }),
-      onUnrecognizedStopReason: (reason) =>
-        ctx.log?.warn("upstream reported an unrecognized stop reason", {
-          accountId: servable.account.id,
-          provider: servable.account.driver.provider,
-          stopReason: reason,
-        }),
-    }),
-  )
+        provider: servable.account.driver.provider,
+        stopReason: reason,
+      }),
+  })
 }

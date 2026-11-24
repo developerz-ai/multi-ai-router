@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { createFastInvoker } from "../../../src/providers/claude-fast/invoker"
 import { reportFastQuota } from "../../../src/providers/claude-fast/quota"
-import { fastFailureOf } from "../../../src/providers/claude-fast/response"
 import { createSdkConcurrency } from "../../../src/providers/claude-sdk/concurrency"
-import { classifySdkFailure } from "../../../src/providers/claude-sdk/errors"
+import { classifySdkFailure, type SdkFailure } from "../../../src/providers/claude-sdk/errors"
 import type { SdkInvocation } from "../../../src/providers/claude-sdk/invoke"
 
 const credential = {
@@ -409,12 +408,17 @@ describe("Claude fast invoker: forced tool choice (#370)", () => {
         error: { type: "invalid_request_error", message: said },
       }),
     })
-    const response = await h.invoke(forced(false))
+    let failure: SdkFailure | undefined
+    const response = await h.invoke({
+      ...forced(false),
+      onRefusal: (refusal) => {
+        failure = refusal
+      },
+    })
     expect(response.status).toBe(400)
     const client = await response.text()
     expect(client).not.toContain("tool_choice forced is not supported")
     expect(client).not.toContain(credential.accessToken)
-    const failure = fastFailureOf(response)
     expect(failure?.classification).toMatchObject({
       kind: "invalid-request",
       status: 400,

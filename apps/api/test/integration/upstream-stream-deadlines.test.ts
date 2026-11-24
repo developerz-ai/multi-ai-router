@@ -101,22 +101,22 @@ describe("runAttempt against a real socket", () => {
   })
 })
 
+const STREAM = JSON.stringify({
+  model: "claude-opus-5",
+  max_tokens: 64,
+  stream: true,
+  messages: [{ role: "user", content: "hello" }],
+})
+
+function sse(): Response {
+  const events = [
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+  ]
+  return new Response(events.join(""), { headers: { "content-type": "text/event-stream" } })
+}
+
 describe("the chain: a hung upstream fails over, a stalled stream fails honestly", () => {
-  const STREAM = JSON.stringify({
-    model: "claude-opus-5",
-    max_tokens: 64,
-    stream: true,
-    messages: [{ role: "user", content: "hello" }],
-  })
-
-  function sse(): Response {
-    const events = [
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
-      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-    ]
-    return new Response(events.join(""), { headers: { "content-type": "text/event-stream" } })
-  }
-
   test("no headers inside the first-byte window: the next account serves, the client sees one answer", async () => {
     const setup: { upstream?: ReturnType<typeof harness>["upstream"] } = {}
     const hung = () =>
@@ -170,6 +170,62 @@ describe("the chain: a hung upstream fails over, a stalled stream fails honestly
     await Bun.sleep(20)
     expect(built.upstream.calls).toHaveLength(1)
     expect(built.usage.rows.at(-1)?.outcome).toBe("upstream_timeout")
+  })
+})
+
+/**
+ * Silence costs a request its headers, so it is bounded across the chain, not per account: three
+ * silent accounts at the 55 s idle clock was 165 s with no status line, past any edge's header
+ * timeout, and a request the third account would have served slowly became the edge's 524.
+ */
+describe("a streaming client's head waits out one idle clock of silence, whatever the chain", () => {
+  const silent = () =>
+    new Response(new ReadableStream({}), { headers: { "content-type": "text/event-stream" } })
+  const CLOCKS = { firstByteMs: 5_000, idleMs: 400, totalMs: 60_000, wallHoldMs: 60 }
+  const pool = (n: number) =>
+    Array.from({ length: n }, (_, i) => account(`s${i}`, { apiKey: `sk-${i}`, cipher: CRYPTOR }))
+
+  test("the first silent account still fails over, and a sibling that answers serves", async () => {
+    const built = harness({ accounts: pool(2), responses: [silent, sse], upstreamStream: CLOCKS })
+    const res = await built.app.request("/v1/messages", post(STREAM, bearer()))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain("message_stop")
+    expect(built.upstream.calls).toHaveLength(2)
+  })
+
+  test("a second silent account commits its head at the wall hold; no third is asked", async () => {
+    const built = harness({
+      accounts: pool(3),
+      responses: [silent, silent, sse],
+      upstreamStream: CLOCKS,
+    })
+    const started = performance.now()
+    const res = await built.app.request("/v1/messages", post(STREAM, bearer()))
+    const headAt = performance.now() - started
+
+    expect(res.status).toBe(200)
+    expect(built.upstream.calls).toHaveLength(2)
+    // One idle clock, then one wall hold: nowhere near two idle clocks (800 ms).
+    expect(headAt).toBeGreaterThanOrEqual(380)
+    expect(headAt).toBeLessThan(700)
+    await res.text().catch(() => "")
+  })
+
+  test("a slow first byte inside the remaining budget is still served from its own account", async () => {
+    const slow = () =>
+      new Response(
+        new ReadableStream({
+          async start(controller) {
+            await Bun.sleep(150)
+            controller.enqueue(new TextEncoder().encode(await sse().text()))
+            controller.close()
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      )
+    const built = harness({ accounts: pool(1), responses: [slow], upstreamStream: CLOCKS })
+    const res = await built.app.request("/v1/messages", post(STREAM, bearer()))
+    expect(await res.text()).toContain("message_stop")
   })
 })
 

@@ -19,6 +19,8 @@ test("snapshot disagreement preserves HTTP status but records one local translat
     ],
     responses: [() => slow.response],
   })
+  // The head waits for the first upstream byte (`success-wall.ts`).
+  slow.release(0)
   const res = await app.request(
     "/v1/chat/completions",
     post(
@@ -33,7 +35,6 @@ test("snapshot disagreement preserves HTTP status but records one local translat
   expect(res.status).toBe(200)
   if (res.body === null) throw new Error("missing body")
   const reader = res.body.getReader()
-  slow.release(0)
   expect(new TextDecoder().decode((await reader.read()).value)).toContain("first")
   slow.release(1)
   expect(new TextDecoder().decode((await reader.read()).value)).toContain(
@@ -75,6 +76,8 @@ test("deferred-fragment overflow records one router error and leaves account hea
     .map((value) => `data: ${JSON.stringify(value)}\n\n`)
     .join("")}data: [DONE]\n\n`
   const slow = slowStream([body])
+  // The head waits for the first upstream byte (`success-wall.ts`).
+  slow.release(0)
   const { app, usage, health, upstream } = harness({
     accounts: [
       account("overflow", { provider: "openrouter", dialect: "openai-chat", cipher: CRYPTOR }),
@@ -93,7 +96,6 @@ test("deferred-fragment overflow records one router error and leaves account hea
       bearer(),
     ),
   )
-  slow.release(0)
   slow.finish()
   const wire = await res.text()
   await settle()

@@ -1,6 +1,6 @@
 import { InvalidRequestError } from "@multi-ai-router/core"
-import type { RateLimitSignal } from "../../providers"
-import { fastFailureOf } from "../../providers/claude-fast/response"
+import type { Logger } from "../../logging/logger"
+import type { RateLimitSignal, SdkFailure, SdkInvocation } from "../../providers"
 import { type AttemptOutcome, failoverKind } from "./attempt"
 import type { SdkAttemptInput } from "./sdk-attempt"
 /**
@@ -79,8 +79,10 @@ export function releasingWith(response: Response, release: () => void): Response
 export async function errorResponseFailure(
   response: Response,
   rateLimit: RateLimitSignal | null,
+  /** What the transport said of this very answer (`SdkInvocation.onRefusal`). */
+  fast?: SdkFailure,
 ): Promise<AttemptOutcome> {
-  const fast = fastFailureOf(response)
+  const reset = fast?.classification.rateLimit
   const refusal = fast?.classification.kind === "invalid-request" ? fast : undefined
   let bodyText = ""
   try {
@@ -91,13 +93,19 @@ export async function errorResponseFailure(
   return {
     kind: "failure",
     failure: {
-      kind: failoverKind(null, response.status),
+      // The refusal's own kind, where the transport knows one: a 403 for one model is not the
+      // request's fault, and a status alone would end the chain on it.
+      kind: failoverKind(fast?.classification.kind ?? null, response.status),
       status: response.status,
       // Router-authored (docs/idea/07-security.md): the SDK body is relayed as an *upstream*
       // answer where relaying is safe, but this sentence is what a router-shaped error renders.
-      message: "the Claude Agent SDK turn ended in an upstream error",
+      message: fast?.clientMessage ?? "the Claude Agent SDK turn ended in an upstream error",
       ...(fast?.classification.requestAttributable === true ? { requestAttributable: true } : {}),
       ...(fast?.classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
+      // A window that meters one model family holds that model, not the account.
+      ...(fast?.classification.modelScoped === true
+        ? { modelScoped: true, resetsAt: reset?.resetsAt, resetSource: reset?.resetSource }
+        : {}),
     },
     classification: refusal?.classification ?? null,
     rateLimit,
@@ -151,4 +159,33 @@ export function rateLimitCapture(
       closed = true
     },
   }
+}
+
+/**
+ * The turn stopped mid-answer. Logged here because the render layer is pure — this seam is where the
+ * account and the request id meet it — and logged with everything the renderer knew, because the
+ * question this line has to answer is *which* early ending it was: the query iterator completing, a
+ * `result` landing mid-block, or the subprocess dying under it.
+ */
+export function truncatedTurnLog(
+  log: Logger | undefined,
+  accountId: string,
+): NonNullable<SdkInvocation["onTruncatedTurn"]> {
+  return (detail) =>
+    log?.warn("sdk turn ended mid-answer; the client is told it is incomplete", {
+      accountId,
+      blocks: detail.blocks,
+      kinds: detail.kinds,
+      lastMessage: detail.lastMessage,
+      lastEvent: detail.lastEvent,
+      sawResult: detail.sawResult,
+      lastSystemSubtype: detail.lastSystemSubtype,
+      // Which of the two explanations for a `tool_use` block that never closed applies —
+      // see `SdkTruncatedTurn`.
+      declaredTools: detail.declaredTools,
+      passthrough: detail.passthrough,
+      flushedBlocks: detail.flushedBlocks,
+      sdkMessages: detail.sdkMessages,
+      frames: detail.frames,
+    })
 }

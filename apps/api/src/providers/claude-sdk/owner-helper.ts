@@ -64,3 +64,21 @@ export function ownerHelperBootProblem(input: {
     "  (/usr/local/libexec/router-cli-owner). See docs/idea/09-deployment.md.",
   ].join("\n")
 }
+
+/**
+ * Whether a guardian that closed before `R` provably left no owner marker, so nothing owns the
+ * directory and the exit is certain. Read only with `R` absent; `close` follows the status pipe's
+ * last byte, so an absent `R` was never written.
+ *
+ * - `73` (deleted) and `75` (capacity, a lock or a generation refused) are returned only before
+ *   `write_marker`, or from `retire_owner`, which follows `R`.
+ * - Dying *of* the two signals this module sends means their handlers were not installed yet, and
+ *   `config-owner.c` installs them before it writes the marker.
+ *
+ * Everything else stays uncertain: `70` covers a marker half-written, and a `SIGKILL` can land
+ * between the marker and `R`. Without this an Account at its owner ceiling, or one client hanging
+ * up while the guardian started, was refused until the process restarted.
+ */
+export function neverRegistered(code: number | null, signal: NodeJS.Signals | null): boolean {
+  return code === 73 || code === 75 || signal === "SIGTERM" || signal === "SIGUSR2"
+}

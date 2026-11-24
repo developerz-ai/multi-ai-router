@@ -196,6 +196,8 @@ describe("streamed: the final usage frame carries it", () => {
 
   test("content reaches the client before any usage exists", async () => {
     const slow = slowStream([CONTENT, `${FINISH}${USAGE}data: [DONE]\n\n`])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const { app } = harness({ accounts: [chatAccount()], responses: [() => slow.response] })
     const res = await app.request(
       "/v1/messages",
@@ -203,7 +205,6 @@ describe("streamed: the final usage frame carries it", () => {
     )
     const reader = res.body?.getReader()
     if (reader === undefined) throw new Error("missing body")
-    slow.release(0)
     expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_start")
     slow.release(1)
     slow.finish()

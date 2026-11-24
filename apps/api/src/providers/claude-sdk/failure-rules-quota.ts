@@ -3,6 +3,7 @@ import {
   any,
   CREDITS_SPENT,
   EXTRA_USAGE_GATED,
+  EXTRA_USAGE_SPENT,
   pattern,
   phrase,
   type SdkRule,
@@ -10,7 +11,7 @@ import {
 } from "./failure-rules-vocabulary"
 
 /**
- * The next six rows of the Agent-SDK failure classification table
+ * The next rows of the Agent-SDK failure classification table
  * (docs/idea/11-anthropic-agent-sdk.md §9): the failures that are about *quota* — a model this
  * plan cannot reach, a dead credit balance, Extra Usage spent, a plan window that is spent, or a
  * bare rate limit. They sit after the request rows because each of their sentences is a statement
@@ -62,11 +63,9 @@ export const SDK_QUOTA_FAILURE_RULES: readonly SdkRule[] = [
     // retryable, so the planner never tried another account, and the client was told its request was
     // malformed when the request was fine and the *account* had no Extra Usage left.
     //
-    // `rate-limited` is the honest class. Nothing about the request is wrong; this account cannot
-    // serve it and a clock will change that, which is exactly `cooling_down` (non-negotiable 7) —
-    // never `credits-exhausted`, which would park a healthy subscription at `402` until a human
-    // intervened. Retryable, so the chain rotates to the next account, and the breaker cools this
-    // one down so the pool is not burned on it again on the very next request.
+    // `rate-limited`, never `credits-exhausted`, which would park a healthy subscription at `402`
+    // until a human intervened. Retryable, so the chain asks one more account; blameless, so no
+    // account cools for what the request's own body provokes.
     //
     // Ordered ahead of `claude-sdk:overage-required` because it is the more specific sentence, and
     // ahead of every bare status token by construction (see the module note in `errors.ts`). The
@@ -79,10 +78,23 @@ export const SDK_QUOTA_FAILURE_RULES: readonly SdkRule[] = [
     // The request's harness fingerprint provokes it on every account alike (`scrub.ts`): fail
     // over, but the account is not out of capacity, so routing must not cool it (101 finding 05.14).
     requestAttributable: true,
-    match: any(
-      phrase("third-party apps now draw from your extra usage"),
-      all("extra usage", "claude.ai/settings/usage"),
-    ),
+    // Nor does waiting clear it: the fingerprint is in the body, and the client resends the body.
+    // Prod 2026-11-18…23: 795 conversations drew this refusal and none was served inside its own
+    // retry burst, seven attempts each. Every account asked answers alike, so a one-account chain
+    // ends as the request wall too; nothing is remembered, and a top-up serves the next request.
+    permanentForRequest: true,
+    match: phrase("third-party apps now draw from your extra usage"),
+  },
+  {
+    // "You're out of extra usage" beside the same link: the same signal, but a top-up or a window's
+    // reset clears it, so it is not permanent for the request and a one-account chain keeps its `429`
+    // (CLI 2.1.319 still carries the sentence as a limit).
+    kind: "rate-limited",
+    signal: "claude-sdk:extra-usage-gated",
+    status: 429,
+    clientMessage: EXTRA_USAGE_SPENT,
+    requestAttributable: true,
+    match: all("extra usage", "claude.ai/settings/usage"),
   },
   {
     // Cooling down, not `credits-exhausted`: the request asked for a variant the account's plan
@@ -110,6 +122,25 @@ export const SDK_QUOTA_FAILURE_RULES: readonly SdkRule[] = [
     status: 429,
     clientMessage: WINDOW_SPENT,
     match: phrase("usage limit reached", "rate limit"),
+  },
+  {
+    // A plan window that meters one model family: "You've hit your Opus limit", "You've reached your
+    // Fable limit" (2.1.261 string table), "Fable 5 requires usage credits" (2.1.319's own limit
+    // pattern, whose families these are). The account serves every other model, so only that model is
+    // held on it. Ahead of `plan-window-spent`, whose shapes contain these.
+    kind: "rate-limited",
+    signal: "claude-sdk:model-window-spent",
+    status: 429,
+    clientMessage: "the account's Claude subscription window for this model is spent",
+    modelScoped: true,
+    match: any(
+      pattern(
+        /(?:hit|reached) your (?:(?:weekly|7-day) )?(?:opus|sonnet|haiku|fable|mythos)(?: [\d.]{1,8})? (?:(?:weekly|usage|7-day) )*limit/,
+      ),
+      pattern(
+        /(?:^|: |\n)(?:api error: (?:\d{3} )?)?(?:opus|sonnet|haiku|fable|mythos)(?: [^·\n]{1,40})? requires usage credits/,
+      ),
+    ),
   },
   {
     // The wording a *plan window* actually uses. Recorded verbatim from a Max subscription whose

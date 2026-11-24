@@ -135,6 +135,8 @@ describe("a streaming SDK response", () => {
       'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n' +
       'event: message_stop\ndata: {"type":"message_stop"}\n\n'
     const slow = slowStream([anthropicSse])
+    // The head waits for the first upstream byte (`success-wall.ts`).
+    slow.release(0)
     const passthrough = harness({
       accounts: [account("api-1", { apiKey: "sk-one", cipher: CRYPTOR })],
       responses: [() => slow.response],
@@ -145,12 +147,10 @@ describe("a streaming SDK response", () => {
       invokeSdk: invoker(),
     })
 
-    const passthroughRes = await passthrough.app.request(
-      "/v1/messages",
-      post(streamMessage(true), bearer()),
-    )
-    slow.release(0)
+    // The answer is not committed before the upstream's first byte, so the bytes come first.
+    const pending = passthrough.app.request("/v1/messages", post(streamMessage(true), bearer()))
     slow.finish()
+    const passthroughRes = await pending
     const [passthroughText, sdkRes] = await Promise.all([
       passthroughRes.text(),
       sdk.app.request("/v1/messages", post(streamMessage(true), bearer())),

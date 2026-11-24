@@ -29,41 +29,19 @@ export interface StreamEndFacts {
   readonly accountId: string
 }
 
-export function endsWithRouterError(
-  response: Response,
+/** What a broken stream says before it closes; nothing to a client that has gone. */
+export type LastWords = (error: unknown) => Uint8Array | undefined
+
+export function routerErrorEnding(
   ingress: Dialect,
   facts: StreamEndFacts,
   /** The client's own signal: once it has gone, nothing is written. */
   client: AbortSignal | undefined,
-): Response {
-  if (response.body === null) return response
-  const reader = response.body.getReader()
-  const encoder = new TextEncoder()
-  const body = new ReadableStream<Uint8Array>(
-    {
-      async pull(controller) {
-        let next: Awaited<ReturnType<typeof reader.read>>
-        try {
-          next = await reader.read()
-        } catch (error) {
-          if (client?.aborted === true) {
-            controller.error(error)
-            return
-          }
-          controller.enqueue(encoder.encode(streamEndEvent(ingress, error, facts)))
-          controller.close()
-          return
-        }
-        if (next.done) controller.close()
-        else controller.enqueue(next.value)
-      },
-      cancel(reason) {
-        return reader.cancel(reason)
-      },
-    },
-    { highWaterMark: 0 },
-  )
-  return new Response(body, response)
+): LastWords {
+  return (error) =>
+    client?.aborted === true
+      ? undefined
+      : new TextEncoder().encode(streamEndEvent(ingress, error, facts))
 }
 
 const MESSAGE_TAIL = "not retried, bytes were already sent"

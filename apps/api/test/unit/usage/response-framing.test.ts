@@ -67,18 +67,66 @@ test("bounded nonstream JSON flushes once at EOF and does not accept unfinished 
     expect(observer.finish().counts.tokensIn).toBe(0)
   }
 })
-test("unterminated SSE and malformed UTF8 are unavailable rather than missing-terminal proof", () => {
-  const observer = createResponseObserver({
+test("a stream cut inside its last frame, and malformed UTF8, are unavailable rather than missing-terminal proof", () => {
+  // Cut mid-frame, with and without a line end: the JSON is not whole, so nothing was read.
+  for (const tail of [
+    'data: {"usage":{"prompt_tok',
+    'data: {"usage":{"prompt_tok\n',
+    "event: mess",
+  ]) {
+    const observer = createResponseObserver({
+      ...spec,
+      descriptor: { terminalPolicy: "require-completion" },
+    })
+    observer.observe(encoder.encode(tail))
+    expect(observer.finish()).toMatchObject({
+      evidenceUnavailable: true,
+      unavailableReason: "trailing",
+      usageStated: false,
+      failure: null,
+      terminal: "none",
+    })
+  }
+  const utf8 = createResponseObserver(spec)
+  utf8.observe(Uint8Array.from([100, 97, 116, 97, 58, 32, 255, 10, 10]))
+  expect(utf8.finish()).toMatchObject({ evidenceUnavailable: true, unavailableReason: "decode" })
+})
+// Prod 2026-11-17..24: 2,306 Codex rows recorded `success` + `usage_unobservable` with null tokens.
+// The translator's parser dispatches a last frame the upstream never ended with a blank line, so
+// the client got its completion while this observer discarded the frame that carried the usage.
+test("a whole last frame the upstream never terminated is read, like the translator reads it", () => {
+  const completed = JSON.stringify({
+    type: "response.completed",
+    response: { status: "completed", usage: { input_tokens: 51234, output_tokens: 321 } },
+  })
+  for (const ending of ["", "\n"]) {
+    const observer = createResponseObserver({
+      ...spec,
+      dialect: "openai-responses",
+      contentType: "text/event-stream",
+    })
+    observer.observe(
+      encoder.encode(
+        `event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: ${completed}${ending}`,
+      ),
+    )
+    expect(observer.finish()).toMatchObject({
+      usageStated: true,
+      evidenceUnavailable: false,
+      unavailableReason: null,
+      terminal: "completed",
+      counts: { tokensIn: 51234, tokensOut: 321 },
+    })
+  }
+  // Every frame was readable and none completed: that is now proof, not lost evidence.
+  const incomplete = createResponseObserver({
     ...spec,
     descriptor: { terminalPolicy: "require-completion" },
   })
-  observer.observe(encoder.encode('data: {"usage":{"prompt_tokens":8}}'))
-  expect(observer.finish()).toMatchObject({
-    evidenceUnavailable: true,
-    failure: null,
-    terminal: "none",
+  incomplete.observe(encoder.encode('data: {"usage":{"prompt_tokens":8}}'))
+  expect(incomplete.finish()).toMatchObject({
+    evidenceUnavailable: false,
+    terminal: "explicit_incomplete",
+    counts: { tokensIn: 8 },
   })
-  const utf8 = createResponseObserver(spec)
-  utf8.observe(Uint8Array.from([100, 97, 116, 97, 58, 32, 255, 10, 10]))
-  expect(utf8.finish().evidenceUnavailable).toBe(true)
 })

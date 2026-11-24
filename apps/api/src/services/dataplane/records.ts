@@ -45,10 +45,10 @@ export interface AttemptTiming {
    * streamed success that is the drain too: relaying is waiting, not working, and excluding it
    * would put the entire generation into `routerOverheadMs`.
    *
-   * Waiting, and only waiting. An attempt's span opens once its body exists and closes at its last
-   * byte, so the conversion a translated candidate needed, the alias rewrite a renamed one needed,
-   * and a credential that spent time failing to decrypt all stay on the router's side of the
-   * subtraction — where a regression in any of them is meant to show.
+   * An HTTP attempt's span opens at its fetch, so the conversion, the alias rewrite, the decrypt and
+   * the header build stay on the router's side of the subtraction, where a regression in any of them
+   * is meant to show. An Agent-SDK attempt's opens at dispatch: its slot wait, its subprocess and the
+   * fast transport's request preparation all count as upstream. So does observing a relayed body.
    */
   readonly upstreamMs: number
   /**

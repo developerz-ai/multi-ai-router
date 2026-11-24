@@ -1,5 +1,5 @@
 import type { UsageOutcome } from "@multi-ai-router/core"
-import type { AttemptFailure } from "../routing"
+import type { AttemptFailure, FailureKind } from "../routing"
 import { TranslationStreamError } from "../translate/shared/stream-error"
 import type { ResponseObservationFacts } from "../usage/response-observer-types"
 import { RouterShutdownError } from "./active-requests"
@@ -26,12 +26,35 @@ const success: RelayVerdict = {
  * the protocol default. It is not an allowlist: label cardinality rests on each hook building its
  * signal from a closed list, as both current hooks do.
  */
-const HOOK_SIGNAL = /^[a-z0-9-]+:[a-z0-9_:-]{1,64}$/
+export const HOOK_SIGNAL = /^[a-z0-9-]+:[a-z0-9_:-]{1,64}$/
+
+/** A response that stopped short: the upstream said so, or it ended with no ending at all. */
+export const UPSTREAM_INCOMPLETE = "upstream_incomplete"
 
 /** The hook's closed signal when a driver hook answered, else the protocol default. */
 function explicitErrorClass(facts: ResponseObservationFacts): string {
   const signal = facts.provider?.signal
   return signal !== undefined && HOOK_SIGNAL.test(signal) ? signal : "upstream_protocol_error"
+}
+
+/** What an in-stream failure proves about the account: the same reading as `chain-recovery.ts`. */
+function streamRecovery(kind: FailureKind): RelayVerdict["recovery"] {
+  // The upstream judged the request, so the account answered.
+  if (kind === "client-error" || kind === "model-unsupported") return "succeeded"
+  // Its shared backend was busy: nothing about this account either way.
+  return kind === "overloaded" ? "uncertain" : "failed"
+}
+
+/**
+ * The upstream's stream ended cleanly with no ending of its own. The translator already told the
+ * client so (`translate/shared/stream-truncated.ts`); this is what the row records instead of a
+ * success nobody received.
+ */
+export class UpstreamTruncatedError extends Error {
+  constructor() {
+    super("upstream stream ended before its final event")
+    this.name = "UpstreamTruncatedError"
+  }
 }
 
 /** First observed causal evidence wins; mutable abort state never rewrites a verdict. */
@@ -48,22 +71,17 @@ export function createRelayTerminal() {
         facts.terminal === "explicit_incomplete"
       ) {
         const errorClass =
-          facts.terminal === "explicit_error" ? explicitErrorClass(facts) : "upstream_incomplete"
+          facts.terminal === "explicit_error" ? explicitErrorClass(facts) : UPSTREAM_INCOMPLETE
+        const kind =
+          facts.failure === null ? null : failoverKind(facts.failure.kind, facts.failure.status)
         capture({
-          outcome:
-            facts.failure === null
-              ? "upstream_error"
-              : failureOutcome(failoverKind(facts.failure.kind, facts.failure.status)),
+          outcome: kind === null ? "upstream_error" : failureOutcome(kind),
           errorClass,
           failure:
-            facts.failure === null
+            facts.failure === null || kind === null
               ? null
-              : {
-                  kind: failoverKind(facts.failure.kind, facts.failure.status),
-                  status: facts.failure.status,
-                  message: "upstream protocol failure",
-                },
-          recovery: facts.failure === null ? "uncertain" : "failed",
+              : { kind, status: facts.failure.status, message: "upstream protocol failure" },
+          recovery: kind === null ? "uncertain" : streamRecovery(kind),
         })
       }
     },
@@ -78,6 +96,13 @@ export function createRelayTerminal() {
         capture({
           outcome: "router_error",
           errorClass: error.errorClass,
+          failure: null,
+          recovery: "uncertain",
+        })
+      } else if (error instanceof UpstreamTruncatedError) {
+        capture({
+          outcome: "upstream_error",
+          errorClass: UPSTREAM_INCOMPLETE,
           failure: null,
           recovery: "uncertain",
         })

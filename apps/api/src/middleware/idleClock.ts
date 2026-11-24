@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "hono"
+import { observeBody } from "./observe-body"
 
 /**
  * Takes a data-plane inference request off the listener's idle clock until its answer is written.
@@ -53,15 +54,10 @@ export function holdIdleClock(idleTimeoutSeconds: number): MiddlewareHandler {
       restore()
     }
     c.res = new Response(
-      response.body.pipeThrough(
-        new TransformStream({
-          transform(chunk, controller) {
-            controller.enqueue(chunk)
-            if (atFirstByte) restoreOnce()
-          },
-          flush: restoreOnce,
-        }),
-      ),
+      observeBody(response.body, {
+        ...(atFirstByte ? { onFirst: restoreOnce } : {}),
+        onEnd: restoreOnce,
+      }),
       response,
     )
   }

@@ -160,10 +160,9 @@ describe("a structured-output request on the Agent-SDK transport, through the ch
     unstruck(h, "sub")
   })
 
-  test("the lone-refusal wall is structured output's alone: extra-usage-gated on one account stays the 429", async () => {
-    // Extra Usage gating is a quota wall that clears with time, so a 400 would tell the client
-    // never to retry a request that succeeds later. Only a refusal that can never succeed on
-    // this pool (structured output on the Agent SDK) ends a one-account chain as the wall.
+  test("extra-usage-gated on one account is the request's own 400, and strikes nothing", async () => {
+    // Prod 2026-11-23 falsified the old reading (a quota wall that clears with time): one session's
+    // body was refused 873 times over seven hours, because the 429 told the client to retry.
     const h = harness([subscriptionAccount("sub")], {
       plain: true,
       runQuery: () => {
@@ -175,7 +174,7 @@ describe("a structured-output request on the Agent-SDK transport, through the ch
 
     const answer = await outcome(h.dispatch())
 
-    expect(answer.status).toBe(429)
+    expect(answer.status).toBe(400)
     expect(h.counts().launches).toBe(1)
     unstruck(h, "sub")
   })

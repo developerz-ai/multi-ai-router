@@ -197,7 +197,12 @@ int main(int argc, char **argv) {
     if (fenced) {
       /* Drain a bounded control burst so renewal framing does not cost one poll per byte. */
       for (int bytes = 0; bytes < 512; bytes++) {
-        if (receive_control(0) != 0) { requested = SIGUSR2; break; }
+        /* A pending request is served below with its own grace; what else made the control read
+           fail is still there on the next pass. Only an expired lease cannot wait for one. */
+        if (receive_control(0) != 0) {
+          if (!requested || !lease_live()) requested = SIGUSR2;
+          break;
+        }
         struct pollfd input = {.fd = 4, .events = POLLIN};
         if (poll(&input, 1, 0) <= 0) break;
       }

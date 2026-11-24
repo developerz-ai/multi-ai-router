@@ -7,6 +7,7 @@ import {
   PERMITTED_TOOLS,
   type SdkConcurrency,
 } from "../../../src/providers"
+import type { CredentialFreshness } from "../../../src/providers/claude-sdk/credential-freshness"
 
 /**
  * The console's "Test now" probe, and specifically the two things about it that are not the SDK's
@@ -57,12 +58,17 @@ interface Spy {
 /** A probe whose "subprocess" stays open until `release` is called, so occupancy is observable. */
 function probeWith(
   concurrency: SdkConcurrency,
-  options: { readonly hold?: Promise<void>; readonly resolveCli?: () => CliResolution } = {},
+  options: {
+    readonly hold?: Promise<void>
+    readonly resolveCli?: () => CliResolution
+    readonly freshness?: CredentialFreshness
+  } = {},
 ) {
   const spy = { launches: [] as Options[], peakInFlight: 0 }
   const probe = createSdkTestProbe({
     cliPathOverride: null,
     concurrency,
+    ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
     resolveCli: options.resolveCli ?? (() => CLI),
     runQuery: async function* ({ options: sdkOptions }) {
       spy.launches.push(sdkOptions)
@@ -444,4 +450,57 @@ describe("the usage gauge on a probe turn", () => {
     expect(result.ok).toBe(true)
     expect(observed).toEqual([{ accountId: "acc-1", source: stream }])
   })
+})
+
+test("a probe re-asks the refresh window once its slot is granted", async () => {
+  // Warm when it queued, inside the CLI's lead when the slot came: the probe must own the window
+  // before it spawns, or it is a second spender of a rotating refresh token.
+  const calls: string[] = []
+  const claim = (name: string) => ({ release: () => void calls.push(`release ${name}`) })
+  const first = claim("first")
+  const second = claim("second")
+  const concurrency = createSdkConcurrency({ global: 1, perAccount: 1 })
+  const { probe, spy } = probeWith(concurrency, {
+    freshness: {
+      wouldRefresh: async () => false,
+      ensureFresh: async (_account, _signal, held) => {
+        calls.push(`${held === undefined ? "ask" : "re-ask"} at ${concurrency.inFlight}`)
+        if (held !== undefined) expect(held).toBe(first)
+        return held === undefined ? first : second
+      },
+    },
+  })
+  const result = await probe.run({
+    accountId: "acc-1",
+    configDir: "/data/claude/acc-1",
+    model: "claude-sonnet-4-5",
+    signal: AbortSignal.timeout(5_000),
+  })
+  expect(result.ok).toBe(true)
+  expect(spy.launches).toHaveLength(1)
+  expect(calls).toEqual(["ask at 0", "re-ask at 1", "release second", "release first"])
+})
+
+test("a probe refused on the re-ask spawns nothing and holds nothing", async () => {
+  const concurrency = createSdkConcurrency({ global: 1, perAccount: 1 })
+  let released = 0
+  const { probe, spy } = probeWith(concurrency, {
+    freshness: {
+      wouldRefresh: async () => false,
+      ensureFresh: async (_account, _signal, held) => {
+        if (held !== undefined) throw new Error("window owned elsewhere")
+        return { release: () => void released++ }
+      },
+    },
+  })
+  const run = probe.run({
+    accountId: "acc-1",
+    configDir: "/data/claude/acc-1",
+    model: "claude-sonnet-4-5",
+    signal: AbortSignal.timeout(5_000),
+  })
+  await expect(run).rejects.toThrow("window owned elsewhere")
+  expect(spy.launches).toHaveLength(0)
+  expect(released).toBe(1)
+  expect(concurrency.inFlight).toBe(0)
 })

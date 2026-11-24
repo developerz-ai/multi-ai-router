@@ -136,7 +136,8 @@ for (const mode of ["ordinary", "probe", "early-reading"] as const) {
       utilization: 1,
     })
     expect(writes).toBe(early ? 2 : 1)
-    expect(finishes).toEqual(["failed"])
+    // A probe settles at its first model output; the late rejection still cools the account above.
+    expect(finishes).toEqual([designated ? "succeeded" : "failed"])
     expect(health.stateOf("sub").inFlight).toBe(0)
     expect(concurrency.inFlight).toBe(0)
   })

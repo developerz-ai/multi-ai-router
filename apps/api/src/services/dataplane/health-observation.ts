@@ -154,6 +154,28 @@ export function createHealthObservations() {
           held.get(accountId)?.verdictVersion === observation.verdictVersion)
       )
     },
+    /**
+     * The same attempt's observation, moved over verdict changes it lived through itself: a probe
+     * settled at its first model output keeps the right to report how its stream ended. Anything that
+     * changed the account or its credential leaves the observation stale, as captured.
+     */
+    follow(accountId: string, observation: HealthObservation): HealthObservation {
+      const current = held.get(accountId)
+      if (
+        current === undefined ||
+        current.facts.lifecycleVersion !== observation.lifecycleVersion ||
+        current.facts.healthRecoveryVersion !== observation.healthRecoveryVersion ||
+        current.facts.authRecoveryVersion !== observation.authRecoveryVersion ||
+        current.facts.authMaterial !== observation.authMaterial ||
+        current.facts.status !== observation.status
+      )
+        return observation
+      return {
+        ...current.facts,
+        observationGeneration: current.generation,
+        verdictVersion: current.verdictVersion,
+      }
+    },
     advanceVerdict(accountId: string): void {
       const current = held.get(accountId)
       if (current !== undefined) current.verdictVersion += 1

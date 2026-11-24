@@ -1,15 +1,19 @@
-import type {
-  QuotaWindowKind,
-  QuotaWindowState,
-  ResetSource,
-  UtilizationSource,
-} from "@multi-ai-router/core"
-import { QuotaWindowKind as QuotaWindowKindSchema } from "@multi-ai-router/core"
-import type { RateLimitSignal, RateLimitWindow } from "../types"
+import type { QuotaWindowState } from "@multi-ai-router/core"
+import type { RateLimitSignal } from "../types"
+import {
+  type AccountQuota,
+  applyOverage,
+  clearStaleRefusals,
+  futureReset,
+  isLimited,
+  SDK_DEFAULT_BUCKET,
+  snapshotOf,
+  windowKind,
+} from "./quota-buckets"
 import {
   clampFraction,
+  MODEL_SCOPED_WINDOWS,
   readSdkRateLimitInfo,
-  type SdkRateLimitReading,
   type SdkUsageGaugeReading,
 } from "./quota-reading"
 
@@ -41,16 +45,13 @@ import {
  *   clears an alarm's `limited` — only the next event or the window's reset does.
  * - **An event that named no window still counts.** A `rejected` with no `rateLimitType` is the
  *   account saying "not now", so it lands in an internal `default` bucket and cools the account
- *   down — but it is never rendered as a real window, because naming which window was spent would
+ *   down until its reset or the next request the upstream serves — but it is never rendered as a real window, because naming which window was spent would
  *   be inventing the one fact the event withheld. A window kind this build does not know lands in
  *   its own unrendered bucket for the same reason, under the SDK's own word for it.
  * - **Never a process singleton.** State is per-runtime and keyed by Account, exactly like the
  *   health store: a module-level map would bleed one runtime's readings into another's inside a
  *   single process, and every test would start dirty.
  */
-
-/** The bucket an event that named no window lands in. Never rendered as a `QuotaWindowState`. */
-export const SDK_DEFAULT_BUCKET = "default"
 
 export interface SdkQuotaSnapshot {
   /** The windows a console renders. Unknown and unnamed buckets are absent by construction. */
@@ -102,19 +103,28 @@ export function createSdkQuotaStore(): SdkQuotaStore {
       const key = reading.rateLimitType ?? SDK_DEFAULT_BUCKET
       const previous = state.buckets.get(key)
       const reported = reading.utilization !== null
+      const rejected = reading.status === "rejected"
+      const modelSpent = rejected && reading.resetsAt !== null && MODEL_SCOPED_WINDOWS.has(key)
+      if (reading.requestStatus === "allowed" || reading.requestStatus === "allowed_warning")
+        clearStaleRefusals(state, key, now)
       // A continuous reporter (the fast transport's headers) is a gauge, not an alarm.
       const fresh = reading.continuous ? "continuous" : "threshold-triggered"
       state.buckets.set(key, {
         limiter: key,
         kind: windowKind(reading.rateLimitType),
-        limited: reading.status === "rejected",
-        // A reading that said nothing about fullness leaves the gauge's number standing.
+        limited: rejected,
+        // A reading that said nothing about fullness leaves the gauge's number standing — except a
+        // refusal by a model's own window, which is that window saying it is full. It is the fact
+        // the per-model filter reads, since such a refusal never cools the Account. Only beside a
+        // reset: a spent window with no clock would hold the model with nothing to let it out.
         utilization: reported
           ? clampFraction(reading.utilization ?? 0)
-          : previous?.source === "continuous"
-            ? previous.utilization
-            : undefined,
-        source: reported ? fresh : (previous?.source ?? "none"),
+          : modelSpent
+            ? 1
+            : previous?.source === "continuous"
+              ? previous.utilization
+              : undefined,
+        source: reported || modelSpent ? fresh : (previous?.source ?? "none"),
         resetsAt: reading.resetsAt ?? futureReset(previous, now),
         lastCheckedAt: now,
       })
@@ -153,126 +163,7 @@ export function createSdkQuotaStore(): SdkQuotaStore {
   }
 }
 
-interface QuotaBucket {
-  /** The provider's own word for the window, kept verbatim — `RateLimitWindow` is free-form. */
-  readonly limiter: string
-  /** Null for the `default` bucket and for a window kind this build does not know. */
-  readonly kind: QuotaWindowKind | null
-  readonly limited: boolean
-  readonly utilization: number | undefined
-  /** Which reading `utilization` came from. `none` whenever it is undefined. */
-  readonly source: UtilizationSource
-  readonly resetsAt: Date | undefined
-  readonly lastCheckedAt: Date
-}
-
-interface AccountQuota {
-  readonly buckets: Map<string, QuotaBucket>
-  usingOverage: boolean
-}
-
-/**
- * The paid-overage window, recorded from the detail every event carries beside its own window.
- *
- * It is never `limited`, and that is the whole subtlety: a rejected overage means the *paid* top-up
- * is unavailable, not that this request cannot be served. An account whose five-hour window is fine
- * serves normally with no overage at all, so letting this bucket block one would take a healthy
- * account out of the pool. Whichever included window actually rejected the request is what does it.
- */
-function applyOverage(
-  state: AccountQuota,
-  reading: SdkRateLimitReading,
-  key: string,
-  now: Date,
-): void {
-  // The event named the overage window itself, so its own bucket already holds the reading —
-  // including a `rejected` status this function would otherwise flatten.
-  if (key === "overage") return
-  if (reading.overageStatus === null && reading.overageResetsAt === null && !reading.usingOverage) {
-    return
-  }
-
-  state.buckets.set("overage", {
-    limiter: "overage",
-    kind: "overage",
-    limited: false,
-    utilization: undefined,
-    source: "none",
-    resetsAt: reading.overageResetsAt ?? undefined,
-    lastCheckedAt: now,
-  })
-}
-
-/**
- * `verdict` is the event path: a `limited` bucket cools the account down through the breaker.
- * `reading` is the gauge path: the same windows, but the signal never claims a refusal the gauge
- * did not make — the health store's fold would otherwise re-record a rate-limit failure per gauge.
- */
-function snapshotOf(state: AccountQuota, mode: "verdict" | "reading", now: Date): SdkQuotaSnapshot {
-  const windows: QuotaWindowState[] = []
-  const limiterWindows: RateLimitWindow[] = []
-  let limited = false
-  let resetsAt: Date | undefined
-
-  for (const bucket of state.buckets.values()) {
-    const reading = {
-      utilizationSource: bucket.utilization === undefined ? ("none" as const) : bucket.source,
-      resetSource: resetSourceOf(bucket),
-      ...(bucket.utilization === undefined ? {} : { utilization: bucket.utilization }),
-      ...(bucket.resetsAt === undefined ? {} : { resetsAt: bucket.resetsAt }),
-    }
-
-    if (bucket.kind !== null) {
-      windows.push({ window: bucket.kind, lastCheckedAt: bucket.lastCheckedAt, ...reading })
-    }
-    limiterWindows.push({ limiter: bucket.limiter, ...reading })
-
-    if (!isLimited(bucket, now) || mode === "reading") continue
-    limited = true
-    if (bucket.resetsAt !== undefined && (resetsAt === undefined || bucket.resetsAt > resetsAt)) {
-      resetsAt = bucket.resetsAt
-    }
-  }
-
-  return {
-    windows,
-    usingOverage: state.usingOverage,
-    signal: {
-      limited,
-      // Only a *blocking* window's reset answers "when may this account serve again", so a reset
-      // borrowed from a window that is merely warning would understate the cooldown.
-      resetSource: resetsAt === undefined ? "unknown" : "provider-reported",
-      windows: limiterWindows,
-      // The named windows ride the signal because that is how they reach Account state: the health
-      // store folds one reading in, from either transport, and the console's gauges and the
-      // filter's `quota-window-spent` read what it folded. Omitted rather than sent empty when this
-      // account has reported only unnamed buckets — `[]` would claim it holds no windows at all,
-      // and on a fresh process that claim would overwrite what the last one persisted.
-      ...(windows.length === 0 ? {} : { quotaWindows: windows }),
-      ...(resetsAt === undefined ? {} : { resetsAt }),
-    },
-  }
-}
-
-function futureReset(bucket: QuotaBucket | undefined, now: Date): Date | undefined {
-  return bucket?.resetsAt !== undefined && bucket.resetsAt > now ? bucket.resetsAt : undefined
-}
-
-function isLimited(bucket: QuotaBucket, now: Date): boolean {
-  return bucket.limited && (bucket.resetsAt === undefined || bucket.resetsAt > now)
-}
-
-function resetSourceOf(bucket: QuotaBucket): ResetSource {
-  return bucket.resetsAt === undefined ? "unknown" : "provider-reported"
-}
-
-/** Zod validated the shape, not the vocabulary; an unknown kind is a bucket, never a window. */
-function windowKind(raw: string | null): QuotaWindowKind | null {
-  if (raw === null) return null
-  const parsed = QuotaWindowKindSchema.safeParse(raw)
-  return parsed.success ? parsed.data : null
-}
-
+export { SDK_DEFAULT_BUCKET } from "./quota-buckets"
 // The readers live in `quota-reading.ts`; re-exported so every existing import keeps working.
 export {
   readSdkRateLimitInfo,
