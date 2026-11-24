@@ -24,14 +24,14 @@ export const LOGIN_PATH = "/login"
 
 /**
  * Where to send an operator whose session just ended, carrying the surface they
- * were on so signing back in returns them there.
+ * were on, query included, so signing back in returns them to the same view.
  *
  * The login screen itself is never a destination — a redirect loop back to
  * `/login?next=/login` is the bug this guard rules out.
  */
-export function loginPathFor(pathname: string): string {
+export function loginPathFor(pathname: string, search = ""): string {
   if (pathname === LOGIN_PATH || pathname === "/") return LOGIN_PATH
-  return `${LOGIN_PATH}?next=${encodeURIComponent(pathname)}`
+  return `${LOGIN_PATH}?next=${encodeURIComponent(`${pathname}${search}`)}`
 }
 
 /**

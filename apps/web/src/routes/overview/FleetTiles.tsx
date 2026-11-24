@@ -1,5 +1,7 @@
 import { StatTile } from "../../components/StatTile"
 import { formatCost, formatCount, formatPercent } from "../../lib/format"
+import { keyState } from "../../lib/key-state"
+import { loadedData } from "../../lib/loaded"
 import type { useAllAccounts } from "../../lib/queries/accounts"
 import type { usePools } from "../../lib/queries/pools"
 import type { useKeys } from "../../lib/queries/router-keys"
@@ -17,6 +19,7 @@ export interface FleetTilesProps {
    */
   readonly routableNow: number
   readonly windowLabel: string
+  readonly nowMs: number
 }
 
 /** The overview's headline figures. Each tile follows its own query, so one failed read is one tile. */
@@ -46,7 +49,8 @@ export function FleetTiles(props: FleetTilesProps) {
         {...tile(
           props.keys,
           () => String((props.keys.data ?? []).length),
-          () => `${(props.keys.data ?? []).filter((key) => !key.revoked).length} active`,
+          () =>
+            `${(props.keys.data ?? []).filter((key) => keyState(key, props.nowMs) === "active").length} active`,
         )}
       />
       <StatTile
@@ -78,14 +82,18 @@ export function FleetTiles(props: FleetTilesProps) {
 }
 
 /**
- * A tile's figures by its query's state. A failed read has to end the skeleton: `StatTile` reads
+ * A tile's figures by its query's state. A failed first read has to end the skeleton: `StatTile` reads
  * an absent value as "still loading", and that query is not going to answer.
  */
 function tile(
-  query: { readonly isSuccess: boolean; readonly isError: boolean },
+  query: {
+    readonly isPending: boolean
+    readonly isError: boolean
+    readonly data: unknown
+  },
   value: () => string,
   note: () => string,
 ): { readonly value?: string; readonly note?: string } {
-  if (query.isSuccess) return { value: value(), note: note() }
+  if (loadedData(query) !== undefined) return { value: value(), note: note() }
   return query.isError ? { value: "—", note: "could not load" } : {}
 }

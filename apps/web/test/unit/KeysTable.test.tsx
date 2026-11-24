@@ -75,6 +75,14 @@ function identitySpans(container: HTMLElement): readonly string[] {
   return Array.from(cell.querySelectorAll("span")).map((span) => span.textContent ?? "")
 }
 
+test("an expired key is not shown as active", () => {
+  withMount([key({ expiresAt: "2026-07-25T00:00:00.000Z" })], {}, (container) => {
+    const cells = [...container.querySelectorAll("td")].map((cell) => cell.textContent)
+    expect(cells).toContain("expired")
+    expect(cells).not.toContain("active")
+  })
+})
+
 describe("KeysTable", () => {
   test("every row offers an edit action and hands back the key it belongs to", () => {
     let edited: ApiKeyView | undefined

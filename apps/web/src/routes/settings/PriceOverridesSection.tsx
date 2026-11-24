@@ -4,19 +4,7 @@ import { ConfirmDialog } from "../../components/ConfirmDialog"
 import { QueryBoundary } from "../../components/QueryBoundary"
 import { TableSkeleton } from "../../components/TableSkeleton"
 import { errorMessage } from "../../lib/api/errors"
-import {
-  buildPriceOverridePayload,
-  diffOverrides,
-  type ModelRates,
-  mergePriceRows,
-  type OverrideDiff,
-  type PriceRow,
-  priceRowId,
-  type RateField,
-  type SettingsView,
-  withRates,
-} from "../../lib/api/settings"
-import { visiblePriceRows } from "../../lib/price-filter"
+import { loadedData } from "../../lib/loaded"
 import { useProviders } from "../../lib/queries/providers"
 import { useSavePriceOverrides, useSettings } from "../../lib/queries/settings"
 import { PriceAddForm } from "./PriceAddForm"
@@ -24,16 +12,8 @@ import { PriceCoverage } from "./PriceCoverage"
 import styles from "./PriceOverridesSection.module.scss"
 import { PriceTable } from "./PriceTable"
 import { PriceTableControls } from "./PriceTableControls"
-import {
-  draftOf,
-  EMPTY_DRAFT,
-  parseDraft,
-  type RateDraft,
-  removalConsequences,
-  summarise,
-  toRate,
-  ZERO_RATES,
-} from "./price-editing"
+import { removalConsequences, summarise } from "./price-editing"
+import { createPriceState } from "./price-state"
 
 /** Edit overrides locally; Save atomically replaces the stored account/provider/model set. */
 export function PriceOverridesSection() {
@@ -41,121 +21,34 @@ export function PriceOverridesSection() {
   const providers = useProviders()
   const save = useSavePriceOverrides()
 
-  const [drafts, setDrafts] = createSignal<Readonly<Record<string, RateDraft>>>({})
-  const [extras, setExtras] = createSignal<readonly PriceRow[]>([])
-  const [dropped, setDropped] = createSignal<readonly string[]>([])
+  const state = createPriceState(() => loadedData(settings)?.prices)
   const [accountId, setAccountId] = createSignal("")
   const [provider, setProvider] = createSignal("")
   const [model, setModel] = createSignal("")
   const [addError, setAddError] = createSignal<string | null>(null)
   const [confirming, setConfirming] = createSignal(false)
-  const [query, setQuery] = createSignal("")
-  const [showAll, setShowAll] = createSignal(false)
 
-  // A row added in this session sits at the end until the save lands and the
-  // server's ordering takes over — a just-added row must not be hard to find.
-  const rows = (view: SettingsView): readonly PriceRow[] =>
-    [...mergePriceRows(view.prices.shipped, view.prices.overrides), ...extras()]
-      .filter((row) => !dropped().includes(row.id))
-      .map((row) => withRates(row, edited(row)))
-
-  const edited = (row: PriceRow): ModelRates => {
-    const draft = drafts()[row.id]
-    return draft === undefined ? row.rates : (parseDraft(draft) ?? row.rates)
-  }
-
-  const diffFor = (view: SettingsView): OverrideDiff =>
-    diffOverrides(view.prices.overrides, buildPriceOverridePayload(rows(view)))
-
-  const dirty = (view: SettingsView): boolean => {
-    const diff = diffFor(view)
-    return diff.removed.length > 0 || diff.changed.length > 0
-  }
-
-  const unparseable = (view: SettingsView): readonly PriceRow[] =>
-    rows(view).filter((row) => {
-      const draft = drafts()[row.id]
-      return draft !== undefined && parseDraft(draft) === null
-    })
-
-  // Folded to the first page unless searched or unfolded; an edited row is never folded away.
-  const visible = (view: SettingsView) =>
-    visiblePriceRows(rows(view), query(), showAll(), (row) => drafts()[row.id] !== undefined)
-
-  const cellValue = (row: PriceRow, field: RateField): string =>
-    drafts()[row.id]?.[field] ?? String(row.rates[field])
-
-  const badCell = (row: PriceRow, field: RateField): boolean => {
-    const draft = drafts()[row.id]
-    return draft !== undefined && toRate(draft[field]) === null
-  }
-
-  const edit = (row: PriceRow, field: RateField, value: string) => {
-    setDrafts((current) => ({
-      ...current,
-      [row.id]: { ...(current[row.id] ?? draftOf(row.rates)), [field]: value },
-    }))
-  }
-
-  const revert = (row: PriceRow) => {
-    const shipped = row.shipped
-    if (shipped === null || row.preserveOverride) {
-      // Remove extensions and explicit overrides whose shipped rate is attribution-only.
-      setExtras((current) => current.filter((extra) => extra.id !== row.id))
-      setDropped((current) => (current.includes(row.id) ? current : [...current, row.id]))
-      return
-    }
-    setDrafts((current) => ({ ...current, [row.id]: draftOf(shipped) }))
-  }
+  const providerList = () => loadedData(providers) ?? []
 
   const discard = () => {
-    setDrafts({})
-    setExtras([])
-    setDropped([])
+    state.discard()
     setAddError(null)
     save.reset()
   }
 
-  const providerList = () => (providers.isSuccess ? (providers.data ?? []) : [])
-
-  const add = (view: SettingsView) => {
+  const add = () => {
     const chosen = providerList().find((descriptor) => descriptor.id === provider())
-    // Normalised here because `price_overrides` indexes a trimmed, lowercased
-    // model name — two casings of one model must not become two rows.
-    const name = model().trim().toLowerCase()
-    if (chosen === undefined || name.length === 0) {
+    if (chosen === undefined || model().trim().length === 0) {
       setAddError("Pick a provider and name a model.")
       return
     }
-
-    const id = priceRowId(chosen.id, name, accountId() || null)
-    if (rows(view).some((row) => row.id === id)) {
-      setAddError(`${chosen.id} / ${name} is already listed — edit its row instead.`)
-      return
-    }
-
-    setExtras((current) => [
-      ...current,
-      {
-        id,
-        accountId: accountId() || null,
-        provider: chosen.id,
-        model: name,
-        origin: "added",
-        shipped: null,
-        rates: ZERO_RATES,
-        longContext: null,
-        updatedAt: null,
-      },
-    ])
-    setDrafts((current) => ({ ...current, [id]: EMPTY_DRAFT }))
-    setDropped((current) => current.filter((value) => value !== id))
-    setModel("")
-    setAddError(null)
+    const refused = state.add(chosen, model(), accountId())
+    setAddError(refused)
+    if (refused === null) setModel("")
   }
 
-  const commit = (view: SettingsView) => {
-    save.mutate(buildPriceOverridePayload(rows(view)), {
+  const commit = () => {
+    save.mutate(state.payload(), {
       onSuccess: () => {
         discard()
         setConfirming(false)
@@ -163,12 +56,9 @@ export function PriceOverridesSection() {
     })
   }
 
-  const attemptSave = (view: SettingsView) => {
-    if (diffFor(view).removed.length > 0) {
-      setConfirming(true)
-      return
-    }
-    commit(view)
+  const attemptSave = () => {
+    if (state.diff().removed.length > 0) setConfirming(true)
+    else commit()
   }
 
   return (
@@ -200,23 +90,23 @@ export function PriceOverridesSection() {
             />
 
             <PriceTableControls
-              hidden={visible(view()).hidden}
-              matched={visible(view()).matched}
-              onQuery={setQuery}
-              onShowAll={setShowAll}
-              query={query()}
-              showAll={showAll()}
-              shown={visible(view()).rows.length}
-              total={rows(view()).length}
+              hidden={state.visible().hidden}
+              matched={state.visible().matched}
+              onQuery={state.setQuery}
+              onShowAll={state.setShowAll}
+              query={state.query()}
+              showAll={state.showAll()}
+              shown={state.visible().rows.length}
+              total={state.rows().length}
             />
 
             <PriceTable
               accounts={view().prices.accounts}
-              invalid={badCell}
-              onEdit={edit}
-              onRevert={revert}
-              rows={visible(view()).rows}
-              value={cellValue}
+              invalid={state.badCell}
+              onEdit={state.edit}
+              onRevert={state.revert}
+              rows={state.visible().rows}
+              value={state.cellValue}
             />
 
             <PriceAddForm
@@ -225,7 +115,7 @@ export function PriceOverridesSection() {
               onAccount={setAccountId}
               error={addError()}
               model={model()}
-              onAdd={() => add(view())}
+              onAdd={add}
               onModel={setModel}
               onProvider={(value) => {
                 setProvider(value)
@@ -235,9 +125,9 @@ export function PriceOverridesSection() {
               providers={providerList()}
             />
 
-            <Show when={unparseable(view()).length > 0}>
+            <Show when={state.unparseable().length > 0}>
               <p class={styles.error} role="alert">
-                <For each={unparseable(view())}>
+                <For each={state.unparseable()}>
                   {(row) => (
                     <span class={styles.line}>
                       {row.provider} / {row.model} has a rate that is not a number of dollars.
@@ -255,17 +145,17 @@ export function PriceOverridesSection() {
             </Show>
 
             <div class={styles.bar}>
-              <p class={styles.summary}>{summarise(view(), diffFor(view()))}</p>
+              <p class={styles.summary}>{summarise(view(), state.diff())}</p>
               <div class={styles.actions}>
-                <Show when={dirty(view())}>
+                <Show when={state.touched()}>
                   <Button onClick={discard} tone="ghost">
                     Discard changes
                   </Button>
                 </Show>
                 <Button
                   busy={save.isPending}
-                  disabled={!dirty(view()) || unparseable(view()).length > 0}
-                  onClick={() => attemptSave(view())}
+                  disabled={!state.dirty() || state.unparseable().length > 0}
+                  onClick={attemptSave}
                   tone="primary"
                 >
                   Save price overrides
@@ -277,15 +167,15 @@ export function PriceOverridesSection() {
               <ConfirmDialog
                 busy={save.isPending}
                 confirmLabel="Save and remove"
-                consequences={removalConsequences(diffFor(view()), view().prices.shipped)}
+                consequences={removalConsequences(state.diff(), view().prices.shipped)}
                 error={save.error}
                 onClose={() => {
                   save.reset()
                   setConfirming(false)
                 }}
-                onConfirm={() => commit(view())}
+                onConfirm={() => commit()}
                 open
-                subject={`${diffFor(view()).removed.length} price override(s)`}
+                subject={`${state.diff().removed.length} price override(s)`}
                 title="This save removes price overrides"
               />
             </Show>

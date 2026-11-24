@@ -76,6 +76,15 @@ describe("clientRecipes", () => {
     expect(text("aider")).toContain(`ANTHROPIC_API_BASE="${BASE}"`)
   })
 
+  test("Claude Code leads with the claudes launcher, which never carries the key", () => {
+    const [launcher, env] = recipe("claude-code").snippets
+    expect(launcher?.label).toContain("claudes (recommended)")
+    expect(launcher?.text).toContain("git clone https://github.com/developerz-ai/claudes.git")
+    expect(launcher?.text).toContain(`claudes login --url "${BASE}"`)
+    expect(launcher?.text).not.toContain(KEY)
+    expect(env?.text).toContain(KEY)
+  })
+
   test("OpenAI-dialect clients get the /v1 suffix, because they append /chat/completions", () => {
     expect(recipe("cursor").snippets[0]?.text).toBe(`${BASE}/v1`)
     expect(text("aider")).toContain(`OPENAI_API_BASE="${BASE}/v1"`)

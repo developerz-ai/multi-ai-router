@@ -21,7 +21,8 @@
     color var(--duration-fast) var(--ease-out);
 }
 
-.button:disabled {
+.button:disabled,
+.button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -46,7 +47,7 @@
   color: var(--accent-contrast);
 }
 
-.primary:hover:not(:disabled) {
+.primary:hover:not(:disabled, [aria-disabled="true"]) {
   border-color: var(--accent);
   filter: brightness(1.08);
 }
@@ -57,7 +58,7 @@
   color: var(--text);
 }
 
-.neutral:hover:not(:disabled) {
+.neutral:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--surface-overlay);
   border-color: var(--border-strong);
 }
@@ -67,7 +68,7 @@
   color: var(--text-muted);
 }
 
-.ghost:hover:not(:disabled) {
+.ghost:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--surface-sunken);
   color: var(--text);
 }
@@ -80,7 +81,7 @@
   color: var(--danger);
 }
 
-.danger:hover:not(:disabled) {
+.danger:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--danger);
   color: var(--accent-contrast);
 }

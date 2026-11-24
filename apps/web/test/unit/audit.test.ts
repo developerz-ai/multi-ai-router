@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   AUDIT_LIMIT_DEFAULT,
   auditDetailEntries,
+  auditKindNote,
   auditKinds,
   auditSubjectText,
   mergeKinds,
@@ -89,4 +90,9 @@ describe("auditSubjectText", () => {
     expect(auditSubjectText("price_overrides")).toBe("price_overrides")
     expect(auditSubjectText("admin")).toBe("admin")
   })
+})
+
+test("a change the router made by itself is explained where it is listed", () => {
+  expect(auditKindNote("account.egress_proxy_replaced")).toContain("dead proxy")
+  expect(auditKindNote("account.updated")).toBeNull()
 })

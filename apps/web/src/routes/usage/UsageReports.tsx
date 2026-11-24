@@ -11,6 +11,7 @@ import {
 } from "../../lib/api/usage-reports"
 import { formatDate } from "../../lib/format"
 import { useDeliverUsageReport, useUsageReports } from "../../lib/queries/usage"
+import { createRowRuns } from "../../lib/row-runs"
 import styles from "./UsageReports.module.scss"
 
 /**
@@ -29,24 +30,16 @@ export function UsageReports() {
   // One notice at a time, keyed to the row it belongs to: a re-send is a deliberate click, and the
   // answer the server gave that click is what the operator reads next.
   const [notice, setNotice] = createSignal<{ periodStart: string; text: string } | null>(null)
-  // Weeks with a re-send in flight, tracked per row: the mutation store only reports its latest
-  // call, and the busy state belongs to the row that was clicked — never to the whole list (#270).
-  const [pendingWeeks, setPendingWeeks] = createSignal<ReadonlySet<string>>(new Set())
+  // Busy belongs to the row that was clicked, never to the whole list (#270).
+  const runs = createRowRuns<UsageReportDeliveryView>()
 
   const resend = (periodStart: string) => {
     // The guard behind `aria-disabled`: the button stays focusable, so the click still lands here.
-    if (pendingWeeks().has(periodStart)) return
-    setPendingWeeks((prev) => new Set(prev).add(periodStart))
+    if (runs.pending().has(periodStart)) return
     setNotice({ periodStart, text: "Posting to the channel…" })
-    deliver.mutate(periodStart, {
+    void runs.run(periodStart, () => deliver.mutateAsync(periodStart), {
       onSuccess: (view) => setNotice({ periodStart, text: deliveryNotice(view) }),
       onError: (error) => setNotice({ periodStart, text: errorMessage(error) }),
-      onSettled: () =>
-        setPendingWeeks((prev) => {
-          const next = new Set(prev)
-          next.delete(periodStart)
-          return next
-        }),
     })
   }
 
@@ -75,8 +68,8 @@ export function UsageReports() {
             // `aria-disabled` + the guard in `resend`, never `disabled`: a `disabled` button drops
             // keyboard focus and is invisible to screen readers, so a busy row would silently
             // strand the operator on it (#270). `aria-busy` announces the in-flight post.
-            aria-busy={pendingWeeks().has(row.periodStart) || undefined}
-            aria-disabled={pendingWeeks().has(row.periodStart) || undefined}
+            aria-busy={runs.pending().has(row.periodStart) || undefined}
+            aria-disabled={runs.pending().has(row.periodStart) || undefined}
             aria-label={`Post the week of ${row.periodStart} to the Discord channel again`}
             class={styles.resendButton}
             onClick={() => resend(row.periodStart)}

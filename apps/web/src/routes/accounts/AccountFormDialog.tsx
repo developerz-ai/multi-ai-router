@@ -195,7 +195,7 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
 
         <Show when={selected() !== undefined && selected()?.connectFlow === null}>
           <TextField
-            autocomplete="off"
+            autocomplete="new-password"
             hint={
               credentialOptional()
                 ? "Optional — this upstream answers without one. Fill it in only if you hold a key for it, or put something in front of it that checks. Encrypted at rest and never returned by any endpoint, in any form."

@@ -11,11 +11,13 @@ import {
   supportedModelsPatch,
 } from "../../lib/account-models"
 import type { UpdateAccountInput } from "../../lib/api/accounts"
-import { errorMessage } from "../../lib/api/errors"
+import { errorMessage, isApiError } from "../../lib/api/errors"
 import type { AccountView, ProviderDescriptor } from "../../lib/api/types"
-import { DIALECT_HINT, dialectChoices, providerCredentialNote } from "../../lib/provider-display"
+import { endpointMove } from "../../lib/endpoint-move"
+import { DIALECT_HINT, dialectChoices } from "../../lib/provider-display"
 import styles from "./AccountEditDialog.module.scss"
 import { BillingFields } from "./BillingFields"
+import { CredentialRotateField } from "./CredentialRotateField"
 import { EgressProxyPanel } from "./EgressProxyPanel"
 import { LoginLifetimeSummary } from "./LoginLifetimeSummary"
 import { ModelAliasesField } from "./ModelAliasesField"
@@ -43,6 +45,9 @@ export interface AccountEditDialogProps {
   readonly onSubmit: (patch: UpdateAccountInput) => void
   readonly onClose: () => void
 }
+
+/** The API's refusal to send a stored key to a host it was not given for. */
+const KEY_FOR_NEW_ENDPOINT = "credential_required_for_new_endpoint"
 
 /**
  * Edit an upstream account in place.
@@ -78,6 +83,14 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
   const [ceilings, setCeilings] = createSignal<CeilingInputs>({})
   const [preferences, setPreferences] = createSignal("")
 
+  // What the dialog opened on. `props.account` is a live row that follows every poll, so an edit
+  // is diffed against this copy: an id discovered meanwhile is not one the operator removed.
+  const [opened, setOpened] = createSignal<{
+    readonly models: readonly string[]
+    readonly baseUrl: string | null
+    readonly dialect: string | null
+  }>({ models: [], baseUrl: null, dialect: null })
+
   // Sync-from-props, re-seeded whenever the dialog opens on a different account.
   // The credential is deliberately not among them: there is nothing to seed it
   // from, and a placeholder that looked like one would be a lie about what the
@@ -86,6 +99,11 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
     on(
       () => (props.open ? props.account : null),
       (account) => {
+        setOpened({
+          models: [...(account?.supportedModels ?? [])],
+          baseUrl: account?.baseUrl ?? null,
+          dialect: account?.dialect ?? null,
+        })
         setLabel(account?.label ?? "")
         setCredential("")
         setBaseUrl(account?.baseUrl ?? "")
@@ -102,7 +120,14 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
   )
 
   const rotatable = () => (props.provider?.connectFlow ?? null) === null
-  const credentialOptional = () => props.provider?.authKind === "none"
+  /** Only a stored key can be carried to the wrong host; an account holding none has none to leak. */
+  const move = () => {
+    if (props.account?.hasCredential !== true) return "same"
+    const verdict = endpointMove(opened(), { baseUrl: baseUrl(), dialect: dialect() })
+    // Where only the router can tell, its refusal of this save is the answer.
+    const refused = isApiError(props.error) && props.error.code === KEY_FOR_NEW_ENDPOINT
+    return verdict === "unknown" && refused ? "moved" : verdict
+  }
 
   const submit = (event: SubmitEvent) => {
     event.preventDefault()
@@ -111,6 +136,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
     const prefs = parsePreferences(preferences())
     const takesPreferences = props.provider?.providerPreferences === true
     if (account === null || !parsedAliases.ok || (takesPreferences && !prefs.ok)) return
+    if (rotatable() && move() === "moved" && credential().length === 0) return
 
     const aliasMap = parsedAliases.aliases
 
@@ -123,7 +149,7 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
       baseUrl: baseUrl().trim().length > 0 ? baseUrl().trim() : null,
       dialect: dialect().length > 0 ? (dialect() as Dialect) : null,
       // Only when changed, with what it removes named (`supportedModelsPatch`).
-      ...supportedModelsPatch(account.supportedModels ?? [], parseModelList(supportedModels())),
+      ...supportedModelsPatch(opened().models, parseModelList(supportedModels())),
       modelAliases: Object.keys(aliasMap).length > 0 ? aliasMap : null,
       ...numeric("weight", weight()),
       ...numeric("priority", priority()),
@@ -176,20 +202,11 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
         </p>
 
         <Show when={rotatable()}>
-          <Show when={providerCredentialNote(props.account?.provider ?? "")}>
-            {(note) => <p class={styles.note}>{note()}</p>}
-          </Show>
-          <TextField
-            autocomplete="off"
-            hint={
-              credentialOptional()
-                ? "Leave empty to keep what is stored. This upstream authenticates nobody, so it may hold none at all."
-                : "Leave empty to keep the stored one. Typing here replaces it — nothing is returned by any endpoint, in any form."
-            }
-            label="Rotate credential"
-            onInput={(event) => setCredential(event.currentTarget.value)}
-            placeholder="unchanged"
-            type="password"
+          <CredentialRotateField
+            move={move()}
+            onInput={setCredential}
+            provider={props.provider}
+            providerId={props.account?.provider ?? ""}
             value={credential()}
           />
         </Show>
@@ -259,14 +276,14 @@ export function AccountEditDialog(props: AccountEditDialogProps) {
           values={ceilings()}
         />
 
-        <EgressProxyPanel account={props.account} shown={rotatable()} />
-
         <Show when={props.error !== undefined && props.error !== null}>
           <p class={styles.error} role="alert">
             {errorMessage(props.error)}
           </p>
         </Show>
       </form>
+      {/* Beside the form, not in it: Enter in a proxy field must save the proxy, not the account. */}
+      <EgressProxyPanel account={props.account} shown={rotatable()} />
     </Modal>
   )
 }

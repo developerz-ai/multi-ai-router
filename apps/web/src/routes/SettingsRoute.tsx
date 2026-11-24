@@ -10,6 +10,7 @@ import { useProviders } from "../lib/queries/providers"
 import { useSession } from "../lib/queries/session"
 import styles from "./SettingsRoute.module.scss"
 import { AuditLogSection } from "./settings/AuditLogSection"
+import { EgressProxiesSection } from "./settings/EgressProxiesSection"
 import { PriceOverridesSection } from "./settings/PriceOverridesSection"
 import { RetentionSection } from "./settings/RetentionSection"
 import { TaskHealthSection } from "./settings/TaskHealthSection"
@@ -68,7 +69,7 @@ export default function SettingsRoute() {
   return (
     <>
       <PageHeader
-        subtitle="Session, providers, pricing, retention, scheduler health, and audit trail."
+        subtitle="Session, providers, pricing, egress proxies, retention, scheduler health, and audit trail."
         title="Settings"
       />
 
@@ -119,6 +120,8 @@ export default function SettingsRoute() {
       </section>
 
       <PriceOverridesSection />
+      <EgressProxiesSection />
+
       <RetentionSection />
       <WeeklyReportSection />
       <TaskHealthSection />

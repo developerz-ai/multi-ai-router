@@ -10,6 +10,7 @@ import { type Column, Table } from "../components/Table"
 import { TableSkeleton } from "../components/TableSkeleton"
 import { routablePoolMembers } from "../lib/account-groups"
 import type { PoolMemberView, PoolView } from "../lib/api/types"
+import { loadedData } from "../lib/loaded"
 import { useAllAccounts } from "../lib/queries/accounts"
 import { useCreatePool, useDeletePool, usePools, useUpdatePool } from "../lib/queries/pools"
 import styles from "./PoolsRoute.module.scss"
@@ -35,7 +36,7 @@ export default function PoolsRoute() {
   const [formOpen, setFormOpen] = createSignal(false)
   const [pendingDelete, setPendingDelete] = createSignal<PoolView | null>(null)
 
-  const accountList = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
+  const accountList = () => loadedData(accounts) ?? []
   const accountLabel = (id: string): string =>
     accountList().find((account) => account.id === id)?.label ?? id
 

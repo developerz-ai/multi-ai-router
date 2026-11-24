@@ -4,6 +4,7 @@ import { App } from "./App"
 import { ScreenErrorBoundary } from "./components/ScreenErrorBoundary"
 import { queryClient } from "./lib/query"
 import { installStaleBundleReload } from "./lib/stale-bundle"
+import { installTheme } from "./lib/theme-dom"
 import "./styles/global.scss"
 
 const root = document.getElementById("root")
@@ -13,6 +14,7 @@ if (root === null) {
 }
 
 installStaleBundleReload()
+installTheme(document.documentElement)
 
 // The outer boundary catches what the shell's own cannot: the login screen and the shell chunk.
 render(

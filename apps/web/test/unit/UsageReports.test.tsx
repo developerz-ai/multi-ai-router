@@ -200,6 +200,33 @@ describe("UsageReports re-send", () => {
     }
   })
 
+  test("two overlapping re-sends both come back: the first week is never left busy", async () => {
+    const gates: PromiseWithResolvers<Response>[] = []
+    const older = { ...REPORT, periodStart: "2026-09-28", periodEnd: "2026-10-05" }
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (!String(input).endsWith("/deliver")) return Response.json({ reports: [REPORT, older] })
+      const gate = Promise.withResolvers<Response>()
+      gates.push(gate)
+      return gate.promise
+    }) as typeof fetch
+    const view = await mount()
+    const buttons = () => [...view.node.querySelectorAll("button")] as HTMLButtonElement[]
+    try {
+      buttons()[0]?.click()
+      await settle()
+      buttons()[1]?.click()
+      await settle()
+      expect(gates).toHaveLength(2)
+      for (const gate of gates) {
+        gate.resolve(Response.json({ deliveryStatus: "sent", deliveryAttempts: 1 }))
+      }
+      await settle()
+      expect(buttons().map((button) => button.getAttribute("aria-busy"))).toEqual([null, null])
+    } finally {
+      view.dispose()
+    }
+  })
+
   test("an HTTP-level refusal shows the server's own sentence", async () => {
     stubFetch(
       () =>

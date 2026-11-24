@@ -94,9 +94,12 @@ Three rules worth stating because they are easy to get wrong:
   because `PoolMemberView` embeds the account's label and status; an account or pool delete also
   invalidates keys, because scope targets cascade.
 
-`QueryBoundary` renders the three states — `TableSkeleton`, `ErrorState` with a retry, content — and
-reads `query.data` **only** inside the success branch. `data` is backed by a Solid resource; reading
-it while pending suspends the nearest boundary and the skeleton never appears.
+`QueryBoundary` renders the states of a read — `TableSkeleton`, `ErrorState` with a retry, content, and
+content under an `ErrorState` when a *refresh* failed. A failed refetch keeps its data, so a screen reads
+`loadedData(query)`, never `query.isSuccess`: gated on success, one failed poll blanked the page.
+
+One action on many rows goes through `createRowRuns`, not a bare mutation: a mutation observer reports
+its latest call only, so a second press would take the first row's spinner, error and callbacks.
 
 ## Running it
 
@@ -184,12 +187,12 @@ selectors outrank bare `:root` on specificity, inside the media query as well as
 explicit choice wins in **both** directions — dark OS + light chosen, and the reverse. `"system"`
 removes the attribute rather than writing a value.
 
-**Contrast is checked, not assumed.** Every foreground token clears WCAG AA (4.5:1) against every
-surface it can sit on, in both schemes. Worst pairing is 4.75:1 (light `--accent` on
-`--surface-sunken`); `--text-muted` — the token a dark UI usually fails on — is 7.11:1 dark and
-5.75:1 light against `--surface-raised`. The light `--accent`, `--ok` and `--danger` are darker than
-their dark-scheme twins for this reason; the naive "same hue in both schemes" palette failed on
-`--surface-sunken`.
+**Contrast is checked, not assumed.** `test/unit/contrast.test.ts` reads `_tokens.scss` and computes
+it, both schemes: every text token clears WCAG AA (4.5:1) on every surface and on the tints composed at
+runtime (a danger or warn banner, a selected segment), and `--border-strong` and the focus ring clear
+3:1. A control's edge is `--border-strong`; `--border` is for separators, which nobody has to find to
+use. The light `--accent`, `--ok`, `--warn` and `--danger` are darker than their dark-scheme twins for
+this reason.
 
 `reset.scss` is the only other global sheet: focus-visible is restyled and never removed, and
 `prefers-reduced-motion: reduce` neutralises transitions and animations app-wide. The skeleton
@@ -231,7 +234,7 @@ from.
 | Never destructure props | Destructuring reads once and severs the prop from the reactive graph permanently. Use `props.x`; `mergeProps` for defaults, `splitProps` to separate |
 | Control flow is components | `<Show>`, `<For>`, `<Switch>`/`<Match>` — not `&&`, a ternary, or `.map()`. `<For>` is keyed by reference, which is what lists of objects want; `<Index>` only when position *is* the identity |
 | Derived values are `createMemo` | Not recomputed in the component body, not a plain function called three times in one template |
-| `createEffect` is a last resort | Only for syncing to something outside the reactive graph — `ThemeToggle` writing `data-theme` onto `<html>` is the one instance. It is not `useEffect`; never derive state with it |
+| `createEffect` is a last resort | Only for syncing to something outside the reactive graph — `ThemeToggle` writing `data-theme` onto `<html>`, or a form seeding its fields when it opens. It is not `useEffect`; never derive state with it |
 
 One deliberate exception: `App.tsx` uses `.map()` over the route table. The router walks its children
 once at setup to build the match tree and cannot walk a `<For>` memo — and a static route table is

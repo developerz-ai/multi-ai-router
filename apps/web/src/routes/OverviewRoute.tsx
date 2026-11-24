@@ -20,6 +20,7 @@ import { errorMessage } from "../lib/api/errors"
 import type { AccountView } from "../lib/api/types"
 import { USAGE_WINDOWS, type UsageWindow, usageWindowLabel } from "../lib/api/usage"
 import { createNow } from "../lib/clock"
+import { loadedData } from "../lib/loaded"
 import { useAllAccounts, useRecheckAllAccounts } from "../lib/queries/accounts"
 import { usePools } from "../lib/queries/pools"
 import { useProviders } from "../lib/queries/providers"
@@ -72,15 +73,17 @@ export default function OverviewRoute() {
   // Coarse: the subscription banner counts down in days, not seconds.
   const now = createNow(30_000)
 
-  const list = () => (accounts.isSuccess ? (accounts.data ?? []) : [])
-  const poolList = () => (pools.isSuccess ? (pools.data ?? []) : [])
-  const keyList = () => (keys.isSuccess ? (keys.data ?? []) : [])
-  const providerList = () => (providers.isSuccess ? (providers.data ?? []) : [])
+  const list = () => loadedData(accounts) ?? []
+  const poolList = () => loadedData(pools) ?? []
+  const keyList = () => loadedData(keys) ?? []
+  const providerList = () => loadedData(providers) ?? []
 
   // One loading concept for both the onboarding panel and the fleet dashboard below it: gating
   // each on its own query would let the dashboard hide (accounts resolved, zero of them) while
   // the panel has not decided yet (pools/keys still in flight), leaving a blank gap between them.
-  const loaded = createMemo(() => accounts.isSuccess && pools.isSuccess && keys.isSuccess)
+  const loaded = createMemo(() =>
+    [accounts, pools, keys].every((query) => loadedData<unknown>(query) !== undefined),
+  )
   // The literal zero state this screen exists to catch — a fresh deployment with nothing in it
   // yet, where a table of every-status-zero and an all-zero tile row would be noise beneath the
   // guided panel rather than information.
@@ -174,7 +177,7 @@ export default function OverviewRoute() {
           keys={keyList()}
           pools={poolList()}
           providers={providerList()}
-          publicUrl={settings.data?.publicUrl ?? null}
+          publicUrl={loadedData(settings)?.publicUrl ?? null}
         />
       </Show>
 
@@ -218,6 +221,7 @@ export default function OverviewRoute() {
           <FleetTiles
             accounts={accounts}
             keys={keys}
+            nowMs={now()}
             pools={pools}
             routableNow={routableNow()}
             usage={usage}

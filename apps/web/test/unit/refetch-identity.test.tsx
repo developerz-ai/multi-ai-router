@@ -250,3 +250,43 @@ test("a table handed fresh objects for the same ids keeps each row and its input
     container.remove()
   }
 })
+
+test("a failed poll keeps the loaded screen, says so, and recovers in place", async () => {
+  let fail = false
+  stubFetch((url) => {
+    if (url.includes("/providers")) return { providers: [PROVIDER] }
+    if (url.includes("/usage")) return { byAccount: [], byKey: [], byModel: [], bucket: "day" }
+    if (url.includes("/accounts")) return [account("acc-1", "claude-one")]
+    return []
+  })
+  const answering = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) =>
+    fail && String(input).includes("/accounts")
+      ? new Response("", { status: 403 })
+      : answering(input)) as typeof fetch
+
+  await mount(
+    () => <AccountsRoute />,
+    async (client, container) => {
+      const row = rowNode(container, "acc-1")
+      const input = row.querySelector<HTMLInputElement>('input[placeholder="model name"]')
+      if (input === null) throw new Error("model input missing")
+      typeInto(input, "half-typed")
+
+      fail = true
+      await client.refetchQueries({ queryKey: ["accounts"] })
+      await settle()
+      expectSameNode(rowNode(container, "acc-1"), row)
+      expect(input.value).toBe("half-typed")
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Accounts could not be loaded",
+      )
+
+      fail = false
+      await client.refetchQueries({ queryKey: ["accounts"] })
+      await settle()
+      expect(container.querySelector('[role="alert"]')).toBeNull()
+      expect(input.isConnected).toBe(true)
+    },
+  )
+})

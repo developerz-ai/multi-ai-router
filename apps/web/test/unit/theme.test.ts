@@ -1,12 +1,30 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { cx } from "../../src/lib/cx"
 import {
   nextTheme,
   parseTheme,
   THEME_PREFERENCES,
+  THEME_STORAGE_KEY,
   type ThemePreference,
   themeLabel,
 } from "../../src/lib/theme"
+import { installTheme } from "../../src/lib/theme-dom"
+
+test("the stored theme is applied at boot, before any route has loaded", () => {
+  localStorage.setItem(THEME_STORAGE_KEY, "light")
+  const root = document.createElement("html")
+  try {
+    installTheme(root)
+    expect(root.getAttribute("data-theme")).toBe("light")
+  } finally {
+    localStorage.removeItem(THEME_STORAGE_KEY)
+  }
+  const boot = readFileSync(join(import.meta.dir, "../../src/main.tsx"), "utf8")
+  expect(boot.indexOf("installTheme(")).toBeGreaterThan(-1)
+  expect(boot.indexOf("installTheme(")).toBeLessThan(boot.indexOf("render("))
+})
 
 describe("parseTheme", () => {
   test("accepts every known preference", () => {

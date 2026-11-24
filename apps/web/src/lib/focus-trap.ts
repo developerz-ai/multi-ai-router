@@ -48,7 +48,10 @@ export function createFocusTrap(options: FocusTrapOptions): void {
     if (container === undefined) return
 
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    focusable(container)[0]?.focus()
+    const items = focusable(container)
+    // A form is opened to be filled in: start on its first control, not on the header's Close.
+    const field = items.find((item) => item.matches("form :is(input, select, textarea)"))
+    ;(field ?? items[0])?.focus()
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -83,7 +86,7 @@ export function createFocusTrap(options: FocusTrapOptions): void {
       // A confirmed delete removes the row whose button opened the dialog before the dialog
       // closes; focusing that detached node drops focus to `<body>`. The page's main landmark
       // is the nearest place that still exists.
-      if (restore?.isConnected === true) restore.focus()
+      if (restore?.isConnected === true && restore !== document.body) restore.focus()
       else document.querySelector<HTMLElement>("main")?.focus()
     })
   })

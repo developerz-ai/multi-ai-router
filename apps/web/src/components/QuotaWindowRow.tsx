@@ -1,4 +1,4 @@
-import { Show } from "solid-js"
+import { createMemo, Show } from "solid-js"
 import { formatAbsolute } from "../lib/format"
 import type { QuotaWindowReset, QuotaWindowStatic } from "../lib/quota-windows"
 import { quotaWindowTone } from "../lib/quota-windows"
@@ -31,6 +31,9 @@ export interface QuotaWindowRowProps {
  */
 export function QuotaWindowRow(props: QuotaWindowRowProps) {
   const window = () => props.window
+  // `props.reset` is computed on read and moves every second; the instant in it almost never does.
+  const reset = createMemo(() => props.reset)
+  const resetsAtMs = createMemo(() => reset().resetsAtMs)
 
   return (
     <li class={styles.row} data-spent={window().spent ? "true" : "false"}>
@@ -68,12 +71,12 @@ export function QuotaWindowRow(props: QuotaWindowRowProps) {
       </Show>
 
       <span class={styles.reset}>
-        <span class={props.reset.reset.kind === "needs_topup" ? styles.topUp : styles.text}>
-          {props.reset.reset.text}
+        <span class={reset().reset.kind === "needs_topup" ? styles.topUp : styles.text}>
+          {reset().reset.text}
         </span>
 
-        <Show when={props.reset.resetsAtMs !== null}>
-          <span class={styles.absolute}>{formatAbsolute(props.reset.resetsAtMs ?? 0)}</span>
+        <Show when={resetsAtMs() !== null}>
+          <span class={styles.absolute}>{formatAbsolute(resetsAtMs() ?? 0)}</span>
         </Show>
 
         <Badge

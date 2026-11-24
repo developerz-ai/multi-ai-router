@@ -13,6 +13,11 @@ export function applyTheme(preference: ThemePreference, root: HTMLElement): void
   root.setAttribute("data-theme", preference)
 }
 
+/** Applies the stored preference before anything renders, so no screen paints in the OS theme first. */
+export function installTheme(root: HTMLElement): void {
+  applyTheme(loadTheme(), root)
+}
+
 export function loadTheme(): ThemePreference {
   try {
     return parseTheme(localStorage.getItem(THEME_STORAGE_KEY))

@@ -6,8 +6,9 @@
 // so a single token set can be declared twice, once per scheme.
 //
 // Contrast is a constraint, not an afterthought: every foreground token clears
-// WCAG AA (4.5:1) against every surface token it can legally sit on, in both
-// schemes. The light `--accent`, `--ok` and `--danger` are darker than their
+// WCAG AA (4.5:1) against every surface and tint it can legally sit on, and
+// `--border-strong`, a control's edge, clears 3:1, in both schemes
+// (`test/unit/contrast.test.ts` computes it). The light `--accent`, `--ok` and `--danger` are darker than their
 // dark-scheme twins for exactly that reason — the naive "same hue both ways"
 // palette fails on `--surface-sunken`.
 
@@ -25,7 +26,7 @@
   --text-muted: #99a3b3;
 
   --border: #232a37;
-  --border-strong: #525d6d;
+  --border-strong: #636f81;
 
   --accent: #5b9dff;
   --accent-soft: rgb(91 157 255 / 0.14);
@@ -53,15 +54,15 @@
   --text-muted: #59636f;
 
   --border: #e2e6eb;
-  --border-strong: #949fad;
+  --border-strong: #7c8795;
 
-  --accent: #1a63dd;
-  --accent-soft: rgb(26 99 221 / 0.1);
+  --accent: #1456c4;
+  --accent-soft: rgb(20 86 196 / 0.1);
   --accent-contrast: #ffffff;
 
   --ok: #15703a;
-  --warn: #8a6300;
-  --danger: #cf2b28;
+  --warn: #7f5b00;
+  --danger: #bd2422;
 
   --scrim: rgb(15 19 25 / 0.42);
   --shadow-1: 0 1px 2px rgb(15 19 25 / 0.06);

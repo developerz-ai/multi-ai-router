@@ -56,13 +56,16 @@ export class ApiError extends Error {
   readonly status: number
   readonly type: string | null
   readonly code: string | null
+  /** When the same request is worth sending again, from `Retry-After`. Null when nothing said. */
+  readonly retryAtMs: number | null
 
-  constructor(status: number, parsed: ParsedError) {
+  constructor(status: number, parsed: ParsedError, retryAtMs: number | null = null) {
     super(parsed.message)
     this.name = "ApiError"
     this.status = status
     this.type = parsed.type
     this.code = parsed.code
+    this.retryAtMs = retryAtMs
   }
 }
 
@@ -88,14 +91,19 @@ const FALLBACK: Readonly<Record<number, string>> = {
   503: "The router is unavailable.",
 }
 
-export function toApiError(status: number, body: unknown): ApiError {
-  const parsed = parseErrorBody(body)
-  if (parsed !== null) return new ApiError(status, parsed)
-  return new ApiError(status, {
+export function toApiError(
+  status: number,
+  body: unknown,
+  retryAfter: string | null = null,
+): ApiError {
+  const parsed = parseErrorBody(body) ?? {
     message: FALLBACK[status] ?? `The router answered ${status}.`,
     type: null,
     code: null,
-  })
+  }
+  // The admin plane only ever sends seconds; a proxy's HTTP date is read as no promise at all.
+  const waits = retryAfter !== null && /^\d+$/.test(retryAfter)
+  return new ApiError(status, parsed, waits ? Date.now() + Number(retryAfter) * 1_000 : null)
 }
 
 /** The last resort: a network failure has no body and no status to render. */

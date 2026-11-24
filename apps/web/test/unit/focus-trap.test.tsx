@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
+import { Modal } from "../../src/components/Modal"
 import { createFocusTrap } from "../../src/lib/focus-trap"
 
 /**
@@ -63,5 +64,23 @@ test("focus returns to the opener when it is still on the page", () => {
   } finally {
     dispose()
     host.remove()
+  }
+})
+
+test("a dialog holding a form opens on its first field, not on Close", () => {
+  const dispose = render(
+    () => (
+      <Modal onClose={() => {}} open title="Form">
+        <form>
+          <input aria-label="name" />
+        </form>
+      </Modal>
+    ),
+    document.body,
+  )
+  try {
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("name")
+  } finally {
+    dispose()
   }
 })
