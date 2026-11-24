@@ -132,6 +132,17 @@ try {
     const disabled = await attempt("shipped", underTest)
     if (disabled.code === 0)
       fail("with the shipped bunfig the import SUCCEEDED: bun auto-installed")
+    // Failed HOW. A bunfig bun cannot parse also exits non-zero without asking the registry, and
+    // proves nothing about the setting: the import has to have been tried and found missing.
+    if (
+      !/cannot find (package|module)/i.test(disabled.stderr) ||
+      !disabled.stderr.includes(PACKAGE)
+    ) {
+      fail(
+        "with the shipped bunfig bun failed, but not because the package was missing — the import was never evaluated:\n" +
+          `  ${disabled.stderr}`,
+      )
+    }
     if (disabled.asked.length > 0) {
       fail(
         `with the shipped bunfig bun still asked the registry for ${JSON.stringify(disabled.asked)}`,

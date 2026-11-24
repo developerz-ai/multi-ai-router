@@ -180,6 +180,47 @@ describe("an OpenRouter 402 on a key at 97 % of its daily cap", () => {
     expect(upstream.calls).toHaveLength(1)
   })
 
+  // Review of #506: at 100 % the balance refusal still borrowed the cap's reset. Midnight refills
+  // the cap, never the balance, so the cooldown ended in the same refusal.
+  test("naming the balance with the cap fully spent: still 402, exhausted, no clock", async () => {
+    const { app, health, upstream } = setup([balanceRefusal, ok], 1)
+
+    const refused = await send(app)
+    expect(refused.status).toBe(402)
+    expect(refused.headers.get("retry-after")).toBeNull()
+    await refused.text()
+
+    const breaker = health.stateOf("or").breaker
+    expect(breaker.status).toBe("exhausted")
+    expect(breaker.cooldownUntil).toBeUndefined()
+
+    const held = await send(app)
+    expect(held.status).toBe(402)
+    expect(held.headers.get("retry-after")).toBeNull()
+    await held.text()
+    expect(upstream.calls).toHaveLength(1)
+  })
+
+  test("the balance as limit_source states it, in neutral words on a 403: 402, exhausted", async () => {
+    const stated = () =>
+      Response.json(
+        {
+          error: {
+            message: "Request could not be completed",
+            metadata: { limit_source: "openrouter_credits" },
+          },
+        },
+        { status: 403 },
+      )
+    const { app, health } = setup([stated, ok], 1)
+
+    const refused = await send(app)
+    expect(refused.status).toBe(402)
+    expect(refused.headers.get("retry-after")).toBeNull()
+    await refused.text()
+    expect(health.stateOf("or").breaker.status).toBe("exhausted")
+  })
+
   test("with the cap well short of spent, even the cap's own sentence borrows no reset", async () => {
     const { app, health } = setup([capRefusal, ok], 0.4)
 

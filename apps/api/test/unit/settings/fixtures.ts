@@ -76,6 +76,7 @@ export const INTERVALS: Readonly<Record<Exclude<ScheduledTaskName, "pool_roster_
     cooldown_recheck: 60 * MINUTE_MS,
     plan_quota_read: 15 * MINUTE_MS,
     pool_reap: 60 * MINUTE_MS,
+    egress_proxy_check: 5 * 60_000,
   }
 
 export interface MemoryPrices {

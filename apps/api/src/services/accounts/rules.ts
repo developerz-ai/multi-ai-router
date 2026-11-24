@@ -1,5 +1,6 @@
 import type { AccountBilling, Dialect, ProviderId } from "@multi-ai-router/core"
-import { type AdminFailure, type AdminResult, ok } from "../admin/result"
+import { type DriverAccount, httpDriver } from "../../providers"
+import { type AdminFailure, type AdminResult, invalid, ok } from "../admin/result"
 import { describeProvider, type ProviderDescriptor } from "./providers"
 
 /**
@@ -23,7 +24,8 @@ import { describeProvider, type ProviderDescriptor } from "./providers"
  * - a subscription-only provider marked `metered` would put a per-token charge
  *   in a spend column for tokens nobody was billed for;
  * - `provider` routing preferences on a surface that reads no such field would be
- *   stored and never sent — an operator believing fp8 was enforced when nothing was.
+ *   stored and never sent — an operator believing fp8 was enforced when nothing was;
+ * - a base URL moved to another host with no new credential would hand the stored one to it.
  */
 
 /** The account state a rule judges — the row as it will be *after* the write. */
@@ -64,6 +66,66 @@ export function resolveBilling(
 ): AccountBilling {
   if (provider.billingFixed) return provider.defaultBilling
   return requested ?? provider.defaultBilling
+}
+
+/** The account state an endpoint move is judged against. */
+type EndpointHolder = DriverAccount & { readonly authMaterial: string | null }
+
+/**
+ * A stored credential stays with the host it was given for. An edit that moves the account to
+ * another origin has to bring the credential with it: otherwise whoever may edit accounts could
+ * name a host of their own and read the upstream key out of the next request's headers, which no
+ * admin endpoint may disclose (CLAUDE.md non-negotiable 3). A path change on the same origin is
+ * not a move. The dialect is part of the question: it picks the surface, and so the pinned host.
+ */
+export function checkEndpointMove(
+  current: EndpointHolder,
+  patch: {
+    readonly baseUrl?: string | null | undefined
+    readonly dialect?: Dialect | null | undefined
+    readonly credential?: string | undefined
+  },
+): AdminResult<null> {
+  if (patch.baseUrl === undefined && patch.dialect === undefined) return ok(null)
+  if (patch.credential !== undefined || current.authMaterial === null) return ok(null)
+  const moved = {
+    ...current,
+    ...(patch.baseUrl === undefined ? {} : { baseUrl: patch.baseUrl }),
+    ...(patch.dialect === undefined ? {} : { dialect: patch.dialect }),
+  }
+  if (upstreamOrigin(current) === upstreamOrigin(moved)) return ok(null)
+  return invalid(
+    `this edit would send the account's stored credential to another host. Send "credential" in the same request, or add the new endpoint as its own account`,
+    "credential_required_for_new_endpoint",
+  )
+}
+
+/**
+ * A proxy on a plain `http` endpoint is handed the request, credential and all: there is no tunnel.
+ * Judged on the account as it will be after the write, whichever of the three moved.
+ */
+export function checkProxiedPlaintext(
+  account: DriverAccount & { readonly label: string; readonly hasCredential: boolean },
+): AdminResult<null> {
+  if (!account.hasCredential || upstreamBase(account)?.protocol !== "http:") return ok(null)
+  return invalid(
+    `account "${account.label}" would reach a plain http endpoint through its egress proxy, so the proxy would read its credential. Use an https endpoint, or clear the proxy`,
+    "egress_proxy_plaintext",
+  )
+}
+
+/** The origin this account's requests go to, or `null` when it resolves to none. */
+export function upstreamOrigin(account: DriverAccount): string | null {
+  return upstreamBase(account)?.origin ?? null
+}
+
+/** Where this account's requests go, or `null` when its provider is not HTTP or has no endpoint. */
+export function upstreamBase(account: DriverAccount): URL | null {
+  try {
+    return httpDriver(account.provider)?.resolveBaseUrl(account) ?? null
+  } catch {
+    return null
+  }
 }
 
 function unimplemented(provider: ProviderDescriptor): AdminFailure | null {

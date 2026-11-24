@@ -129,7 +129,7 @@ ADMIN_OIDC_ADMIN_EMAIL=admin@example.com,second.operator@example.com
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `ADMIN_OIDC_ISSUER_URL` | for OIDC | Exact OIDC issuer. Discovery is fetched from `/.well-known/openid-configuration`; the returned `issuer` must match. |
+| `ADMIN_OIDC_ISSUER_URL` | for OIDC | Exact OIDC issuer. Discovery is fetched from `/.well-known/openid-configuration`; the returned `issuer` must match. A trailing slash may be written or left out; the token's `iss` must equal the issuer the discovery document states. |
 | `ADMIN_OIDC_CLIENT_ID` | for OIDC | Client identifier and expected ID-token audience. |
 | `ADMIN_OIDC_CLIENT_SECRET` | no | Confidential-client secret. Omit only for a public client; PKCE remains mandatory either way. |
 | `ADMIN_OIDC_REDIRECT_URI` | for OIDC | Exact callback URI registered with the provider. |
@@ -146,7 +146,7 @@ The OIDC block is all-or-nothing: all absent means "OIDC off, local password onl
 
 `GET /api/admin/auth/oidc/start` creates a ten-minute, one-shot state row containing the PKCE verifier and nonce, then redirects to the provider. `GET /api/admin/auth/oidc/callback` consumes that state and validates its binding before any discovery, code exchange or JWKS request. Unknown, expired and replayed state never contacts the IdP, even after a process restart. The callback then exchanges the code, verifies the ID token, and issues the bounded admin session. A valid state stays consumed if a later IdP request fails; the operator starts a fresh sign-in. Both routes answer `404` when OIDC is not configured. `POST /api/admin/auth/login` verifies the password against the stored argon2id hash and issues the identical session. `GET /api/admin/auth/methods` is public and reports which paths exist (`{ "oidc": bool, "local": bool }`) — it is how the login page knows what to render.
 
-On success the callback sets the cookie and sends the browser to `/`. The hop is client-side, not a `302`, and for the same reason the route is unguarded: this response is the tail of a cross-site chain that began at the provider, so a server-issued redirect can produce a follow-up request that arrives *without* the cookie just set — the console would bounce to `/login` and read as a failed sign-in. A navigation issued by the callback document itself is same-origin and self-initiated, which carries a Strict cookie. A visible link covers the no-JS case.
+On success the callback sets the cookie and sends the browser to `/`. The console keeps the view the operator was signing in to (path and query) in that tab's session storage before leaving for the provider, and opens it once after the callback, under the same same-origin rule as `?next=`. The server never sees or redirects to it. The hop is client-side, not a `302`, and for the same reason the route is unguarded: this response is the tail of a cross-site chain that began at the provider, so a server-issued redirect can produce a follow-up request that arrives *without* the cookie just set — the console would bounce to `/login` and read as a failed sign-in. A navigation issued by the callback document itself is same-origin and self-initiated, which carries a Strict cookie. A visible link covers the no-JS case.
 
 The callback is intentionally unguarded: a cross-site top-level redirect cannot carry the `SameSite=Strict` session cookie. The one-shot state, nonce, PKCE verifier, and principal pins authorize the callback. The login endpoint is likewise unguarded — it is what issues the session — and its authority is the password plus the per-IP throttle. See [07-security.md](07-security.md#admin-oidc) for the threat model.
 
@@ -178,7 +178,7 @@ A router API key (`mar_live_…`) can never authenticate the admin plane.
 
 ## Troubleshooting
 
-The browser receives only “Single sign-on verification failed.” — for both paths. The kind is in the router log and in the audit feed, never in the response:
+The browser receives only “Sign-in failed. Try again.” — for both paths. A `503` “Sign-in is temporarily unavailable” (`admin_auth_unavailable`) is not a verdict: Postgres or the IdP did not answer. The log line `admin sign-in could not be judged` names the door and the reason, and `the identity provider refused an admin sign-in` carries the IdP's own error code. The kind is in the router log and in the audit feed, never in the response:
 
 ```
 {"level":"warn","msg":"admin sign-in rejected at the OIDC callback","component":"admin-auth",

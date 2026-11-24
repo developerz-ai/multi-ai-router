@@ -135,7 +135,8 @@ describe("anthropic — platform.claude.com pricing, read 2026-11-03", () => {
     expectCard("anthropic-api", "claude-fable-5-1", [10, 50, 0.25, 12.5])
     expectCard("anthropic-api", "claude-fable-5", [10, 50, 1, 12.5])
     expectCard("anthropic-api", "claude-mythos-5", [10, 50, 1, 12.5])
-    expectCard("anthropic-api", "claude-sonnet-5-5", [2, 10, 0.2, 2.5])
+    // Footnote 2, read 2026-11-24: cache hits on Opus 5.5 and Sonnet 5.5 are 0.05x the input price.
+    expectCard("anthropic-api", "claude-sonnet-5-5", [2, 10, 0.1, 2.5])
     expectCard("anthropic-api", "claude-sonnet-5", [2, 10, 0.2, 2.5])
   })
 
@@ -223,6 +224,17 @@ describe("openai — developers.openai.com pricing, read 2026-11-03", () => {
     expectTieredCard("openai-api", "gpt-6-sol", [2, 10, 0.2, 2.5], 272_000, [4, 15, 0.4, 5])
     expectTieredCard("openai-api", "gpt-6.1-sol", [2, 10, 0.1, 2.5], 272_000, [4, 15, 0.2, 5])
     expectTieredCard("openai-api", "gpt-6-astra", [10, 50, 1, 12.5], 272_000, [20, 75, 2, 25])
+    // Read 2026-11-24; both were served on Codex subscriptions and priced as unknown until then.
+    expectTieredCard("openai-api", "gpt-6.2-sol", [2, 10, 0.1, 2.5], 272_000, [4, 15, 0.2, 5])
+    expectTieredCard("openai-api", "gpt-6.1-terra", [1, 5, 0.05, 1.25], 272_000, [2, 7.5, 0.1, 2.5])
+    // The subscription provider is valued against the same rows.
+    expectTieredCard(
+      "openai-oauth",
+      "gpt-6.1-terra",
+      [1, 5, 0.05, 1.25],
+      272_000,
+      [2, 7.5, 0.1, 2.5],
+    )
   })
 
   test("the GPT-5 family", () => {

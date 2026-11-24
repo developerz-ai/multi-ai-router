@@ -7,6 +7,7 @@ import { usageRecords } from "../schema/usage-records"
 import { attributionRelation, bucketSql, isAttributionDimension } from "./usage-attribution"
 import { readUsageExportRows } from "./usage-export-repository"
 import { dimensionIdType, groupIdsMatch } from "./usage-filter"
+import { readGroupSeries } from "./usage-history-group-series"
 import { createUsageHistoryMaintenance } from "./usage-history-maintenance"
 import {
   historyDimensions,
@@ -243,6 +244,8 @@ function historyRepository(
     series: (window, bucket, width, filter) =>
       read<UsageSeriesPoint>(seriesQuery(window, bucket, undefined, width, undefined, filter)),
     seriesByDimension,
+    seriesByDimensions: (window, bucket, width, ids, filter, attribution) =>
+      readGroupSeries(read, window, bucket, width, ids, filter, attribution),
     withSnapshot: (callback) =>
       inSnapshot
         ? callback(repo, createUsageReadRepository(db))

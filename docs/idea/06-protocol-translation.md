@@ -439,6 +439,8 @@ their boundaries. Completion events do not replay already emitted text.
 |---|---|
 | Clean | Anthropic `system` (string or text-block array) ⇄ OpenAI leading `role: "system"` / `"developer"` message. |
 | Lossy | `cache_control` on a system block is dropped when the target has no equivalent. Multiple system blocks are concatenated with newlines in one direction and cannot be split back — except toward a surface that carries `cache_control` (`ProviderSurface.cacheControl`, `openrouter`): a system array with a marker on any block stays one text part per block, each marker on its own part, so the cached prefix ends where the client put it. |
+| Mid-conversation, openai-chat → openai-responses | Only the **leading run** of `system` / `developer` messages becomes `instructions` (a leading `developer` item on GPT-6.2+, see [Known lossy edges](#known-lossy-edges)). Each later one stays **in place** as a `developer` input item, one item per message, so the translation of a message depends only on the messages before it. Acceptance verified live against the Codex backend on 2026-11-24 (`gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.2-sol`, three turns, `200 response.completed`). The cache gain is expected from prefix stability; that probe could not measure it (`cached_tokens` was 0 on every turn, the control included), so it is read from prod cached tokens after the roll. Through 2.76.1 every such message was joined into `instructions`, which put a per-turn note ahead of the transcript and ended the cached prefix there (#489). |
+| Mid-conversation, toward `anthropic` (from openai-chat or openai-responses) | **Still hoisted** into the top-level `system`, wherever it sat. Known and deferred: a per-turn note there changes the prefix ahead of every message, so Anthropic's cache misses the history on that turn. The carrier (an in-place `system` turn, or a text block on the adjacent user turn) is undecided. |
 | Dropped | Claude Code opens `system` with a billing-attribution block (`x-anthropic-billing-header: cc_version=…; cch=<checksum>;`) whose `cch` changes every request. Toward an OpenAI dialect (`instructions`, the leading system message, and the per-block parts toward a `cache_control` surface) a `system` block that starts with that prefix is **dropped**, so it cannot sit at the head of the prefix and defeat every prefix-keyed upstream cache. Only a block beginning with the prefix is removed; the same text elsewhere is untouched. **Same-dialect passthrough is deliberately untouched** (byte-passthrough, never parsed): Anthropic's own cache tolerates the header, and `claude-fast` already pins `cch=00000`. |
 | Rejected | Nothing. A system prompt always has a target representation. |
 
@@ -671,12 +673,28 @@ Original upstream HTTP facts and the already-sent client status are preserved. I
 account health strike or retry, and a later upstream completion cannot replace that verdict. The
 Chat error envelope is followed by its protocol close markers, not a successful accounting verdict.
 
-**A truncated stream is never given a synthesized ending.** If the upstream dies before its finish
-reason, the translator emits no `message_delta`, no `message_stop`, and no `[DONE]` — the client
-learns the truth from the abrupt close. Manufacturing a clean terminator would report a completion
-that did not happen, on a request that cannot be retried because its bytes are already on the wire.
-The reverse case is owed and is emitted: a stream that stated its finish reason but never sent the
-terminator gets one, because the completion is whole and only its punctuation is missing.
+**A truncated stream is never given a synthesized ending, and is never left silent.** When a
+translated stream has started and the upstream reaches a clean EOF without its terminal event, the
+translator emits no `message_delta`, no `message_stop`, no `response.completed` and no `[DONE]`:
+manufacturing a clean terminator would report a completion that did not happen, on a request that
+cannot be retried because its bytes are already on the wire. It emits one router error event in the
+client's dialect instead (`translate/shared/stream-truncated.ts`): Anthropic `event: error`, an
+openai-chat error chunk with no `[DONE]` after it, the flat Responses `error` event. Its code is
+`upstream_incomplete` and its `router` object states `wall: "capacity"`, `retryable: true`,
+`signal: "upstream_incomplete"` and the request id. Through 2.76.1 the stream ended on its last
+content delta and nothing else, which most SDKs read as a finished answer.
+
+Exactly one error event ends a stream. A transport fault after the first byte is the relay's
+(`dataplane/relay-stream-end.ts`); a clean EOF is the translator's; an error the upstream itself
+sent is translated as it came and nothing is added. A stream that yielded no client event at all
+ends with the same event, written by the relay (`dataplane/relay-translate.ts`): a `200` over
+silence reads as an answer nobody can parse. Either way the attempt is recorded `upstream_error` /
+`upstream_incomplete`, never `success`, and an incomplete answer with no stated usage is priced
+`unknown`, never free. Same-dialect passthrough is untouched. An Anthropic `message_stop` with no `message_delta` before it is such a truncation too: toward
+openai-chat it gets the error event, never a bare `[DONE]`, because nothing stated why the message
+ended. The reverse case is still owed and emitted: a
+stream that stated its finish reason but never sent the terminator gets one, because the completion
+is whole and only its punctuation is missing.
 
 **`[DONE]` is unconditional termination toward Anthropic, and never states a null `stop_reason`.**
 Unlike the upstream connection simply closing, openai-chat's `[DONE]` sentinel is an explicit "I am
@@ -690,13 +708,15 @@ literally.
 
 The recognized Anthropic `stop_reason` set is `end_turn`, `max_tokens`, `stop_sequence`,
 `tool_use`, `pause_turn`, `refusal`, and `model_context_window_exceeded`. Every one has a row below; an unrecognized value is a provider
-change, logged and mapped conservatively to `end_turn` / `stop`, never dropped silently.
+change, logged and mapped conservatively to `end_turn` / `stop`, never dropped silently — except an
+`incomplete` Responses answer, which is never told as a clean stop (the `max_messages` row).
 
 | Anthropic `stop_reason` | OpenAI `finish_reason` | Responses | Note |
 |---|---|---|---|
 | `end_turn` | `stop` | `status: "completed"` | clean, both ways |
 | `max_tokens` | `length` | `incomplete_details.reason: "max_output_tokens"` | clean, both ways |
 | `model_context_window_exceeded` | `length` | `incomplete_details.reason: "max_output_tokens"` | context truncation; the narrower cause is lost toward OpenAI |
+| `max_tokens` (read only) | `length` (read only) | `status: "incomplete"` with `incomplete_details.reason: "max_messages"` (Codex, `gpt-6.2-sol`, 33 answers in 12 h on 2026-11-23), or any reason this build does not define | read exactly as `max_output_tokens`; an undefined reason is also logged as unrecognized. What `max_messages` caps is not published. The usage row records `upstream_incomplete` either way. Through 2.76.1 both were told as `stop` / `end_turn` |
 | `tool_use` | `tool_calls` | `status: "completed"` with a function-call output item | clean, both ways |
 | `stop_sequence` | `stop` | `status: "completed"` | lossy → OpenAI: *which* sequence matched (`stop_sequence` field) is lost |
 | — | `content_filter` | `incomplete_details.reason: "content_filter"` | lossy → Anthropic: mapped to `end_turn`, the refusal reason is lost |
@@ -1067,6 +1087,9 @@ Be suspicious of any cell not listed here — if it is not documented, it is not
 | `verbosity` / `text.verbosity` toward any other dialect, OpenRouter's `reasoning` object on openai-chat | OpenAI → any other dialect | dropped silently: not in the parsed schema. Only `reasoning_effort` / `reasoning.effort` is read as the reasoning dial |
 | Top-level `system` / `instructions` toward GPT-6.2 or later | → `openai-responses` | **moved** to a leading `developer` input item (`input_text`). From GPT-6.2 top-level `instructions` are appended after `input` and billed uncached on every request (developers.openai.com prompt-caching guide, read 2026-11-20), so a system prompt there is never a cache read. `instructions` stays `""` where the surface requires the field (Codex), absent elsewhere. Decided on the post-alias model by a version threshold (`gpt-6.2` onward, `cachesTopLevelInstructions`), applied per attempt so one conversion serves a `gpt-6.1` and a `gpt-6.2` account alike; older models keep `instructions` unchanged |
 | `input_image` naming only a `file_id` | `openai-responses` → any | rejected `400`: a stored file is provider-side state this router cannot resolve into bytes |
+| `refusal` from an openai-chat upstream (`message.refusal`, `delta.refusal`) | → `anthropic`, `openai-responses` | carried as answer text, after `content` and a newline (`shared/openai-chat-wire.ts`). Through 2.76.1 it was read as absent and the client got an empty answer under a clean stop |
+| `tools: []` (the Responses default) | `openai-responses` → `openai-chat`, `anthropic` | omitted, as a toolkit the router emptied already was: openai-chat refuses an empty list. `tool_choice: "auto"` beside it is omitted too and `"required"` is dropped and reported; an explicit `"none"` is kept |
+| `data:image/jpg;base64,…` | OpenAI → `anthropic` | the media type is written `image/jpeg`, the only JPEG name Anthropic accepts; every other media type passes as written |
 | `max_tokens` / `max_completion_tokens` | → `openai-chat` | not lossy, but **not one name either** — emitted under whichever of the two the selected Account accepts. See [The output ceiling](#the-output-ceiling-one-field-two-names) |
 | Responses item ids | → `openai-responses` | minted by the router from the response id and the item's position — deterministic, but not the provider's own |
 | Beta headers (`anthropic-beta`) | → non-Anthropic, and on the Agent-SDK path | dropped |
@@ -1235,6 +1258,17 @@ requirements, not preferences — a violation is a bug, not a tuning opportunity
 | **SSE parsing is linear** | The translate-path SSE reader (`sse/parse.ts`) visits each code unit once: a partial line is held as its chunks and joined once when its end arrives. Rescanning the held line per chunk was quadratic — 637 ms of event loop for one 1 MiB line in 4 KiB chunks, and a Responses `response.completed` restates the whole output. An optional `maximumFrameLength` bounds one frame; past it the parser reports `translation_pending_overflow` through `failure()` and emits nothing more |
 | **Request parsing dispatches on type** | Block, part and item unions are `discriminatedUnion("type")` with the catch-all last, so a block pays for its own parser only; a plain union ran every failing branch first (~4 ms of Zod on an 800-message transcript, the whole budget). A malformed known block still names its deepest field in the `400`. The parse is spent once per request: `parseIngressRequest` validates the body, and each target shape converts from that value through the pair's `requestFromParsed` (`dataplane/translate-body.ts`) |
 | **The Agent-SDK path is the labeled exception** | A subprocess per request is inherently heavier than an HTTP hop. Document the cost; do not pretend the budget applies uniformly ([11-anthropic-agent-sdk.md](11-anthropic-agent-sdk.md)) |
+
+**Translation cost is proportional to body size, and the 5 ms budget does not hold for a large
+translated body.** A cross-dialect request is decoded, parsed, converted and serialized once: about
+2.5 ms per MB to decode and `JSON.parse`, about 2.7 ms per MB to `JSON.stringify` and encode, and
+under 1 ms per MB for schema validation and conversion together (Bun 1.4, measured 2026-11-23).
+Nothing in it is superlinear. A 1.2 MB transcript costs about 8 ms and a 4.8 MB one about 30 ms,
+which is the prod p99 of 19–33 ms on translated paths against 11 ms on passthrough (24 h to
+2026-11-23; overhead correlates 0.92 with input size on Codex). Read
+`router_overhead_seconds` on the translate path against request size, not against the flat budget;
+passthrough is the path the budget binds. Stream translation is outside that metric: 5–12 µs of CPU
+per upstream delta.
 
 ## Design rules
 

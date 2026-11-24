@@ -86,8 +86,9 @@ function withCheck(held: EgressOverview, tested: TestedProxy, check: ProxyCheck)
     status: check.status,
     latencyMs: check.latencyMs,
     lastCheckedAt: check.checkedAt,
-    ...(alive ? { consecutiveFailures: 0 } : {}),
-    ...(check.outcome === "ok" ? { lastOkAt: check.checkedAt, repair: "idle" as const } : {}),
+    // Either answer proves the proxy alive, so nothing is left to repair.
+    ...(alive ? { consecutiveFailures: 0, repair: "idle" as const } : {}),
+    ...(check.outcome === "ok" ? { lastOkAt: check.checkedAt } : {}),
   })
   return {
     ...held,

@@ -1,4 +1,6 @@
 import type { UsageExportRow } from "./usage-export-repository"
+import type { UsageGroupIds } from "./usage-group-latency"
+import type { UsageGroupSeries } from "./usage-history-group-series"
 import type { UsageSummaryAggregates } from "./usage-history-summary"
 import type {
   UsageAttributedDimension,
@@ -81,6 +83,19 @@ export interface UsageHistoryRepository {
     filter: UsageFilter,
     attribution: UsageKeyAttribution,
   ): Promise<UsageGroupSeriesPoint[]>
+  /**
+   * {@link UsageHistoryRepository.seriesByDimension} for all six dimensions in one statement
+   * (`usage-history-group-series.ts`), narrowed to the ids each breakdown selected. Optional only
+   * so a hand-built repository stays valid; the real one always has it.
+   */
+  seriesByDimensions?(
+    window: UsageWindow,
+    bucket: "hour" | "day",
+    bucketWidth: number | undefined,
+    ids: UsageGroupIds,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
+  ): Promise<UsageGroupSeries>
   /**
    * At most `limit` rows at UTC day x key x account x pool x model for the CSV export, over the
    * same source and (required) filter as `totals`. The caller asks for `cap + 1` to learn it is

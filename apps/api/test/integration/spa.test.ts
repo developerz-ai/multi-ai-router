@@ -2,8 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { PendingClaudeLoginToken } from "@multi-ai-router/db"
+import type { Database, PendingClaudeLoginToken } from "@multi-ai-router/db"
 import { type AppDeps, createApp } from "../../src/app"
+import { readEgressProxyEnv } from "../../src/config/egress-proxy"
 import { createLogger } from "../../src/logging/logger"
 import {
   type AccountModelsService,
@@ -32,6 +33,7 @@ import { createSettingsService } from "../../src/services/settings"
 import { createUsageService } from "../../src/services/usage-read"
 import { accountDeletionFixture } from "../support/account-deletion"
 import { createMemoryConfigDirs } from "../support/config-dirs"
+import { memoryEgress } from "../support/memory-egress"
 import { createMemoryStore } from "../support/memory-store"
 import { silentLogger } from "../support/silent-logger"
 import { testSupportedModelsWriter } from "../support/supported-models-writer"
@@ -406,13 +408,16 @@ describe("the full app, mounted end to end", () => {
           config: {},
           now: () => now().getTime(),
         }),
+        // Mounted, never driven: every request in this file is unauthenticated.
         egressProxies: createEgressProxyService({
-          accounts: store.accounts,
+          accounts: { ...store.accounts, ...memoryEgress(store.rows.accounts).methods },
+          database: {} as Database,
           cipher: adminCipher,
           audit,
           now,
           coherence: { refreshCatalog: async () => {} },
           webshare: { apiKey: null, timeoutMs: 1000 },
+          env: { ...readEgressProxyEnv({}), accountTestNowCooldownSeconds: 0 },
         }),
         accounts: createAccountsService({
           accounts: store.accounts,

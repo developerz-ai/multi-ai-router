@@ -74,6 +74,18 @@ proxy HTML/JSON cannot masquerade as successful inference. Valid streaming bodie
 A completed upstream refusal, including empty content and zero output tokens, remains a valid
 Messages response with its refusal stop reason/details; it is not retried as a transport fault.
 
+**Refusals.** The classification of a refused request travels by `onRefusal`, never on the
+`Response`, because wrappers rebuild the `Response` (through 2.76.1 the ownership wrapper dropped
+it, and one request the subscription would not serve cooled the whole account). A
+request-attributable refusal reports no account verdict from its headers. An error frame inside a
+`200` is answered to a non-streaming client with the status it would have had before the stream. A
+`403` about one model is `claude-sdk:model-forbidden`; an HTML `403` is `claude-sdk:edge-forbidden`;
+any other `403` is the credential's.
+
+**Caching.** When the client marks its prefix but no message, the history has at least one assistant
+turn and fewer than four breakpoints are set, the router adds one five-minute breakpoint on the last
+block. One-shots, native Claude Code requests and a top-level `cache_control` are left alone.
+
 ## Evidence and rollout
 
 Interactive wire calibration should use `bin/claude-trace pty --model <concrete-model>` or the

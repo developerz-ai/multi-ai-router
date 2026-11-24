@@ -19,6 +19,7 @@ import type { AccountAuthProbe } from "../../services/health/claudeAuthProbe"
 import type { AdminSessionStoreForPurge } from "./admin-session-purge"
 import type { CooldownRecheckPorts } from "./cooldown-recheck"
 import type { CredentialTaskDeps } from "./credential-tasks"
+import type { EgressProxyCheckPorts } from "./egress-proxy-check"
 import type { IdleAccountProbeDeps } from "./idle-account-probe"
 import type { ModelCatalogRefreshDeps } from "./model-catalog-refresh"
 import type { PlanQuotaReadPorts } from "./plan-quota-read"
@@ -129,6 +130,8 @@ export interface ScheduledTaskDeps
    * configured, and then no task is built: a roster check with no roster has nothing to compare.
    */
   readonly poolRosterCheck?: PoolRosterCheckPorts
+  /** The proxy sweep and its cadence (`services/accounts/egress`). Absent: no task is built. */
+  readonly egressProxyCheck?: EgressProxyCheckPorts
   /** A full `Env` satisfies this, so the composition root passes `env` straight through. */
   readonly env: Pick<
     Env,

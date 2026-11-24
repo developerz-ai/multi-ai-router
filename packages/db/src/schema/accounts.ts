@@ -50,6 +50,13 @@ export interface SupportedModelRemoval {
 export interface StoredEgressProxy {
   readonly address: string
   readonly sealed: string
+  /** The vendor inventory this proxy came from. Absent: a custom URL the operator typed. */
+  readonly vendor?: string
+  /** The vendor's own id for the proxy; with `vendor`, its identity across credential changes. */
+  readonly vendorId?: string
+  readonly country?: string | null
+  /** Absent reads as `manual`: only `on-failure` lets `egress_proxy_check` move the account. */
+  readonly replace?: "manual" | "on-failure"
 }
 
 /**

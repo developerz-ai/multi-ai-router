@@ -74,11 +74,11 @@ describe.skipIf(!process.env.DATABASE_URL)("shared login budget", () => {
       },
     })
     const login = () => service.completeLocalLogin({ ip: "test", password: "test" })
-    await expect(login()).rejects.toThrow("Single sign-on verification failed. Try again.")
+    await expect(login()).rejects.toThrow("Sign-in is temporarily unavailable.")
     expect(verifies).toBe(0)
     fail = false
-    await expect(login()).rejects.toThrow("Single sign-on verification failed. Try again.")
-    await expect(login()).rejects.toThrow("Single sign-on verification failed. Try again.")
+    await expect(login()).rejects.toThrow("Sign-in is temporarily unavailable.")
+    await expect(login()).rejects.toThrow("Sign-in is temporarily unavailable.")
     expect(verifies).toBe(2)
   })
 

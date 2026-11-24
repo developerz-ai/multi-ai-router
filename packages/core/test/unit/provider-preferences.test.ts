@@ -15,6 +15,7 @@ describe("ProviderPreferences, refusals first", () => {
     ["a duplicated quantization", { quantizations: ["fp8", "fp8"] }],
     ["a non-boolean allow_fallbacks", { allow_fallbacks: "yes" }],
     ["an empty provider slug", { order: [""] }],
+    ["a slug with a NUL, which Postgres cannot store", { only: ["deep\u0000infra"] }],
     ["a field OpenRouter does not have", { prefer: "fast" }],
     ["a camelCase spelling of a real field", { allowFallbacks: true }],
     ["an empty object, which states nothing", {}],

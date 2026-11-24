@@ -7,7 +7,7 @@ import type {
 import { axisBucketWidth, buildAxis } from "./axis"
 import { attributionOf, ownerRows, toolRows } from "./buckets"
 import { foldFailures } from "./failures"
-import { historySeriesBy, rawBreakdown } from "./group-reads"
+import { groupLatencies, groupSeriesBy } from "./group-reads"
 import { resolveReadWindow } from "./read-window"
 import { groupedFacts, type SummaryFactsReader } from "./summary-facts"
 import { alignSeries, breakdownRow, groupSeries, keyNames, label } from "./summary-view"
@@ -58,18 +58,14 @@ export async function readSummary(
   const incomplete = coverage.incomplete || retainedAttempts > totals.attempts
   const failures = foldFailures(outcomes, totals.attempts, incomplete)
   const selected = rows.map((group) => group.slice(0, maxRows))
-  const diagnostics = await Promise.all(
-    dimensions.map((dimension, index) =>
-      rawBreakdown(
-        deps.raw,
-        window,
-        dimension,
-        (selected[index] ?? []).map((row) => row.id),
-        maxRows,
-        filter,
-        attribution,
-      ),
-    ),
+  const diagnostics = await groupLatencies(
+    deps.raw,
+    window,
+    dimensions,
+    selected.map((group) => group.map((row) => row.id)),
+    maxRows,
+    filter,
+    attribution,
   )
   const limited = selected.map((group, index) => {
     const measured = new Map((diagnostics[index] ?? []).map((row) => [row.id, row]))
@@ -80,19 +76,15 @@ export async function readSummary(
       routerOverheadP95Ms: measured.get(row.id)?.routerOverheadP95Ms ?? null,
     }))
   })
-  const seriesByDimension = await Promise.all(
-    dimensions.map((dimension, index) =>
-      historySeriesBy(
-        deps.history,
-        window,
-        window.bucket,
-        dimension,
-        width,
-        (limited[index] ?? []).map((row) => row.id),
-        filter,
-        attribution,
-      ),
-    ),
+  const seriesByDimension = await groupSeriesBy(
+    deps.history,
+    window,
+    window.bucket,
+    dimensions,
+    width,
+    limited.map((group) => group.map((row) => row.id)),
+    filter,
+    attribution,
   )
   const [keys, accounts, pools, models, owners, tools] = limited
   const [keySeries, accountSeries, poolSeries, modelSeries, ownerSeries, toolSeries] =

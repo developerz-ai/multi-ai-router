@@ -8,6 +8,7 @@ import { readBackgroundEnv } from "./background"
 import { readClaudeLoginEnv } from "./claude-login"
 import { readClaudeSdkPacingEnv } from "./claude-sdk-pacing"
 import { readCliOwnershipEnv } from "./cli-ownership"
+import { readEgressProxyEnv } from "./egress-proxy"
 import {
   DEFAULT_LOG_QUIET_PATHS,
   DEFAULT_SCHEDULER_JITTER_FRACTION,
@@ -125,10 +126,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
   return {
     ...claudeLogin,
     usageReport: usageReport.usageReport,
-    webshare: {
-      apiKey: raw.WEBSHARE_API_KEY ?? null,
-      timeoutMs: raw.WEBSHARE_TIMEOUT_MS ?? 10_000,
-    },
+    ...readEgressProxyEnv(raw),
     ...readRecoveryEnv(raw),
     ...readUsageReadEnv(raw),
     ...readAdminBodiesEnv(raw),

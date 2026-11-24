@@ -74,6 +74,11 @@ export const OAUTH_CALLBACK_PATH = "/admin/accounts/oauth/callback"
 /** 256 bits each. The verifier is base64url of 32 bytes, comfortably inside PKCE's 43..128 chars. */
 const STATE_BYTES = 32
 const VERIFIER_BYTES = 32
+/**
+ * A state this router minted is base64url. The callback is unauthenticated, so anything else stops
+ * before the database, which refuses a NUL with an error rather than an empty answer.
+ */
+const STATE_SHAPE = /^[A-Za-z0-9_-]{1,128}$/
 
 export interface OAuthConnectStarted {
   readonly accountId: string
@@ -141,6 +146,7 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
 
   /** Where paste and redirect meet. Consume first, judge second: a wrong guess burns its state. */
   const exchange = async (presented: Presentation): Promise<AdminResult<OAuthConnectCompleted>> => {
+    if (!STATE_SHAPE.test(presented.state)) return invalid(STATE_REJECTED, "state_rejected")
     const consumed = await deps.states.consume(presented.state, deps.now())
     const bound = await bindConsumed(deps.accounts, consumed, presented.boundTo, flowFor)
     if (!bound.ok) return bound
@@ -240,7 +246,8 @@ export function createOAuthConnectService(deps: OAuthConnectDeps): OAuthConnectS
     redeem: async (query) => {
       // A refusal still burns the state: it was presented, and one-shot means once.
       if (query.error !== undefined && query.error !== "") {
-        if (query.state !== undefined) await deps.states.consume(query.state, deps.now())
+        if (query.state !== undefined && STATE_SHAPE.test(query.state))
+          await deps.states.consume(query.state, deps.now())
         return invalid(
           "the provider did not authorize this connection — start the connect flow again",
           "authorization_refused",

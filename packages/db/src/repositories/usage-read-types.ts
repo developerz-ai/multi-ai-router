@@ -1,4 +1,5 @@
 import type { UsageOutcome } from "../schema/enums"
+import type { UsageGroupIds, UsageGroupLatencies } from "./usage-group-latency"
 import type { TokenSpanShape, TokenSpanUsage } from "./usage-token-spans"
 
 export * from "./usage-token-spans"
@@ -103,7 +104,7 @@ export interface UsageOutcomeCount {
 }
 
 /** Per-group latency, shared by the raw and the history-served breakdown rows. */
-interface UsageGroupLatency {
+export interface UsageGroupLatency {
   /**
    * Null when the dimension does not apply — no pool was in play (including an attempt that failed before an account was chosen), or an account since deleted. Never
    * null for owner and tool, which carry a `#`-prefixed bucket id instead (`usage-attribution.ts`).
@@ -177,6 +178,17 @@ export interface UsageReadRepository {
     filter: UsageFilter,
     attribution: UsageKeyAttribution,
   ): Promise<UsageRawGroupRow[]>
+  /**
+   * Per-group latency for every dimension at once (`usage-group-latency.ts`): what the summary
+   * decorates its breakdown rows with. Optional only so a hand-built repository stays valid; the
+   * real one always has it, and a reader without it asks `breakdown` once per dimension instead.
+   */
+  groupLatency?(
+    window: UsageWindow,
+    filter: UsageFilter,
+    attribution: UsageKeyAttribution,
+    ids: UsageGroupIds,
+  ): Promise<UsageGroupLatencies>
   /**
    * Attempts per outcome over the window — the split behind "3% failed, of which what?".
    *

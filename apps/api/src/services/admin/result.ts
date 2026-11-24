@@ -1,4 +1,5 @@
 import { type ErrorBody, REQUEST_WALL, refusalBody } from "../../errors/render"
+import type { RouterVerdict } from "../../errors/router-object"
 
 /**
  * How an admin service reports a rejection.
@@ -14,14 +15,19 @@ import { type ErrorBody, REQUEST_WALL, refusalBody } from "../../errors/render"
  * one service call, one `c.json`.
  */
 
-/** Only the three an admin CRUD surface can produce. Nothing here is a 5xx. */
-export type AdminFailureStatus = 400 | 404 | 409
+/**
+ * What an admin surface can produce. `429` is the caller's own pace; `503` is a dependency that did
+ * not answer, never a bug.
+ */
+export type AdminFailureStatus = 400 | 404 | 409 | 429 | 503
 
 export interface AdminFailure {
   readonly status: AdminFailureStatus
   /** Machine-readable, stable, and the same shape the data plane uses. */
   readonly code: string
   readonly message: string
+  /** Set exactly when resending the same request unchanged can succeed: how long to wait first. */
+  readonly retryAfterSeconds?: number
 }
 
 export type AdminResult<T> =
@@ -46,12 +52,38 @@ export function conflict(message: string, code = "conflict"): AdminResult<never>
   return { ok: false, failure: { status: 409, code, message } }
 }
 
+/** How long a caller waits before resending a request a dependency did not answer. */
+const UNAVAILABLE_RETRY_SECONDS = 5
+
+/** Nothing is wrong with the request: something this router asked did not answer. Resend it. */
+export function unavailable(
+  message: string,
+  code: string,
+  retryAfterSeconds: number = UNAVAILABLE_RETRY_SECONDS,
+): AdminResult<never> {
+  return { ok: false, failure: { status: 503, code, message, retryAfterSeconds } }
+}
+
+/** The caller asked again before the router would do it again. */
+export function tooSoon(
+  message: string,
+  code: string,
+  retryAfterSeconds: number,
+): AdminResult<never> {
+  return { ok: false, failure: { status: 429, code, message, retryAfterSeconds } }
+}
+
 /**
  * The admin plane speaks no provider dialect, so failures render in the OpenAI
  * shape — the same default `errors/render.ts` gives every non-`/v1` path — with
- * `error.router` beside the sentence. Every admin failure is a `400`/`404`/`409`:
- * the request itself is wrong, so its wall is `request`.
+ * `error.router` beside the sentence. A `400`/`404`/`409` is wrong in the request
+ * itself, so its wall is `request`; a `429`/`503` clears by itself, so its wall is the clock.
  */
 export function failureBody(failure: AdminFailure, requestId: string | null): ErrorBody {
-  return refusalBody(null, failure.status, failure.message, failure.code, REQUEST_WALL, requestId)
+  const { retryAfterSeconds } = failure
+  const verdict: RouterVerdict =
+    retryAfterSeconds === undefined
+      ? REQUEST_WALL
+      : { wall: "clock", scope: "request", retryAfterSeconds }
+  return refusalBody(null, failure.status, failure.message, failure.code, verdict, requestId)
 }

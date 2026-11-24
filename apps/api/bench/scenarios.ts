@@ -217,7 +217,12 @@ export async function runScenario(
   await drive(build(scenario, shaped), scenario, shaped, Math.round(options.warmup * share))
 
   const built = build(scenario, shaped)
-  const background = startBackground(built, scenario, shaped)
+  const background = startBackground(
+    built,
+    scenario,
+    shaped,
+    shaped.firstByteDelayMs + BACKGROUND_CHUNKS * shaped.chunkGapMs,
+  )
   const driven = await background.ready
     .then(() => drive(built, scenario, shaped, requests))
     .finally(() => background.stop())

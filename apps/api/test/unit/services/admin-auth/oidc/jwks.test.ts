@@ -184,3 +184,29 @@ describe("createJWKSCache", () => {
     expect(calls).toBe(2)
   })
 })
+
+/** Keycloak publishes an RSA-OAEP `use: "enc"` key beside its signing one, and importing it throws. */
+describe("a published key that cannot verify our tokens", () => {
+  const unusable: readonly (readonly [string, (n: unknown) => Record<string, unknown>])[] = [
+    [
+      "an encryption key",
+      (n) => ({ kty: "RSA", n, e: "AQAB", kid: "x", use: "enc", alg: "RSA-OAEP" }),
+    ],
+    ["another RSA hash", (n) => ({ kty: "RSA", n, e: "AQAB", kid: "x", alg: "RS512" })],
+    ["a PSS key", (n) => ({ kty: "RSA", n, e: "AQAB", kid: "x", alg: "PS256" })],
+    ["no kid", (n) => ({ kty: "RSA", n, e: "AQAB", alg: "RS256" })],
+    ["an unreadable modulus", () => ({ kty: "RSA", n: "!!", e: "AQAB", kid: "x" })],
+    ["a key type we do not read", () => ({ kty: "OKP", crv: "Ed25519", x: "a", kid: "x" })],
+  ]
+  for (const [name, other] of unusable) {
+    test(`${name} does not hide the signing key`, async () => {
+      const { publicJwk } = await makeJwkPair("sig")
+      const spare = await makeJwkPair("x")
+      const cache = createJWKSCache("https://sso.test/jwks", {
+        fetch: async () => jsonResponse({ keys: [other(spare.publicJwk.n), publicJwk] }),
+      })
+      expect((await cache.resolve({ kid: "sig" })).kid).toBe("sig")
+      await expect(cache.resolve({ kid: "x" })).rejects.toBeInstanceOf(OIDCJWKSError)
+    })
+  }
+})

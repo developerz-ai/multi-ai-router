@@ -2,8 +2,6 @@ import { AdminAuthError } from "@multi-ai-router/core"
 import { type Context, Hono } from "hono"
 import { deleteCookie, setCookie } from "hono/cookie"
 import { z } from "zod"
-import { REQUEST_WALL, refusalBody } from "../../errors/render"
-import type { RouterVerdict } from "../../errors/router-object"
 import { type AdminAuthEnv, adminAuth } from "../../middleware/adminAuth"
 import { signInAuditContext } from "../../middleware/auditContext"
 import { requestClientIp, trustedProxyHops } from "../../middleware/clientIp"
@@ -11,6 +9,7 @@ import { readJsonBody } from "../../services/admin"
 import {
   ADMIN_API_TOKEN_ACTOR,
   ADMIN_LOGIN_FAILED_MESSAGE,
+  ADMIN_LOGIN_UNAVAILABLE_MESSAGE,
   type AdminAuthService,
   AdminLoginThrottledError,
   type AdminSession,
@@ -20,6 +19,15 @@ import {
   sessionExpiryMs,
 } from "../../services/admin-auth"
 import { callbackPage, callbackPageSignedIn } from "./auth-callback-page"
+import {
+  idpErrorCode,
+  isSignInOutage,
+  lockout,
+  logSignInOutage,
+  oidcNotConfigured,
+  refuse,
+  refuseUnavailable,
+} from "./auth-refusals"
 
 /**
  * The admin plane's authentication routes — mountable on its own, because `app.ts` owns the
@@ -32,7 +40,7 @@ import { callbackPage, callbackPageSignedIn } from "./auth-callback-page"
  *                          caller could not learn by trying both.
  * `POST /login`       — public, per-IP throttled. The local password door: trades the password
  *                          for the same session the OIDC callback issues. Every failure,
- *                          whatever its cause, carries the one OIDC-identical wording.
+ *                          whatever was wrong, carries the one OIDC-identical wording; an outage is a 503.
  * `GET /oidc/start`    — public. Mints the state and the nonce, returns a 302 to the IdP's
  *                          authorize endpoint. 404 when OIDC is not configured.
  * `GET /oidc/callback`  — public. The IdP sends the browser back with the `code` and `state`.
@@ -115,8 +123,12 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
         c.header("Retry-After", String(error.retryAfterSeconds))
         return refuse(c, 429, ADMIN_LOGIN_FAILED_MESSAGE, null, lockout(error.retryAfterSeconds))
       }
-      // Wrong password, no credential configured, anything else: one wording,
-      // byte-identical to the OIDC callback's — see the service.
+      if (isSignInOutage(error)) {
+        logSignInOutage(c, "local", error)
+        return refuseUnavailable(c)
+      }
+      // Wrong password or no credential configured: one wording, byte-identical to the OIDC
+      // callback's — see the service.
       return refuse(c, 401, ADMIN_LOGIN_FAILED_MESSAGE, "admin_auth_failed")
     }
   })
@@ -127,7 +139,10 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       const { authorizeUrl } = await deps.service.startLogin(requestClientIp(c, trustedHops))
       return c.redirect(authorizeUrl, 302)
     } catch (error) {
-      if (!(error instanceof AdminLoginThrottledError)) throw error
+      if (!(error instanceof AdminLoginThrottledError)) {
+        logSignInOutage(c, "oidc-start", error)
+        return refuseUnavailable(c)
+      }
       c.header("Retry-After", String(error.retryAfterSeconds))
       return refuse(c, 429, ADMIN_LOGIN_FAILED_MESSAGE, null, lockout(error.retryAfterSeconds))
     }
@@ -141,7 +156,12 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
     if (error !== undefined && error.length > 0) {
       // The IdP denied the authorization. Render the callback page with a
       // generic failure message — the operator sees the same wording as a
-      // probe would.
+      // probe would, and the log names the IdP's code.
+      c.get("log").warn("the identity provider refused an admin sign-in", {
+        component: "admin-auth",
+        idpError: idpErrorCode(error),
+        remedy: "docs/idea/13-admin-oidc.md#troubleshooting",
+      })
       return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 400)
     }
     if (code === undefined || code === "" || state === undefined || state === "") {
@@ -166,6 +186,10 @@ export function adminAuthRoutes(deps: AdminAuthRoutesDeps): Hono<AdminAuthEnv> {
       if (err instanceof AdminLoginThrottledError) {
         c.header("Retry-After", String(err.retryAfterSeconds))
         return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_FAILED_MESSAGE), 429)
+      }
+      if (isSignInOutage(err)) {
+        logSignInOutage(c, "oidc-callback", err)
+        return c.html(callbackPage("Sign-in failed", ADMIN_LOGIN_UNAVAILABLE_MESSAGE), 503)
       }
       // This route renders HTML, so it answers the failure itself rather than rethrowing into the
       // error handler — which means it owes the operator the line that handler would have written.
@@ -265,27 +289,3 @@ function sessionBody(session: AdminSession): Record<string, string | null> {
 const localLoginBody = z.object({
   password: z.string().min(1).max(1024),
 })
-
-/** OIDC absent is not an error — the door simply does not exist on this router. */
-function oidcNotConfigured(c: Context<AdminAuthEnv>): Response {
-  return refuse(c, 404, "Not found", "not_found")
-}
-
-/** A refusal: the sentence and code as before, `error.router` beside them. */
-function refuse(
-  c: Context<AdminAuthEnv>,
-  status: 400 | 401 | 404 | 429,
-  message: string,
-  code: string | null,
-  verdict: RouterVerdict = REQUEST_WALL,
-): Response {
-  return c.json(
-    refusalBody(null, status, message, code, verdict, c.get("requestId") ?? null),
-    status,
-  )
-}
-
-/** The per-IP sign-in lockout: a clock clears it, at the `Retry-After` the response carries. */
-function lockout(retryAfterSeconds: number): RouterVerdict {
-  return { wall: "clock", scope: "request", retryAfterSeconds }
-}

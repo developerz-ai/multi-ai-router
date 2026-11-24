@@ -46,6 +46,7 @@ export {
   LocalPasswordPolicyError,
   localPasswordPolicyProblem,
 } from "./localCredential"
+export { ADMIN_LOGIN_UNAVAILABLE_MESSAGE } from "./login-outcomes"
 export {
   createPostgresSessionStore,
   hashSessionId,
@@ -56,6 +57,7 @@ export {
   type AdminAuthDeps,
   type AdminAuthMethods,
   type AdminAuthService,
+  AdminAuthUnavailableError,
   AdminLoginThrottledError,
   createAdminAuthService,
   LOCAL_ADMIN_USERNAME,

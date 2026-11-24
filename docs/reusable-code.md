@@ -12,7 +12,7 @@ helper — most of the small things you are about to write are already here.
 | Within one app only | that app's `src/lib/` | `apps/web/src/lib/cx.ts` |
 | Within one app, but a layer not a helper | that layer's directory | `apps/api/src/logging/`, `apps/api/src/middleware/` |
 | Across shell scripts | `bin/` | `bin/check` runs the offline CI jobs in order — lint, typecheck, test, build. The `advisory` and `ui-geometry` gates are CI-only: one needs the network, the other a browser |
-| Shared *by* shell scripts, not run by hand | `bin/lib/` | `bin/lib/database-url` prints the `DATABASE_URL` a `bun test` run will see; `bin/check` and `bin/test` both ask it rather than each spelling Bun's dotenv rules out |
+| Shared *by* shell scripts, not run by hand | `bin/lib/` | `bin/lib/database-url` prints the `DATABASE_URL` a `bun test` run will see; `bin/check` and `bin/test` both ask it rather than each spelling Bun's dotenv rules out. `bin/lib/ensure-test-database.ts` gives a test shard its own database; `bin/lib/merge-test-timings.ts` refreshes `bin/lib/test-timings.json`; `bin/lib/assert-bundles-self-contained.ts` fails a bundle that still imports a package by name (the image ships no `node_modules`); `bin/lib/auto-install-probe.ts` proves a `bunfig.toml` stops bun auto-installing, with a loopback registry as its positive control |
 
 Timing, from the org standard (`gold-standards-in-ai/docs/architecture/solid-srp.md` — "Reusable
 helpers, not copy-paste" and "No premature abstraction"):
@@ -201,6 +201,9 @@ rejection shape, a body read, or an audit write.
 | `mutationCommitted`, `keyMutationCommitted`, `CoherenceHooks`, `withCatalogRefresh` | `services/accounts/service.ts`, `services/admin/coherence.ts` | Production account services await `mutationCommitted` immediately after the committed write, before audit or response mapping; composition supplies the strict catalog barrier. Key edits invalidate authorization without resetting rate-limit usage; revoke/delete discard both. `withCatalogRefresh` is a compatibility decorator over successful returned results, not the production account mutation barrier |
 | `createSnapshotRefresh(load, install)` | `services/snapshots/refresh.ts` | Shared serial snapshot loading for routing, prices and model catalogs. Ordinary refreshes coalesce; mutation barriers wait for a post-write read to install, obsolete reads cannot replace it, and failures preserve the last good snapshot |
 | `render(c, result, status?)` | `routes/admin/render.ts` | The one place an `AdminResult` becomes a response. Four copies of it is four chances for one to answer `200` with an error body |
+| `noNul` / `NO_NUL` | `services/admin/parse.ts` | Every free-text field or filter that reaches Postgres: a NUL is a `400`, not a `500` from the driver |
+| `unavailable()` | `services/admin/result.ts` | An admin failure a retry can fix: `503` (or `429` when asked again too soon) with `Retry-After` and `error.router.retryable: true` |
+| `upstreamBase()` | `services/accounts/rules.ts` | Where an account's requests go: the one reading of its endpoint, used by the origin and plain-`http` credential rules |
 
 ### Settings, task health and the audit feed — `apps/api/src/services/settings/`
 
@@ -358,14 +361,17 @@ in a test as on the wire.
 | Thing | Where | Use it when |
 |---|---|---|
 | `benchApp(options)` → the router booted in memory | `bench/harness.ts` | Measuring the request path. The composition root's wiring with three substitutions a benchmark forces: the stub upstream, an array key repository, and a log sink that serializes and discards |
-| `stubUpstream(options)` → `fetch` + per-request `Trip` | `bench/upstream.ts` | Answering in either dialect, streamed or not, with a controlled time to first byte and per-request timestamps for both ends of the relay |
+| `stubUpstream(options)` → `fetch` + per-request `Trip` | `bench/upstream.ts` (+ `upstream-wire.ts`, `upstream-responses.ts`) | Answering as an Anthropic, Chat Completions or Responses-API upstream, streamed or not, with a controlled time to first byte and per-request timestamps: when the router called it, its first byte, its last |
+| `drive()`, `startBackground()` | `bench/drive.ts` | Driving a built app: N requests through C workers, taking every clock reading around each, plus long background streams that load the app without being measured (`ready` resolves once all are in flight at the upstream) |
+| `overheadMs()`, `addedTtftMs()`, `worstTokenDelayMs()`, `tokensIn()` | `bench/clocks.ts` | What those readings mean, as pure arithmetic: lateness before the upstream, between chunks (per stream token) and after its last byte; added TTFT from the request's start. Unit-tested with chosen timestamps |
 | `parseHistogram()`, `histogramQuantile()`, `histogramMean()`, `sampleQuantile()` | `bench/quantiles.ts` | Reading a Prometheus exposition back as numbers. Pure; `histogramQuantile` matches Prometheus' own interpolation, so a printed number is the number a dashboard shows |
-| `verdict(results, budgets)` → rows + violations | `bench/report.ts` | Turning driven scenarios into a pass/fail against both halves of the budget: overhead p99 and added-TTFT p95. Pure — no app, no clock, no printing |
+| `verdict(results, budgets)` → rows + violations | `bench/report.ts` | Turning driven scenarios into a pass/fail against both halves of the budget: measured overhead p99 and added-TTFT p95, with the series' sample count and mean beside them as the cross-check. Pure — no app, no clock, no printing |
 | `toBaseline()`, `compareToBaseline()`, `renderDelta()` | `bench/baseline.ts` | Diffing a run against a committed `bench/baseline.json`. Pure; `run.ts` owns the file I/O so the comparison is unit-testable without a disk |
 
 Driven by `bin/bench`, guarded by `test/integration/bench.test.ts`, and explained in
-[`docs/idea/08-observability.md`](idea/08-observability.md#verifying-the-budget). It measures nothing
-itself — it drives traffic and reads `router_overhead_seconds` off `GET /metrics`.
+[`docs/idea/08-observability.md`](idea/08-observability.md#verifying-the-budget). It measures
+the budget per request with clocks in its own process, and reads `router_overhead_seconds` off
+`GET /metrics` to prove the series recorded the same requests.
 
 ### Web — `apps/web/src/`
 

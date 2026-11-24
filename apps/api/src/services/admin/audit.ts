@@ -94,6 +94,11 @@ export const AUDIT_KINDS = {
    * nothing writes none (`services/accounts/supported-models-writer.ts`).
    */
   accountSupportedModelsChanged: "account.supported_models_changed",
+  /**
+   * `egress_proxy_check` moved an account off a dead proxy. Addresses only: a proxy's userinfo is a
+   * credential. An operator's own assignment is `account.updated`.
+   */
+  accountEgressProxyReplaced: "account.egress_proxy_replaced",
   keyCreated: "key.created",
   keyUpdated: "key.updated",
   keyRevealed: "key.revealed",

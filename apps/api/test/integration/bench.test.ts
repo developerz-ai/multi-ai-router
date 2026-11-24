@@ -12,9 +12,18 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { type Budgets, OVERHEAD_METRIC, render, verdict } from "../../bench/report"
+import { drive } from "../../bench/drive"
+import { benchApp } from "../../bench/harness"
+import {
+  BACKGROUND_FLOOR,
+  type Budgets,
+  OVERHEAD_METRIC,
+  render,
+  verdict,
+} from "../../bench/report"
 import { parseArgs } from "../../bench/run"
 import { type DriveOptions, runScenario, SCENARIOS } from "../../bench/scenarios"
+import { stubUpstream } from "../../bench/upstream"
 
 /**
  * Keeps `bin/bench` honest. A benchmark nobody runs rots, and one that rots silently is worse than
@@ -75,7 +84,9 @@ describe("the overhead bench", () => {
     const loaded = results.filter((result) => result.scenario.backgroundStreams !== undefined)
     expect(loaded).not.toHaveLength(0)
     for (const result of loaded) {
-      expect(result.backgroundOverlap?.min).toBeGreaterThanOrEqual(1)
+      expect(result.backgroundOverlap?.min).toBeGreaterThanOrEqual(
+        Math.ceil((result.scenario.backgroundStreams ?? notReached()) * BACKGROUND_FLOOR),
+      )
       expect(result.backgroundOverlap?.max).toBe(result.scenario.backgroundStreams ?? notReached())
     }
     expect(
@@ -103,14 +114,39 @@ describe("the overhead bench", () => {
     expect(median).toBeLessThan(held / 3)
   }, 30_000)
 
-  test("added time-to-first-token counts from the request's start, so it is never below the pre-upstream work", async () => {
-    const streamed = SCENARIOS.find((scenario) => scenario.stream) ?? notReached()
-    const result = await runScenario(streamed, OPTIONS)
+  test("added time-to-first-token includes a delay before the upstream is called", async () => {
+    // A relay's own latency is positive under either definition, so "greater than zero" cannot tell
+    // them apart. Fifteen milliseconds spent before the upstream is even called can: counted from
+    // the upstream's first byte it vanishes, counted from the request's start it is all there.
+    const before = 15
+    const scenario = SCENARIOS.find((candidate) => candidate.stream) ?? notReached()
+    const stub = stubUpstream({
+      dialect: "anthropic",
+      stream: true,
+      chunks: 4,
+      firstByteDelayMs: 2,
+    })
+    const bench = benchApp({
+      provider: scenario.provider,
+      upstream: {
+        ...stub,
+        fetch: async (request) => {
+          await Bun.sleep(before)
+          return stub.fetch(request)
+        },
+      },
+    })
+    const driven = await drive(
+      { bench, open: stub.open, backgroundActive: stub.backgroundActive },
+      scenario,
+      { ...OPTIONS, concurrency: 1 },
+      6,
+    )
 
-    // From the upstream's first byte this difference could be a few microseconds; from the
-    // request's start it contains auth, the body scan and selection, and cannot be negative.
-    expect(result.addedTtftMs).toHaveLength(result.requests)
-    expect(result.addedTtftMs.every((value) => value > 0)).toBe(true)
+    expect(driven.addedTtftMs).toHaveLength(6)
+    expect(Math.min(...driven.addedTtftMs)).toBeGreaterThanOrEqual(before)
+    // …and it is overhead too: time before the upstream is the first term of the sum.
+    expect(Math.min(...driven.overheadMs)).toBeGreaterThanOrEqual(before)
   }, 30_000)
 
   test("covers both non-SDK egress paths — the labels prove it was not passthrough twice", async () => {
@@ -381,9 +417,12 @@ describe("the verdict", () => {
     expect(outcome.violations[0]).toContain("no request's overhead was measured")
   })
 
-  test("a scenario that names background load fails when none was in flight", () => {
+  test("a scenario that names background load fails unless nearly all of it was in flight", () => {
     const loaded = SCENARIOS.find((candidate) => candidate.backgroundStreams !== undefined)
+    const scenario = loaded ?? notReached()
+    const wanted = scenario.backgroundStreams ?? notReached()
     const base = {
+      scenario,
       requests: 10,
       failures: 0,
       exposition,
@@ -391,20 +430,24 @@ describe("the verdict", () => {
       addedTtftMs: [],
       buffered: 0,
     }
+    const floor = Math.ceil(wanted * BACKGROUND_FLOOR)
 
-    for (const backgroundOverlap of [null, { min: 0, max: 32 }]) {
-      const outcome = verdict(
-        [{ ...base, scenario: loaded ?? notReached(), backgroundOverlap }],
-        BUDGETS,
-      )
+    // None, one — a serial workload wearing the loaded scenario's name — and one short of enough.
+    for (const backgroundOverlap of [
+      null,
+      { min: 0, max: wanted },
+      { min: 1, max: wanted },
+      { min: floor - 1, max: wanted },
+    ]) {
+      const outcome = verdict([{ ...base, backgroundOverlap }], BUDGETS)
       expect(outcome.violations).toHaveLength(1)
-      expect(outcome.violations[0]).toContain("no background stream in flight")
+      expect(outcome.violations[0]).toContain(`of ${wanted} background streams in flight`)
     }
-    const held = verdict(
-      [{ ...base, scenario: loaded ?? notReached(), backgroundOverlap: { min: 31, max: 32 } }],
-      BUDGETS,
-    )
-    expect(held.violations).toEqual([])
+    // A stream ending and reopening is not missing load.
+    for (const min of [floor, wanted - 1, wanted]) {
+      const held = verdict([{ ...base, backgroundOverlap: { min, max: wanted } }], BUDGETS)
+      expect(held.violations).toEqual([])
+    }
   })
 
   test("holds a non-streamed scenario to the overhead budget only — it has no first token to be late with", () => {

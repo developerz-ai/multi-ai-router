@@ -144,6 +144,7 @@ describe("the tasks read", () => {
       "cooldown_recheck",
       "plan_quota_read",
       "pool_reap",
+      "egress_proxy_check",
     ])
 
     const janitor = result.value.tasks[0]

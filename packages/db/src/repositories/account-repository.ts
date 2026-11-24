@@ -5,6 +5,7 @@ import { type AccountRow, accounts } from "../schema/accounts"
 import { quotaWindows } from "../schema/quota-windows"
 import { sessions } from "../schema/sessions"
 import { createAccountAuthorization } from "./account-authorization"
+import { createAccountEgressMethods } from "./account-egress"
 import { createAccountLifecycle } from "./account-lifecycle"
 import { createSupportedModelsMethods } from "./account-supported-models"
 import type { AccountListFilter, AccountRepository } from "./account-types"
@@ -75,6 +76,7 @@ export function createAccountRepository(
     ...lifecycle,
     ...createAccountAuthorization(db, recoveryCooldownMs),
     ...createSupportedModelsMethods(db),
+    ...createAccountEgressMethods(db),
     create: async (input) => {
       const rows = await db
         .insert(accounts)

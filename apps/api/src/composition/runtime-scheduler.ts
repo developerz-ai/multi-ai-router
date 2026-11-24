@@ -139,6 +139,10 @@ export function createRuntimeScheduler(
       accounts: () => catalog.accounts(),
       read: (account) => readPlanQuota({ ...catalogRefreshDeps, health, now }, account),
     },
+    egressProxyCheck: {
+      sweep: (ctx) => admin.egressProxies.sweep(ctx),
+      intervalMs: env.egressProxy.checkIntervalMinutes * 60_000,
+    },
     poolReap: { pools: repositories.pools, reaper: admin.poolReaper },
     // Only when a roster is configured: the key is omitted entirely otherwise, so the registry sees
     // `undefined` and builds no `pool_roster_check` task. `listSummaries` is the ciphertext-free

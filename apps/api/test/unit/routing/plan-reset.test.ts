@@ -177,11 +177,18 @@ describe("a key cap refuses before its reading says spent", () => {
     message: "openrouter:key-limit-window",
     keyCap: true,
   }
-  /** `402 Insufficient credits`: nothing in it names the key's cap. */
+  /** `402 Insufficient credits`, or `limit_source: openrouter_credits`: the prepaid balance. */
   const balance: AttemptFailure = {
     kind: "credits-exhausted",
     status: 402,
     message: "openrouter:insufficient-credits",
+    namesBalance: true,
+  }
+  /** A `402` nothing classified: no word about a key, a cap or a balance. */
+  const ambiguous: AttemptFailure = {
+    kind: "credits-exhausted",
+    status: 402,
+    message: "upstream returned 402",
   }
 
   test("a refusal naming the cap, at 97 %, cools until the cap's own reset", () => {
@@ -207,7 +214,7 @@ describe("a key cap refuses before its reading says spent", () => {
   // E's driver flag: the sentence names the key's cap but no window (`Key limit exceeded`,
   // `limit_source: openrouter_key_limit`), so it stays `credits-exhausted` and carries `keyCap`.
   test("a credits refusal flagged as the key's cap borrows the near-spent cap's reset", () => {
-    const flagged: AttemptFailure = { ...balance, message: "openrouter:key-limit", keyCap: true }
+    const flagged: AttemptFailure = { ...ambiguous, message: "openrouter:key-limit", keyCap: true }
     const planned = withPlanReset(flagged, [nearCap()], AT, FRESH)
     expect(planned.kind).toBe("rate-limited")
     expect(planned.resetsAt).toEqual(MIDNIGHT)
@@ -217,21 +224,38 @@ describe("a key cap refuses before its reading says spent", () => {
   })
 
   test("the client path's predicate is the breaker's, refusal by refusal", () => {
-    const flagged: AttemptFailure = { ...balance, keyCap: true }
+    const flagged: AttemptFailure = { ...ambiguous, keyCap: true }
     const perMinute: AttemptFailure = { kind: "rate-limited", status: 429, message: "slow down" }
     expect(keyCapResetFor(capNamed, [nearCap()], AT, FRESH)).toEqual(MIDNIGHT)
     expect(keyCapResetFor(flagged, [nearCap()], AT, FRESH)).toEqual(MIDNIGHT)
     expect(keyCapResetFor(balance, [nearCap()], AT, FRESH)).toBeNull()
-    expect(keyCapResetFor(balance, [nearCap({ utilization: 1 })], AT, FRESH)).toEqual(MIDNIGHT)
+    expect(keyCapResetFor(balance, [nearCap({ utilization: 1 })], AT, FRESH)).toBeNull()
+    expect(keyCapResetFor(ambiguous, [nearCap()], AT, FRESH)).toBeNull()
     expect(keyCapResetFor(perMinute, [nearCap({ utilization: 1 })], AT, FRESH)).toBeNull()
   })
 
-  test("a credits refusal borrows only from a cap the reading says is fully spent", () => {
+  // Review of #506: this asserted that an explicit balance refusal borrows a fully spent cap's
+  // reset. No key reset refills a prepaid balance: the account cooled until midnight, answered
+  // `429`, and at midnight was refused again.
+  test("a refusal naming the balance borrows nothing, even from a fully spent cap", () => {
     const spent = nearCap({ utilization: 1 })
-    const planned = withPlanReset(balance, [spent], AT, FRESH)
+    expect(withPlanReset(balance, [spent], AT, FRESH)).toBe(balance)
+    expect(recordFailure(HEALTHY, balance, AT).status).toBe("exhausted")
+    expect(keyCapResetFor(balance, [spent], AT, FRESH)).toBeNull()
+  })
+
+  test("an ambiguous credits refusal borrows only from a cap the reading says is fully spent", () => {
+    const spent = nearCap({ utilization: 1 })
+    expect(withPlanReset(ambiguous, [nearCap()], AT, FRESH)).toBe(ambiguous)
+    const planned = withPlanReset(ambiguous, [spent], AT, FRESH)
     expect(planned.kind).toBe("rate-limited")
     expect(planned.resetsAt).toEqual(MIDNIGHT)
-    expect(verifiedKeyCapReset([spent], AT, FRESH)).toEqual(MIDNIGHT)
+    expect(keyCapResetFor(ambiguous, [spent], AT, FRESH)).toEqual(MIDNIGHT)
+  })
+
+  test("the balance outranks a key-cap flag carried beside it", () => {
+    const both: AttemptFailure = { ...balance, keyCap: true }
+    expect(withPlanReset(both, [nearCap({ utilization: 1 })], AT, FRESH)).toBe(both)
   })
 
   test("the near-cap bound is the caller's, and applies to the cap-named refusal alone", () => {

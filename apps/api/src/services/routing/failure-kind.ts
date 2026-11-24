@@ -74,6 +74,13 @@ export interface AttemptFailure {
    */
   readonly keyCap?: boolean
   /**
+   * The refusal names the **prepaid balance** (`FailureClassification.namesBalance`:
+   * `limit_source: openrouter_credits`, `Insufficient credits`). The opposite evidence to
+   * {@link keyCap}, and it outranks it: no key reset refills a balance, so `plan-reset.ts` lends
+   * it nothing, a fully spent cap's reset included.
+   */
+  readonly namesBalance?: boolean
+  /**
    * A `client-error` about **this account's own settings** (`FailureClassification.accountScoped`:
    * an OpenRouter provider filter or data policy that leaves no endpoint, one request larger than
    * the account's in-flight budget). The next account may serve the body as it stands, one of the

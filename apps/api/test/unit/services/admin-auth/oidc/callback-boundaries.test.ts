@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { AdminAuthError } from "@multi-ai-router/core"
+import { AdminAuthUnavailableError } from "../../../../../src/services/admin-auth"
 import { createOIDCFlow } from "../../../../../src/services/admin-auth/oidc/flow"
 import { createOIDCStateStore } from "../../../../../src/services/admin-auth/oidc/state"
 import { createCredentialCipher } from "../../../../../src/services/crypto/cipher"
@@ -66,7 +67,7 @@ describe("OIDC callbacks reject unusable state before contacting the IdP", () =>
     const h = fixture()
     const { state } = await h.states.issue()
     await expect(h.coldFlow().complete({ code: "unused", state })).rejects.toBeInstanceOf(
-      AdminAuthError,
+      AdminAuthUnavailableError,
     )
     expect(h.fetches()).toBe(1)
     await expect(h.coldFlow().complete({ code: "unused", state })).rejects.toBeInstanceOf(

@@ -105,7 +105,10 @@ describe.skipIf(ownDatabaseUrl === "")("pool roster task persistence", () => {
       await runMigrations({ url, migrationsFolder: beforeFolder })
       const handle = createDatabase({ url, maxConnections: 1 })
       try {
-        const oldNames = scheduledTask.enumValues.filter((task) => task !== "pool_roster_check")
+        // The values the schema had at 0050: everything but the two added since.
+        const oldNames = scheduledTask.enumValues.filter(
+          (task) => task !== "pool_roster_check" && task !== "egress_proxy_check",
+        )
         expect(await enumValues(handle)).toEqual(oldNames)
         const repository = createScheduledTaskRepository(handle.db)
         for (const task of oldNames) {

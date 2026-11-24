@@ -17,6 +17,9 @@
 
 import { z } from "zod"
 
+/** The one algorithm `idToken.ts` accepts. */
+const SIGNING_ALG = "RS256"
+
 /** The dials we actually consume. Other fields are ignored by design. */
 const jwkSchema = z.object({
   kty: z.string(),
@@ -34,8 +37,23 @@ const jwkSchema = z.object({
 })
 
 const jwksSchema = z.object({
-  keys: z.array(jwkSchema),
+  // Parsed one by one (`usableKey`): a key we cannot use says nothing about the one that signed.
+  keys: z.array(z.unknown()),
 })
+
+/**
+ * The key as one that can verify our tokens, or `null`. An IdP publishes its other keys in the same
+ * set (Keycloak's RSA-OAEP `use: "enc"` one), and importing one of those throws.
+ */
+function usableKey(raw: unknown): { kid: string; n: string; e: string } | null {
+  const parsed = jwkSchema.safeParse(raw)
+  if (!parsed.success) return null
+  const { kty, kid, use, alg, n, e } = parsed.data
+  if (kty !== "RSA" || n === undefined || e === undefined) return null
+  if (use !== undefined && use !== "sig") return null
+  if (alg !== undefined && alg !== SIGNING_ALG) return null
+  return { kid, n, e }
+}
 
 export interface JWK {
   readonly kty: string
@@ -155,22 +173,26 @@ export function createJWKSCache(
     const maxAgeMs = parseMaxAge(res.headers.get("cache-control"), defaultMaxAgeMs)
     const nowMs = clock()
     const imported: CacheEntry[] = []
-    for (const jwk of parsed.data.keys) {
-      // Only RSA at the moment. EC support is a follow-up; the JWK layer is the
-      // seam to add it on without surfacing new errors to the caller.
-      if (jwk.kty !== "RSA") continue
-      if (jwk.n === undefined || jwk.e === undefined) continue
-      const alg = jwk.alg ?? "RS256"
-      const key = await crypto.subtle.importKey(
-        "jwk",
-        { kty: jwk.kty, n: jwk.n, e: jwk.e, alg },
-        { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-        false,
-        ["verify"],
-      )
-      imported.push({ key: { kid: jwk.kid, alg, key }, loadedAtMs: nowMs, maxAgeMs })
+    for (const raw of parsed.data.keys) {
+      const jwk = usableKey(raw)
+      if (jwk === null) continue
+      try {
+        const key = await crypto.subtle.importKey(
+          "jwk",
+          { kty: "RSA", n: jwk.n, e: jwk.e, alg: SIGNING_ALG },
+          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+          false,
+          ["verify"],
+        )
+        imported.push({
+          key: { kid: jwk.kid, alg: SIGNING_ALG, key },
+          loadedAtMs: nowMs,
+          maxAgeMs,
+        })
+      } catch {
+        // A modulus this runtime cannot import. The others still can be.
+      }
     }
-    // Replace the cache atomically. Reads after this point see the new set.
     cache.clear()
     for (const entry of imported) cache.set(entry.key.kid, entry)
   }

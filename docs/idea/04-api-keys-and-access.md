@@ -268,7 +268,7 @@ Every key carries a **scope** — the set of Accounts it may reach — in one of
 | Tool | slug, optional | What the key is used from (`claude-code`, `ci`). Same slug rule |
 | Purpose | free text, optional | Trimmed, at most 500 characters; blank stores as unset; must not contain U+0000 (`400`) |
 | Rate limit | requests per window | Enforced as an **exact sliding window** over accepted requests, in memory, before the request body is read — a refusal must cost less than the request it refuses. Over the ceiling → `429` `key_rate_limited` + `Retry-After`, and never `quota_exhausted`: one key spending its allowance is not the pool running out. **Per replica**, deliberately: a shared counter would put a round trip on the request path, so two replicas admit up to twice the ceiling |
-| Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one. A new or **changed** expiry must lie in the future (`expiry_in_past`); an edit that resends the stored one is accepted, so an expired key can still be renamed or re-scoped |
+| Expiry | timestamp, optional | a key past expiry is rejected exactly like a revoked one. A new or **changed** expiry must lie in the future (`expiry_in_past`); an edit that resends the stored one is accepted, so an expired key can still be renamed or re-scoped; the console shows it as `expired`, not `active`, and does not count it among active keys |
 | Revoked | flag | one-way |
 
 All four attribution fields are nullable (a key minted before they existed is unlabelled) and `PATCH null` clears each. `GET /api/admin/keys` takes exact-match `?owner=` and `?tool=` filters, which combine; a value that is not a valid slug answers `400`, and so does any other query parameter. The convention is to name keys `<owner>/<tool>`; it is documentation, not validation, and `name` stays free text.
@@ -393,7 +393,7 @@ Paths and purpose only. Handler detail belongs in [01-architecture.md](01-archit
 | `/api/admin/accounts/**` | upstream account CRUD, health, re-check, test, model discovery, connect/reconnect | yes — CRUD + disable + re-check + test + `POST /:id/models/discover` + `PATCH`/`PUT /:id/models`, and connect/reconnect for both flows (the `claude` CLI's login, and the authorization-code flow the router drives) |
 | `/api/admin/pools/**` | pool CRUD, membership, policy, weights, priority order, overflow account | yes |
 | `/api/admin/keys/**` | list, create, reveal, edit limits and bindings, revoke | yes |
-| `/api/admin/egress-proxies` | the Webshare proxies to choose from (`GET /`), and the one an account leaves through (`PATCH` / `DELETE /accounts/:id`). No answer carries a proxy password | yes |
+| `/api/admin/egress-proxies` | every vendor's proxies, the accounts using each, and each assigned proxy's health (`GET /`); try one (`POST /test`, `POST /accounts/:id/test`); assign, clear, and set the replace mode (`PATCH` / `DELETE /accounts/:id`, `PATCH /accounts/:id/replace`). No answer carries a proxy password or a vendor key | yes |
 | `/api/admin/providers` | the static provider registry, so the console's account form is never a second copy of it | yes |
 | `GET /api/admin/usage` | totals, series and breakdowns by key, account, pool, model, over a window; optional repeated `owner`, `tool`, `model`, `keyId`, `poolId`, `accountId` filters (`400` on invalid filters or unknown query keys; see [08-observability](08-observability.md#filters)) | yes |
 | `GET`/`PATCH` `/api/admin/settings` | the running build's `version`; retention knobs, log level, janitor cadence and the configured `PUBLIC_URL` (or null) read from the environment; the shipped price table with the date it was verified (`prices.shippedAsOf`) so an override is edited against the rows it replaces, and the overrides themselves read and written | yes — the `PATCH` takes the price overrides as one complete set, so the table is never half-applied, and the warm price book is refreshed before the response is written |
@@ -404,6 +404,14 @@ Every group above accepts either admin credential — the console's session cook
 `ADMIN_API_TOKEN` bearer described in [Driving the admin API without a
 browser](#driving-the-admin-api-without-a-browser). The one route that distinguishes them is
 `POST /api/admin/auth/logout`, which refuses the token because there is no session to end.
+
+A `503` from the admin plane means something the router asked did not answer (a vendor or device
+sign-in, a model listing that timed out or got `429`/`5xx`), and a `429` means the caller asked
+again too soon; both carry `Retry-After` and `error.router.retryable: true`. A `400`/`404`/`409` is
+wrong in the request and fails alike when resent. Two `400`s guard a stored credential: moving an
+account's `baseUrl` to another origin without the `credential` in the same request is
+`credential_required_for_new_endpoint`, and an egress proxy on an account that reaches a plain
+`http` endpoint with a credential is `egress_proxy_plaintext`.
 
 The connect flow under `/api/admin/accounts` is four calls, all guarded like the rest of the plane:
 `POST /:id/connect` answers with an authorization URL, `POST /:id/connect/complete` takes back the

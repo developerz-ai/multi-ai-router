@@ -34,6 +34,22 @@ the proxy and cannot establish the router's production overhead.
 
 ## Repeat after an SDK/CLI update
 
+The order, start to finish:
+
+1. Bump `@anthropic-ai/claude-agent-sdk` in `apps/api/package.json` and `bun.lock`.
+2. The owner runs the billed `bin/claude-trace` captures on one model: `pty`, `print`, `sdk`,
+   `conversation`, `subagents`, `autocompact`, `fast`.
+3. `analyze` must match integrity 100%.
+4. Update `integrity.ts` (`CLAUDE_FAST_CLI_VERSION`, `SEEDS`).
+5. Update `availability.ts` (`VERIFIED_BINARY` sha256 of the linux-x64 binary,
+   `CALIBRATED_BUN_VERSION`).
+6. Update `profile.ts` (`FAST_BETAS`, Stainless package and runtime versions, header order).
+7. Re-verify `CLI_REFRESH_LEAD_MS`, the failure phrases and the quota header claims.
+8. Update the pins in this file and in `docs/idea/claude-fast-mode.md`.
+9. Run `claude-profile-check` on the image.
+
+`calibration.test.ts` fails until steps 4 and 5 are done.
+
 `bin/claude-trace --help` describes the live diagnostics. They require Bun, Python 3, `uv`,
 `claude` and an existing Claude login. `uv` obtains the pinned proxy in its own tool environment;
 no Python dependency is installed into the router. These commands make real, billed requests.

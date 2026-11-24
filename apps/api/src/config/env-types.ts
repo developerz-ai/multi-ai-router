@@ -3,6 +3,7 @@ import type { readBackgroundEnv } from "./background"
 import type { ClaudeLoginConfig } from "./claude-login"
 import type { ClaudeSdkPacingConfig } from "./claude-sdk-pacing"
 import type { readCliOwnershipEnv } from "./cli-ownership"
+import type { EgressProxyEnv, WebshareEnv } from "./egress-proxy"
 import type { AdminAuthConfig, AdminOidcConfig } from "./env-admin-types"
 import type { LogLevel } from "./env-defaults"
 import type { DataPlaneConfig, FailoverConfig, TranslationConfig } from "./env-routing-types"
@@ -251,7 +252,9 @@ export interface Env {
   /** When the weekly usage report is due — `config/usage-report.ts`. */
   readonly usageReport: UsageReportConfig
   /** Webshare, the one proxy vendor the console can list. A null key turns the listing off. */
-  readonly webshare: { readonly apiKey: string | null; readonly timeoutMs: number }
+  readonly webshare: WebshareEnv
+  /** Dead-proxy checks and repair — `config/egress-proxy.ts`. */
+  readonly egressProxy: EgressProxyEnv
   readonly oauthRefresh: OAuthRefreshConfig
   readonly translation: TranslationConfig
 }

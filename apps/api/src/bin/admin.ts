@@ -13,6 +13,7 @@ import {
   type LocalAdminCredentials,
   LocalPasswordPolicyError,
 } from "../services/admin-auth"
+import { createHiddenLineReader } from "./hidden-line"
 
 /**
  * `bin/admin` — the local admin password's only write path.
@@ -84,29 +85,19 @@ async function readHiddenLines(prompts: readonly [string, string]): Promise<[str
   const decoder = new TextDecoder()
   stdin.setRawMode(true)
   try {
+    const keys = createHiddenLineReader()
+    // Both lines may arrive in one read (a paste); the second is kept, not asked for again.
     const lines: string[] = []
-    for (const prompt of prompts) {
+    for (const [index, prompt] of prompts.entries()) {
       process.stderr.write(prompt)
-      let line = ""
-      let done = false
-      while (!done) {
+      while (lines.length <= index) {
         const chunk = await reader.read()
         if (chunk.done) fail("stdin closed before the password was entered", 2)
-        for (const char of decoder.decode(chunk.value, { stream: true })) {
-          if (char === "\r" || char === "\n") {
-            done = true
-            break
-          }
-          if (char === "\u0003") fail("aborted — nothing was written", 2)
-          if (char === "\u007f" || char === "\b") {
-            line = line.slice(0, -1)
-          } else {
-            line += char
-          }
-        }
+        const typed = keys.push(decoder.decode(chunk.value, { stream: true }))
+        if (typed.aborted) fail("aborted — nothing was written", 2)
+        lines.push(...typed.lines)
       }
       process.stderr.write("\n")
-      lines.push(line)
     }
     return [lines[0] ?? "", lines[1] ?? ""]
   } finally {
@@ -133,6 +124,19 @@ async function revokeSessions(
   username: string | null,
 ): Promise<number> {
   return username === null ? await sessions.deleteAll() : await sessions.deleteByUsername(username)
+}
+
+/** A changed password whose old sessions survive rotated nothing, so a failure here says so. */
+async function signOutLocal(sessions: AdminSessionRepository, done: string): Promise<number> {
+  try {
+    return await revokeSessions(sessions, LOCAL_ADMIN_USERNAME)
+  } catch (error) {
+    return fail(
+      `${done}, but its existing sessions could not be signed out ` +
+        `(${error instanceof Error ? error.message : "unknown error"}).\n` +
+        `  Run: bin/admin revoke-sessions --user ${LOCAL_ADMIN_USERNAME}`,
+    )
+  }
 }
 
 function signedOutLine(count: number): string {
@@ -163,7 +167,7 @@ async function setPassword(
     }
     throw error
   }
-  const revoked = await revokeSessions(sessions, LOCAL_ADMIN_USERNAME)
+  const revoked = await signOutLocal(sessions, "the password was set")
 
   process.stdout.write(
     "local admin password set — the argon2id hash is in Postgres; the password itself is nowhere.\n" +
@@ -181,7 +185,10 @@ async function deletePassword(
 ): Promise<void> {
   const removed = await credentials.remove()
   // Even with no row: a password session that outlived its row is exactly what this cleans up.
-  const revoked = await revokeSessions(sessions, LOCAL_ADMIN_USERNAME)
+  const revoked = await signOutLocal(
+    sessions,
+    removed ? "the password was removed" : "no password was set",
+  )
   if (!removed) {
     process.stdout.write(
       `no local admin password was set — nothing to remove.\n${signedOutLine(revoked)}`,

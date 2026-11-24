@@ -423,6 +423,10 @@ describe("starting a login", () => {
     expect(h.login.handles).toHaveLength(2)
     expect(h.login.handles[0]?.stats.cancels).toBe(1)
     expect(h.login.handles[1]?.stats.cancels).toBe(0)
+    // The new claim overwrites the old under the same lease token. A clear here would race it.
+    await tick()
+    expect(h.claims.clears).toEqual([])
+    expect(h.claims.rows.size).toBe(1)
   })
 
   test("a CLI that will not start is reported by name", async () => {

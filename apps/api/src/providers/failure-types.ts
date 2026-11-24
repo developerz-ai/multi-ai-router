@@ -168,6 +168,14 @@ export interface FailureClassification {
    * one, and calling it a clock would answer `429` for a wall only a top-up clears (non-negotiable 7).
    */
   readonly keyCap?: boolean
+  /**
+   * A spend refusal that names the **prepaid balance** itself: OpenRouter's
+   * `limit_source: openrouter_credits`, `Insufficient credits`, `settings/credits`. The opposite
+   * evidence to {@link keyCap}: no key reset refills a balance, so it borrows no cap's reset,
+   * not even a fully spent one's, and stays `exhausted` until a human tops up. Absent on a refusal
+   * that says nothing either way, which is the only kind the spent-cap fallback is for.
+   */
+  readonly namesBalance?: boolean
 }
 
 /** Parsed bounded successful-body evidence; no I/O, raw body logging, or response replacement. */

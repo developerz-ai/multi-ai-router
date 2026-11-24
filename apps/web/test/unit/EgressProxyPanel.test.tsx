@@ -244,3 +244,32 @@ test("inside the account dialog, the proxy box submits the proxy and never the a
     dispose()
   }
 })
+
+test("a save of a typed URL leaves a vendor choice and mode that were not sent", async () => {
+  const gate = Promise.withResolvers<void>()
+  await mount(
+    account(null),
+    true,
+    async (root) => {
+      const onFailure = () =>
+        [...root.querySelectorAll("select")].filter((node) =>
+          [...node.options].some((option) => option.value === "on-failure"),
+        )
+      open(root)
+      selectOption(selectWith(root, "webshare/d-1"), "webshare/d-1")
+      selectOption(onFailure().at(-1) as HTMLSelectElement, "on-failure")
+      typeInto(urlBox(root), "http://u:p@first.test:1")
+      const form = urlBox(root).form
+      if (form !== null) fire(form, "submit")
+      await settle()
+      typeInto(urlBox(root), "")
+      gate.resolve()
+      await settle()
+      expect(selectWith(root, "webshare/d-1").value).toBe("webshare/d-1")
+      expect(onFailure().at(-1)?.value).toBe("on-failure")
+    },
+    assignment({ id: "a" }),
+    new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } }),
+    gate.promise,
+  )
+})

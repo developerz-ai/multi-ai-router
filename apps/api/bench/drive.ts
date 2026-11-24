@@ -52,6 +52,8 @@ export function startBackground(
   built: Built,
   scenario: Scenario,
   options: DriveOptions,
+  /** How long one background stream lasts, ms: what their starts are spread across. */
+  streamMs: number,
 ): Background {
   const count = scenario.backgroundStreams
   if (count === undefined || count <= 0) return NO_BACKGROUND
@@ -59,7 +61,12 @@ export function startBackground(
   let running = true
   let failures = 0
 
-  const worker = async () => {
+  // Opened across half a stream's length — so all are in flight before the first one ends — and
+  // therefore ENDING that far apart too: started
+  // together they would all finish and reopen in the same instant, and every request measured
+  // in that instant would meet an idle router.
+  const worker = async (_unused: unknown, index: number) => {
+    await new Promise((resolve) => setTimeout(resolve, (index * streamMs) / (2 * count)))
     while (running) {
       const response = await built.bench.app.request(INGRESS_PATH, {
         method: "POST",

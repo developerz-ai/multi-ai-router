@@ -96,6 +96,7 @@ export const scheduledTask = pgEnum("scheduled_task", [
   "plan_quota_read",
   "pool_reap",
   "pool_roster_check",
+  "egress_proxy_check",
 ])
 
 export const scheduledTaskOutcome = pgEnum("scheduled_task_outcome", [

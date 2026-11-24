@@ -250,6 +250,27 @@ describe("the cooldown_recheck task", () => {
     expect(h.store.stateOf("a").breaker.status).toBe("active")
   })
 
+  // A 2xx probe on a provider that limits per model, whose reply still carried that model's
+  // `limited` reading: folded as the account's, it re-cooled the account the probe had just reopened.
+  test("a model-level limit on the probe's reply is not folded as the account's", async () => {
+    const reading: RateLimitSignal = {
+      limited: true,
+      resetSource: "provider-reported",
+      windows: [],
+      resetsAt: at(2 * DAY),
+    }
+    const perModel = harness([routable("a", "nvidia")], undefined, { reading })
+    perModel.cool("a")
+    await perModel.run()
+    expect(perModel.store.stateOf("a").breaker.status).toBe("active")
+
+    // The same reply from a provider whose limits are the account's still cools it.
+    const perAccount = harness([routable("b", "openai-oauth")], undefined, { reading })
+    perAccount.cool("b")
+    await perAccount.run()
+    expect(perAccount.store.stateOf("b").breaker.status).toBe("cooling_down")
+  })
+
   test("a 429 with no reading at all leaves it intact too", async () => {
     const h = harness([routable("a", "openai-oauth")], () => limited)
     h.cool("a")

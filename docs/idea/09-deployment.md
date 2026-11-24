@@ -24,6 +24,11 @@ conservative monotonic deadline established **before** the acquire or renewal re
 a delayed response cannot grant extra local lifetime, and wall-clock jumps cannot extend it.
 Database outages stop renewal; reaching the local deadline fails closed, including cached
 fast-mode credentials. Warm request admission consults local readiness only.
+A renewal error keeps the current deadline; only an explicit refusal or the deadline ends authority,
+and the deadline ends it at the instant it passes, whatever the heartbeat is doing.
+A fenced owner still gives its process tree the TERM grace before KILL. An exit for capacity, or a
+cancel before registration, is certain: it releases the account. Exit 70, an unexpected signal, or
+anything after readiness stays uncertain.
 
 Ownership environment settings (all names start with `CLAUDE_OWNERSHIP_`):
 
@@ -212,7 +217,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:18.4@sha256:a02db8cac496f15b094798a38254f14d6e00741f709360e5e00bb6668ea31636
+    image: postgres:18.6@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
     environment: { POSTGRES_USER: router, POSTGRES_PASSWORD: router, POSTGRES_DB: router }
     volumes: [postgres-data-18:/var/lib/postgresql]
     healthcheck:
@@ -259,7 +264,8 @@ either way — it is unrelated to the database.
 ### Migrations
 
 Migrations run **at boot, before the listener opens**, and are **idempotent** — a restart, a crash
-mid-upgrade, or two containers racing the same database converge on the same schema.
+mid-upgrade, or two containers racing the same database converge on the same schema. 60 files,
+through `0059` (2.77.0).
 
 A failed migration **fails the boot, loudly**: the process exits non-zero naming the migration that
 failed, and never serves traffic on a half-migrated schema. `docker compose up -d` leaves you with a
@@ -470,7 +476,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `UPSTREAM_IDLE_TIMEOUT_MS` | no | `55000` | The longest silence between a streamed attempt's body chunks, counted only while the router is waiting on the upstream (a client that stops reading is backpressure, not a stall). Expiry aborts the upstream and ends the client's stream with an error, recorded `upstream_timeout`, breaker struck — never a retry, bytes may be out. 55 s: under `SERVER_IDLE_TIMEOUT_SECONDS`' 60 s default, so a silent upstream is failed as an upstream timeout before the listener closes the socket and the attempt is misread as `client_cancelled`. Raise it with that one. **`0` refused at boot**; must be at most `UPSTREAM_STREAM_TIMEOUT_MS`. |
 | `UPSTREAM_STREAM_TIMEOUT_MS` | no | `3600000` | The whole of a streamed HTTP attempt, headers to last byte. 1 h: the first-byte and idle clocks catch every hang, so this only bounds a stream that keeps trickling — and a 128k-token generation at a slow model's 40 tokens/s runs ~55 min. Was the shared 600 s, which cut healthy long generations mid-stream. The weekly usage report's settle caveat compares its real gap with this when it is the longer deadline (`USAGE_REPORT_SETTLE_MINUTES`). **`0` refused at boot.** |
 | `UPSTREAM_STREAM_CAP_MIN_SECONDS` | no | `840` | A stream the upstream drops without completing, after at least this long, is read as the provider's own stream cap (Codex closes at ~900 s; 840 leaves a minute for clock skew) rather than as a fault of the account, and is reported as such. |
-| `UPSTREAM_STREAM_WALL_HOLD_MS` | no | `5000` | How long a **streaming** client's status line may wait, after the upstream's headers, for the first event that decides wall or content. A wall inside it (`event: error`, `response.failed`, a MiniMax `base_resp`) fails over to a sibling in the same call; the first content event ends the hold at once, so time to first token is unchanged. Expiry commits the stream with what the upstream sent so far. 5 s: walls arrive within milliseconds of the headers, and a client's header timeout is the failure a longer hold buys. See [05](05-routing-and-failover.md#a-wall-inside-a-2xx). **`0` refused at boot.** |
+| `UPSTREAM_STREAM_WALL_HOLD_MS` | no | `5000` | How long a **streaming** client's status line may wait, after the upstream's headers, for the first event that decides wall or content. A wall inside it (`event: error`, `response.failed`, a MiniMax `base_resp`) fails over to a sibling in the same call; the first content event ends the hold at once, so time to first token is unchanged. Expiry commits the stream with what the upstream sent so far. 5 s: walls arrive within milliseconds of the headers, and a client's header timeout is the failure a longer hold buys. See [05](05-routing-and-failover.md#a-wall-inside-a-2xx). **`0` refused at boot.** The hold starts at the upstream's first byte: with zero bytes the status line waits past it so a silent account can fail over, on one budget per request (`UPSTREAM_IDLE_TIMEOUT_MS` minus this hold): the first silent account spends it, the next is committed at this hold and no further account is tried. That commit is not a head on the wire: `Bun.serve` sends the header block only with the first body byte, so the client of a second silent account waits for that account too, up to two idle clocks (about 110 s at the defaults). Waiting for response headers is `UPSTREAM_FIRST_BYTE_TIMEOUT_MS`, per attempt, and not part of it. The Agent-SDK and fast paths are not held |
 | `TRANSLATE_DEFAULT_MAX_TOKENS` | no | `4096` | The `max_tokens` an Anthropic account is given when the client spoke a dialect that makes it optional and sent none. Anthropic requires the field; the default is generous on purpose, because a low value truncates answers nobody asked to truncate. **`0` refused at boot**: Anthropic requires `max_tokens >= 1`, so zero turns every translated request that omitted it into a `400` that looks like a client bug. |
 | `MAX_TRANSLATION_PENDING_BYTES` | no | `1048576` | Whole 1024..33554432. Bounds each cross-dialect deferred fragment queue and final-snapshot identity tracker. Ordinary live deltas remain incremental. Overflow emits an honest translation error and does not strike the account or retry after bytes; separate from protocol observation and request-body limits. |
 | `MAX_TRANSLATION_SSE_FRAME_BYTES` | no | `16777216` | Largest single upstream SSE frame a translated stream buffers; a larger one fails the relay with a typed translation error instead of growing memory. |
@@ -845,7 +851,7 @@ needed, and neither breaks it).
 | Restart | `docker compose up -d` |
 | Migrations | Run automatically at boot, before the listener opens. Idempotent. A failed migration exits non-zero and does not serve traffic. |
 | Roll back | Pin the previous tag and `docker compose up -d`. Take a `pg_dump` first — a rolled-back binary may not understand a migrated schema, and migrations are forward-only. |
-| Postgres major version | Pinned to `postgres:18.4` and an immutable multi-architecture digest, on the `postgres-data-18` volume mounted at `/var/lib/postgresql` — the parent directory, because PostgreSQL 18 keeps its data under `18/docker` inside it. Updating the router image does not touch this pin. |
+| Postgres major version | Pinned to `postgres:18.6` and an immutable multi-architecture digest — the same tag and digest CI's test job runs, held together by `image-pins.test.ts`, on the `postgres-data-18` volume mounted at `/var/lib/postgresql` — the parent directory, because PostgreSQL 18 keeps its data under `18/docker` inside it. Updating the router image does not touch this pin. |
 | Postgres major upgrade | **Not a `docker compose pull`.** PostgreSQL cannot start a new major on an older data directory, so each major gets its own volume — the compose file mounts a **fresh** `postgres-data-18`, and the 18 container never sees the old 16 directory (it boots cleanly on the empty one). That is exactly the trap: pulling the new stack onto a deployment still holding 16 data starts a healthy Postgres on an **empty database**, and the old data stays behind in the legacy `postgres-data` volume, unmerged and easy to miss. Migrate the data first, then upgrade: stop the stack and run `bin/pg-upgrade-16-to-18` — it dumps the legacy `postgres-data` volume with a throwaway `postgres:16` container and restores it into `postgres-data-18` (the legacy volume is left untouched; delete it by hand only after you have verified the deployment). It needs the same `ENCRYPTION_KEY` the rows were written under, since restored rows are ciphertext only that key decrypts. A fresh deployment has no legacy volume and needs no migration. |
 
 ## Image tags
@@ -860,18 +866,32 @@ Multi-arch (`linux/amd64`, `linux/arm64`), published to `ghcr.io/developerz-ai/m
 gate — lint, typecheck, test, build, `ui-geometry` (headless Chromium against the built SPA),
 `image` (the release Dockerfile built for amd64 and never pushed, so its build-time assertions run
 on every PR) and `advisory` (live OSV.dev dependency assessment; it colours `main` and gates a
-release, not a merge) — and stops there. The `bench` job reports `router_overhead_seconds` against
-the committed baseline instead of blocking. A push to `main` deliberately publishes nothing.
+release, not a merge) — and stops there. The `bench` job reports measured per-request overhead against the
+committed baseline instead of blocking. A push to `main` deliberately publishes nothing.
 
 The typecheck runs the production TypeScript solution build, then non-composite no-emit projects
 for everything that build leaves out: `apps/api/tsconfig.tests.json` (`test/`, `smoke/`, `bench/`,
 `advisory/`), `packages/core/tsconfig.tests.json`, `packages/db/tsconfig.tests.json` (tests and
 `drizzle.config.ts`), `apps/web/tsconfig.tests.json` (component tests with the DOM lib, and
 `vite.config.ts`) and the root `tsconfig.tools.json` (`bin/lib/**/*.ts`, `native/build.ts`).
-`bin/check` reaches them through `bin/lint` and the root `typecheck` script; CI uses that same
+`bin/check` runs the root `lint` and `typecheck` scripts as stages of its own — typecheck beside the
+test suite, which it shares nothing with — and `bin/lint` runs the same two in sequence; CI uses that same
 script. Bun runtime execution, including `bun test`, does **not** typecheck sources, so a file
 outside every project is never checked; `apps/api/test/integration/typecheck-coverage.test.ts`
 fails when any TypeScript file in the workspace falls outside the projects that script runs.
+
+A bare `bin/test` runs the suite as two shards at once, balanced by the per-file durations in
+`bin/lib/test-timings.json`. The live-Postgres suites own the database they are pointed at, so each shard after the first gets a
+sibling database on the same server (`router_shard2`). `bin/test` creates it and stamps it with a
+database comment; one that already exists is used only if it carries that stamp, because the suites
+truncate and a name is not proof of ownership. The database URL reaches that step on stdin, never
+as an argument. A shard whose database cannot be prepared fails rather than running without one. Any shard
+failing fails the run. `bin/test <pattern>` and `bin/test --changed[=<ref>]` run one process.
+Off a terminal the output is failures and the summary only. `bin/check` prints one line per stage
+and a failing stage's own output; `bin/check --fast` (lint, typecheck, the tests a change reaches)
+is the inner loop and says itself that it is not the gate.
+A type error stops the suite and is reported as soon as the compiler has it; a signal to either
+script stops and reaps its own children — by pid, never the caller's process group.
 
 The reason is that a registry accumulating one image per commit makes "which tag is real" ambiguous,
 and a moving `main` tag invites deploying an untagged commit. The release tag is the only ref
@@ -910,6 +930,35 @@ They are declared in the `Dockerfile`, not only in CI, so a local
 `docker build -t multi-ai-router:dev .` produces a labelled image too — that is the build least able
 to explain itself later. `release.yml` layers `docker/metadata-action`'s richer set (created
 timestamp, real sha) on top.
+
+### What the image carries
+
+**The image carries `dist/` and no `node_modules`.** The server, the admin CLI and the profile check
+are bundles with every dependency inlined; `bin/build` fails when one still imports a package by
+name, and the runtime stage copies no dependency tree. Releases through 2.76.1 did copy one, and it
+was the whole development install — `bun install --production` over an existing tree removes
+nothing — so the image shipped a linter, a compiler, a browser driver and two bundlers beside every
+upstream credential, at 1.65 GB. It is about 0.8 GB without them.
+
+Bun auto-installs an unresolved bare import from the registry when there is no `node_modules`
+beside the entrypoint, which would be a network fetch of unpinned code into the container that
+holds the credentials. `/app/bunfig.toml` sets `[install] auto = "disable"`, so a missing module is
+an error. The assertion has a positive control, because "an import of a registry package fails" is
+also what a build with no route to the registry looks like with auto-install fully on:
+`bin/lib/auto-install-probe.ts` serves a package from loopback, shows that bun fetches and imports
+it by default, then shows that with the shipped file the same import fails and the registry is never
+asked. The image build runs it, and CI's `image` job runs it again in the built image.
+
+One path is not exercised by any of those checks: the Agent SDK resolves its platform package
+through `createRequire` when it is given no executable path. The router always gives it one
+(`pathToClaudeCodeExecutable`, the staged `/usr/local/bin/claude`), so that branch does not run —
+and it is the first place to look if a Claude subscription turn fails after an SDK update while
+`/healthz` and the boot log are clean.
+
+The duplicate `claude` binaries the SDK's platform packages install (one per libc) are deleted in
+the same layer that installs them, after the right one is staged, so no cached layer ever holds
+them. Deleting them in a later layer left ~460 MB in the cache per lockfile change and ~160 MB per
+source change, which is what took the Actions cache past its quota.
 
 ### Base image pinning
 
@@ -1015,7 +1064,7 @@ same-dialect passthrough (the common case) does no body parsing at all; see
 | Claude subscription account fails every request while API-key accounts work | The `claude` CLI is missing or cannot exec in the image (a native binary built for a different libc), or `CLAUDE_CONFIG_ROOT` is not on the persistent volume | Read `checks.claudeCli` on `/readyz`: it names the resolution rung that won, or `missing`. The image stages the CLI from the SDK's own platform package and proves it execs at build time, so a custom build is the usual cause — keep builder and runtime on the same libc. Confirm the `claude-config` volume is mounted and owned by the container's uid — a fresh, empty config directory presents as an account that never authenticates. |
 | All accounts `cooling_down`, requests fail | Every candidate hit a `429` or a circuit breaker and none has reset yet | Check reset times on `/accounts`. Add another account to the pool, or move the key to a pool with a paid-API fallback via `priority-failover`. See [05-routing-and-failover.md](05-routing-and-failover.md). |
 | Clients get `401` | Key revoked, expired, wrong value, or both auth headers sent and disagreeing | Re-copy the key from `/keys`. Send exactly one of `Authorization: Bearer` or `x-api-key`. See [04-api-keys-and-access.md](04-api-keys-and-access.md). |
-| Admin SSO returns “Single sign-on verification failed” | Discovery, JWKS, state, token claims, or the configured principal check failed | Start a fresh login and inspect the bounded `[admin-oidc] complete failed: <kind>` server log. Match the kind against [13-admin-oidc.md](13-admin-oidc.md#troubleshooting). Never paste the callback URL, code, state, ID token, or client secret into an issue. |
+| Admin sign-in returns “Sign-in failed. Try again.” | Discovery, JWKS, state, token claims, or the configured principal check failed | Start a fresh login and inspect the bounded `[admin-oidc] complete failed: <kind>` server log. Match the kind against [13-admin-oidc.md](13-admin-oidc.md#troubleshooting). Never paste the callback URL, code, state, ID token, or client secret into an issue. |
 | Console login says it succeeded, then every screen bounces back to the login form ("session expired") | The router is reached over plain `http://` (a LAN install, or a proxy that does not forward `X-Forwarded-Proto`), so the browser silently discarded the `Secure` session cookie. The OIDC verification itself was genuinely fine, which is why no provider error names the problem | `docker compose logs router` carries a `warn` from the callback: *"login succeeded but the session cookie is Secure and this request arrived over plain HTTP"*, with the remedy in the same line. Either set `SESSION_COOKIE_INSECURE=true` (plain-HTTP install), or terminate HTTPS in front and forward `X-Forwarded-Proto` — the header is honored for this check whether or not `TRUST_PROXY` is on. See [04-api-keys-and-access.md](04-api-keys-and-access.md#session-cookie). |
 | A sweep hasn't run — the DB keeps growing, or usage rollups stop appearing | The scheduler runs in-process, so a wedged or crashed task is invisible unless you look at its last-run record | Check the task's last `ScheduledTaskRun` (admin UI, or the row directly): a stale `startedAt` with a null `finishedAt` means a run was killed halfway or is stuck holding the advisory lock; a stale `startedAt` with `outcome: failed` names the error. `outcome: partial` is normal and means the batch limit was hit and the next run continues. If every replica shows nothing, no replica is acquiring the lock — check Postgres connectivity and `JANITOR_INTERVAL_MINUTES`. |
 | `/readyz` red, `/healthz` green | Postgres unreachable or zero healthy accounts | `/healthz` is liveness only, by design — zero healthy accounts is an operator problem, not a reason to restart a working process. Check `docker compose ps postgres` and account health. See [08-observability.md](08-observability.md). |

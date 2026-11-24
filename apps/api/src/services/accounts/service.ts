@@ -5,12 +5,23 @@ import type {
   PoolRepository,
 } from "@multi-ai-router/db"
 import type { AccountConfigDirs } from "../../providers/claude-sdk/config-dir"
-import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
+import { AUDIT_KINDS, AUDIT_SUBJECTS } from "../admin/audit"
 import { namedPools } from "../admin/audit-diff"
 import { type AdminResult, conflict, notFound, ok } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
 import { describeProvider } from "./providers"
-import { checkAccountShape, resolveBilling } from "./rules"
+import {
+  type AccountDeletionDeps,
+  type DeletionCleanup,
+  finishAccountDeletion,
+  liveKeyNames,
+} from "./remove"
+import {
+  checkAccountShape,
+  checkEndpointMove,
+  checkProxiedPlaintext,
+  resolveBilling,
+} from "./rules"
 import type { AccountListQuery, CreateAccountBody, UpdateAccountBody } from "./schemas"
 import { replaceFromPatch, type SupportedModelsWriter } from "./supported-models-writer"
 import { type AccountView, toAccountView } from "./view"
@@ -42,12 +53,12 @@ export interface AccountsService {
     AdminResult<{
       readonly id: string
       readonly deleted: true
-      readonly cleanup: "removed" | "deferred" | "not_applicable"
+      readonly cleanup: DeletionCleanup
     }>
   >
 }
 
-export interface AccountsServiceDeps {
+export interface AccountsServiceDeps extends AccountDeletionDeps {
   readonly accounts: Pick<
     AccountRepository,
     "create" | "list" | "findById" | "updateOperatorAccount" | "disable" | "delete"
@@ -60,19 +71,6 @@ export interface AccountsServiceDeps {
   readonly supportedModels: Pick<SupportedModelsWriter, "write">
   /** Only ever touched for a provider the registry says carries a `CLAUDE_CONFIG_DIR`. */
   readonly configDirs: AccountConfigDirs
-  /** Publish durable filesystem tombstone and close account owner admission before the barrier. */
-  readonly revokeDeletedAccount: (account: {
-    readonly id: string
-    readonly configDir: string | null
-  }) => Promise<void>
-  /** Strict deletion barrier: remove catalog/session admission after durable delete. */
-  readonly deletionCommitted: (accountId: string) => Promise<void>
-  /** Shared-volume authority cancels owners and removes only under exclusive ownership. */
-  readonly cleanupDeletedAccount: (account: {
-    readonly id: string
-    readonly configDir: string | null
-  }) => Promise<"removed" | "deferred" | "not_applicable">
-  readonly audit: AuditRecorder
   /** Await the local routing barrier after commit, before audit or response work. */
   readonly mutationCommitted?: (accountId: string) => Promise<void>
   readonly now: () => Date
@@ -193,6 +191,22 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
         ...(body.billing === undefined ? {} : { billing: body.billing }),
       })
       if (!checked.ok) return checked
+      const moved = checkEndpointMove(current, body)
+      if (!moved.ok) return moved
+      // Only a real change: the console sends these two on every save.
+      const moves =
+        body.credential !== undefined ||
+        resolve(body.baseUrl, current.baseUrl) !== current.baseUrl ||
+        resolve(body.dialect, current.dialect ?? null) !== (current.dialect ?? null)
+      if (current.egressProxy !== null && moves) {
+        const sealed = checkProxiedPlaintext({
+          ...current,
+          baseUrl: resolve(body.baseUrl, current.baseUrl),
+          dialect: resolve(body.dialect, current.dialect),
+          hasCredential: body.credential !== undefined || current.authMaterial !== null,
+        })
+        if (!sealed.ok) return sealed
+      }
 
       // First, through the one list writer (own audit row): a refusal leaves every field unwritten.
       const { supportedModels, supportedModelsRemoving, ...fields } = body
@@ -258,12 +272,10 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
       // A key scoped to explicit accounts is narrowed — possibly to nothing — by
       // this delete, and would then fail at selection time with no trace of why.
       // Say so instead, and name the keys: `disable` is the non-destructive door.
-      const scoped = await deps.keys.listKeysScopedToAccount(id)
+      const scoped = liveKeyNames(await deps.keys.listKeysScopedToAccount(id))
       if (scoped.length > 0) {
         return conflict(
-          `account "${found.value.label}" is named by the scope of ${scoped.length} key(s): ${scoped
-            .map((key) => `"${key.name}"`)
-            .join(", ")}. Re-scope them, or disable the account instead.`,
+          `account "${found.value.label}" is named by the scope of ${scoped.length} key(s): ${scoped.join(", ")}. Re-scope or revoke them, or disable the account instead.`,
           "account_in_use",
         )
       }
@@ -272,24 +284,11 @@ export function createAccountsService(deps: AccountsServiceDeps): AccountsServic
       const pools = await poolsOf(id)
       const deleted = await deps.accounts.delete(id)
       if (!deleted) return notFound(`no account with id "${id}"`)
-
-      try {
-        await deps.revokeDeletedAccount({ id, configDir: found.value.configDir })
-      } finally {
-        // Even a filesystem tombstone failure must not leave a deleted row locally routable.
-        await deps.deletionCommitted(id)
-      }
-      // Cleanup precedes optional audit work. Deferred cleanup keeps owned credentials intact;
-      // durable deletion already prevents a late credential CAS from resurrecting the account.
-      const cleanup = await deps.cleanupDeletedAccount({ id, configDir: found.value.configDir })
-      await deps.audit.record({
-        kind: AUDIT_KINDS.accountDeleted,
-        subjectType: AUDIT_SUBJECTS.account,
-        subjectId: id,
-        detail: { label: found.value.label, provider: found.value.provider, pools },
+      return ok({
+        id,
+        deleted: true,
+        cleanup: await finishAccountDeletion(deps, found.value, pools),
       })
-
-      return ok({ id, deleted: true, cleanup })
     },
   }
 }

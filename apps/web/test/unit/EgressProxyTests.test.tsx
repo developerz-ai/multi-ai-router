@@ -135,3 +135,33 @@ test("a test inside its cooldown counts down to the next one, and holds the butt
         { status: 429, headers: { "retry-after": "50" } },
       ),
   ))
+
+test("a refused target proves the proxy alive: the dead-proxy banner goes with the count", () =>
+  withSection(
+    overview({
+      assigned: [
+        assignment({
+          replace: "on-failure",
+          healthOf: { outcome: "timeout", consecutiveFailures: 3, repair: "no_candidate" },
+        }),
+      ],
+    }),
+    async (root) => {
+      expect(root.textContent).toContain("1 dead proxy was not replaced")
+      root
+        .querySelector<HTMLButtonElement>('button[aria-label="Test the proxy of or-main now"]')
+        ?.click()
+      await settle()
+      expect(root.textContent).toContain("target refused")
+      expect(root.textContent).not.toContain("dead proxy was not replaced")
+      expect(root.textContent).not.toContain("failed check")
+    },
+    () =>
+      Response.json({
+        outcome: "refused",
+        status: 403,
+        latencyMs: 5,
+        checkedAt: new Date().toISOString(),
+        nextAllowedAt: new Date().toISOString(),
+      }),
+  ))

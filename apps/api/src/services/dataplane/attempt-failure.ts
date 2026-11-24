@@ -59,6 +59,7 @@ export function toAttemptFailure(
     ...(classification?.providerScoped === true ? { providerScoped: true } : {}),
     ...(classification?.accountScoped === true ? { accountScoped: true } : {}),
     ...(classification?.keyCap === true ? { keyCap: true } : {}),
+    ...(classification?.namesBalance === true ? { namesBalance: true } : {}),
   }
 }
 

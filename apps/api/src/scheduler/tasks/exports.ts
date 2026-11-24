@@ -7,6 +7,8 @@ export type { AdminSessionPurgeDeps, AdminSessionStoreForPurge } from "./admin-s
 export { createAdminSessionPurgeTask } from "./admin-session-purge"
 export type { ConfigDirReapDeps, OrphanConfigDir, ReapPlan, ReapPlanInput } from "./config-dir-reap"
 export { createConfigDirReapTask, planConfigDirReap } from "./config-dir-reap"
+export type { EgressProxyCheckPorts, EgressSweepReport } from "./egress-proxy-check"
+export { createEgressProxyCheckTask } from "./egress-proxy-check"
 export type { IdleAccountProbeDeps } from "./idle-account-probe"
 export { createIdleAccountProbeTask, IDLE_PROBE_MODELS } from "./idle-account-probe"
 export { poolRosterCheckIntervalMs, scheduledTaskIntervals } from "./intervals"

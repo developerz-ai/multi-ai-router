@@ -4,6 +4,7 @@
  */
 
 export * from "./account-breakers"
+export * from "./account-egress-health"
 export * from "./account-exhausted-watches"
 export * from "./account-operator-checks"
 export * from "./account-recoveries"

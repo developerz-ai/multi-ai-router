@@ -102,8 +102,13 @@ export const ANTHROPIC_MODELS: ModelTable = {
   "claude-opus-4-1": anthropicRates(15, 75),
   /** Claude Opus 4 — $15 / $75. */
   "claude-opus-4": anthropicRates(15, 75),
-  /** Claude Sonnet 5.5 — $2 / $10, the current Sonnet tier. */
-  "claude-sonnet-5-5": anthropicRates(2, 10),
+  /**
+   * Claude Sonnet 5.5 — $2 / $10, the current Sonnet tier. Cache reads are footnoted at 0.05x
+   * ($0.10) with Opus 5.5, not the standard 0.1x: read 2026-11-24 from the pricing page's model
+   * table ("Cache hits and refreshes on Claude Opus 5.5 and Claude Sonnet 5.5 are priced at 0.05x
+   * the base input price"). The row carried 0.1x until then and priced every cached token double.
+   */
+  "claude-sonnet-5-5": anthropicRates(2, 10, 0.05),
   /**
    * Claude Sonnet 5 — $2 / $10. Launched as introductory pricing through 2026-08-31 with $3 / $15
    * to follow; the pricing page now states the increase "will not occur" and $2 / $10 is the
