@@ -25,8 +25,6 @@ const OVER_LIMIT: Readonly<Record<string, number>> = {
   "apps/api/src/providers/claude-sdk/render/envelope.ts": 316,
   // Claude SDK slice (A05): the early-stop state machine for forwarded tool calls.
   "apps/api/src/providers/claude-sdk/tools/early-stop.ts": 311,
-  // Routing types (A05): selection input types, frozen at current length; split with the policy/ follow-up.
-  "apps/api/src/services/routing/types.ts": 303,
 }
 
 function lineCount(text: string): number {

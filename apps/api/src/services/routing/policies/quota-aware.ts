@@ -68,7 +68,7 @@ export const quotaAware: Policy = ({ candidates, rotationCounter, now, options }
   if (rotatedUnranked.length > 0) notes.push(degraded(accountIds(rotatedUnranked)))
 
   return {
-    ordered: [...allRanked, ...rotatedUnranked],
+    ordered: [...rankedOrder, ...rotatedUnranked, ...rotatedSoftLimited],
     notes,
   }
 }

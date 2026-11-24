@@ -71,6 +71,21 @@ describe("quota-aware soft limit", () => {
   const now = new Date("2026-01-01T12:00:00.000Z")
   const sessionKey = "test-session"
 
+  it("rotates accounts tied at the default threshold", () => {
+    const candidates = [makeCandidate(makeAccount("a", 0.8)), makeCandidate(makeAccount("b", 0.95))]
+    const result = quotaAware({ candidates, rotationCounter: 1, now, sessionKey, options: {} })
+    expect(result.ordered.map((c) => c.account.id)).toEqual(["b", "a"])
+  })
+
+  it("tries unknown readings before soft-limited accounts", () => {
+    const candidates = [
+      makeCandidate(makeAccount("limited", 0.85)),
+      makeCandidate(makeAccount("unknown", undefined)),
+    ]
+    const result = quotaAware({ candidates, rotationCounter: 0, now, sessionKey, options: {} })
+    expect(result.ordered.map((c) => c.account.id)).toEqual(["unknown", "limited"])
+  })
+
   it("accounts at 0.8 utilization get zero headroom with default soft limit", () => {
     const account = makeAccount("acc-1", 0.8)
     const headroom = continuousQuotaHeadroom(account, now)
@@ -260,15 +275,22 @@ describe("quota-aware soft limit", () => {
 
   it("uses default soft limit 0.8 when not provided", () => {
     const atDefault = makeAccount("at-default", 0.8)
-    const below = makeAccount("below", 0.7)
+    const above = makeAccount("z-above", 0.85)
 
-    const candidates = [makeCandidate(atDefault), makeCandidate(below)]
-    const result = quotaAware({ candidates, rotationCounter: 0, now, sessionKey, options: {} })
+    const candidates = [makeCandidate(atDefault), makeCandidate(above)]
+    const result = quotaAware({ candidates, rotationCounter: 1, now, sessionKey, options: {} })
 
-    // Below 0.8 should be first
-    expect(result.ordered[0]?.account.id).toBe("below")
-    // At 0.8 should be last (soft-limited at default 0.8)
+    // Both are soft-limited, so rotation breaks the tie.
+    expect(result.ordered[0]?.account.id).toBe("z-above")
     expect(result.ordered[1]?.account.id).toBe("at-default")
+    const raised = quotaAware({
+      candidates,
+      rotationCounter: 1,
+      now,
+      sessionKey,
+      options: { quotaSoftLimit: 0.9 },
+    })
+    expect(raised.ordered.map((c) => c.account.id)).toEqual(["at-default", "z-above"])
   })
 
   it("non-continuous utilization source does not contribute to headroom", () => {

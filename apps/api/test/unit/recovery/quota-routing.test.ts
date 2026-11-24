@@ -13,7 +13,7 @@ for (const kind of ["named", "limiter"] as const) {
         : { limiterWindows: [limiter(0.1, "requests", { resetsAt: NOW })] },
     )
     const fresh = account("fresh", {
-      quotaWindows: [{ ...continuous(0.9), resetsAt: new Date(NOW.getTime() + 1000) }],
+      quotaWindows: [{ ...continuous(0.7), resetsAt: new Date(NOW.getTime() + 1000) }],
     })
     const result = runPolicy("quota-aware", {
       candidates: [candidate(stale), candidate(fresh)],

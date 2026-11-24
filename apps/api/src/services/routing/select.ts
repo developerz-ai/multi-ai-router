@@ -45,6 +45,7 @@ export function selectAccounts(
   const rejected = new Map<string, RejectedCandidate>()
   const ordered: Candidate[] = []
   const seen = new Set<string>()
+  const poolsById = new Map(snapshot.pools.map((pool) => [pool.id, pool]))
   let usedOverflow = false
 
   for (const group of scopeGroups) {
@@ -54,7 +55,7 @@ export function selectAccounts(
     }
     usedOverflow = usedOverflow || resolved.usedOverflow
 
-    const pool = snapshot.pools.find((p) => p.id === group.poolId)
+    const pool = group.poolId === null ? undefined : poolsById.get(group.poolId)
     const poolOptions = { ...options, quotaSoftLimit: pool?.quotaSoftLimit }
 
     const policed =

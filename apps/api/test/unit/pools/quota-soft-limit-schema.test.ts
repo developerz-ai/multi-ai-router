@@ -1,8 +1,38 @@
 import { describe, expect, it } from "bun:test"
 import { z } from "zod"
 import { createPoolBody, updatePoolBody } from "../../../src/services/pools/schemas"
+import { createPoolsService } from "../../../src/services/pools/service"
+import { createMemoryStore } from "../../support/memory-store"
+import { silentLogger } from "../../support/silent-logger"
 
 describe("quotaSoftLimit schema validation", () => {
+  it("rejects sub-percent precision on both writes", () => {
+    expect(createPoolBody.safeParse({ name: "pool", quotaSoftLimit: 0.804 }).success).toBe(false)
+    expect(updatePoolBody.safeParse({ quotaSoftLimit: 0.804 }).success).toBe(false)
+  })
+
+  it("preserves an omitted limit and resets null to the default", async () => {
+    const store = createMemoryStore()
+    const service = createPoolsService({
+      pools: store.pools,
+      accounts: store.accounts,
+      mutations: store.mutations,
+      logger: silentLogger(),
+      now: () => new Date(),
+      onCommitted: () => {},
+    })
+    const created = await service.create(
+      createPoolBody.parse({ name: "pool", quotaSoftLimit: 0.6 }),
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) throw new Error("create failed")
+    const id = created.value.id
+    const unchanged = await service.update(id, updatePoolBody.parse({ name: "renamed" }))
+    expect(unchanged.ok && unchanged.value.quotaSoftLimit).toBe(0.6)
+    const cleared = await service.update(id, updatePoolBody.parse({ quotaSoftLimit: null }))
+    expect(cleared.ok && cleared.value.quotaSoftLimit).toBe(0.8)
+    expect(Number((await store.pools.findById(id))?.quotaSoftLimit)).toBe(0.8)
+  })
   const QUOTA_SOFT_LIMIT = z.number().min(0.01).max(0.99)
 
   describe("QUOTA_SOFT_LIMIT schema", () => {

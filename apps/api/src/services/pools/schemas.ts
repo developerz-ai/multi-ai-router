@@ -1,7 +1,7 @@
 import { RoutingPolicy } from "@multi-ai-router/core"
 import { z } from "zod"
 
-const QUOTA_SOFT_LIMIT = z.number().min(0.01).max(0.99)
+const QUOTA_SOFT_LIMIT = z.number().min(0.01).max(0.99).multipleOf(0.01)
 
 /**
  * The pool write contract.

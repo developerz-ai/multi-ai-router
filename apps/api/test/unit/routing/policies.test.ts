@@ -327,7 +327,7 @@ describe("quota-aware", () => {
     ]
     const result = runPolicy("quota-aware", input({ candidates: pool }))
 
-    expect(ids(result.ordered)).toEqual(["c", "a", "b"])
+    expect(ids(result.ordered)).toEqual(["c", "b", "a"])
     expect(result.notes).toEqual([
       { kind: "quota-ranked", accountIds: ["c", "a"], unknownAccountIds: ["b"] },
       {

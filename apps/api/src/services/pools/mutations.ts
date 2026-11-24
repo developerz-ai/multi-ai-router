@@ -93,8 +93,7 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
                 ...(body.quotaSoftLimit === undefined
                   ? {}
                   : {
-                      quotaSoftLimit:
-                        body.quotaSoftLimit === null ? undefined : body.quotaSoftLimit,
+                      quotaSoftLimit: body.quotaSoftLimit ?? 0.8,
                     }),
               },
               deps.now(),
