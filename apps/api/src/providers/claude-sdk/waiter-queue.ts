@@ -29,7 +29,12 @@ export interface WaiterQueue<T> {
   readonly size: number
 }
 
-export function createWaiterQueue<T>(): WaiterQueue<T> {
+/**
+ * `onLinkVisit` is a test probe: it is called once for every link the queue reads or rewrites to
+ * take an entry out, so a test can assert the cost of a departure without a clock. Nothing in
+ * production passes it.
+ */
+export function createWaiterQueue<T>(onLinkVisit?: () => void): WaiterQueue<T> {
   let head: Link<T> | undefined
   let tail: Link<T> | undefined
   let size = 0
@@ -37,10 +42,17 @@ export function createWaiterQueue<T>(): WaiterQueue<T> {
   const unlink = (link: Link<T>): void => {
     if (!link.queued) return
     link.queued = false
+    onLinkVisit?.()
     if (link.prev === undefined) head = link.next
-    else link.prev.next = link.next
+    else {
+      onLinkVisit?.()
+      link.prev.next = link.next
+    }
     if (link.next === undefined) tail = link.prev
-    else link.next.prev = link.prev
+    else {
+      onLinkVisit?.()
+      link.next.prev = link.prev
+    }
     link.prev = undefined
     link.next = undefined
     size -= 1

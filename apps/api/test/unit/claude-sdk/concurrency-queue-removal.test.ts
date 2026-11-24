@@ -102,3 +102,36 @@ test("the waiter queue keeps first-in-first-out order when entries leave from an
   queue.push(9)
   expect(queue.shift()).toBe(9)
 })
+
+test("a departure reads a constant number of links, however long the line is and wherever it leaves from", () => {
+  // The array-method counter above cannot see a hand-written loop; this one counts the queue's own
+  // link visits through its probe, so an O(N) walk inside remove() fails whatever it is written with.
+  const MAX_VISITS_PER_DEPARTURE = 3 // the entry itself plus its two neighbours
+  const costs = (size: number, pick: (handles: { remove(): void }[]) => number[]): number => {
+    let visits = 0
+    const queue = createWaiterQueue<number>(() => {
+      visits += 1
+    })
+    const handles = Array.from({ length: size }, (_, value) => queue.push(value))
+    const order = pick(handles)
+    visits = 0
+    for (const index of order) handles[index]?.remove()
+    expect(queue.size).toBe(size - order.length)
+    return visits / order.length
+  }
+  const newestFirst = (handles: unknown[]) => handles.map((_, index) => handles.length - 1 - index)
+  const middleOut = (handles: unknown[]) => {
+    const mid = Math.floor(handles.length / 2)
+    return handles
+      .map((_, index) => (index % 2 === 0 ? mid + index / 2 : mid - (index + 1) / 2))
+      .filter((i) => i >= 0 && i < handles.length)
+  }
+
+  for (const pick of [newestFirst, middleOut]) {
+    const small = costs(200, pick)
+    const large = costs(WAITERS, pick)
+    expect(small).toBeGreaterThan(0) // a queue that reports nothing proves nothing
+    expect(small).toBeLessThanOrEqual(MAX_VISITS_PER_DEPARTURE)
+    expect(large).toBeLessThanOrEqual(MAX_VISITS_PER_DEPARTURE)
+  }
+})

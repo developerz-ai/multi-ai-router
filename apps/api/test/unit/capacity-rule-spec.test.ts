@@ -11,6 +11,14 @@ import { join } from "node:path"
 const ROOT = join(import.meta.dir, "../../../..")
 const read = (path: string): string => readFileSync(join(ROOT, path), "utf8")
 
+/** The text from `from` up to the next `until` after it (or the end), whitespace-normalised input. */
+function section(text: string, from: string, until: string): string {
+  const start = text.indexOf(from)
+  if (start < 0) throw new Error(`docs/clients.md lost its "${from}" heading`)
+  const end = text.indexOf(until, start + from.length)
+  return text.slice(start, end < 0 ? undefined : end)
+}
+
 describe("the capacity-answer exception", () => {
   test("CLAUDE.md carries the amended rule verbatim", () => {
     expect(read("CLAUDE.md")).toContain(
@@ -38,7 +46,25 @@ describe("the capacity-answer exception", () => {
     // With `ROUTING_MAX_ATTEMPTS` set the walk stops at the cap, so "the eligible accounts" and
     // "tried across the pool" are only true for the default, uncapped router.
     expect(guide).toContain("up to `ROUTING_MAX_ATTEMPTS` accounts")
-    expect(guide.split("`ROUTING_MAX_ATTEMPTS`").length - 1).toBeGreaterThanOrEqual(2)
+    // Each passage that promises a walk carries the qualifier itself: counting mentions across the
+    // whole guide lets one passage keep it while the other goes uncapped.
+    const errors = section(guide, "## Errors, retries and timeouts", "### ")
+    const retries = section(guide, "### Retries: let the router do it", "- **Never retry")
+    expect(errors).toContain("`ROUTING_MAX_ATTEMPTS`")
+    expect(retries).toContain("up to `ROUTING_MAX_ATTEMPTS` accounts")
+  })
+
+  test("no passage of the client guide promises the whole pool is tried without the cap", () => {
+    const guide = read("docs/clients.md").replace(/\s+/g, " ")
+    const claims = /(tries|tried|walks) (across )?the (eligible accounts|pool)/g
+    const uncapped = [...guide.matchAll(claims)].filter((hit) => {
+      // The qualifier must live in the same sentence as the claim.
+      const rest = guide.slice(hit.index)
+      const stop = rest.search(/\. [A-Z]/)
+      return !(stop < 0 ? rest : rest.slice(0, stop)).includes("ROUTING_MAX_ATTEMPTS")
+    })
+    expect(uncapped.map((hit) => hit[0])).toEqual([])
+    expect(guide.match(claims)?.length ?? 0).toBeGreaterThanOrEqual(2) // the guard still sees the claims
   })
 
   test("the knob is in the example env and the deployment table", () => {
