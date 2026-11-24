@@ -162,7 +162,14 @@ nowhere.
 **Behavior** (`tool-choice.ts`, a pure function `prepareFastRequest` calls after it copies the
 client's fields):
 
-- `{type:"tool", name}` keeps only that tool. `{type:"any"}` keeps every declared tool. Both send
+- Haiku 5.5 accepts native named and `any` tool choice (CLI 2.1.331 live replay,
+  2026-11-24). Preserve both, all declared tools and thinking fields. Native forcing
+  also works with adaptive thinking; incompatible enabled/budget thinking reaches
+  upstream validation unchanged. The internal structured-output carrier still uses
+  the JSON adaptation below. The remaining models retain the calibrated adaptation.
+
+
+- For other models, `{type:"tool", name}` keeps only that tool. `{type:"any"}` keeps every declared tool. Both send
   `{type:"auto"}` (keeping `disable_parallel_tool_use`) and remove a `thinking {type:"disabled"}`,
   which only existed to permit the force. Fast mode never adds one.
 - The router's structured-output tool `router_structured_output` (the openai-chat `response_format`

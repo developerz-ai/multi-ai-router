@@ -10,7 +10,8 @@ import { nativeStructuredSchema } from "./native-schema"
  * on this transport, with or without `thinking` (prod replay, 2026-11-09, issue #370), while
  * `{type:"auto"}` and native `output_config.format` are served on every model tried. So:
  *
- * - `{type:"tool", name}` keeps only the named tool; `{type:"any"}` keeps the declared tools. Both
+ * - Haiku 5.5 accepts native named/any force; leave it and its thinking fields unchanged.
+ * - Other models: `{type:"tool", name}` keeps only the named tool; `{type:"any"}` keeps the declared tools. Both
  *   send `{type:"auto"}` (keeping `disable_parallel_tool_use`) and drop a `thinking: disabled`,
  *   which only existed to permit the force. A non-streaming answer is checked for the call by the
  *   invoker, as the Agent-SDK transport does.
@@ -52,6 +53,16 @@ export function adaptFastToolChoice(
   const kept =
     choice.type === "any" ? declared : declared.filter((tool) => tool.name === choice.name)
   if (kept.length === 0) return { body, adapted: null }
+
+  // CLI 2.1.331 live replay, 2026-11-24: Haiku 5.5 accepts native any/named force,
+  // including adaptive thinking. Other calibrated families still reject both with 400.
+  // Internal structured-output carriers retain their separate JSON adaptation below.
+  if (
+    body.model === "claude-haiku-5-5" &&
+    !(choice.type === "tool" && choice.name === STRUCTURED_OUTPUT_TOOL)
+  ) {
+    return { body, adapted: null }
+  }
 
   const { tool_choice: _forced, ...rest } = body
   const unforced: Record<string, unknown> = { ...rest }
