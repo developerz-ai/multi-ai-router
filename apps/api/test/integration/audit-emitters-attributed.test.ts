@@ -68,7 +68,11 @@ const ACCOUNTS = "routes/admin/accounts.ts"
 
 /** `<file under src/>:<AUDIT_KINDS key>` → how that write is attributed. */
 const EMITTERS: Record<string, readonly Entry[]> = {
-  "services/accounts/egress-proxy.ts:accountUpdated": [
+  "services/accounts/egress/move.ts:accountEgressProxyReplaced": [
+    { via: "task", task: "egress_proxy_check" },
+  ],
+  "services/accounts/egress/move.ts:accountUpdated": [{ via: "task", task: "egress_proxy_check" }],
+  "services/accounts/egress/service.ts:accountUpdated": [
     { via: "guarded", group: "routes/admin/egress.ts" },
   ],
   "services/accounts/service.ts:accountCreated": [
@@ -80,9 +84,7 @@ const EMITTERS: Record<string, readonly Entry[]> = {
   "services/accounts/service.ts:accountDisabled": [
     { via: "guarded", group: ACCOUNTS, driven: true },
   ],
-  "services/accounts/service.ts:accountDeleted": [
-    { via: "guarded", group: ACCOUNTS, driven: true },
-  ],
+  "services/accounts/remove.ts:accountDeleted": [{ via: "guarded", group: ACCOUNTS, driven: true }],
   "services/accounts/discover-models.ts:accountModelsDiscovered": [
     { via: "guarded", group: ACCOUNTS },
   ],

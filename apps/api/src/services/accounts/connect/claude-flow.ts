@@ -1,7 +1,7 @@
 import type { PendingClaudeLoginToken } from "@multi-ai-router/db"
 import { type ClaudeLoginHandle, parsePastedCode } from "../../../providers/claude-sdk/login"
 import { AUDIT_KINDS, AUDIT_SUBJECTS } from "../../admin/audit"
-import { type AdminResult, conflict, invalid, ok } from "../../admin/result"
+import { type AdminResult, conflict, invalid, ok, unavailable } from "../../admin/result"
 import { timingSafeEqualStrings } from "../../admin-auth"
 import {
   createClaimStore,
@@ -94,7 +94,9 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
       )
 
     release(accountId)?.handle.cancel()
-    releaseClaim(accountId)
+    // The superseded login's claim carries this same lease token, so the claim below overwrites it.
+    // Clearing it here would race that write and could delete the new claim.
+    pendingClaims.delete(accountId)
 
     // The durable claim fences a paste landing on another replica. Write it before any CLI
     // subprocess exists so a refused claim never starts one; it holds no code or credential.
@@ -116,7 +118,7 @@ export function createClaudeLoginFlow(deps: ClaudeConnectDeps): ClaudeConnectSer
     if (pending.stopping || signal.aborted || lifetime.isClosed(accountId)) {
       handle.cancel()
       clearClaim(accountId, claimToken)
-      return conflict("router is shutting down", "shutting_down")
+      return unavailable("router is shutting down", "shutting_down")
     }
 
     pendingClaims.set(accountId, claimToken)

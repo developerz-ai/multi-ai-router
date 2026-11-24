@@ -167,12 +167,24 @@ function sse(
   const encoder = new TextEncoder()
   // Worked out before the stream starts, so stamping a token is one clock read and an assignment:
   // anything the stub does between chunks is time the router's relay has to share the loop with.
-  const tokens = chunks.map(tokensIn)
+  // Only for a measured request — a background stream has no trip, and scanning its hundreds of
+  // chunks on every restart would be fixture work competing with the requests being timed.
+  const tokens = trip === undefined ? [] : chunks.map(tokensIn)
+  // Exactly once, however the stream ends: a cancel mid-delay is followed by an enqueue that
+  // throws, and counting both would leave the background-stream count one short for good.
+  let ended = false
+  const end = () => {
+    if (ended) return
+    ended = true
+    onEnd()
+  }
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
         for (const [index, chunk] of chunks.entries()) {
           await sleep(index === 0 ? delayMs : gapMs)
+          // Cancelled while it slept: stop producing rather than enqueue into a closed stream.
+          if (ended) return
           controller.enqueue(encoder.encode(chunk))
           if (trip === undefined) continue
           const at = performance.now()
@@ -183,10 +195,10 @@ function sse(
         if (trip !== undefined) trip.upstreamLastByteAt = performance.now()
         controller.close()
       } finally {
-        onEnd()
+        end()
       }
     },
-    cancel: onEnd,
+    cancel: end,
   })
 
   return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } })

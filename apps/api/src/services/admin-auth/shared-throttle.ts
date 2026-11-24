@@ -1,10 +1,9 @@
-import { AdminAuthError } from "@multi-ai-router/core"
 import type {
   createAdminLoginThrottleRepository,
   LoginThrottleNamespace,
 } from "@multi-ai-router/db"
 import type { AdminAuthConfig } from "./config"
-import { ADMIN_LOGIN_FAILED_MESSAGE } from "./login-outcomes"
+import { AdminAuthUnavailableError } from "./login-outcomes"
 import { createLoginThrottle, type ThrottleDecision } from "./throttle"
 
 export interface SharedThrottle {
@@ -20,15 +19,15 @@ export function createSharedThrottle(
     async consume(namespace, key) {
       try {
         return await repository.consume(namespace, key, config)
-      } catch {
-        throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
+      } catch (cause) {
+        throw new AdminAuthUnavailableError({ cause })
       }
     },
     async reset(namespace, key) {
       try {
         await repository.reset(namespace, key)
-      } catch {
-        throw new AdminAuthError(ADMIN_LOGIN_FAILED_MESSAGE)
+      } catch (cause) {
+        throw new AdminAuthUnavailableError({ cause })
       }
     },
   }

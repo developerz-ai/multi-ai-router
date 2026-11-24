@@ -1,3 +1,4 @@
+import { AdminAuthError } from "@multi-ai-router/core"
 import { Hono } from "hono"
 import { createLogger } from "../../src/logging/logger"
 import { errorHandler } from "../../src/middleware/errorHandler"
@@ -16,7 +17,15 @@ export function authService() {
 export function adminFixture(auth: AdminServices["auth"]): AdminServices {
   return {
     auth,
-    egressProxies: { list: unexpected, set: unexpected, clear: unexpected },
+    egressProxies: {
+      list: unexpected,
+      set: unexpected,
+      setReplace: unexpected,
+      clear: unexpected,
+      test: unexpected,
+      testAccount: unexpected,
+      sweep: unexpected,
+    },
     accounts: {
       list: unexpected,
       get: unexpected,
@@ -90,7 +99,7 @@ export function login() {
         ...authService(),
         completeLocalLogin: async () => {
           calls++
-          throw new Error("fixture wrong credential")
+          throw new AdminAuthError("fixture wrong credential")
         },
       },
     }),

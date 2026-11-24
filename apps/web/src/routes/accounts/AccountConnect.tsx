@@ -163,10 +163,14 @@ export function AccountConnect(props: AccountConnectProps) {
   const redeem = (pasted: string) => {
     const account = props.account
     if (account === null) return
+    const mine = attempts.newest(account.id)
     const run = complete.mutateAsync({ id: account.id, pasted })
     redeeming = run
     run
-      .then((result) => redeeming === run && setCompleted(result))
+      .then((result) => {
+        attempts.finished(account.id, mine)
+        if (redeeming === run) setCompleted(result)
+      })
       .catch(() => {}) // Rendered from the mutation's own `error`.
       .finally(() => {
         if (redeeming === run) redeeming = null
@@ -183,7 +187,7 @@ export function AccountConnect(props: AccountConnectProps) {
       const left = attempts.newest(id)
       // A code being redeemed may be about to succeed: cancelled only if it does not.
       if (redeeming !== null) redeeming.catch(() => attempts.orphaned(id, left))
-      else if (pending) cancel.mutate(id)
+      else if (pending) attempts.orphaned(id, left)
     }
     clear()
     then()
@@ -204,7 +208,10 @@ export function AccountConnect(props: AccountConnectProps) {
             beginning={beginDevice.isPending}
             nowMs={props.nowMs}
             onBegin={beginDeviceLogin}
-            onConnected={(result) => setCompleted(result)}
+            onConnected={(result) => {
+              attempts.finished(result.accountId, attempts.newest(result.accountId))
+              setCompleted(result)
+            }}
             started={deviceStarted()}
           />
         ) : undefined

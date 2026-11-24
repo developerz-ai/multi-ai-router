@@ -35,6 +35,8 @@ export type {
   ProbeHoldObservation,
 } from "./repositories/account-breaker"
 export { createAccountBreakerRepository } from "./repositories/account-breaker"
+export type { EgressAccountRow, SwapEgressProxyInput } from "./repositories/account-egress"
+export * from "./repositories/account-egress-health-repository"
 export type {
   AccountAuthorizationMethods,
   AccountLifecycleMethods,
@@ -104,12 +106,7 @@ export type {
   CatalogSnapshotRows,
 } from "./repositories/catalog-snapshot-repository"
 export { createCatalogSnapshotRepository } from "./repositories/catalog-snapshot-repository"
-export type {
-  ExhaustedWatchRepository,
-  ExhaustedWatchRow,
-  ExhaustedWatchState,
-} from "./repositories/exhausted-watch-repository"
-export { createExhaustedWatchRepository } from "./repositories/exhausted-watch-repository"
+export * from "./repositories/exhausted-watch-repository"
 export type {
   AccountCatalogAge,
   AccountCatalogAttempt,

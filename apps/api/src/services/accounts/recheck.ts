@@ -111,6 +111,11 @@ type CommitPhase =
       readonly auth: ClaudeAuthReport | undefined
     }
 
+interface CommitFailure {
+  readonly kind: "failed"
+  readonly error: unknown
+}
+
 export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
   const commit = async (accountId: string, source: RecheckSource): Promise<CommitPhase> => {
     const done = (result: AdminResult<RecheckResult>): CommitPhase => ({ kind: "done", result })
@@ -201,22 +206,34 @@ export function createRecheckService(deps: RecheckServiceDeps): RecheckService {
   }
 
   // Commits with bounded concurrency, installs the catalog once, then publishes: one five-table
-  // reload for the fleet instead of one per account (plan 101, 03.4).
+  // reload for the fleet instead of one per account (plan 101, 03.4). One account's failure is
+  // raised only after every account that did commit has been published.
   const recheckAll = async (): Promise<AdminResult<readonly RecheckResult[]>> => {
     const accounts = await deps.accounts.list({})
     const phases = await mapBounded(
       accounts,
       Math.max(1, deps.recheckAllConcurrency ?? 4),
-      (account) => commit(account.id, "operator_recovery"),
+      (account): Promise<CommitPhase | CommitFailure> =>
+        commit(account.id, "operator_recovery").catch((error: unknown) => ({
+          kind: "failed" as const,
+          error,
+        })),
     )
     if (phases.some((phase) => phase.kind === "committed")) await deps.refreshCatalog()
     const results: RecheckResult[] = []
+    let refused: AdminResult<never> | null = null
+    let failure: CommitFailure | null = null
     for (const phase of phases) {
+      if (phase.kind === "failed") {
+        failure ??= phase
+        continue
+      }
       const result = phase.kind === "done" ? phase.result : await publish(phase)
       if (result.ok) results.push(result.value)
-      else if (result.failure.status !== 404) return result
+      else if (result.failure.status !== 404) refused ??= result
     }
-    return ok(results)
+    if (failure !== null) throw failure.error
+    return refused ?? ok(results)
   }
 
   return { recheck, recheckAll }

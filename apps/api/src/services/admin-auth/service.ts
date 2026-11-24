@@ -5,6 +5,7 @@ import { type AdminAuthConfig, resolveAdminAuthConfig } from "./config"
 import { csrfTokenMatches, mintCsrfToken } from "./csrf"
 import {
   ADMIN_LOGIN_FAILED_MESSAGE,
+  AdminAuthUnavailableError,
   AdminLoginThrottledError,
   createAuditFire,
   LOCAL_ADMIN_USERNAME,
@@ -34,7 +35,12 @@ export type {
   LoginCompleteResult,
   LoginStartResult,
 } from "./service-types"
-export { ADMIN_LOGIN_FAILED_MESSAGE, AdminLoginThrottledError, LOCAL_ADMIN_USERNAME }
+export {
+  ADMIN_LOGIN_FAILED_MESSAGE,
+  AdminAuthUnavailableError,
+  AdminLoginThrottledError,
+  LOCAL_ADMIN_USERNAME,
+}
 
 const NOT_AUTHENTICATED = "Admin authentication required"
 const UNKNOWN_IP = UNKNOWN_CLIENT_IP
@@ -122,7 +128,8 @@ export function createAdminAuthService(deps: AdminAuthDeps): AdminAuthService {
           ip: input.ip,
           method: "oidc",
           // The diagnostic kind, not the wording — the same value the transport logs.
-          ...(err instanceof AdminAuthError && err.reason !== undefined
+          ...((err instanceof AdminAuthError || err instanceof AdminAuthUnavailableError) &&
+          err.reason !== undefined
             ? { reason: err.reason }
             : {}),
         },

@@ -320,3 +320,16 @@ describe("recheck", () => {
     expect(refused.ok && refused.value.rechecked).toBe(false)
   })
 })
+
+test("one account's failure in a recheck-all does not lose the accounts that committed", async () => {
+  const h = harness(60, [row("a"), row("b")], {
+    auth: {
+      check: async (account) => {
+        if (account.id === "a") throw new Error("claude is unavailable")
+        return null
+      },
+    },
+  })
+  await expect(h.service.recheckAll()).rejects.toThrow("claude is unavailable")
+  expect(h.audited.map((event) => event.subjectId)).toEqual(["b"])
+})

@@ -122,4 +122,69 @@ describe.skipIf(!historyUrl)("summaryAggregates", () => {
     const window: UsageWindow = { from: new Date(0), to: new Date(1) }
     await expect(fixture.history().summaryAggregates(window, 0, {}, attribution)).rejects.toThrow()
   })
+
+  // The summary asked the six sparkline series as six statements, each rebuilding the facts union.
+  // One GROUPING SETS statement must return exactly the points the six did, id-narrowed alike.
+  test("seriesByDimensions equals the six seriesByDimension reads", async () => {
+    const history = fixture.history()
+    const windows: UsageWindow[] = [
+      { from: new Date("1984-01-02T00:00:00Z"), to: new Date("1984-01-07T00:00:00Z") },
+      { from: new Date("1984-01-02T10:00:00Z"), to: new Date("1984-01-05T07:30:00Z") },
+      { from: new Date("1985-01-01T00:00:00Z"), to: new Date("1985-01-02T00:00:00Z") },
+    ]
+    const filters: UsageFilter[] = [
+      {},
+      { accountIds: [ACCOUNTS[0] ?? ""] },
+      { models: ["model-1"] },
+    ]
+    const sorted = (points: readonly { at: string; id: string | null }[]) =>
+      [...points].sort((a, b) => `${a.at} ${a.id}`.localeCompare(`${b.at} ${b.id}`))
+    let compared = 0
+    let points = 0
+    for (const window of windows)
+      for (const filter of filters)
+        for (const [bucket, width] of [
+          ["day", 1],
+          ["hour", 1],
+          ["hour", 6],
+        ] as const) {
+          // Every group but the largest, so the narrowing is exercised; the null group included.
+          const picked = await separately(window, 101, filter)
+          const ids = Object.fromEntries(
+            dims.map((d) => [
+              d,
+              (picked.breakdowns[d] as { id: string | null }[]).slice(1).map((row) => row.id),
+            ]),
+          ) as Record<UsageDimension, (string | null)[]>
+          const together = await history.seriesByDimensions?.(
+            window,
+            bucket,
+            width,
+            ids,
+            filter,
+            attribution,
+          )
+          if (together === undefined) throw new Error("the real repository states it")
+          for (const d of dims) {
+            const alone =
+              d === "owner" || d === "tool"
+                ? await history.seriesByDimension(
+                    window,
+                    bucket,
+                    d,
+                    width,
+                    ids[d],
+                    filter,
+                    attribution,
+                  )
+                : await history.seriesByDimension(window, bucket, d, width, ids[d], filter)
+            expect(sorted(together[d])).toEqual(sorted(alone))
+            points += alone.length
+            compared++
+          }
+        }
+    expect(compared).toBe(162)
+    // Not vacuous: the fixture produced real points to compare.
+    expect(points).toBeGreaterThan(200)
+  })
 })

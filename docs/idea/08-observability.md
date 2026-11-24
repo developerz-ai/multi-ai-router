@@ -33,7 +33,7 @@ client request that hits a rate-limited account, fails over, and succeeds on the
 | `costEstimate` | decimal? | See below. Null for an unknown model — never silently zero |
 | `costBasis` | enum | `metered` \| `notional` \| `unknown`. Which of the first two a priced attempt takes comes from the **Account's** `billing`, not from its provider — see below |
 | `latencyMs` / `ttfbMs` | int / int? | Router-observed wall time for the attempt; time to the first relayed byte. **TTFB is what makes "zero added time-to-first-token" a measurement** — `latencyMs` is dominated by generation time and hides a buffering regression completely |
-| `routerOverheadMs` | int | Time in the router, excluding upstream and awaited body reads; parser work remains included — the per-record twin of `router_overhead_seconds` |
+| `routerOverheadMs` | int | Time in the router, excluding upstream and awaited body reads; parser work remains included — the per-record twin of `router_overhead_seconds`. An HTTP attempt's upstream span opens at its fetch, so since 2.77.0 decrypt, header build and the body copy are counted and the overload pause is not (a step on deploy with no change in real latency); an Agent-SDK attempt's opens at dispatch. Fast-mode preparation (about 10 ms/MB) is therefore **not** in it, and neither is observing a relayed body |
 | `httpStatus` / `responseStatus` | int? / int? | Independent upstream HTTP response and caller response facts. Null means unavailable; legacy responseStatus remains unknown, never inferred from outcome or upstream status |
 | `outcome` | enum | `success` \| `client_error` \| `translation_failed` \| `request_too_large` \| `key_revoked` \| `scope_violation` \| `key_rate_limited` \| `no_healthy_account` \| `quota_exhausted` \| `credits_exhausted` \| `upstream_error` \| `upstream_timeout` \| `upstream_auth_failed` \| `credential_decrypt_failed` \| `router_error`. Grouped by *whose problem it is* (`packages/core/src/domain/usage.ts`). Three that share a status but never fold together: `quota_exhausted` (a window a clock refills), `credits_exhausted` (a balance a human refills), and `key_rate_limited` (one key spent its own ceiling — not the operator's capacity) |
 | `httpStatus` / `errorClass` | int? / string? | **Upstream** status when it answered — never the status the client was sent. `NULL` means no upstream answered this attempt: the connection failed, or the router refused before dialing (a pool-wide cooldown's `429`, an empty scope's `403`); the client-facing status of those is fixed by `errorClass`/`outcome`. A closed signal or a router-authored class name (`client_cancelled`, `TranslationError`, …) — never a message, never a body. The protocol default for an in-stream error is `upstream_protocol_error`; a driver hook that answered (Codex's `codex:stream-error:<code>`, MiniMax's `minimax:base_resp-<code>`) carries its own `signal` into the column instead. A wall read out of a `2xx` before commit (05 § *A wall inside a 2xx*) records the upstream's `2xx` with `errorClass` `success_wall`, while the client hears the `429`/`402`/`503` it was owed; through 2.57.1 the row carried the owed status, so such walls were indistinguishable from an upstream `4xx` |
@@ -151,6 +151,11 @@ reads as a promise. Every rule names the module that owns it.
 | Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's are derived from the published multiples its pricing page states (read 0.1x, or the footnoted lower multiple; write 1.25x for the 5-minute TTL, 2x for the 1-hour TTL), rather than restated per row. The usage object states the TTL split (`usage.cache_creation.ephemeral_1h_input_tokens`), so a 1-hour write is priced at 2x at estimate time; the split is not persisted — the row keeps one `cacheWriteTokens` counter and its `cost_estimate` already carries the split. A write with no stated split, and any operator override (which has no 1-hour field), prices at the 5-minute rate, so writes read low, never high |
 | Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
 
+Price provenance: the Anthropic and OpenAI rows for `claude-sonnet-5-5`, `gpt-6.2-sol` and
+`gpt-6.1-terra` were read 2026-11-24; the rest of both tables keep 2026-11-03. Sonnet 5.5 cache
+reads are the published 0.05x ($0.10 / MTok), not the standard 0.1x. GPT-5.6 Sol's $4 / $20 is
+promotional "until November 30, 2026" and is due a re-read in December.
+
 The shipped set is the twelve wired vendor tables answering for fourteen providers:
 `anthropic-api` and `anthropic-oauth` share the Anthropic table, `openai-api` and `openai-oauth`
 share the OpenAI one, and `gemini`, `zai`, `kimi`, `minimax`, `groq`, `deepseek`, `xai`, `mistral`,
@@ -209,8 +214,20 @@ closed set:
 
 The outcome stays `success`, because the client was served. A warn line, `upstream usage unread`,
 records the terminal the stream reached and the upstream's event names by count (never a payload).
+A stream that ended without its terminal also logs `upstream response incomplete`: warn with
+`no-terminal-event`, info with the upstream's named reason; its `eventTypes` carries event and
+`item.<type>` counts.
 That line is how the cause is read off a live row. A response that did state a sample keeps its counts
-and price unchanged. These rows used to be priced `0.000000`. Prod, 2026-11-10/11: 1,644
+and price unchanged.
+
+A last SSE frame the upstream closed without its blank line is still a frame, and the observer reads
+it exactly as the translator's parser does (through 2.76.1 it discarded one: the client got its
+completion and the row said `usage_unobservable`). Evidence is lost only when a frame is not whole,
+and the `upstream usage unread` line names why in `lostTo`: `trailing` a stream cut inside its last frame,
+`json` a frame that is not JSON, `decode` bytes that are not UTF-8, `salvage` an over-cap frame the
+scanner could not close, `content-type` a body that is neither SSE nor JSON.
+
+These rows used to be priced `0.000000`. Prod, 2026-11-10/11: 1,644
 ChatGPT/Codex attempts translated from `/v1/chat/completions` read as free completions.
 
 **The basis comes from the Account, not from the provider.** `accounts.billing` is either `metered`
@@ -410,12 +427,15 @@ read once, folded to the (key, account, pool, model) grain, labelled once with b
 tool bucket, aggregated over `GROUPING SETS ((), (api_key_id), …, (tool_grp))`, each set ranked
 and cut exactly as `breakdown` does. A differential integration test pins it equal to the seven
 separate reads (full days, partial edges, filters, cut and uncut limits, tie order). Prod (10.11)
-measured ~20 aggregates per load at 140–490 ms each; seven of them become one. `readSummary`
+measured ~20 aggregates per load at 140–490 ms each; seven of them become one. Since 2.77.0 one
+summary is 8 statements on one repeatable-read snapshot: clock, coverage, the grouped totals and
+breakdowns, global latency, the series, outcomes, one grouped per-dimension latency read and one
+grouped per-dimension series read (18 before). `readSummary`
 reads its totals and breakdowns through it (`services/usage-read/summary-facts.ts`
 `groupedFacts`; the seven-statement `perDimensionFacts` stays as the differential baseline in
 `summary-facts.test.ts`). `bin/bench-usage` at fixture scale, 2026-11-11 on a loaded host (load
 ~13): shared buffers 884,708 → 513,186, wall 20.4 s → 12.8 s. The six per-dimension series reads
-remain separate; they are the next consolidation candidate.
+were still separate then; since 2.77.0 they are one statement.
 
 `bin/bench-usage` seeds the fixture into a throwaway database, runs the real `readSummary`, and
 re-runs every statement under EXPLAIN (ANALYZE, BUFFERS). It exits non-zero when the wall clock
@@ -825,7 +845,12 @@ Why it is output-safe, and not a heuristic:
   or a 2.15.x replica during a rolling upgrade), until a **full** sweep (`backfill({ fullScan:
   true })`) adopts it. The hourly sweep is floored at W (below), so it never sees such a row; the
   full pass runs on its own long cadence (`USAGE_BACKFILL_FULL_SCAN_HOURS`, 24 h by default, owned
-  by the rollup task) or after the remedy below clears W. Once adopted, `legacy` flags it (restored pre-2.16 rows, `ingested_at` NULL,
+  by the rollup task) or after the remedy below clears W. The full pass first asks, without the
+  history lock, whether any raw row lacks a banked receipt. Admission commits a row and its receipt
+  in one transaction, so a snapshot sees both or neither and the answer is as true as under the
+  lock. Only a hit takes the lock and adopts in bounded batches. A clean pass certifies nothing and
+  does not move the banked-through watermark. (Through 2.76.1 the daily scan anti-joined every
+  retained row, 1.1M in prod and 10–14 s, while holding the lock every usage write takes.) Once adopted, `legacy` flags it (restored pre-2.16 rows, `ingested_at` NULL,
   adopt as `legacy_unbanked` or `legacy_baseline`, not `legacy_overlap`). A window wholly inside
   raw retention still sets `incomplete` via the admin summary's raw-vs-history count (`retainedAttempts > totals.attempts`, summary.ts:58-59).
   Remedy: set both columns NULL (`update usage_history_state set banked_through_at = null,
@@ -1117,18 +1142,34 @@ measurements, so `bin/bench` reports them as two tables:
 
 | Claim | Measured as |
 |---|---|
-| **< 5 ms added p99** | Read straight off `router_overhead_seconds` via `GET /metrics`, after driving concurrent requests through the real router against an in-process stub upstream. Nothing external is timed — the series that alerts is the series that is checked |
-| **Zero added time-to-first-token** | The stub records when it released its first byte; the driver records when the client saw one. The difference is what the router added, and its **p95 is held to `--ttft-budget-ms` (default 2 ms)**. A first client byte arriving *after* the upstream's last is the extreme case — a relay that buffered — and fails by that name instead of as a slow percentile |
+| **< 5 ms added p99** | Measured per request and unrounded, as how late the router made it: its time before it called the in-process stub upstream, plus the worse of two delays — its time after the upstream's last byte, and the latest any stream token reached the client after the stub released it. Lateness, not CPU: per-token delays are not summed, because a client does not wait for them in series. `router_overhead_seconds` is scraped from `GET /metrics` beside it and must have recorded every request, because the series is what alerts; its sample count and mean are printed as a cross-check, and the verdict is held to the measurement |
+| **Zero added time-to-first-token** | How long the client waited for its first byte from the moment it sent the request, less how long the stub took to produce one once the router called it. Its **p95 is held to `--ttft-budget-ms` (default 2 ms)**. A first client byte arriving *after* the upstream's last is the extreme case — a relay that buffered — and fails by that name instead of as a slow percentile |
 
-Both non-SDK egress paths are covered, streamed and not. The Agent-SDK path is excluded: it spawns a
-subprocess per request and is the budget's labeled exception.
+Every non-SDK egress path is covered, streamed and not: byte passthrough to an Anthropic account,
+translation to a Chat Completions account, and translation to a Responses-API account — the wire a
+ChatGPT/Codex account answers in, and the most expensive translation in production. The Agent-SDK
+path is excluded: it spawns a subprocess per request and is the budget's labeled exception.
 
 The default 1 KB `"x"` prompt is the routing scanner's one fast path, so on its own it proves
 nothing about a real request (the 10-02 bench read 5.0 ms where prod read 38–82 ms at the same
 size). The scenario list therefore also drives prod-shaped bodies built by `bench/transcript.ts` —
 a cached system prompt, tool schemas, and a transcript of `tool_use` edits answered by
 `tool_result` source text — at 350 KB (non-streamed, and streamed over 200 chunks), 1 MB, and
-translated at 350 KB, plus a ~62 KB non-streamed answer just under the 64 KiB success peek.
+translated at 350 KB to both translated wires, plus a ~62 KB non-streamed answer just under the
+64 KiB success peek.
+
+Three more scenarios exist because a one-account, idle router is not what serves traffic. One
+gives the app a deployment-sized roster — 31 accounts of one provider in 11 pools, with a key
+scoped to those pools — so the candidate intersection of non-negotiable 6 is computed on every
+request. One keeps 32 long streams in flight on that roster while short requests are measured: a
+request in production shares its event loop with generations being relayed chunk by chunk, and that
+is where a tail comes from. The background streams are load, never samples.
+
+The transcript scenarios run at most two requests at a time and a fifth of `--requests` (the
+200-chunk stream: four at a time, a tenth). The bench reports per-request cost, which only holds
+while offered load sits well under what one event loop retires; a 350 KB body costs milliseconds of
+CPU where a 1 KB prompt costs microseconds, so eight of them against a 20 ms upstream is a
+saturated loop and what that measures is its queue.
 
 A measurement is only worth reading if it was taken on the runtime this code ships on, so the
 `bin/bench` wrapper checks the pinned runtime before the benchmark runs: it calls the repository's own
@@ -1136,32 +1177,47 @@ runtime contract (`bin/lib/require-bun`, which compares `bun --version` against 
 exits non-zero on a mismatch. A budget is therefore never measured on a Bun the test suite and the
 released image never ran on.
 
-**Why the two claims are read at different quantiles.** `router_overhead_seconds` is a bucketed
-histogram fed whole-millisecond samples, so its tail is bounded by the bucket edges and a p99 read
-off it is stable run to run. Added TTFT is a raw sample series timed across an async relay on one
-event loop: its p50 and p95 move under 15% between runs on an idle box, while its **p99 was measured
+**Why the two claims are read at different quantiles.** Both are raw sample series timed
+on one event loop. Overhead is a whole-request difference between two long spans, and its p99 is the
+number the non-negotiable names. Added TTFT is one short interval across an async relay: its p50 and p95 move under 15% between runs on an idle box, while its **p99 was measured
 moving 0.56 → 4.03 ms across four consecutive runs of identical code**. That tail is the scheduler,
 not the router, and gating it would fail runs for being unlucky. p95 gives up nothing, because every
 way the router can actually add time to a first token — buffering the relay, awaiting Postgres or a
 body parse before forwarding, a translation that accumulates before it emits — charges *every*
 stream and moves p50 and p95 together.
 
-One sensitivity worth knowing before reading a pass as proof: work the router does **before** the
-upstream's first byte exists is absorbed, not measured, because the client was going to wait anyway.
-The stub's `--first-byte-ms` (default 20) is therefore the floor on what a pre-relay delay has to
-exceed to register. That matches what a client actually experiences — a real upstream's first token
-is hundreds of milliseconds out, so the router has at least that much slack — but it means the
-number answers "did the client wait longer", not "did the router do more work". The latter is what
-`router_overhead_seconds` is for, which is why both are reported.
+Two things an earlier form of these measurements could not see, and why each is taken the way it
+is. Subtracting the upstream's whole span from a request's wall time hides everything the router
+does *between* chunks: translation that finishes before the next chunk arrives does not lengthen
+the request, it only delays the token it was done on. So every text delta the stub sends is
+numbered, the stub records when it released each and the driver when it read each, and the worst of
+those delays is part of the request's overhead. And measuring first-token time from the upstream's
+first byte hides everything the router does *before* it calls the upstream — auth, the body scan,
+selection, translating the request — which is most of what it does; a router that spent 3 ms there
+added 3 ms to every first token and reported zero. It is therefore counted from the request's start.
+The arithmetic is `bench/clocks.ts`, pure, and tested with chosen timestamps.
 
-Two honesty notes the tool prints for itself. The series is fed whole-millisecond samples
-(`routerOverheadMs` is an integer column), so every percentile below 1 ms is a bucket bound rather
-than a measurement and the **mean** is the number with sub-millisecond resolution. And concurrency
-against a fast stub is load-shaping, not realism: an upstream that answers instantly saturates the
-event loop, and the queueing that follows is genuinely time in the router, so it lands in the
-histogram. The defaults sit well under saturation; raising `--concurrency` or dropping
-`--first-byte-ms` measures the saturation point instead, which is a fair thing to want and a
-different thing to read.
+A scenario that names background load must have had it: the stub counts the background streams the
+router has open, the driver does not send a measured request until all of them are in flight, and a
+scenario whose measured requests met none fails by that name.
+
+Why the verdict stopped reading the histogram. `router_overhead_seconds` is fed
+`routerOverheadMs`, an integer column, into eight buckets. A quantile read off it is therefore a
+bucket edge: every scenario whose requests rounded to 0 ms reported p50/p95/p99 of
+0.250/0.475/0.495 ms whatever it cost, and anything landing in the 2–5 ms bucket read close to
+5 ms. That is a stable number that measures nothing — it cannot tell 0.1 ms from 0.9 ms, and it
+kept the bench an order of magnitude under what production recorded for the same request shapes.
+The measurement is taken with clocks in the bench's own process instead, the same way added TTFT
+always was; the series is still scraped, and a scenario whose series recorded nothing fails by
+that name. The series also under-reads one thing the measurement sees: a non-streamed answer's body
+is read inside the span the router counts as waiting on the upstream, so the cost of observing a
+large answer never reaches `routerOverheadMs`.
+
+One honesty note the design keeps. Concurrency against a fast stub is load-shaping, not realism: an
+upstream that answers instantly saturates the event loop, and the queueing that follows is
+genuinely time in the router. The defaults sit well under saturation; raising `--concurrency` or
+dropping `--first-byte-ms` measures the saturation point instead, which is a fair thing to want and
+a different thing to read.
 
 `bin/bench` exits non-zero when either claim breaks, which makes it usable as a gate. It is
 deliberately **not** part of `bin/check`: a timing measurement on a shared CI runner is a flaky
@@ -1177,19 +1233,21 @@ worth blocking a merge over, and a gate nobody trusts gets ignored.
 What it produces instead:
 
 - **`bin/bench --json --baseline bench/baseline.json`** — runs the harness and prints its normal
-  verdict plus a `delta` block comparing every scenario's overhead mean and p99, and every streamed
+  verdict plus a `delta` block comparing every scenario's measured overhead mean and p99, and every streamed
   scenario's added-TTFT p95, against the numbers committed in `bench/baseline.json`. Both halves of
   the budget: a regression that stays under an absolute ceiling still deserves to be visible on the
   PR that introduced it.
 - The JSON is written to the job's **summary** (visible on the PR, no log-diving) and uploaded as
   the `bench-report` **artifact** (30-day retention), so a trend across PRs is one download away.
 
-`bench/baseline.json` is a committed, versioned file (`{"version": 2, "budgets", "rows": [...]}`)
+`bench/baseline.json` is a committed, versioned file (`{"version": 3, "budgets", "rows": [...]}`)
 — not derived at CI time — so the delta is against a number a human chose to keep, not against
 whatever the previous run on a possibly-noisier runner happened to produce. A baseline written by an
 older format is **refused**, not silently diffed: a version-1 file predates the added-TTFT ceiling
 and carries no p95 to compare, so comparing against one would report "no drift" for precisely the
 number that had until then gone unwatched.
+A version-2 file is refused for the same reason: its overhead numbers are histogram bucket edges,
+and a delta between a bucket edge and a measurement is not a delta.
 
 **Re-baselining**, after an intentional performance change (or before cutting a release, alongside
 a `bin/bench` smoke run):
@@ -1565,9 +1623,10 @@ removed). These rows name it, as ids with their names, never a key or credential
 |---|---|
 | `pool.created` | `members: [{ accountId, name }]`, the initial membership |
 | `pool.updated` (body sent `members`) | `membersAdded` and `membersRemoved`, each `[{ accountId, name }]`, diffed by `accountId` between the membership held before the write and the set after it; `memberCount` stays |
-| `pool.deleted` | `members: [{ accountId, name }]` the pool had, read before the delete's cascade; `keys: [{ keyId, name }]` whose scope named it — always none on the operator's delete, which refuses a scoped pool. The reaper's delete adds `fate` to each key (`revoked`, `detached`, `already_revoked`) and keeps `revokedKeyIds` / `detachedKeyIds` |
+| `pool.deleted` | `members: [{ accountId, name }]` the pool had, read before the delete's cascade; `keys: [{ keyId, name }]` whose scope named it — only revoked keys on the operator's delete, which refuses a pool a live key is scoped to. The reaper's delete adds `fate` to each key (`revoked`, `detached`, `already_revoked`) and keeps `revokedKeyIds` / `detachedKeyIds` |
 | `key.updated` (body sent `scope`) | `scopeBefore` (beside `scope`, so a `pools` → `all` widen does not read as a narrowing), `poolsAdded` / `poolsRemoved` as `[{ poolId, name }]`, `accountsAdded` / `accountsRemoved` as `[{ accountId, name }]` |
 | `account.disabled` / `account.deleted` | `pools: [{ poolId, name }]`, the pools the account was a member of at that moment (read before a delete's cascade) |
+| `account.egress_proxy_replaced` | `vendor`, `from`, `to` (`host:port`), `reason` (the check outcome), `failures`, `country`. Two `warn` alert lines go with the sweep: `egress proxy replaced` and `egress proxy has no replacement` (`accountId`, `label`, `vendor`, `from`, `to`, `reason`) |
 
 An account `name` is its label. A name that no longer resolves is written as `null`, keeping the id.
 The account rows are read outside any transaction (the accounts service has none), so a membership
@@ -1634,9 +1693,10 @@ removed). These rows name it, as ids with their names, never a key or credential
 |---|---|
 | `pool.created` | `members: [{ accountId, name }]`, the initial membership |
 | `pool.updated` (body sent `members`) | `membersAdded` and `membersRemoved`, each `[{ accountId, name }]`, diffed by `accountId` between the membership held before the write and the set after it; `memberCount` stays |
-| `pool.deleted` | `members: [{ accountId, name }]` the pool had, read before the delete's cascade; `keys: [{ keyId, name }]` whose scope named it — always none on the operator's delete, which refuses a scoped pool. The reaper's delete adds `fate` to each key (`revoked`, `detached`, `already_revoked`) and keeps `revokedKeyIds` / `detachedKeyIds` |
+| `pool.deleted` | `members: [{ accountId, name }]` the pool had, read before the delete's cascade; `keys: [{ keyId, name }]` whose scope named it — only revoked keys on the operator's delete, which refuses a pool a live key is scoped to. The reaper's delete adds `fate` to each key (`revoked`, `detached`, `already_revoked`) and keeps `revokedKeyIds` / `detachedKeyIds` |
 | `key.updated` (body sent `scope`) | `scopeBefore` (beside `scope`, so a `pools` → `all` widen does not read as a narrowing), `poolsAdded` / `poolsRemoved` as `[{ poolId, name }]`, `accountsAdded` / `accountsRemoved` as `[{ accountId, name }]` |
 | `account.disabled` / `account.deleted` | `pools: [{ poolId, name }]`, the pools the account was a member of at that moment (read before a delete's cascade) |
+| `account.egress_proxy_replaced` | `vendor`, `from`, `to` (`host:port`), `reason` (the check outcome), `failures`, `country`. Two `warn` alert lines go with the sweep: `egress proxy replaced` and `egress proxy has no replacement` (`accountId`, `label`, `vendor`, `from`, `to`, `reason`) |
 
 An account `name` is its label. A name that no longer resolves is written as `null`, keeping the id.
 The account rows are read outside any transaction (the accounts service has none), so a membership
@@ -1675,6 +1735,7 @@ interval reads `stale`, which is what a wedged task looks like from the outside.
 | Cooldown recheck (`cooldown_recheck`) | `COOLDOWN_RECHECK_INTERVAL_MINUTES` (hourly) |
 | Plan quota read (`plan_quota_read`) | `PLAN_QUOTA_READ_INTERVAL_MINUTES` (15) |
 | Empty pool reap (`pool_reap`) | `POOL_REAP_INTERVAL_MINUTES` (hourly); deletes Pools memberless past `RETENTION_EMPTY_POOL_DAYS`. Two `warn` alert lines: `empty pool reaped` (`poolId`, `poolName`, `emptySince`, `revokedKeyIds`, `detachedKeyIds`) per Pool, and `key revoked: every pool it was scoped to was reaped` (`keyId`, `poolId`) per revoked key — a client holding that key starts failing `401` |
+| Egress proxy check (`egress_proxy_check`) | `EGRESS_PROXY_CHECK_INTERVAL_MINUTES`; built only when the proxy sweep is wired. `itemsProcessed` is accounts checked; `partial` when the batch overflowed, a vendor was unavailable for an `on-failure` account, or shutdown interrupted it |
 | Roster drift check (`pool_roster_check`) | `POOL_ROSTER_CHECK_INTERVAL_MINUTES` (15); **constructed only when `POOL_ROSTER_PATH` is set**, read-only, never reconciles — see [Pool roster drift](#pool-roster-drift) |
 
 ### The catalog refresh is not a scheduled task

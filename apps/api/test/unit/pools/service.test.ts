@@ -430,3 +430,21 @@ describe("write schemas", () => {
     expect(updatePoolBody.safeParse({}).success).toBe(false)
   })
 })
+
+test("a revoked key in scope does not block a pool's delete, and the audit names it", async () => {
+  const { service, store } = await seeded()
+  const made = await service.create({ name: "p" })
+  if (!made.ok) throw new Error("pool refused")
+  const key = await store.keys.create({ name: "k", value: "v", prefix: "p", scope: "pools" })
+  await store.keys.replaceScopeTargets(key.id, { poolIds: [made.value.id] })
+  expect(await service.remove(made.value.id)).toMatchObject({ failure: { code: "pool_in_use" } })
+  await store.keys.markRevoked(key.id, NOW)
+  expect(await service.remove(made.value.id)).toMatchObject({ ok: true })
+  expect(auditOf(store, "pool.deleted")?.detail).toMatchObject({
+    keys: [{ keyId: key.id, name: "k" }],
+  })
+})
+
+test("a NUL in a pool name is refused", () => {
+  expect(createPoolBody.safeParse({ name: "a\0" }).success).toBe(false)
+})

@@ -1,5 +1,6 @@
 import { KEY_LABEL_SLUG, KeyOwnerKind, KeyScope } from "@multi-ai-router/core"
 import { z } from "zod"
+import { NO_NUL, noNul } from "../admin/parse"
 
 /**
  * The router-key write contract.
@@ -13,14 +14,6 @@ import { z } from "zod"
  * spelled out, so the three forms here and the `key_scope` Postgres enum cannot
  * drift apart.
  */
-
-/**
- * Postgres `text` cannot hold U+0000: the insert fails and the client sees a 500
- * for what is plain bad input. Reject it at the edge, once, for every free-text
- * label (name, purpose).
- */
-const noNul = (value: string): boolean => !value.includes("\u0000")
-const NO_NUL = { message: "must not contain a NUL character" }
 
 const KEY_NAME = z.string().trim().min(1).max(120).refine(noNul, NO_NUL)
 

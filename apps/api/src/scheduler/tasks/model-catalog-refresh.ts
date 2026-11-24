@@ -1,3 +1,4 @@
+import { describeError } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow, ModelCatalogRepository } from "@multi-ai-router/db"
 import { type CatalogRefreshOutcome, selectForRefresh } from "../../services/models"
 import type { ScheduledTask } from "../types"
@@ -94,11 +95,21 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
           return { outcome: "partial", itemsProcessed: tally.refreshed }
         }
 
-        const outcome = await deps.refresh(account, now)
+        // One account's throw (a database error in its catalog write) must cost that account and
+        // nothing else: uncaught, it ended the tick before the stamp below, so the same account
+        // sorted first on every later tick and the ones behind it were never asked.
+        const outcome = await deps.refresh(account, now).catch(
+          (error: unknown): CatalogRefreshOutcome => ({
+            kind: "failed",
+            reason: "refresh_threw",
+            detail: describeError(error, Number.POSITIVE_INFINITY),
+          }),
+        )
         if (outcome.kind === "refreshed") {
           // The write moved `refreshed_at`, which orders this account by itself again — the
           // attempt row has answered its last question and is cleared rather than left to age.
-          await deps.catalog.clearAttempt(account.id)
+          // A stale row left behind by a failed clear only orders this account a little later.
+          await deps.catalog.clearAttempt(account.id).catch(() => undefined)
           tally.refreshed += 1
           tally.models += outcome.models
           // A truncated listing still refreshed, but the operator should know rows may be missing.
@@ -113,7 +124,13 @@ export function createModelCatalogRefreshTask(deps: ModelCatalogRefreshDeps): Sc
         }
         // Asked without a write: stamp it durably, or the next tick — usually a different
         // process — would sort this account first all over again.
-        await deps.catalog.recordAttempt(account.id, now)
+        // The stamp failing must not end the tick either: the rest of the batch is still owed.
+        await deps.catalog.recordAttempt(account.id, now).catch((error: unknown) => {
+          logger.warn("model catalog attempt could not be stamped", {
+            accountId: account.id,
+            error: describeError(error, Number.POSITIVE_INFINITY),
+          })
+        })
         if (outcome.kind === "skipped") {
           tally.skipped += 1
           // Info, not warn: a skip is the refresh declining to ask — a subscription with no config

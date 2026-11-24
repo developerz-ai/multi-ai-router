@@ -139,11 +139,13 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
           const pool = await tx.pools.findById(id)
           if (pool === undefined) return notFound(`no pool with id "${id}"`)
           const scoped = await tx.keys.listKeysScopedToPool(id)
-          if (scoped.length > 0) {
+          // A revoked key reaches nothing, so it blocks nothing; its scope row cascades away.
+          const live = scoped.filter((key) => !key.revoked)
+          if (live.length > 0) {
             return conflict(
-              `pool "${pool.name}" is named by the scope of ${scoped.length} key(s): ${scoped
+              `pool "${pool.name}" is named by the scope of ${live.length} key(s): ${live
                 .map((key) => `"${key.name}"`)
-                .join(", ")}. Re-scope them first.`,
+                .join(", ")}. Re-scope or revoke them first.`,
               "pool_in_use",
             )
           }
@@ -159,8 +161,8 @@ export function createPoolMutations(deps: PoolsServiceDeps): Pick<PoolsService, 
               name: pool.name,
               policy: pool.policy,
               members: namedAccounts(held, labels),
-              // Always none here (a scoped pool is refused above), written so the operator's
-              // delete and the reaper's carry the same fields.
+              // Only revoked keys here (a live one is refused above), so the operator's delete and
+              // the reaper's carry the same fields.
               keys: scoped.map((key) => ({ keyId: key.id, name: key.name })),
             },
           })

@@ -95,6 +95,11 @@ confirmation dialog and shows a dismissible notice that the account cannot route
 credential directory awaits confirmed owner exit; unknown exits may require operator follow-up.
 No directory path, boot identity or owner marker is rendered in that notice.
 
+Only a subscription account owns a directory, so any other account's `cleanup` is `not_applicable`.
+A directory that could not be revoked or removed is `deferred`, and `config_dir_reap` finishes it;
+the `account.deleted` audit row is written either way. A revoked key in scope blocks neither an
+account nor a pool delete.
+
 
 **Who writes `status`, and what may overwrite what.** The column holds two different kinds of fact.
 `active` and `disabled` are the **operator's** — a setting, written from the console. `cooling_down`,

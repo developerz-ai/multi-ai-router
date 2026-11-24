@@ -137,9 +137,14 @@ export function createRecoveryBegin(
         // `uncertain` is bounded like `failed`: its `nextAllowedAt` already covers the outcome bound
         // (`markUncertain` fires only past it; the fence above extends it), and an owner-recorded
         // `uncertain` attempt has settled. Terminal-until-an-operator blocked routing indefinitely.
+        // A `succeeded` attempt owes no wait: the account answered, so a re-trip is new evidence
+        // and the breaker's own backoff (checked above) is the clock that governs it. Holding the
+        // recovery cooldown over it left a re-tripped account with no permit for the full window.
+        // The column still holds for an operator's re-check, which reads it on its own path.
         if (
           held !== undefined &&
-          (held.generation === input.generationCandidate || held.nextAllowedAt > now)
+          (held.generation === input.generationCandidate ||
+            (held.state !== "succeeded" && held.nextAllowedAt > now))
         )
           return undefined
         // Only fresh captured recovery revision can start the next automatic generation.

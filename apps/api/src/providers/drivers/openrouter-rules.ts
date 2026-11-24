@@ -6,6 +6,7 @@ import {
   keyCap,
   messageRule,
   modelScoped,
+  namesBalance,
   onStatus,
   typeRule,
   withResetEstimate,
@@ -204,10 +205,22 @@ const INSUFFICIENT = messageRule(
 )
 const CODE_402 = codeRule("credits-exhausted", "openrouter:code-402", ["402"])
 
+/**
+ * `limit_source: openrouter_credits`: OpenRouter saying, in the field it tells clients to branch
+ * on, that the prepaid balance refused. Provenance: `api_reference/limits.mdx` (as `Metadata`
+ * above). It had no verdict of its own, so one worded neutrally on a `403` with no numeric
+ * `error.code` matched nothing below and fell to the status: `auth`, a refused credential, for an
+ * account that only needs a top-up (review of #506). After the oversized-request exception, which
+ * shares the source and is about one request. Blast radius: every OpenRouter `402`/`403` naming
+ * that source is `credits-exhausted` and never borrows a key cap's reset.
+ */
+const BALANCE = namesBalance(typeRule("credits-exhausted", "openrouter:credits", [BALANCE_SOURCE]))
+
 /** The walls OpenRouter names itself, ahead of every reading of its wording. */
 const STATED_RULES: readonly ClassificationRule[] = [
   typeRule("rate-limited", "openrouter:in-flight-budget", [IN_FLIGHT_SOURCE]),
   accountScoped(typeRule("invalid-request", "openrouter:request-over-budget", [OVERSIZED])),
+  BALANCE,
   whenReset(typeRule("rate-limited", "openrouter:key-limit-window", [KEY_SOURCE])),
   whenReset(typeRule("rate-limited", "openrouter:budget-window", BUDGET_SOURCES)),
   typeRule("credits-exhausted", "openrouter:budget-spent", BUDGET_SOURCES),
@@ -255,10 +268,11 @@ export const OPENROUTER_RULES: readonly ClassificationRule[] = [
       statuses: [404],
     }),
   ),
+  // Past `unlessBalance`, what is left of each rule is the refusal that names the balance.
   unlessBalance(INSUFFICIENT),
-  INSUFFICIENT,
+  namesBalance(INSUFFICIENT),
   unlessBalance(CODE_402),
-  CODE_402,
+  namesBalance(CODE_402),
   codeRule("rate-limited", "openrouter:code-429", ["429"]),
   codeRule("auth", "openrouter:code-401", ["401"]),
 ]

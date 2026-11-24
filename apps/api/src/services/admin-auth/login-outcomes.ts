@@ -13,7 +13,25 @@ export const UNKNOWN_ADMIN_SUBJECT = "unknown"
  * are indistinguishable on the wire on purpose: the answer that names its
  * reason is a probe oracle. The audit log carries the real kind.
  */
-export const ADMIN_LOGIN_FAILED_MESSAGE = "Single sign-on verification failed. Try again."
+export const ADMIN_LOGIN_FAILED_MESSAGE = "Sign-in failed. Try again."
+
+/**
+ * The sign-in could not be judged at all: the store behind it did not answer. Not a verdict on what
+ * was presented, so it is not a 401.
+ */
+export class AdminAuthUnavailableError extends Error {
+  /** Operator-only, as `AdminAuthError.reason` is: which dependency, for the log and the audit. */
+  readonly reason: string | undefined
+
+  constructor(options: ErrorOptions & { readonly reason?: string } = {}) {
+    super(ADMIN_LOGIN_UNAVAILABLE_MESSAGE, options)
+    this.name = "AdminAuthUnavailableError"
+    this.reason = options.reason
+  }
+}
+
+export const ADMIN_LOGIN_UNAVAILABLE_MESSAGE =
+  "Sign-in is temporarily unavailable. Try again shortly."
 
 /** The session username a password login runs under — one principal, no user table. */
 export const LOCAL_ADMIN_USERNAME = "local-admin"

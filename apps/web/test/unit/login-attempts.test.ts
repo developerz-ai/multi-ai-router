@@ -50,3 +50,33 @@ test("a replaced start that lands late is left alone, and accounts never mix", (
   log.orphaned("b", other)
   expect(cancelled).toEqual(["b"])
 })
+
+test("an older start still in flight is cancelled too, after the newer one was", () => {
+  const { cancelled, log } = attempts()
+  const slow = log.begin("a")
+  const quick = log.begin("a")
+  log.orphaned("a", quick)
+  expect(cancelled).toEqual(["a"])
+  log.orphaned("a", slow)
+  expect(cancelled).toEqual(["a", "a"])
+})
+
+test("one that lands after the newer was left, or finished, is cancelled; before, it is covered", () => {
+  for (const end of ["orphaned", "finished"] as const) {
+    const { cancelled, log } = attempts()
+    const slow = log.begin("a")
+    const quick = log.begin("a")
+    log.shown("a", quick)
+    log[end]("a", quick)
+    cancelled.length = 0
+    log.orphaned("a", slow)
+    expect(cancelled).toEqual(["a"])
+  }
+  const { cancelled, log } = attempts()
+  const slow = log.begin("a")
+  const quick = log.begin("a")
+  log.shown("a", quick)
+  log.orphaned("a", slow)
+  log.orphaned("a", quick)
+  expect(cancelled).toEqual(["a"])
+})

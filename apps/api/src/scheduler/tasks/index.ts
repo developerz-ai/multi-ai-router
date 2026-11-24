@@ -5,6 +5,7 @@ import { createConfigDirReapTask } from "./config-dir-reap"
 import { createCooldownRecheckTasks } from "./cooldown-recheck"
 import { createCredentialTasks } from "./credential-tasks"
 import type { ScheduledTaskDeps } from "./deps"
+import { createEgressProxyCheckTasks } from "./egress-proxy-check"
 import { createIdleAccountProbeTask } from "./idle-account-probe"
 import { poolRosterCheckIntervalMs, scheduledTaskIntervals } from "./intervals"
 import { createJanitorTask } from "./janitor"
@@ -182,6 +183,7 @@ export function createScheduledTasks(deps: ScheduledTaskDeps): readonly Schedule
     ...createPoolRosterCheckTasks(deps.poolRosterCheck, {
       intervalMs: poolRosterCheckIntervalMs(env),
     }),
+    ...createEgressProxyCheckTasks(deps.egressProxyCheck),
   ]
 }
 

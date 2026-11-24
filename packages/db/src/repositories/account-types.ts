@@ -14,13 +14,17 @@ import type {
   SupportedModelList,
 } from "../schema/accounts"
 import type { QuotaWindowRow } from "../schema/quota-windows"
+import type { AccountEgressMethods } from "./account-egress"
 import type { AddedAccountRepositoryMethods } from "./account-lifecycle-types"
 import type { SupportedModelsMethods } from "./account-supported-models"
 import type { BackgroundAccountSubject } from "./background-account-eligibility"
 import type { AccountQuotaObservation, ObservedQuotaWindowWrite } from "./observed-quota-window"
 import type { QuotaWindowWrite } from "./quota-window-mutations"
 
-export interface AccountRepository extends AddedAccountRepositoryMethods, SupportedModelsMethods {
+export interface AccountRepository
+  extends AddedAccountRepositoryMethods,
+    SupportedModelsMethods,
+    AccountEgressMethods {
   /** Durable identity/state check at a background upstream admission boundary. */
   readEligibleBackgroundAccount(
     id: string,

@@ -270,4 +270,59 @@ describe.skipIf(!runnable)("usage aggregates against a live database", () => {
     expect(byOutcome.get("success")).toBe(3)
     expect(byOutcome.get("upstream_error")).toBe(1)
   })
+
+  // The summary read these as six statements (prod: 340-450 ms each inside a 9 s usage page). One
+  // GROUPING SETS statement must answer every dimension with exactly the numbers the six did.
+  test("groupLatency: one statement equals the six per-dimension breakdowns", async () => {
+    const attribution = {
+      ids: [crypto.randomUUID()],
+      owners: ["someone"],
+      ownerKinds: ["person"],
+      tools: ["a-tool"],
+    }
+    const latency = (rows: readonly { id: string | null }[]) =>
+      [...rows]
+        .map((row) => {
+          const { id, latencyP50Ms, latencyP95Ms, routerOverheadP95Ms } = row as never
+          return { id, latencyP50Ms, latencyP95Ms, routerOverheadP95Ms }
+        })
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    const columns = ["apiKeyId", "accountId", "poolId", "model"] as const
+    for (const filter of [{}, { accountIds: [accountA] }, { models: ["no-such-model"] }]) {
+      const expected = {
+        apiKeyId: await usage.breakdown(WINDOW, "apiKeyId", undefined, 1000, filter),
+        accountId: await usage.breakdown(WINDOW, "accountId", undefined, 1000, filter),
+        poolId: await usage.breakdown(WINDOW, "poolId", undefined, 1000, filter),
+        model: await usage.breakdown(WINDOW, "model", undefined, 1000, filter),
+        owner: await usage.breakdown(WINDOW, "owner", undefined, 1000, filter, attribution),
+        tool: await usage.breakdown(WINDOW, "tool", undefined, 1000, filter, attribution),
+      }
+      const ids = {
+        apiKeyId: expected.apiKeyId.map((row) => row.id),
+        accountId: expected.accountId.map((row) => row.id),
+        poolId: expected.poolId.map((row) => row.id),
+        model: expected.model.map((row) => row.id),
+        owner: expected.owner.map((row) => row.id),
+        tool: expected.tool.map((row) => row.id),
+      }
+      const grouped = await usage.groupLatency?.(WINDOW, filter, attribution, ids)
+      if (grouped === undefined) throw new Error("the real repository states groupLatency")
+      for (const dimension of [...columns, "owner", "tool"] as const)
+        expect(latency(grouped[dimension])).toEqual(latency(expected[dimension]))
+    }
+    // Only the selected ids come back: `model` is client-typed, so "every group" has no ceiling.
+    const none: (string | null)[] = []
+    const only = await usage.groupLatency?.(WINDOW, {}, attribution, {
+      apiKeyId: none,
+      accountId: [accountA],
+      poolId: [null],
+      model: none,
+      owner: none,
+      tool: none,
+    })
+    expect(only?.accountId).toEqual([expect.objectContaining({ id: accountA, latencyP95Ms: 300 })])
+    expect(only?.model).toEqual([])
+    expect(only?.apiKeyId).toEqual([])
+    expect(only?.poolId.map((row) => row.id)).toEqual([null])
+  })
 })

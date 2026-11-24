@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import type { AccountRepository, OauthStateRepository } from "@multi-ai-router/db"
 import type { Logger } from "../../../logging/logger"
 import type { OAuthTokenRequest, ProviderDeviceFlow } from "../../../providers"
-import { type AdminResult, invalid, ok } from "../../admin/result"
+import { type AdminResult, invalid, ok, unavailable } from "../../admin/result"
 import type { CredentialCipher } from "../../crypto/cipher"
 import { sendIssuerRequest } from "./issuer-request"
 import { bindConsumed, connectableAccount, STATE_REJECTED } from "./oauth-binding"
@@ -122,7 +122,7 @@ export function createDeviceConnectService(deps: DeviceConnectDeps): DeviceConne
 
     const answer = await send(device.userCodeRequest())
     if (answer === null) {
-      return invalid(
+      return unavailable(
         "the provider's device sign-in could not be reached — try again",
         "device_unreachable",
       )

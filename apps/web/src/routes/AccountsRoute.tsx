@@ -93,7 +93,9 @@ export default function AccountsRoute() {
   const create = useCreateAccount()
   const update = useUpdateAccount()
   const remove = useDeleteAccount()
-  const row = useAccountRowActions()
+  const row = useAccountRowActions(
+    (id) => accountList().find((account) => account.id === id)?.label,
+  )
   const recheckAll = useRecheckAllAccounts()
 
   const closeForm = () => {
@@ -148,7 +150,7 @@ export default function AccountsRoute() {
       <AccountsNotices
         discover={row.discoveries}
         enableError={editing() === null ? update.error : null}
-        labelFor={(id) => accountList().find((one) => one.id === id)?.label ?? "a deleted account"}
+        labelFor={row.labelFor}
         recheck={row.rechecks}
         recheckAll={recheckAll}
         test={row.tests}

@@ -863,6 +863,10 @@ Windows: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `overag
 and a `rateLimitType` this build does not know gets its own unrendered bucket under the SDK's word
 for it, because naming a window we cannot name is the one way to report a limit that does not exist.
 Either way a `rejected` still cools the Account down: the refusal is the fact, the window is detail.
+The exception is a model-scoped window (`seven_day_opus`, `seven_day_sonnet`): it is recorded, never
+the account's verdict, and counts as spent only with a reset
+([05-routing-and-failover.md](05-routing-and-failover.md)). A refusal with no reset clears when the
+upstream next allows a request; one with a future reset keeps its clock.
 
 Two readings are dropped rather than passed on, both because the alternative is a fabricated fact.
 A **reset instant already in the past** — late delivery, clock skew, or a value reported in seconds —

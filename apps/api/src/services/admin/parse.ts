@@ -12,6 +12,13 @@ import { type AdminResult, invalid, ok } from "./result"
  * layer is the only thing that knows about `Context`.
  */
 
+/**
+ * Postgres cannot store U+0000 in `text` or `jsonb`: the write fails and the caller sees a 500 for
+ * plain bad input. Every free-text field and filter that reaches a query refuses it here instead.
+ */
+export const noNul = (value: string): boolean => !value.includes("\u0000")
+export const NO_NUL = { message: "must not contain a NUL character" }
+
 /** A body that is not JSON is a validation failure, never a 500. */
 export async function readJsonBody(
   request: Request,

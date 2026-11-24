@@ -1,5 +1,6 @@
 import { RoutingPolicy } from "@multi-ai-router/core"
 import { z } from "zod"
+import { NO_NUL, noNul } from "../admin/parse"
 
 /**
  * The pool write contract.
@@ -15,7 +16,7 @@ import { z } from "zod"
  * pool that briefly routes somewhere else.
  */
 
-const POOL_NAME = z.string().trim().min(1).max(120)
+const POOL_NAME = z.string().trim().min(1).max(120).refine(noNul, NO_NUL)
 const WEIGHT = z.number().int().min(1).max(10_000)
 const PRIORITY = z.number().int().min(0).max(10_000)
 

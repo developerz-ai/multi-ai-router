@@ -7,6 +7,7 @@ import {
   QuotaWindowKind,
 } from "@multi-ai-router/core"
 import { z } from "zod"
+import { NO_NUL, noNul } from "../admin/parse"
 
 /**
  * The account write contract. Zod at the boundary, once — everything downstream
@@ -24,12 +25,23 @@ import { z } from "zod"
  * minted and provisioned on create (`providers/claude-sdk/config-dir.ts`).
  */
 
-const LABEL = z.string().trim().min(1).max(120)
+const LABEL = z.string().trim().min(1).max(120).refine(noNul, NO_NUL)
 /** Bounded so an oversized body cannot become an oversized ciphertext. */
 const CREDENTIAL = z.string().min(1).max(8192)
-const BASE_URL = z.url().max(2048)
-const MODEL_NAME = z.string().trim().min(1).max(200)
-const MODEL_ALIASES = z.record(z.string().min(1).max(200), z.string().min(1).max(200))
+/**
+ * An endpoint and nothing else. Userinfo and a query string are where a credential hides in a URL,
+ * and this column is neither sealed nor withheld from a view; a fragment never reaches a server.
+ */
+const BASE_URL = z
+  .url({ protocol: /^https?$/, error: "must be an absolute http(s) URL" })
+  .max(2048)
+  .refine((value) => {
+    const url = URL.parse(value)
+    return url !== null && `${url.username}${url.password}${url.search}${url.hash}` === ""
+  }, 'must not carry a username, password, query string or fragment — put the key in "credential"')
+const MODEL_NAME = z.string().trim().min(1).max(200).refine(noNul, NO_NUL)
+const MODEL_ALIAS = z.string().min(1).max(200).refine(noNul, NO_NUL)
+const MODEL_ALIASES = z.record(MODEL_ALIAS, MODEL_ALIAS)
 /**
  * Upstream-side model ids. Bounded because this is a catalog, not a corpus — a provider listing
  * runs to tens of entries and a body of ten thousand is a mistake or an attack, not a config.
@@ -169,7 +181,7 @@ export type CompleteConnectBody = z.infer<typeof completeConnectBody>
  */
 export const testNowBody = z
   .object({
-    model: z.string().trim().min(1).max(200),
+    model: MODEL_NAME,
     confirmed: z.boolean().optional(),
   })
   .strict()

@@ -34,8 +34,16 @@ export const ProviderQuantization = z.enum([
 ])
 export type ProviderQuantization = z.infer<typeof ProviderQuantization>
 
-/** A provider slug (`deepinfra`, `novita`). Bounded: a list of slugs, not a corpus. */
-const SLUG = z.string().trim().min(1).max(200)
+/**
+ * A provider slug (`deepinfra`, `novita`). Bounded: a list of slugs, not a corpus. Postgres stores no
+ * U+0000 in `jsonb`, so one is refused here rather than as a `500` from the write.
+ */
+const SLUG = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine((slug) => !slug.includes("\u0000"), "must not contain a NUL character")
 const SLUGS = z.array(SLUG).min(1).max(100)
 
 const distinct = (values: readonly string[]) => new Set(values).size === values.length

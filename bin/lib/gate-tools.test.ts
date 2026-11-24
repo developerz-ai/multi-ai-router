@@ -123,6 +123,16 @@ describe("ensure-test-database", () => {
       if (!named.ok) throw new Error(named.reason)
       const quoted = quoteIdentifier(named.name)
       const sql = new SQL(base)
+      // Provisioning needs CREATEDB, and a role that merely owns its test database is a supported
+      // way to run this suite (`ROUTER_TEST_SHARDS=1`). CI's role has it, so it runs there.
+      const [role] =
+        await sql`SELECT (rolcreatedb OR rolsuper) AS able FROM pg_roles WHERE rolname = current_user`
+      if (role?.able !== true) {
+        await sql.close()
+        return
+      }
+      // Dropped at the end only if THIS test made it: a name that already exists is somebody's.
+      let owned = false
       const mark = async () =>
         (
           await sql`SELECT shobj_description(oid, 'pg_database') AS mark FROM pg_database WHERE datname = ${named.name}`
@@ -130,6 +140,7 @@ describe("ensure-test-database", () => {
       try {
         // Somebody else's database that happens to have the name: the suites would truncate it.
         await sql.unsafe(`CREATE DATABASE ${quoted}`)
+        owned = true
         const refused = run("ensure-test-database.ts", [String(shard)], base)
         expect(refused.status).toBe(1)
         expect(refused.stderr).toContain("bin/test did not create it")
@@ -138,7 +149,9 @@ describe("ensure-test-database", () => {
 
         // Absent — a fresh server, as in CI: created, stamped, and its URL printed.
         await sql.unsafe(`DROP DATABASE ${quoted}`)
+        owned = false
         const created = run("ensure-test-database.ts", [String(shard)], base)
+        owned = created.status === 0
         expect(created.status).toBe(0)
         expect(new URL(created.stdout).pathname).toBe(`/${encodeURIComponent(named.name)}`)
         expect(await mark()).toBe(OWNERSHIP_MARK)
@@ -146,7 +159,7 @@ describe("ensure-test-database", () => {
         // Its own, from an earlier run: reused.
         expect(run("ensure-test-database.ts", [String(shard)], base).status).toBe(0)
       } finally {
-        await sql.unsafe(`DROP DATABASE IF EXISTS ${quoted}`)
+        if (owned) await sql.unsafe(`DROP DATABASE IF EXISTS ${quoted}`)
         await sql.close()
       }
     },
@@ -174,6 +187,17 @@ describe("auto-install-probe", () => {
       const result = run("auto-install-probe.ts", [bunfig])
       expect(result.status).toBe(1)
       expect(result.stderr).toContain("the import SUCCEEDED")
+    }))
+
+  test("fails a bunfig bun cannot parse, though it says the words and the import fails", () =>
+    scratch((dir) => {
+      // Bun exits non-zero on the config and never reaches the import or the registry — the two
+      // things a weaker probe checked. That is not the setting working.
+      const bunfig = join(dir, "bunfig.toml")
+      writeFileSync(bunfig, '[install]\nauto = "disable"\nregistry = = broken\n')
+      const result = run("auto-install-probe.ts", [bunfig])
+      expect(result.status).toBe(1)
+      expect(result.stderr).not.toContain("0 fetched")
     }))
 
   test("fails a bunfig that leaves auto-install on", () =>

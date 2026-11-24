@@ -181,3 +181,62 @@ describe("no endpoint left", () => {
     expect(classify(404, "Not found")?.accountScoped).toBeUndefined()
   })
 })
+
+// Review of #506: `openrouter_credits` had no verdict of its own. A `403` naming it in neutral
+// words, with no numeric `error.code`, matched no wording rule and fell to the status: `auth`, a
+// refused credential, for an account that only needs a top-up.
+describe("the balance, as limit_source states it", () => {
+  const neutral = (status: number, metadata: Record<string, unknown>) =>
+    openrouter?.classifyFailure(
+      response(status, {
+        body: { error: { message: "Request could not be completed", metadata } },
+      }),
+    )
+
+  test.each([402, 403])(
+    "a %d naming openrouter_credits is a spent balance, whatever it says",
+    (s) => {
+      const result = neutral(s, { limit_source: "openrouter_credits" })
+
+      expect(result?.kind).toBe("credits-exhausted")
+      expect(result?.signal).toBe("openrouter:credits")
+      expect(result?.namesBalance).toBe(true)
+      expect(result?.keyCap).toBeUndefined()
+    },
+  )
+
+  test("one request larger than the in-flight budget is still that request's, not the balance", () => {
+    const result = neutral(402, {
+      limit_source: "openrouter_credits",
+      reason: "weight_exceeds_budget",
+    })
+
+    expect(result?.kind).toBe("invalid-request")
+    expect(result?.signal).toBe("openrouter:request-over-budget")
+    expect(result?.namesBalance).toBeUndefined()
+  })
+
+  test("the balance decides over wording that names a key limit", () => {
+    const result = stated(402, unaffordable("daily"), { limit_source: "openrouter_credits" })
+
+    expect(result?.kind).toBe("credits-exhausted")
+    expect(result?.namesBalance).toBe(true)
+    expect(result?.keyCap).toBeUndefined()
+  })
+
+  test("wording alone that names the balance carries the same evidence", () => {
+    const worded = classify(
+      402,
+      "Insufficient credits. Add more using https://openrouter.ai/settings/credits",
+    )
+
+    expect(worded?.kind).toBe("credits-exhausted")
+    expect(worded?.namesBalance).toBe(true)
+    expect(worded?.keyCap).toBeUndefined()
+  })
+
+  test("a refusal naming the key, or nothing, does not claim the balance", () => {
+    expect(classify(402, unaffordable("total"))?.namesBalance).toBeUndefined()
+    expect(stated(402, "x", { limit_source: "openrouter_key_limit" })?.namesBalance).toBeUndefined()
+  })
+})

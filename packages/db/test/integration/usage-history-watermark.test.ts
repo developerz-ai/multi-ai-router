@@ -3,6 +3,7 @@ import type { SQL } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { PgDialect } from "drizzle-orm/pg-core"
 import { drizzle } from "drizzle-orm/postgres-js"
+import { createDatabase } from "../../src/client"
 import { createUsageHistoryRepository } from "../../src/repositories/usage-history-repository"
 import * as schema from "../../src/schema/index"
 import { usageHistoryState } from "../../src/schema/usage-history-state"
@@ -361,5 +362,32 @@ describe.skipIf(!historyUrl)("banked-through watermark (#275)", () => {
     })
     // Only the row at W. Unfloored, the anti-join walks all 300.
     expect(read).toBeLessThan(10)
+  })
+})
+
+describe.skipIf(historyUrl === "")("full-scan backfill and the history lock", () => {
+  test("a clean table is proven without the lock every usage admission takes", async () => {
+    await reset()
+    await admit("1984-02-01T12:00:00Z", LOW)
+    await sweep()
+    const before = await state()
+    // Another transaction holds the history lock, as an admission or a retention batch does.
+    // On its own connection: the fixture's pool has one, and the sweep needs it.
+    const other = createDatabase({ url: fixture.url(), maxConnections: 1 })
+    let result: unknown
+    try {
+      result = await other.sql.begin(async (holder) => {
+        await holder`select id from usage_history_state where id = 'v2' for update`
+        return Promise.race([
+          fixture.history().backfill({ limit: 1000, fullScan: true }),
+          new Promise<"waited">((resolve) => setTimeout(() => resolve("waited"), 1500)),
+        ])
+      })
+    } finally {
+      await other.close()
+    }
+    expect(result).toEqual({ processed: 0, remaining: false })
+    // The lock-free pass certifies nothing: the watermark is exactly where the locked sweep left it.
+    expect(await state()).toEqual(before)
   })
 })

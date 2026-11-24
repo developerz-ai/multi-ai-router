@@ -136,6 +136,7 @@ describe("documented enum values", () => {
       "plan_quota_read",
       "pool_reap",
       "pool_roster_check",
+      "egress_proxy_check",
     ])
     expect(scheduledTaskOutcome.enumValues).toEqual(["success", "failed", "partial"])
   })

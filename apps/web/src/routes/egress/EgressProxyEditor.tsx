@@ -55,13 +55,17 @@ export function EgressProxyEditor(props: {
       { accountId: props.accountId, proxy },
       {
         onSuccess: (row) => {
-          // Only what was sent: a draft typed while the save was in flight is the operator's next.
-          if (url() === sent.url) setUrl("")
-          if (choice() === sent.choice) setChoice("")
-          if (replace() === sent.replace) setReplace(null)
           // The typed URL holds a password, and a mutation keeps what it was called with.
           save.reset()
-          test.reset()
+          // A draft changed while the save was in flight is the operator's next: only the field
+          // that was sent is cleared out of it, and a test result by now is about the new one.
+          const changed =
+            url() !== sent.url || choice() !== sent.choice || replace() !== sent.replace
+          const typed = proxy !== null && "url" in proxy
+          if (!changed || (typed && url() === sent.url)) setUrl("")
+          if (!changed || (!typed && choice() === sent.choice)) setChoice("")
+          if (!changed || (!typed && replace() === sent.replace)) setReplace(null)
+          if (!changed) test.reset()
           props.onSaved(row.egressProxy ?? null)
         },
       },

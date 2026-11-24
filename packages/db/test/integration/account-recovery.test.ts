@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { eq, sql } from "drizzle-orm"
+import { createAccountBreakerRepository } from "../../src/repositories/account-breaker"
 import { accountRecoveries } from "../../src/schema/account-recoveries"
 import { recoveryFixture, url } from "./account-recovery-fixture"
 
@@ -156,6 +157,111 @@ describe.skipIf(!url)("durable recovery ownership and one issuance", () => {
       }),
     ).toBeUndefined()
     expect(await repo.issue(input)).toBeUndefined()
+  })
+  // A probe answered a clean 200, then the account tripped again seconds later. The succeeded row's
+  // cooldown gated the next automatic generation, so no permit could be issued for the whole window
+  // and the breaker's own short backoff never governed the re-trip.
+  test("a succeeded outcome does not make a re-trip wait out the recovery cooldown", async () => {
+    const input = await fixture.issue()
+    const repo = fixture.repositories().recovery
+    const settled = await repo.outcome({
+      ...input,
+      state: "succeeded",
+      cooldownMs: 60000,
+      quotaSpentThreshold: 1,
+    })
+    expect(settled?.state).toBe("succeeded")
+    // The column still holds: it is the operator re-check's server-side cooldown.
+    expect(settled?.nextAllowedAt.getTime()).toBeGreaterThan(Date.now() + 30000)
+    expect(
+      (
+        await repo.reserveOperatorCheck({
+          accountId: input.accountId,
+          claimToken: crypto.randomUUID(),
+          leaseMs: 1000,
+        })
+      )?.kind,
+    ).toBe("cooldown")
+    const automatic = {
+      accountId: input.accountId,
+      expected: input.expected,
+      expectedRecoveryRevision: settled?.revision ?? null,
+      reason: "cooldown-expired" as const,
+      cooldownMs: 60000,
+      maximumOutcomeAgeMs: 60000,
+    }
+    // The settled generation itself stays single-use.
+    expect(
+      await repo.beginAutomaticRecovery({ ...automatic, generationCandidate: input.generation }),
+    ).toBeUndefined()
+    const next = await repo.beginAutomaticRecovery({
+      ...automatic,
+      generationCandidate: crypto.randomUUID(),
+    })
+    expect(next).toMatchObject({ state: "pending", ownerBootId: null, permitId: null })
+    // The spent permit cannot settle or reissue the new generation.
+    expect(await repo.issue(input)).toBeUndefined()
+    expect(
+      await repo.outcome({ ...input, state: "failed", cooldownMs: 1000, quotaSpentThreshold: 1 }),
+    ).toBeUndefined()
+  })
+  test("after a success, a re-trip waits out the breaker's clock and nothing longer", async () => {
+    const input = await fixture.issue()
+    const repo = fixture.repositories().recovery
+    const settled = await repo.outcome({
+      ...input,
+      state: "succeeded",
+      cooldownMs: 60000,
+      quotaSpentThreshold: 1,
+    })
+    const breakers = createAccountBreakerRepository(fixture.db())
+    const tripped = await breakers.observe({
+      accountId: input.accountId,
+      expected: input.expected,
+      observedRevision: 0,
+      status: "cooling_down",
+      cooldownUntil: new Date(Date.now() + 400),
+      cooldownSource: "estimated",
+      consecutiveFailures: 1,
+    })
+    expect(tripped?.status).toBe("cooling_down")
+    const begin = () =>
+      repo.beginAutomaticRecovery({
+        accountId: input.accountId,
+        generationCandidate: crypto.randomUUID(),
+        expected: input.expected,
+        expectedRecoveryRevision: settled?.revision ?? null,
+        reason: "cooldown-expired",
+        cooldownMs: 60000,
+        maximumOutcomeAgeMs: 60000,
+      })
+    // Inside the breaker's own backoff: no generation.
+    expect(await begin()).toBeUndefined()
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    // Past it, and still 59 s inside the recovery cooldown the succeeded row carries.
+    expect(await begin()).toMatchObject({ state: "pending", permitId: null })
+  })
+  test("a failed outcome still holds the next automatic generation through its cooldown", async () => {
+    const input = await fixture.issue()
+    const repo = fixture.repositories().recovery
+    const settled = await repo.outcome({
+      ...input,
+      state: "failed",
+      cooldownMs: 60000,
+      quotaSpentThreshold: 1,
+    })
+    expect(settled?.state).toBe("failed")
+    expect(
+      await repo.beginAutomaticRecovery({
+        accountId: input.accountId,
+        generationCandidate: crypto.randomUUID(),
+        expected: input.expected,
+        expectedRecoveryRevision: settled?.revision ?? null,
+        reason: "cooldown-expired",
+        cooldownMs: 60000,
+        maximumOutcomeAgeMs: 60000,
+      }),
+    ).toBeUndefined()
   })
   test("expired pending lease transfers ownership and fences the previous boot", async () => {
     const account = await fixture.seed()

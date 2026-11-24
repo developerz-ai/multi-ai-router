@@ -114,6 +114,16 @@ Of the in-scope candidates, an account survives only if **all** of these hold:
 | **Quota headroom** | a live quota signal reports the relevant window exhausted (see [03-providers.md](03-providers.md)) |
 | **Supports the model** | the requested model — after alias mapping — is outside the account's explicit model set, or, with no explicit set, outside its provider's model family |
 
+A quota window is spent **for the model it meters**. `five_hour`, `seven_day`, `overage` and
+`spend_limit` meter every model. `seven_day_opus` meters names matching `opus` and
+`seven_day_sonnet` names matching `sonnet`, matched on the upstream name after the alias map
+(`routing/quota.ts`). A spent Opus window drops the account for Opus alone, until that window's reset;
+Sonnet and Haiku keep being served by it (T3 in the worked example). Every question asked of the account as a whole —
+live health, the recovery reopen sweep, the dispatch guard, background admission, the hourly
+`cooldown_recheck` — reads only the account-wide windows, so a family window never holds the account
+out, never makes it due for a recheck, and never keeps a reread from reopening it. Through 2.76.1
+`findSpentWindow` ignored the model and a spent Opus window dropped the account for everything.
+
 An account with **no** declared model set falls back to its **provider's model family**
 (`routing/model-family.ts`): anchored name patterns the driver declares as `modelFamily`. Only a
 single-vendor upstream declares one — today a Claude subscription (`claude-*`, the CLI's aliases
@@ -574,6 +584,8 @@ that pool — the policy never runs across the union.
 | `529` | Retry with the overload budget, as `overloaded` — whether or not Anthropic's `overloaded_error` body survived a rewriting proxy. Never a breaker strike. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. A **streamed** HTTP attempt's timeout before response headers is the first-byte clock (see *Upstream deadlines* below). |
 | `4xx` other than `429`, `408`, `425` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
+| a `4xx` about the vendor's wire (`providerScoped`, driver-classified: Gemini refusing a missing thought signature or a field outside Google's schema) | **Skip that provider's remaining candidates and retry the next one of another provider.** No breaker strike, no model hold, no recovery probe. The skip lasts the whole chain. When no other provider is left the chain stops as `provider-wall` and the client hears that upstream `4xx` itself; an account that answered `overloaded` earlier is still asked again first. |
+| a `4xx` about this account's own settings (`accountScoped`: an OpenRouter provider filter or data policy that leaves no endpoint, a request larger than the account's in-flight budget) | **Retry the next candidate, same provider included.** No strike, no hold. With none left the chain stops as `provider-wall` and the upstream's own `4xx` is the answer. |
 | The upstream refuses the **model name** (`model-unsupported`, driver-classified: the `claude` CLI's "There's an issue with the selected model … may not exist or you may not have access to it", Codex's "`<model>` model is not supported when using Codex with a ChatGPT account") | **Retry the next candidate**, before any byte reaches the client. **No breaker strike, no cooldown, no recovery probe** — the account answered correctly about a name it never served, and the next account may serve that vendor. Recorded as `client_error`. When every candidate refused it, the client hears the first refusal itself: Codex's own `400`, or for a subscription a router-authored `404` "the Claude subscription does not serve the requested model". Routing's [model family](#candidate-filtering) keeps most of these from being attempted at all; this row is for what the family admits and the upstream still refuses. Until 2026-10-04 the first read `unknown` (a `502` that struck the breaker) and the second `invalid-request` (no failover). |
 | **In-stream refusal on a 200 stream** (Codex `response.failed` or bare `error` event; classified by the `openai-oauth` driver hook, not the HTTP `rules` array) | Codes `invalid_prompt`, `invalid_request_error`, `context_length_exceeded`, `unsupported_parameter`, `unsupported_value`, `invalid_json_schema` → `invalid-request` (failover reads `client-error`; the breaker is **not** struck — a request-shaped refusal is bad at every account, but the account is not unwell). Codes `usage_limit_reached`, `rate_limit_exceeded` → `rate-limited`; the observer forces `rateLimit: null` so the verdict carries no estimated reset, and the breaker trips on the **first** hit (a stream-only rate limit is a fact about the account, not about the request). Code `account_deactivated`, and only from `response.error.code` of a frame whose own JSON `type` is `response.failed` (the one place the Codex CLI reads them; every other shape is retried or skipped there) `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` → `credits-exhausted`; the account moves to `exhausted` on the first hit (no clock, human action only). Any other code, or no code, → `server-error` (fail-closed; three in a row cool the account). The verdict's `errorClass` is the closed `codex:stream-error:<code>` signal (or `codex:stream-error:other`); the usage row carries the signal, never the upstream message. The code decides when there is one (top level, then the nested error object's `code`): a listed code maps as above, any other code is `server-error`. Exception: a quota code at `response.error.code` of a frame whose own JSON `type` is `response.failed` decides even beside a root `code` or `error`, which the Codex CLI ignores on that frame. Only when there is no code is the nested error object's `type` read, and only for the limit and deactivated codes above, never a quota code, which the Codex CLI's stream parser reads only as a code (the same lists the HTTP rules use, which read `type` even beside a code; in-stream, a code always decides): `invalid_request_error` is OpenAI's catch-all *type*, carried by account-level refusals such as `invalid_api_key` too, so a type never marks a refusal request-shaped. The flat event's own `type` is the event name `error` and is never read as a code. A frame too large for the observation cap is salvaged with its `error` and `code` kept (and MiniMax's `base_resp.status_code`, so an oversized in-body MiniMax failure still reads as one), so a large echoed prompt does not hide the code; an error object too large to keep is dropped and the failure classifies `server-error`, never success. The salvaged frame is read as `JSON.parse` reads it: a repeated `error`, `response` or `message` keeps its **last** copy (under a repeated parent, the members captured under the copy it replaced are released, not merged into it), and an escaped slot key (`"usage"` written `"\u0075sage"`) is matched as the key it decodes to — a key that is not pure ASCII, an invalid escape, or a raw key over 32 bytes matches no slot — so the code read is the code the frame ends with. Only the latest root `error` shape controls the placeholder: an object too large to keep is read as `{}`, while a later non-object replaces that flag and is omitted if it cannot fit. |
 | `401` / `403` | **Retry the next candidate** — before any byte has reached the client, like every row above. Move the account to `needs_reauth` (OAuth), or — for an API key, or a no-auth endpoint that has grown something in front of it, neither of which has a login to re-run — to a `cooling_down` labeled **`credential-rejected`**, `ROUTING_AUTH_FAILURE_COOLDOWN_MS` long (15 min default, doubling per refused re-test up to `ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS`, 4 h), re-tested by one half-open probe when it ends and reported meanwhile as needing a human (see *A rejected key is a re-tested cooldown* below). Through v2.14.0 this row said `disabled`. A rejected credential is *account*-scoped, not request-scoped: the next candidate authenticates with its own. Until v2.9 this row read "do not retry", which meant the first request to land on a subscription whose 30-day login had expired failed `502` while five healthy subscriptions sat beside it; only the *next* request routed around the parked account. The `502` is still what the client hears when **every** candidate failed that way — every one, because the default attempt bound is the pool itself, not a number (`ROUTING_MAX_ATTEMPTS` unset). |
@@ -649,12 +661,18 @@ Rules:
   structured-output constraint the Agent-SDK transport cannot carry, which a fast-mode or API-key
   account serves natively) fails over once with no cooldown and no breaker strike;
   a second such answer in the same chain (`REQUEST_WALL_AFTER`, 2) stops it with reason
-  `request-wall`, rendered with `wall: "request"` — never a router `429`. So does a chain whose every
+  `request-wall`, rendered with `wall: "request"` (`400`, no `Retry-After`) — never a router `429`. So does a chain whose every
   attempt was refused that way with no untried candidate left, but only for a refusal no clock
-  clears on that pool (`permanentForRequest`: `claude-sdk:structured-output-unsupported`), where a
-  `503` would send the client back to the same refusal (developerz.ai plan 101 slice 09, R1). A
-  refusal that clears with time (`extra-usage-gated`) on a one-account pool keeps its held `429`:
-  the same request succeeds later. Such a refusal counts even when its transport
+  clears on that pool (`permanentForRequest`: `claude-sdk:structured-output-unsupported`, and since
+  2.77.0 `claude-sdk:extra-usage-gated` in its "third-party apps now draw from your extra usage"
+  wording only), where a `503` or `429` would send the client back to the
+  same refusal (developerz.ai plan 101 slice 09, R1). With siblings in the pool the first refusal
+  still fails over, and a second ends the walk by the count. The same signal in an
+  out-of-extra-usage wording is the account's and clears on a clock or a top-up: it is not
+  permanent, and a one-account chain keeps its `429`. Through 2.76.1 every `extra-usage-gated` was
+  read as clearing with time and kept a held `429` on a one-account pool; prod 2026-11-23: one
+  session's body was refused 873 times in seven hours there, each retry a fresh upstream turn
+  recorded as `quota_exhausted`, because the `429` told the client to try again. Such a refusal counts even when its transport
   refused before the upstream started: it is a classified verdict, not a preparation fault, so it
   takes the failure tail (usage row, sentence, wall count). Both Claude-subscription transports
   carry the flag: the fast transport dropped it until 2.70.1, so there the breaker read the same
@@ -688,7 +706,7 @@ Accepted on purpose; each row names what would make it worth building (developer
 | Sealed Codex reasoning replays only on the account that minted it; a failover is a cold cache from that step ([06](06-protocol-translation.md)) | The seal is the upstream account's encrypted content; no other account can read it | Failover share on sealed-reasoning conversations above 5 % of their turns in a week |
 | A router-minted thinking signature is refused by a real Anthropic upstream; same key and model, a chain hop from a translated account to a passthrough one is the residual gap ([06](06-protocol-translation.md)) | Clients strip on provider/wire/model change; the residual needs one pool mixing translated and passthrough accounts for one model | A pool serving one model through both an `anthropic` passthrough account and a translated one |
 | Fast mode rewrites `system[0]` (billing block + checksum) per request, and a fast/SDK switch is a different prefix, so the next turn prefills cold ([claude-fast-mode](claude-fast-mode.md)) | Caching survives by upstream tolerance of the rewrite, observed on canaries | Cache-read share on Claude-subscription turns after a fast-mode release falls below the share before it |
-| A streaming status line waits up to `UPSTREAM_STREAM_WALL_HOLD_MS` (5 s) for a wall; a silently-thinking upstream past first byte is cut at `UPSTREAM_IDLE_TIMEOUT_MS` (55 s) | Walls arrive within milliseconds of the headers; the idle clock sits under the server's | Client header timeouts at 5 s +/- 1 s, or `upstream_timeout` rows on a provider whose own docs state a silent thinking phase longer than 55 s |
+| A streaming status line waits up to `UPSTREAM_STREAM_WALL_HOLD_MS` (5 s) for a wall once the upstream has sent a byte; an upstream that sent headers and no byte is held past it and ended by `UPSTREAM_IDLE_TIMEOUT_MS` (55 s) as a failed attempt, once per request: the next silent account is committed at the wall hold and no further account is tried, though its client still has no head until that account's first byte; a silently-thinking upstream past first byte is cut at the same 55 s | Walls arrive within milliseconds of the first byte; the idle clock sits under the server's | Client header timeouts at 5 s +/- 1 s after an upstream's first byte, no head for up to two idle clocks (about 110 s) on a chain of two silent accounts, or `upstream_timeout` rows on a provider whose own docs state a silent thinking phase longer than 55 s |
 
 Both transports answer this table. The Agent-SDK path has no upstream HTTP status of its own, so
 three consequences are spelled out:
@@ -1035,7 +1053,8 @@ nothing else — and no attempt left a more actionable answer, the `503 no_healt
 wall `capacity` (`retryable: true`) and a `Retry-After`: the soonest breaker cooldown among the
 accounts it tried, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` (plan 101, 13.8). Any other
 failure in the chain names no wait. When the planner stopped on a **request wall** — the request
-itself refused wherever it goes (`requestAttributable`, e.g. `claude-sdk:extra-usage-gated`) — the
+itself refused wherever it goes (`requestAttributable`, e.g. `claude-sdk:extra-usage-gated` in its
+third-party-apps wording) — the
 answer is the request's own `400` (wall `request`), never a `429` a retry would meet again (05.14).
 
 ### When the chain is empty
@@ -1108,8 +1127,35 @@ key cap: a fresh, provider-reported `spend_limit` window that is spent and names
 yields `quota_exhausted` (`429`, `wall: clock`, `reset_at`, `retry_after_s`) and temporary
 `upstream rate limited (...)` wording, never a top-up instruction. Only a genuinely drained balance,
 where no such reset evidence exists, says `credits-exhausted` (`402`, "needs a top-up, no timer will
-fix it"). Missing, stale, estimated, headroom or past reset evidence is never turned into an invented
-instant: it keeps the human-wall sentence. The developerz.ai client's frozen-sentence regex contract
+fix it"). A spend refusal borrows a key cap's reset only on evidence that the
+refusal is about that cap, and the evidence is the refusal's own words, never the reading alone:
+
+- The driver flags a refusal `keyCap` when it names the key's own cap (`limit_source:
+  openrouter_key_limit`, `Key limit exceeded`, `… create a key with a higher daily limit`) or names
+  neither the key nor the balance. A flagged refusal borrows the reset of the key's fresh
+  `spend_limit` reading when the cap is at or past the near-cap bound (default 0.9), not only at
+  100 %: OpenRouter refuses a request the cap's remainder cannot cover, so the refusal lands while
+  the reading is still under 100 % (prod 2026-11-23: parked `exhausted` at 17:00Z, answered "needs a
+  top-up" until 03:03Z, three hours past its 00:00Z reset; #441). It is then a clock: `429` +
+  `Retry-After`, `cooling_down` until the cap's reset.
+- A refusal that names the prepaid balance is flagged `namesBalance` (`limit_source:
+  openrouter_credits`, `Insufficient credits`, `settings/credits`) and borrows nothing, **whatever
+  the cap reads, 100 % included**: no key reset refills a balance. It stays `402` and `exhausted`.
+  `namesBalance` outranks `keyCap`.
+- `limit_source: openrouter_credits` is classified `credits-exhausted` (`openrouter:credits`) from
+  the field itself, ahead of every wording rule and after the oversized-request exception (`reason:
+  weight_exceeds_budget`, which shares the source and is about one request). Without it, one worded
+  neutrally on a `403` with no numeric `error.code` fell to the status and read as `auth`, a refused
+  credential.
+- A `credits-exhausted` refusal that says nothing either way (no flag: a `402` no rule could read)
+  borrows only from a cap the reading says is fully spent, where refusal and reading agree and
+  nothing contradicts them.
+- A reset the refusal states itself (`metadata.resets_at`) always stands and nothing is borrowed. A
+  `total` cap names no reset and stays a human's. A stale reading lends nothing.
+- The breaker and the client's error read one predicate (`keyCapResetFor`), so the status a client
+  is told and the state the account lands in cannot disagree.
+
+The developerz.ai client's frozen-sentence regex contract
 (`upstream rate limited`, `earliest reset ... (estimated)`) still holds unchanged.
 
 Every attempt still writes its own `UsageRecord`, so the account that could not be dispatched to
@@ -1396,7 +1442,15 @@ Quota writes compare provider-observation timestamps per account/window; older o
 
 Background turns (credential keepalive, idle probe, model-catalog reads) stay off an account only
 while its recovery may still have a call on the wire: an `issued` permit, or a `failed`/`uncertain`
-attempt before its `next_allowed_at`. A `pending` generation has nothing in flight and advances only
+attempt before its `next_allowed_at`. A designated probe settles `succeeded` at its first model
+output, not at the end of the stream, so a long turn does not hold the account's gate for its whole
+duration; the end-of-stream verdict still reaches the breaker through `followAttempt`, and a stream
+that breaks later still strikes. A candidate with no permit is dropped before its body is built. A
+recovery that ended `succeeded` owes no wait: if the account
+trips again, the next automatic generation may begin as soon as the breaker's own cooldown has
+passed. The gate (`beginAutomaticRecovery`) ignores `next_allowed_at` for a `succeeded` row; the
+column is still written and still governs the operator's Re-check cooldown, and it gates what
+follows a `failed` or `uncertain` attempt. A `pending` generation has nothing in flight and advances only
 when it is demanded (a live request, a re-check, or the router's reopen sweep); gating background work on it left an account no key routes
 to un-kept-alive until its login went cold (prod, 2026-10-07). The durable predicate
 (`background-account-eligibility.ts`) and the warm one (`recoveryBlocksBackground`) agree.
@@ -1446,8 +1500,8 @@ Rule 7, amended 2026-11-06 (developerz.ai#7868): `exhausted` keeps every propert
 Some upstreams answer a wall with a success status: MiniMax a drained balance as `200` and `base_resp.status_code: 1008`; Anthropic-shaped streams `200` then `event: error`; Codex `response.created` then `response.failed`. Relayed, that was a fake success — the client got an error body under a `200`, the account was struck only after the relay settled, and a healthy sibling went unasked. Until a byte reaches the client failover is still open, so the attempt reads the front of a `2xx` body before committing it (`services/dataplane/success-wall.ts`):
 
 - **A client that is not streaming** sees nothing before the whole answer exists, so its status line is held until the front of the body decides.
-- **A streaming client is held too, bounded by `UPSTREAM_STREAM_WALL_HOLD_MS`** (5 s). The first event that decides ends the hold at once; an upstream still silent when it expires is committed with what it sent, and the read in flight is carried into the relay, so a reasoning upstream that thinks for minutes cannot run a client's header timeout down. `SERVER_IDLE_TIMEOUT_SECONDS` is off while the handler runs (`middleware/idleClock.ts`), so the hold never trips it. A wall inside the hold fails over to a sibling in the same call (2.53.0; before it, a streaming client was committed at the upstream's headers and every such wall stayed in-stream).
-- **An upstream stream** is read to its first event that is not a preamble (`message_start`, `ping`, `response.created`, `response.in_progress`; Codex answers a spent plan as `response.created` then `response.failed`). An error there is a wall; anything else — content, a keepalive comment — commits.
+- **A streaming client is held too, bounded by `UPSTREAM_STREAM_WALL_HOLD_MS`** (5 s). The first event that decides ends the hold at once; an upstream still silent when it expires is committed with what it sent, and the read in flight is carried into the relay, so a reasoning upstream that thinks for minutes cannot run a client's header timeout down. `UPSTREAM_STREAM_WALL_HOLD_MS` bounds the hold once the upstream has sent a byte. With zero bytes the status line waits past it, so a silent account can fail over. That extra silence is one budget per request, `UPSTREAM_IDLE_TIMEOUT_MS` minus the wall hold, shared by every attempt and recovery re-run (`dataplane/silent-hold.ts`): the first silent account spends all of it and fails over, the next silent one commits at the wall hold and no further account is tried. The commit comes after one idle clock plus one wall hold (about 60 s at the defaults), but **it is not a head on the wire**: `Bun.serve` sends a complete header block only with the first body byte (1.4.2 and 1.4.4), so the client of a second silent account waits for that account too, up to two idle clocks (about 110 s); uncapped it was one idle clock per silent account, 165 s for three. Waiting for response headers is not part of it (`UPSTREAM_FIRST_BYTE_TIMEOUT_MS`, per attempt). The Agent-SDK and fast paths are not held. Through 2.76.1 an upstream that sent headers and nothing else was committed at the hold's expiry, and its later failure was in-stream. `SERVER_IDLE_TIMEOUT_SECONDS` is off while the handler runs (`middleware/idleClock.ts`), so the hold never trips it. A wall inside the hold fails over to a sibling in the same call (2.53.0; before it, a streaming client was committed at the upstream's headers and every such wall stayed in-stream).
+- **An upstream stream** is read to its first event that is not a preamble (`message_start`, `ping`, `response.created`, `response.in_progress`, and since 2.77.0 Codex's `response.metadata` / `codex.response.metadata`, which arrive before its `error`; Codex answers a spent plan as `response.created` then `response.failed`). An error there is a wall; anything else — content, a keepalive comment — commits.
 - **A JSON body** is read whole, because an envelope is only an envelope once complete.
 - Either read stops at `UPSTREAM_ERROR_MAX_BYTES` and commits, and the upstream's own clocks (first-byte, idle, `UPSTREAM_TIMEOUT_MS`) bound the wait.
 - The driver's own success hook decides first (MiniMax `base_resp`, Codex stream codes), then the dialect's explicit error shape worded into a kind by the driver's rules; an explicit error no rule names is a retryable `server-error`.

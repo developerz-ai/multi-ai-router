@@ -464,3 +464,61 @@ function built(options: { readonly intervalMs: number; readonly startupDelayMs?:
   })
   return { task }
 }
+
+// A throw from one account's refresh (a database error in its catalog write) ended the whole tick
+// before that account was stamped, so it sorted first again on every later tick and nobody behind
+// it was ever asked.
+describe("a refresh that throws costs its own account, not the sweep", () => {
+  test("the thrower is stamped and reported, and the accounts behind it are still asked", async () => {
+    const attempts = new Map<string, Date>()
+    const { task, asked } = failingTask({
+      accounts: [account("a"), account("b"), account("c")],
+      attempts,
+      batchSize: 3,
+      outcome: (row) => {
+        if (row.id === "a") throw new Error("replaceForAccount: connection terminated")
+        return { kind: "refreshed", models: 2 }
+      },
+    })
+
+    const result = await tick(task, NOW)
+
+    expect(asked).toEqual(["a", "b", "c"])
+    expect(result).toEqual({ outcome: "partial", itemsProcessed: 2 })
+    expect(attempts.get("a")).toEqual(NOW)
+
+    // Stamped, so the next tick no longer starts with it.
+    const second = failingTask({
+      accounts: [account("a"), account("b"), account("c")],
+      attempts,
+      refreshedAt: new Map([["b", new Date(NOW.getTime() - 2 * HOUR)]]),
+      batchSize: 1,
+    })
+    await tick(second.task, new Date(NOW.getTime() + HOUR))
+    expect(second.asked).not.toEqual(["a"])
+  })
+
+  test("a stamp that cannot be written does not end the tick either", async () => {
+    const asked: string[] = []
+    const task = createModelCatalogRefreshTask({
+      accounts: { list: async () => [account("a"), account("b")] },
+      catalog: {
+        lastRefreshedAt: async () => [],
+        lastAttemptedAt: async () => [],
+        recordAttempt: async () => {
+          throw new Error("db down")
+        },
+        clearAttempt: async () => undefined,
+      },
+      refresh: async (row) => {
+        asked.push(row.id)
+        throw new Error("boom")
+      },
+      intervalMs: HOUR,
+      batchSize: 5,
+      startupDelayMs: 30_000,
+    })
+    expect(await tick(task, NOW)).toEqual({ outcome: "partial", itemsProcessed: 0 })
+    expect(asked).toEqual(["a", "b"])
+  })
+})

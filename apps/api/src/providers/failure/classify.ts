@@ -35,6 +35,8 @@ export interface ClassificationRule {
   readonly accountScoped?: true
   /** Copied onto the classification: see `FailureClassification.keyCap`. */
   readonly keyCap?: true
+  /** Copied onto the classification: see `FailureClassification.namesBalance`. */
+  readonly namesBalance?: true
 }
 
 /**
@@ -165,6 +167,7 @@ export function classifyUpstreamFailure(
     ...(matched?.providerScoped === true ? { providerScoped: true } : {}),
     ...(matched?.accountScoped === true ? { accountScoped: true } : {}),
     ...(matched?.keyCap === true ? { keyCap: true } : {}),
+    ...(matched?.namesBalance === true ? { namesBalance: true } : {}),
   }
 }
 
@@ -229,6 +232,11 @@ export function accountScoped(rule: ClassificationRule): ClassificationRule {
 /** The same rule, its spend refusal possibly the key's own cap rather than the balance. */
 export function keyCap(rule: ClassificationRule): ClassificationRule {
   return { ...rule, keyCap: true }
+}
+
+/** The same rule, its spend refusal naming the prepaid balance: no key reset is its remedy. */
+export function namesBalance(rule: ClassificationRule): ClassificationRule {
+  return { ...rule, namesBalance: true }
 }
 
 /** The same rule, carrying an estimated reset for responses that name none. */

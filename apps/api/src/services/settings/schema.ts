@@ -8,6 +8,7 @@ import type {
 } from "@multi-ai-router/db"
 import { z } from "zod"
 import type { LogLevel, RetentionConfig } from "../../config/env"
+import { NO_NUL, noNul } from "../admin/parse"
 import type { PriceAccount, UnpricedModel } from "../cost/coverage"
 import type { PriceSource } from "../cost/provenance"
 
@@ -46,7 +47,7 @@ const RATE = z.number().min(0).max(10_000)
  * model up and how the unique index on `(provider, model)` is defined. Two casings of one model
  * would otherwise both store and only one would ever be found.
  */
-const MODEL = z.string().trim().toLowerCase().min(1).max(200)
+const MODEL = z.string().trim().toLowerCase().min(1).max(200).refine(noNul, NO_NUL)
 
 /** `provider` is core's own schema, never a restated list: the Postgres enum is built from it. */
 export const priceOverrideInput = z
@@ -107,13 +108,13 @@ export const auditQuery = z.object({
     .default(AUDIT_LIMIT_DEFAULT),
   /** Every audit subject is a database uuid; anything else cannot name one. */
   subjectId: z.uuid().optional(),
-  kind: z.string().trim().min(1).max(120).optional(),
+  kind: z.string().trim().min(1).max(120).refine(noNul, NO_NUL).optional(),
   /**
    * The stored `actor`, matched exactly. Bounded like `kind`, at the longest valid email address
    * (an SSO username is one) rather than at `kind`'s 120, which would make a real operator
    * unfilterable.
    */
-  actor: z.string().trim().min(1).max(AUDIT_ACTOR_FILTER_MAX).optional(),
+  actor: z.string().trim().min(1).max(AUDIT_ACTOR_FILTER_MAX).refine(noNul, NO_NUL).optional(),
 })
 
 export type AuditQuery = z.infer<typeof auditQuery>

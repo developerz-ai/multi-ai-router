@@ -19,6 +19,6 @@ export {
 } from "./audit-context"
 export type { CoherenceHooks } from "./coherence"
 export { keyMutationCommitted, withCatalogRefresh } from "./coherence"
-export { readJsonBody, validate, validateId } from "./parse"
+export { NO_NUL, noNul, readJsonBody, validate, validateId } from "./parse"
 export type { AdminFailure, AdminFailureStatus, AdminResult } from "./result"
-export { conflict, failureBody, invalid, notFound, ok } from "./result"
+export { conflict, failureBody, invalid, notFound, ok, unavailable } from "./result"

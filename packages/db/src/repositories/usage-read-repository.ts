@@ -5,6 +5,7 @@ import { usageRecords } from "../schema/usage-records"
 
 import { attributedRaw, isAttributionDimension } from "./usage-attribution"
 import { dimensionIdType, filterConditions, groupIdsMatch } from "./usage-filter"
+import { readGroupLatency } from "./usage-group-latency"
 import type {
   UsageDimension,
   UsageFilter,
@@ -15,6 +16,8 @@ import type {
 } from "./usage-read-types"
 import { createTokensSince } from "./usage-tokens-since"
 
+export type { UsageGroupIds, UsageGroupLatencies } from "./usage-group-latency"
+export type { UsageGroupSeries } from "./usage-history-group-series"
 export * from "./usage-read-types"
 
 const DIMENSION_COLUMNS = {
@@ -171,6 +174,8 @@ export function createUsageReadRepository(db: Database): UsageReadRepository {
     },
 
     breakdown,
+    groupLatency: (window, filter, attribution, ids) =>
+      readGroupLatency(db, window, filter, attribution, ids),
 
     outcomes: async (window, filter) =>
       db

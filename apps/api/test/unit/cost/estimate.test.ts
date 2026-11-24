@@ -118,11 +118,13 @@ describe("pricing a metered attempt", () => {
   })
 
   test("the cache-read multiple is the one the vendor footnotes per model, not one constant", () => {
-    // 0.025x on Fable 5.1, 0.05x on Opus 5.5, the standard 0.1x everywhere else.
+    // 0.025x on Fable 5.1, 0.05x on Opus 5.5 and Sonnet 5.5 (pricing page footnote 2, read
+    // 2026-11-24), the standard 0.1x everywhere else.
     expect(lookupRates("anthropic-api", "claude-fable-5-1")?.cacheReadPerMtok).toBe(0.25)
     expect(lookupRates("anthropic-api", "claude-fable-5")?.cacheReadPerMtok).toBe(1)
     expect(lookupRates("anthropic-api", "claude-opus-5-5")?.cacheReadPerMtok).toBe(0.2)
-    expect(lookupRates("anthropic-api", "claude-sonnet-5-5")?.cacheReadPerMtok).toBe(0.2)
+    expect(lookupRates("anthropic-api", "claude-sonnet-5-5")?.cacheReadPerMtok).toBe(0.1)
+    expect(lookupRates("anthropic-api", "claude-sonnet-5")?.cacheReadPerMtok).toBe(0.2)
     // The 5-minute write multiple did not move: 1.25x on every row.
     expect(lookupRates("anthropic-api", "claude-fable-5-1")?.cacheWritePerMtok).toBe(12.5)
     expect(lookupRates("anthropic-api", "claude-opus-5-5")?.cacheWritePerMtok).toBe(5)

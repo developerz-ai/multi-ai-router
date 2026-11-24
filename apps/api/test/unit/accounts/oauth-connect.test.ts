@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { createHash } from "node:crypto"
 import type { OAuthConnectService } from "../../../src/services/accounts"
 import { createOAuthConnectService } from "../../../src/services/accounts"
@@ -364,4 +364,15 @@ describe("cancelling a pending authorization", () => {
     expect(first.value.cancelled).toBe(true)
     expect(second.value.cancelled).toBe(false)
   })
+})
+
+test("a callback state this router cannot have minted never reaches the store", async () => {
+  const h = harness()
+  const consumed = spyOn(h.store.oauthStates, "consume")
+  for (const query of [
+    { code: "c", state: "a\0b" },
+    { error: "access_denied", state: "\0" },
+  ])
+    expect((await h.connect.redeem(query)).ok).toBe(false)
+  expect(consumed).not.toHaveBeenCalled()
 })

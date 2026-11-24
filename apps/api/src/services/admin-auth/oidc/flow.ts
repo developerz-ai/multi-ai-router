@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { AdminAuthError, describeError } from "@multi-ai-router/core"
 import type { RequiredClaim } from "../../../config/env-admin-types"
+import { ADMIN_LOGIN_FAILED_MESSAGE, AdminAuthUnavailableError } from "../login-outcomes"
 import { createDiscoveryService, DEFAULT_DISCOVERY_TTL_MS, OIDCDiscoveryError } from "./discovery"
 import { assertEmailVerified, OIDCIdTokenInvalidError, verifyIdToken } from "./idToken"
 import { createJWKSCache, DEFAULT_JWKS_TTL_MS, type JWKSCache, OIDCJWKSError } from "./jwks"
@@ -65,7 +66,7 @@ export class OIDCPrincipalMismatchError extends Error {
 }
 
 /** Collapses every failure to a single wording for the operator-facing answer. */
-const OIDC_VERIFICATION_FAILED = "Single sign-on verification failed. Try again."
+const OIDC_VERIFICATION_FAILED = ADMIN_LOGIN_FAILED_MESSAGE
 
 export interface OIDCFlow {
   /** Builds the authorize URL and the state row for it. The state is the IdP-opaque value. */
@@ -167,9 +168,9 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         discovery.invalidate()
         // The status only. A token-endpoint error body quotes the request back — including the
         // authorization code and, on some providers, the client secret — so it never reaches a log.
-        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
-          reason: `token_exchange: endpoint returned ${res.status}`,
-        })
+        const reason = `token_exchange: endpoint returned ${res.status}`
+        if (res.status >= 500) throw new AdminAuthUnavailableError({ reason })
+        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, { reason })
       }
       const body = (await res.json()) as { id_token?: unknown }
       if (typeof body.id_token !== "string" || body.id_token.length === 0) {
@@ -208,7 +209,9 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         const verified = await verifyIdToken(
           {
             token: tokenResponse.id_token,
-            issuer: config.issuerUrl.replace(/\/+$/u, ""),
+            // The IdP's own spelling, which discovery matched to the configured one: `iss` must
+            // equal it exactly, and Auth0 and Authentik end theirs in a slash.
+            issuer: doc.issuer,
             audience: config.clientId,
             nonce: consumed.nonce,
             clockSkewSeconds: config.clockSkewSeconds ?? 60,
@@ -260,6 +263,8 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         // attached, by design (see the comment there), and every OIDC error here is built the
         // same way. Bounded like any logged reason; the transport's redactor scrubs the line.
         const reason = `${kind}: ${describeError(err, 500)}`
+        if (err instanceof AdminAuthUnavailableError) throw err
+        if (unanswered(err)) throw new AdminAuthUnavailableError({ cause: err, reason })
         if (
           err instanceof OIDCDiscoveryError ||
           err instanceof OIDCJWKSError ||
@@ -274,7 +279,7 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
         if (err instanceof AdminAuthError) {
           throw err.reason === undefined ? new AdminAuthError(err.message, { reason }) : err
         }
-        throw new AdminAuthError(OIDC_VERIFICATION_FAILED, { reason })
+        throw new AdminAuthUnavailableError({ cause: err, reason })
       }
       if (principal === null) {
         throw new AdminAuthError(OIDC_VERIFICATION_FAILED, {
@@ -284,4 +289,12 @@ export function createOIDCFlow(deps: OIDCFlowDeps): OIDCFlow {
       return principal
     },
   }
+}
+
+/** The IdP did not answer, which is no verdict on what was presented. */
+function unanswered(error: unknown): boolean {
+  return (
+    (error instanceof OIDCDiscoveryError || error instanceof OIDCJWKSError) &&
+    error.code === "fetch_failed"
+  )
 }

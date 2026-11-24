@@ -409,7 +409,7 @@ describe("GET /api/admin/auth/oidc/callback", () => {
     await get(h.app, START)
     const res = await get(h.app, `${CALLBACK}?code=does-not-matter&state=never-issued`)
     expect(res.status).toBe(401)
-    expect((await res.text()).toLowerCase()).toContain("single sign-on")
+    expect((await res.text()).toLowerCase()).toContain("sign-in failed. try again.")
   })
 
   test("a code that was already redeemed is rejected", async () => {
@@ -465,7 +465,7 @@ describe("GET /api/admin/auth/oidc/callback", () => {
     // The browser half is unchanged: one wording, and nothing about which emails are configured.
     // A body that named the rejected address would turn the callback into a probe oracle.
     const body = await res.text()
-    expect(body.toLowerCase()).toContain("single sign-on")
+    expect(body.toLowerCase()).toContain("sign-in failed. try again.")
     expect(body).not.toContain("someone-else@test")
     expect(body).not.toContain(ADMIN_EMAIL)
 
@@ -501,7 +501,7 @@ describe("GET /api/admin/auth/oidc/callback", () => {
     expect(failure?.requestId).toBeTruthy()
 
     const body = await res.text()
-    expect(body.toLowerCase()).toContain("single sign-on")
+    expect(body.toLowerCase()).toContain("sign-in failed. try again.")
     expect(body).not.toContain("dev_user")
     expect(body).not.toContain("customer-secret-kind")
 
@@ -772,7 +772,7 @@ test("bogus callbacks from one IP hit 429 before the state store, with bounded a
   expect(consumes).toBe(5)
   const limited = await get(h.app, `${CALLBACK}?code=a&state=b`)
   expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0)
-  expect(await limited.text()).toContain("Single sign-on verification failed")
+  expect(await limited.text()).toContain("Sign-in failed. Try again.")
   expect(h.audits.filter((event) => event.kind === "admin.login_failed")).toHaveLength(6)
 })
 

@@ -1,11 +1,11 @@
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
 import { AUDIT_KINDS, AUDIT_SUBJECTS, type AuditRecorder } from "../admin/audit"
-import { type AdminResult, invalid, notFound, ok } from "../admin/result"
+import { type AdminResult, invalid, notFound, ok, unavailable } from "../admin/result"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { FetchLike } from "../dataplane"
 import { bounded } from "../dataplane/attempt-log"
-import { listUpstreamModels } from "../models"
+import { listUpstreamModels, type UpstreamListing } from "../models"
 import { describeProvider } from "./providers"
 import type { SupportedModelsWriter } from "./supported-models-writer"
 
@@ -205,7 +205,15 @@ async function listModels(
         ? {}
         : { upstreamMessage: bounded(listed.detail, deps.reasonMaxChars) }),
     })
-    return invalid(listed.message, listed.code)
+    return transient(listed)
+      ? unavailable(listed.message, listed.code)
+      : invalid(listed.message, listed.code)
   }
   return ok(listed.entries.map((entry) => entry.id))
+}
+
+/** A listing that can answer on the next ask. A 4xx is this account's to fix, not the clock's. */
+function transient(listed: Extract<UpstreamListing, { ok: false }>): boolean {
+  if (listed.code !== "discovery_failed") return false
+  return listed.status === undefined || listed.status === 429 || listed.status >= 500
 }

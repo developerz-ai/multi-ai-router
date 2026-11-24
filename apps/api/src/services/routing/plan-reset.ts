@@ -77,11 +77,14 @@ export const DEFAULT_KEY_CAP_NEAR_UTILIZATION = 0.9
  *   `credits-exhausted`. Either way the key's fresh `spend_limit` reading at or past
  *   `keyCapNearUtilization` supplies the reset, when it has one. A `total` cap has none and stays a
  *   human's. A reset the refusal states itself always stands.
- * - A `credits-exhausted` refusal with no such flag names no cap. It borrows only from a cap the
- *   reading says is **fully spent** (prod: `openrouter-glm53-fallback`, `exhausted` from
- *   2026-10-08): refusal and reading then agree. A near-spent cap proves nothing about it. The same
- *   key can sit on an empty prepaid balance (`402 Insufficient credits`), and cooling that until
- *   midnight would answer `429` for a wall only a top-up clears.
+ * - A `credits-exhausted` refusal that names the prepaid balance
+ *   ({@link AttemptFailure.namesBalance}: `402 Insufficient credits`, `limit_source:
+ *   openrouter_credits`) borrows nothing, whatever the cap reads. No key reset refills a balance:
+ *   cooling it until midnight answered `429` for a wall only a top-up clears, and refused again
+ *   at midnight (review of #506).
+ * - A `credits-exhausted` refusal that says nothing either way borrows only from a cap the reading
+ *   says is **fully spent** (prod: `openrouter-glm53-fallback`, `exhausted` from 2026-10-08):
+ *   refusal and reading then agree, and nothing contradicts them.
  * - A `rate-limited` refusal that states nothing borrows only from a fully spent window, as before:
  *   a per-minute `429` on a key at 95 % of its daily cap is not that cap.
  *
@@ -150,17 +153,22 @@ function keyCapBound(nearUtilization: number): number {
 }
 
 /** What {@link keyCapResetFor} reads of a refusal. */
-export type KeyCapRefusal = Pick<AttemptFailure, "kind" | "keyCap">
+export type KeyCapRefusal = Pick<AttemptFailure, "kind" | "keyCap" | "namesBalance">
 
 /**
  * The key-cap reset **this refusal** may borrow, or `null`: one predicate for the breaker
  * ({@link withPlanReset}) and for the client's error (`dataplane/chain-failed-attempt.ts`), so the
  * status a client reads and the state the account lands in cannot disagree.
  *
- * The bound follows the refusal's own evidence. One the driver flagged
- * {@link AttemptFailure.keyCap} borrows from a cap at or past `keyCapNearUtilization`. A
- * `credits-exhausted` refusal with no flag borrows only from a fully spent one. Anything else
- * borrows nothing here.
+ * The bound follows the refusal's own evidence, strongest first:
+ *
+ * 1. It names the prepaid balance ({@link AttemptFailure.namesBalance}): nothing, at any
+ *    utilization. A cap at 100 % resets at midnight and the balance is exactly as empty after.
+ * 2. The driver flagged it {@link AttemptFailure.keyCap}: a cap at or past `keyCapNearUtilization`.
+ * 3. A `credits-exhausted` refusal that says nothing either way: only a cap the reading says is
+ *    fully spent, where refusal and reading agree and nothing contradicts them.
+ *
+ * Anything else borrows nothing here.
  */
 export function keyCapResetFor(
   failure: KeyCapRefusal,
@@ -169,6 +177,7 @@ export function keyCapResetFor(
   maxAgeMs: number,
   keyCapNearUtilization: number = DEFAULT_KEY_CAP_NEAR_UTILIZATION,
 ): Date | null {
+  if (failure.namesBalance === true) return null
   if (failure.keyCap === true)
     return verifiedKeyCapReset(windows, now, maxAgeMs, keyCapNearUtilization)
   if (failure.kind === "credits-exhausted") return verifiedKeyCapReset(windows, now, maxAgeMs)

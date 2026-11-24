@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { AdminAuthError } from "@multi-ai-router/core"
+import { AdminAuthUnavailableError } from "../../../../../src/services/admin-auth"
 import { createOIDCFlow } from "../../../../../src/services/admin-auth/oidc/flow"
 import { createCredentialCipher } from "../../../../../src/services/crypto/cipher"
 import { createMemoryStore } from "../../../../support/memory-store"
@@ -357,7 +358,7 @@ describe("createOIDCFlow required claims", () => {
     const reason = err.reason ?? ""
     expect(reason.startsWith("principal: ")).toBe(true)
     expect(reason).toContain('"kind"')
-    expect(err.message).toBe("Single sign-on verification failed. Try again.")
+    expect(err.message).toBe("Sign-in failed. Try again.")
     for (const leaked of mustNotContain) expect(reason).not.toContain(leaked)
     return reason
   }
@@ -562,5 +563,77 @@ describe("discovery lifetime", () => {
     expect(seen.discovery).toBe(2)
     const principal = await flow.complete(await startAndMintCode(h, flow, second.state))
     expect(principal.email).toBe(ADMIN_EMAIL)
+  })
+})
+
+describe("an issuer that ends in a slash (Auth0, Authentik)", () => {
+  const slashed = (fetchImpl: typeof fetch): typeof fetch =>
+    Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) =>
+        String(input).endsWith("/.well-known/openid-configuration")
+          ? Response.json({ ...(buildDiscovery() as object), issuer: `${ISSUER}/` })
+          : fetchImpl(input, init),
+      { preconnect: () => {} },
+    )
+
+  for (const issuerUrl of [ISSUER, `${ISSUER}/`]) {
+    test(`signs in when configured as ${issuerUrl}`, async () => {
+      const { h, fetch } = await buildHarness()
+      h.extraClaims = { iss: `${ISSUER}/` }
+      const flow = buildFlow(h, slashed(fetch), { ...baseConfig(), issuerUrl })
+      const { state } = await flow.start()
+      const { code } = await startAndMintCode(h, flow, state)
+      expect((await flow.complete({ code, state })).email).toBe(ADMIN_EMAIL)
+    })
+  }
+
+  test("a token from any other issuer is still refused", async () => {
+    const { h, fetch } = await buildHarness()
+    h.extraClaims = { iss: "https://evil.test/" }
+    const flow = buildFlow(h, slashed(fetch), baseConfig())
+    const { state } = await flow.start()
+    const { code } = await startAndMintCode(h, flow, state)
+    await expect(flow.complete({ code, state })).rejects.toBeInstanceOf(AdminAuthError)
+  })
+})
+
+describe("an IdP or store that does not answer is an outage, not a refusal", () => {
+  const failing = (
+    path: string,
+    answer: () => Promise<Response>,
+    rest: typeof fetch,
+  ): typeof fetch =>
+    Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) =>
+        String(input).includes(path) ? answer() : rest(input, init),
+      { preconnect: () => {} },
+    )
+  const refused = () => Promise.reject(new TypeError("connect ECONNREFUSED"))
+
+  for (const [name, path, answer] of [
+    ["the token endpoint is unreachable", "/token", refused],
+    ["the token endpoint answers 502", "/token", async () => new Response("", { status: 502 })],
+    ["the key set is unreachable", "/keys", refused],
+    ["the key set answers 503", "/keys", async () => new Response("", { status: 503 })],
+  ] as const) {
+    test(name, async () => {
+      const { h, fetch } = await buildHarness()
+      const flow = buildFlow(h, failing(path, answer, fetch), baseConfig())
+      const { state } = await flow.start()
+      const { code } = await startAndMintCode(h, flow, state)
+      const error = await flow.complete({ code, state }).catch((caught: unknown) => caught)
+      expect(error).toBeInstanceOf(AdminAuthUnavailableError)
+      expect((error as AdminAuthUnavailableError).reason).toBeTruthy()
+      expect((error as Error).message).not.toContain("ECONNREFUSED")
+    })
+  }
+
+  test("a token endpoint that refuses the code is still a refusal", async () => {
+    const { h, fetch } = await buildHarness()
+    const deny = async () => new Response("", { status: 400 })
+    const flow = buildFlow(h, failing("/token", deny, fetch), baseConfig())
+    const { state } = await flow.start()
+    const { code } = await startAndMintCode(h, flow, state)
+    await expect(flow.complete({ code, state })).rejects.toBeInstanceOf(AdminAuthError)
   })
 })

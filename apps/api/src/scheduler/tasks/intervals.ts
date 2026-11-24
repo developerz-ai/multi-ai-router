@@ -4,9 +4,16 @@ import type { ScheduledTaskDeps } from "./deps"
 const MINUTE_MS = 60_000
 
 /**
+ * Tasks whose cadence is not read from `env` here: `pool_roster_check` exists only with a roster
+ * ({@link poolRosterCheckIntervalMs}), and `egress_proxy_check` takes its interval with its port.
+ */
+type PortScheduledTask = "pool_roster_check" | "egress_proxy_check"
+
+/**
  * Every runtime task's cadence, in milliseconds, keyed by its `scheduled_task` name.
  * `pool_roster_check` is absent because it only exists when a roster is configured: its cadence
  * comes from {@link poolRosterCheckIntervalMs}, which answers `null` when there is nothing to run.
+ * `egress_proxy_check` is absent because its port carries its own interval.
  *
  * Exported because the admin plane's task-health screen has to judge "is this
  * task overdue?" against the schedule *this process is actually running*
@@ -16,7 +23,7 @@ const MINUTE_MS = 60_000
  */
 export function scheduledTaskIntervals(
   env: ScheduledTaskDeps["env"],
-): Readonly<Record<Exclude<ScheduledTaskName, "pool_roster_check">, number>> {
+): Readonly<Record<Exclude<ScheduledTaskName, PortScheduledTask>, number>> {
   return {
     janitor_sweep: env.janitorIntervalMinutes * MINUTE_MS,
     usage_rollup: env.scheduler.usageRollupIntervalMinutes * MINUTE_MS,

@@ -118,7 +118,9 @@ describe.skipIf(!ownDatabaseUrl)("replica-lease PostgreSQL fencing", () => {
       const [session] = await other.sql<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`
       if (!session) throw new Error("missing mutator session")
       for (const operation of ["heartbeat", "ready", "drain", "release"] as const) {
-        const first = await repo.acquire(crypto.randomUUID(), crypto.randomUUID(), 3000)
+        // Each of the four operations waits its lease out, so the TTL is the test's runtime. Long
+        // enough to see the lock wait while the lease is live (a few statements), no longer.
+        const first = await repo.acquire(crypto.randomUUID(), crypto.randomUUID(), 750)
         if (!first) throw new Error("acquire failed")
         if (operation === "release") expect(await repo.drain(first)).toBe(true)
         const locked = Promise.withResolvers<void>()

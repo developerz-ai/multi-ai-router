@@ -451,6 +451,15 @@ compatibility surface, and `INVALID_ARGUMENT` (400) with the message `API key no
 Generative Language API behind it. Classified on the status alone, the second reads as a client
 mistake — the operator then debugs the request instead of the credential.
 
+Errors arrive wrapped in a one-element array (`[{error}]`), which the driver unwraps before any of
+the readings above. `UNAVAILABLE` (503) is `overloaded`, never a strike. Limits are per model, so a
+`429` holds that model and the key's other models keep serving. A `QuotaFailure` whose `quotaId`
+names `PerDay` ignores `RetryInfo` and waits for the next midnight Pacific, estimated from the
+reply's `Date` header; without one no reset is stated. A `400` about a missing thought signature or
+a field outside Google's schema is provider-scoped: the chain moves to another vendor
+([05-routing-and-failover.md](05-routing-and-failover.md)). `/models` refuses undeclared query
+parameters, so none is sent, and the `models/` prefix on a listed id is stripped.
+
 ## `opencode-go` — a flat-fee plan that requires the conversation named
 
 OpenCode Go sold per member, reached with an ordinary API key. There is no login flow: the Console's
@@ -683,7 +692,7 @@ and the router keeps selecting a credential that can no longer serve a request.
 | `anthropic-api` | `400` · `error.type: invalid_request_error` · message **starts** `Your credit balance is too low`; or `error.type` is `billing_error` | Anthropic answers a spent console balance with **`400 invalid_request_error`**. Read the status alone and it classifies as a client mistake |
 | `openai-oauth` | `detail.code` / `error.code` / `type` in `usage_limit_reached`, `rate_limit_exceeded` (→ `rate-limited`); `account_deactivated`, `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` (→ `credits-exhausted`: on a `429`, by code, and as a `type` only `insufficient_quota`; in a stream, only from `response.error.code` of a frame whose own JSON `type` is `response.failed`) | Codex answers a spent balance with **`429`**, as OpenAI's API does, and the Codex CLI treats those four quota codes as fatal (`QuotaExceeded`, openai/codex `codex-rs/codex-api/src/sse/responses_error.rs`). The stream hook shares the lists ([05-routing-and-failover.md](05-routing-and-failover.md)) |
 | `openai-api` | `error.code` / `error.type` in `insufficient_quota`, `billing_hard_limit_reached`, `account_deactivated` | OpenAI returns **`429`** for a spent balance — the same status it uses for real rate limiting. Status alone marks a dead account `cooling_down` and retries it on a timer forever |
-| `openrouter` | on `402`/`403`, message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or on `403`, message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through as a `403`. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test — and, with the key's own fresh `GET /api/v1/key` reading spent, any of these key-cap refusals cools until the cap's reset boundary instead ([OpenRouter](#openrouter--provider-preferences-key-caps-and-per-model-throttles)). A `400`/`404` saying `is not a valid model ID` or `is no longer available` (a delisted model, prod 2026-11-09) is `model-unsupported`: the next account gets its turn and this one is not struck |
+| `openrouter` | on `402`/`403`, message matches `insufficient credits` / `requires more credits` / `add more using`; or `error.code` is `402`; or on `403`, message matches `Key limit exceeded` (a `total` cap, or one naming no window) | OpenRouter echoes the numeric HTTP status back in `error.code` rather than a string. The wording rule is what still catches it when the `402` is proxied through as a `403`. A per-key spend cap arrives as a **`403`** — read on status alone it was `auth`, and a valid key sat in "credential rejected" (prod, 2026-10-04). A cap that resets `daily` / `weekly` / `monthly` is the opposite case: `rate-limited`, estimated re-test — and, with the key's own fresh `GET /api/v1/key` reading spent, any of these key-cap refusals cools until the cap's reset boundary instead ([OpenRouter](#openrouter--provider-preferences-key-caps-and-per-model-throttles)). A `400`/`404` saying `is not a valid model ID` or `is no longer available` (a delisted model, prod 2026-11-09) is `model-unsupported`: the next account gets its turn and this one is not struck `error.metadata.limit_source` decides first: `openrouter_in_flight_budget` is `rate-limited`; `openrouter_key_limit` and a guardrail or workspace budget with `resets_at` are `rate-limited` to that instant, without one `credits-exhausted`; `reason: weight_exceeds_budget` is about the one request. A refusal naming the balance never borrows a near-spent key cap's reset |
 | `zai` | `error.code` in `1113`, `1112`; or, on `400`/`402`/`429`, message matches `insufficient balance` / `balance is insufficient` (never a bare `account balance`, which also merely describes one) | Numeric vendor codes on both surfaces. `130x` is throttling and `100x` is auth — three families that all arrive as one HTTP status |
 | `kimi` | `error.type` is `exceeded_current_quota_error` **unless the message reports a spent usage window** (read first — see the mirror-image table); or, on `400`/`402`/`429`, message matches `insufficient balance` / `account … not active` | Anthropic-shaped body, Moonshot's own `type` vocabulary. Without it the account cools down on a timer instead of being flagged for a human. Since 2026-11-09 Kimi also sends that type on the weekly-window `429`; read on the type alone it parked a healthy account `exhausted` five times in 37 h and answered 28 requests `402` (sweep 101, 10.1) |
 | `minimax` | `base_resp.status_code` is `1008`. A spent Token Plan window — `429`, message `… Token Plan usage limit reached … (2056)` — is `rate-limited` (`minimax:token-plan-limit`), never a dead balance, though it names Credits | **MiniMax reports failures in a `base_resp` envelope that can arrive with HTTP 200.** A driver reading only the status sees a success and hands an error body to the client as a completion |
@@ -702,6 +711,20 @@ and the router keeps selecting a credential that can no longer serve a request.
 Each classification also records **which signal decided it** (`openai:insufficient_quota`,
 `minimax:base_resp-1008`, …) so a misclassification is debuggable rather than a mystery. Expect
 drift: a vendor renaming a code is a one-file fix, and that is the whole point of pinning them.
+
+Four vendors word more than a dead balance, and their drivers read all of it:
+
+- **z.ai** words its walls as `429`s: `1308`, `1310` and `1316`-`1321` are spent windows and carry
+  their reset in the message (`1316`/`1317` also say "Insufficient balance for extra usage", which
+  is not a dead balance); `1305` is the shared service overloaded; `1309`, `1314`, `1315` need a
+  human; `1211` and `1311` are about the model.
+- **MiniMax** `base_resp` codes are one table in `drivers/minimax.ts`, from its published list. A
+  code not in it is a `server-error`.
+- **Groq** limits are held per model. A `413` "Request too large for model" is provider-scoped: no
+  wait clears it, another vendor may take the prompt
+  ([05-routing-and-failover.md](05-routing-and-failover.md)).
+- **Alibaba Model Studio** (a preset of `openai-compatible`): `AllocationQuota.FreeTierOnly` holds
+  the model, `Arrearage` is `exhausted`, "Allocated quota exceeded" is a throttle.
 
 **A wording rule never reads the client's own words.** Upstream `4xx` messages echo client-chosen
 text — `404 "model: <name>"`, `"The model \`<name>\` does not exist"`, a block `type` in quotes — and a
@@ -791,7 +814,7 @@ they were for (`modelScoped`), and the account keeps serving the rest. Kilo's ho
 five-minute re-test.
 
 **The ranking.** `FREE_MODEL_RANKING` (`services/models/free-ranking.ts`) orders free models smartest first and
-says by id where each is free. It is judged daily by `.dz/briefs/free-providers.md` and shipped in the image, so
+says by id where each is free. It is judged daily by `.dz/schedules/free-providers.md` and shipped in the image, so
 no request depends on somebody else's list. An id is listed only under a provider that never bills it: `groq` and
 `gemini` are absent because the same id is billed on a paid plan. `GET /v1/free-models` lists what the presenting
 key reaches for nothing, in that order; a name some in-scope account would bill is left out, because the router
@@ -1027,16 +1050,49 @@ fresh login, refresh, inference and tool/cache behavior still require a live can
 ## Egress proxy
 
 An operator may give one Account one HTTP proxy: a corporate egress, an address a vendor allow-lists,
-a region. Account → **Edit** → **Egress proxy**: an `http(s)://user:password@host:port` URL, or one of
-your own Webshare proxies when `WEBSHARE_API_KEY` is set (`services/accounts/webshare.ts`, the only file
-that knows Webshare).
+a region: an `http(s)://user:password@host:port` URL, or one of your own Webshare proxies when
+`WEBSHARE_API_KEY` is set (`services/accounts/egress/webshare.ts`, the only file that knows Webshare; a second vendor is one
+file and one line in `egress/index.ts`).
+Account → **Edit** → **Change egress proxy** sets, tests or removes one Account's proxy and its
+replacement mode. **Settings → Egress proxies** shows every Account behind one, what the router's
+checks say, why a dead one was not replaced, and each vendor's inventory with who uses it. A proxy
+the vendor no longer lists or marks invalid is shown as such and kept while it answers; a test
+inside its cooldown counts down to the next one.
 
-- **Static.** An Account keeps the proxy it was given. The router does not rotate addresses and does
-  not pick one per request.
+- **Static, with optional dead-proxy repair.** An Account keeps the proxy it was given. With
+  `replace: on-failure` (default `manual`), `egress_proxy_check` may move it to another healthy
+  proxy of the same vendor after `EGRESS_PROXY_FAILURE_THRESHOLD` consecutive checks in which the
+  proxy itself was dead: no connection, no answer, or `407`. An upstream that drops or blackholes
+  the proxy's address looks the same from outside, so silence counts only when the proxy is silent
+  to a neutral host (`example.com`) too; one that answers for that host is alive. A proxy its vendor
+  no longer lists, or calls invalid, is kept while it answers; the overview shows the vendor's word,
+  and it names the reason once the proxy is dead. Same country first, never one another Account
+  uses, each candidate probed before it is taken, at most one swap per
+  `EGRESS_PROXY_SWAP_COOLDOWN_MINUTES`, its stamp written in the same transaction as the swap. New
+  credentials for the same proxy at the same address are
+  stored in place and are not a swap; the same id at a new address is a move like any other. It
+  never reads an AI provider's answer and never acts per request; no status of theirs can move an
+  address. With no unused healthy proxy, or an incomplete vendor list, the Account stays put and its
+  state says so. It repairs a dead proxy; it does not rotate addresses to multiply a per-IP
+  allowance.
+- **The probe.** `CONNECT` to the Account's upstream, read the status line, close: no TLS to the
+  upstream, no HTTP request, no credential of the Account's. `407` is a proxy failure; any other
+  answer means the proxy is alive: `refused` is shown and ends the run of failures, so the threshold
+  counts consecutive proxy-level failures only. An operator's own test is recorded and never
+  counted; asking again too soon is `429 proxy_test_cooldown` with `Retry-After`.
+- **State.** A swap changes `accounts.egress_proxy` alone, by compare-and-swap on the sealed URL and
+  on the mode still being `on-failure`, so an operator's edit made meanwhile always wins; no
+  lifecycle, recovery or breaker generation moves. Health lives in `account_egress_health`, keyed to
+  the assigned proxy by a hash, so assigning another makes it stale without a write. Requests in
+  flight finish on the old socket; other replicas follow within `CATALOG_REFRESH_SECONDS`. Every
+  swap is audited `account.egress_proxy_replaced` and logged at warn (`egress proxy replaced`;
+  `egress proxy has no replacement`, once per transition).
 - **Whole.** Every HTTP call for the Account passes `runAttempt`, so inference, listings, quota reads
   and tests all use it. Providers that sign in (`anthropic-oauth`, `openai-oauth`) are refused one:
   their login and refresh calls leave by another path, and half an Account behind a proxy is one seen
-  from two addresses.
+  from two addresses. An Account whose endpoint is plain `http` and holds a credential is refused
+  one too (`400 egress_proxy_plaintext`, also on an edit that would make it one; an edit that leaves the
+  endpoint and credential as they were is not judged): with no tunnel the proxy would read the key.
 - **Never around it.** A proxy that fails, or answers `407`, is a connection failure on that Account.
   The request moves to another Account.
 - What a vendor's terms say about addresses is between the operator and the vendor. A key's allowance is

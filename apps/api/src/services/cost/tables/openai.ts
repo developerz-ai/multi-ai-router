@@ -37,8 +37,9 @@ const LONG_CONTEXT_FROM = 272_000
  * GPT-5.6 Sol — the current default flagship, and the first family to publish a **cache write**
  * price of its own rather than folding writes into ordinary input. `gpt-5.6` is its alias.
  *
- * $4 / $20 standard, which the pricing page states is promotional "at least through November 21,
- * 2026"; the long-context card doubles the input and 1.5x's the output, per the model page.
+ * $4 / $20 standard, which the pricing page states is promotional "until November 30, 2026" (read
+ * 2026-11-24; it said "at least through November 21" on 2026-11-03), so this row is due a re-read
+ * in December. The long-context card doubles the input and 1.5x's the output, per the model page.
  */
 const GPT_5_6_SOL = tiered(
   rates(4, 20, { read: 0.4, write: 5 }),
@@ -85,6 +86,20 @@ export const OPENAI_MODELS: ModelTable = {
     rates(2, 10, { read: 0.1, write: 2.5 }),
     LONG_CONTEXT_FROM,
     rates(4, 15, { read: 0.2, write: 5 }),
+  ),
+  /**
+   * GPT-6.2 Sol and GPT-6.1 Terra — read 2026-11-24 from the same Text API table, standard tier.
+   * Both were being served (Codex subscriptions) and priced as unknown for want of a row.
+   */
+  "gpt-6.2-sol": tiered(
+    rates(2, 10, { read: 0.1, write: 2.5 }),
+    LONG_CONTEXT_FROM,
+    rates(4, 15, { read: 0.2, write: 5 }),
+  ),
+  "gpt-6.1-terra": tiered(
+    rates(1, 5, { read: 0.05, write: 1.25 }),
+    LONG_CONTEXT_FROM,
+    rates(2, 7.5, { read: 0.1, write: 2.5 }),
   ),
   "gpt-6-astra": tiered(
     rates(10, 50, { read: 1, write: 12.5 }),

@@ -206,6 +206,57 @@ describe("bin/test shards", () => {
     }
   })
 
+  test("a signal during shard setup stops the database helper too, before the script exits", async () => {
+    // The helper runs SQL (CREATE DATABASE). Left in a command substitution it outlived a TERM to
+    // its shard: the script reported and exited while it was still talking to the server.
+    const { dir, env } = tree(
+      ["test"],
+      fakeBun(`bin/lib/ensure-test-database.ts) echo $$ > "$OUT/pid.helper.$2"; exec sleep 60 ;;`),
+    )
+    const run = Bun.spawn(["sh", "bin/test"], { cwd: dir, env, stdout: "ignore", stderr: "ignore" })
+    const files = [join(dir, "pid.helper.1"), join(dir, "pid.helper.2")]
+    try {
+      await until(() => files.every((file) => existsSync(file)), "both shards' helpers")
+      const helpers = files.map(pidIn)
+      expect(helpers.every(alive)).toBe(true)
+
+      run.kill("SIGTERM")
+      expect(await run.exited).toBe(130)
+      expect(helpers.some(alive)).toBe(false)
+    } finally {
+      run.kill("SIGKILL")
+    }
+  })
+
+  test("a failed shard is replayed whole even when it was streamed; a passing one is not", () => {
+    // The live follower is killed, not drained: a failure written just before the shard exited may
+    // never have been shown, and the last fifteen lines of a long log are not where it is.
+    const { dir, env } = tree(
+      ["test"],
+      fakeBun(
+        ARMS.ensureOk,
+        `test)
+    case "$*" in *--shard=2/2*) echo "(fail) the first failure, far above the summary" ;; *) echo "shard one, line one" ;; esac
+    i=0; while [ $i -lt 40 ]; do echo "line $i"; i=$((i + 1)); done
+    case "$*" in *--shard=2/2*) exit 1 ;; esac ;;`,
+      ),
+    )
+    const run = Bun.spawnSync(["sh", "bin/test"], {
+      cwd: dir,
+      env: { ...env, ROUTER_TEST_VERBOSE: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const out = run.stdout.toString()
+    const passed = out.slice(out.indexOf("── shard 1/2 — exit 0 ──"), out.indexOf("── shard 2/2"))
+    const failed = out.slice(out.indexOf("── shard 2/2 — exit 1 ──"))
+
+    expect(run.exitCode).toBe(1)
+    expect(failed).toContain("(fail) the first failure, far above the summary")
+    expect(passed).not.toContain("shard one, line one")
+    expect(passed).toContain("line 39")
+  })
+
   test("streams the shards while they run when asked to, and still reports each at the end", async () => {
     const { dir, env } = tree(
       ["test"],

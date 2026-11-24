@@ -30,8 +30,22 @@ export function createUsageHistoryMaintenance(db: Database) {
   // A committed sweep advances through the indexed event clock. Exhaustion resets this hint so
   // newly arrived older legacy rows are picked up next sweep; correctness remains receipt-based.
   let cursor: { createdAt: Date; id: string } | undefined
+  /** A raw row with no banked receipt: what a sweep adopts. */
+  const unbanked = sql`not exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending')`
   const backfill = async ({ limit, fullScan = false }: { limit: number; fullScan?: boolean }) => {
     boundUsageBatch(limit)
+    // A full scan anti-joins every retained row (prod: 1.1M rows, 10-14 s, zero ever found), and
+    // under the history lock that stalled every usage admission for as long. Ask first without the
+    // lock: admission commits a row and its receipt in one transaction, so a snapshot sees both or
+    // neither, and "no unbanked row" is as true here as under the lock. Only a hit takes the lock.
+    // `count`, not `limit 1`: the planner expects many hits, and a limit talks it out of the hash
+    // anti-join into a million index probes. Nothing is certified on this path, so no watermark.
+    if (fullScan && cursor === undefined) {
+      const [probe] = await db.execute<{ pending: number }>(
+        sql`select count(*)::int as pending from ${usageRecords} where ${unbanked}`,
+      )
+      if ((probe?.pending ?? 0) === 0) return { processed: 0, remaining: false }
+    }
     const committed = await db.transaction(async (tx) => {
       const { state, dbNow } = await lockUsageHistory(tx)
       // A fresh sweep starts at the banked-through watermark, not the table start: every row at or
@@ -48,7 +62,7 @@ export function createUsageHistoryMaintenance(db: Database) {
         .select()
         .from(usageRecords)
         .where(
-          sql`not exists (select 1 from ${usageContributions} c where c.kind = 'attempt' and c.id = ${usageRecords.id} and c.source <> 'legacy_pending') ${after === undefined ? sql`` : sql`and ${usageRecords.createdAt} >= ${after.createdAt.toISOString()}::timestamptz and (${usageRecords.createdAt},${usageRecords.id}) > (${after.createdAt.toISOString()}::timestamptz,${after.id}::uuid)`}`,
+          sql`${unbanked} ${after === undefined ? sql`` : sql`and ${usageRecords.createdAt} >= ${after.createdAt.toISOString()}::timestamptz and (${usageRecords.createdAt},${usageRecords.id}) > (${after.createdAt.toISOString()}::timestamptz,${after.id}::uuid)`}`,
         )
         .orderBy(asc(usageRecords.createdAt), asc(usageRecords.id))
         .limit(limit)

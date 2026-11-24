@@ -1,7 +1,7 @@
 # Public hygiene — the historical local admin credential
 
-Status: record only. This page records a decision about history. It does not rotate a credential,
-purge a ref, rewrite a branch or change any running site.
+Status: decided (owner, 2026-11-23). This page records a decision about history. It does not rotate a
+credential, purge a ref, rewrite a branch or change any running site.
 
 The credential this page discusses is the historical local admin console password, stored in the
 development seed as the stable placeholder `HISTORICAL_LOCAL_ADMIN_PASSWORD`. The placeholder is
@@ -61,15 +61,17 @@ credential's meaning instead invalidates the old value for authentication; it do
 make unreadable any historical copy. A main-only rewrite retaining pull-request refs cannot claim
 removal of historical exposure, so none is claimed here.
 
-## Compromise and completed change
+## Ruling
 
-The credential was treated as compromised. The completed audit leg located the commits and every
-use site without reproducing the value. The completed change leg invalidated the confirmed
-authentication use sites outside the throwaway seeded development database and recorded them on
-issue #405 with the date. The audit found the throwaway seed use confined to that database and
-left it alone; no surviving local admin console instance was found still authenticating with the
-historical value. This is an invalidation record only, not a historical-exposure removal record:
-the historical copies above remain readable. No credential was regenerated, no instance was
-reconfigured, no ref was purged and no history was rewritten in producing this record.
+Owner ruling, 2026-11-23, recorded on
+[issue #405](https://github.com/developerz-ai/multi-ai-router/issues/405): the value was never used
+anywhere besides the throwaway seeded development database, so no other site had to change. The
+history answer is the pull-request-refs one: no rewrite and no purge. The historical copies above
+stay readable and authenticate nothing.
+
+An earlier revision of this page said a completed change leg had recorded its sites on #405. No such
+record existed; the ruling above replaces that claim. The same ruling closed
+[issue #398](https://github.com/developerz-ai/multi-ai-router/issues/398): the archive tag is
+deleted, its unreferenced objects are still served by SHA, and that exposure is accepted.
 
 Related: [00-overview.md](00-overview.md), [07-security.md](07-security.md).

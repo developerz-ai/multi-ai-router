@@ -1,7 +1,12 @@
 import { describeError } from "@multi-ai-router/core"
 import type { AccountRepository, AccountRow } from "@multi-ai-router/db"
 import type { Logger } from "../../logging/logger"
-import type { RateLimitSignal, SdkUsageGaugeProbeOutcome } from "../../providers"
+import {
+  accountLevelReading,
+  httpDriver,
+  type RateLimitSignal,
+  type SdkUsageGaugeProbeOutcome,
+} from "../../providers"
 import { UpstreamAdmissionRefused } from "../../providers/upstream-admission"
 import { describeProvider } from "../../services/accounts/providers"
 import type { HealthStore } from "../../services/dataplane"
@@ -216,8 +221,17 @@ async function byRequest(
   })
   if (result.kind !== "answered") return "skipped"
   const { reading } = seen
-  const fold = (signal: RateLimitSignal): void =>
-    deps.health.applyRateLimit(account.id, signal, now, observation)
+  // A limit on the probe model alone (a free NVIDIA, Gemini or OpenRouter model) is kept as a
+  // reading and never as the account's verdict: folded `limited`, a 2xx probe re-cooled the very
+  // account it had just reopened.
+  const driver = httpDriver(before.provider)
+  const fold = (signal: RateLimitSignal): void => {
+    const held =
+      driver === null
+        ? signal
+        : accountLevelReading(signal, { driver, upstreamModel: choice.model })
+    if (held !== null) deps.health.applyRateLimit(account.id, held, now, observation)
+  }
   if (result.ok) {
     if (!spentByProvider(deps, account, now)) {
       deps.health.recordSuccess(account.id, observation)

@@ -6,6 +6,7 @@ import { BACKGROUND_ENV_FIELDS } from "./background"
 import { CLAUDE_LOGIN_ENV_FIELDS } from "./claude-login"
 import { CLAUDE_SDK_PACING_ENV_FIELDS } from "./claude-sdk-pacing"
 import { CLI_OWNERSHIP_ENV_FIELDS } from "./cli-ownership"
+import { EGRESS_PROXY_ENV_FIELDS } from "./egress-proxy"
 import { LOG_LEVELS } from "./env-defaults"
 import {
   absoluteUrl,
@@ -56,6 +57,7 @@ export const ENV_FIELDS = {
   ...RECOVERY_ENV_FIELDS,
   ...CLAUDE_SDK_PACING_ENV_FIELDS,
   ...RUNTIME_LIMIT_ENV_FIELDS,
+  ...EGRESS_PROXY_ENV_FIELDS,
   PORT: wholeNumber.refine((value) => value <= 65_535, "must be at most 65535").optional(),
   SERVER_IDLE_TIMEOUT_SECONDS: serverIdleTimeoutSeconds.optional(),
   SHUTDOWN_DRAIN_MS: wholeNumber.optional(),
@@ -233,8 +235,6 @@ export const ENV_FIELDS = {
   // binding and starts the conversation fresh on another eligible account. Enum, not a number —
   // the drift guard's zero rule does not apply.
   ROUTING_BOUND_ACCOUNT_COOLING_DOWN: z.enum(["fail", "rebind"]).optional(),
-  WEBSHARE_API_KEY: nonEmpty.optional(),
-  WEBSHARE_TIMEOUT_MS: atLeastOne.optional(),
   UPSTREAM_TIMEOUT_MS: atLeastOne.optional(),
   UPSTREAM_ERROR_MAX_BYTES: atLeastOne
     .refine((value) => value <= 33_554_432, "must be at most 33554432")

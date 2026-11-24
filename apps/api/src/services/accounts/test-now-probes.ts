@@ -1,6 +1,7 @@
 import { type Dialect, isRouterError, type OpenAiChatCeiling } from "@multi-ai-router/core"
 import type { AccountRow } from "@multi-ai-router/db"
 import {
+  accountLevelReading,
   type DriverAccount,
   type FailureClassification,
   httpDriver,
@@ -149,10 +150,11 @@ export async function runHttpProbe(
     fetch:
       beforeBackgroundUpstreamStart === undefined
         ? call
-        : async (request) => {
+        : // `init` carries the account's egress proxy: dropping it sends the probe around it.
+          async (request, init) => {
             await beforeBackgroundUpstreamStart()
             request.signal.throwIfAborted()
-            return call(request)
+            return call(request, init)
           },
     cipher: deps.cipher,
     timeoutMs: deps.timeoutMs,
@@ -161,7 +163,15 @@ export async function runHttpProbe(
   // Folded as the SDK half folds its readings: a provider-reported reset must reach the health store
   // routing reads, or the router's own recovery probe (`dataplane/recovery-probe.ts`) re-tests a
   // window the provider already said is closed. That probe's `fold` defers it past its verdict.
-  if (outcome.kind !== "admission-refused" && outcome.rateLimit !== null) fold(outcome.rateLimit)
+  // A limit that is one model's own is folded as a reading, never as the account's wall.
+  if (outcome.kind !== "admission-refused") {
+    const reading = accountLevelReading(outcome.rateLimit, {
+      driver,
+      upstreamModel,
+      classification: outcome.kind === "failure" ? outcome.classification : null,
+    })
+    if (reading !== null) fold(reading)
+  }
 
   if (outcome.kind === "success") {
     // Never relayed anywhere — this call has no client. Draining it is hygiene, not a translation.

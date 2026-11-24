@@ -20,6 +20,9 @@ import type { ScenarioResult } from "./scenarios"
 
 export const OVERHEAD_METRIC = "router_overhead_seconds"
 
+/** The share of a scenario's background streams every measured request must have met. */
+export const BACKGROUND_FLOOR = 0.75
+
 export interface Row {
   readonly scenario: string
   readonly path: string
@@ -98,10 +101,15 @@ export function verdict(results: readonly ScenarioResult[], budgets: Budgets): V
     }
     const overlap = results[rows.indexOf(entry)]?.backgroundOverlap
     const wanted = results[rows.indexOf(entry)]?.scenario.backgroundStreams
-    if (wanted !== undefined && (overlap === null || overlap === undefined || overlap.min < 1)) {
-      violations.push(
-        `${entry.scenario}: measured requests ran with no background stream in flight — the load the scenario names was not there`,
-      )
+    if (wanted !== undefined) {
+      const least = overlap?.min ?? 0
+      // Near the count it names, not merely above zero: one stream in flight is not thirty-two.
+      // The slack is for the instant a stream ends and its worker reopens it.
+      if (least < Math.ceil(wanted * BACKGROUND_FLOOR)) {
+        violations.push(
+          `${entry.scenario}: a measured request ran with ${least} of ${wanted} background streams in flight — the load the scenario names was not there`,
+        )
+      }
     }
     if (entry.buffered > 0) {
       violations.push(
