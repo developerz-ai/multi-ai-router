@@ -15,14 +15,33 @@ function headers(toolNames?: readonly string[]) {
   })
 }
 
-describe("Claude fast profile (2.1.319)", () => {
+describe("Claude fast profile (2.1.331)", () => {
   test("carries the tool-provenance beta and the native runtime version", () => {
     expect(FAST_BETAS).toContain("tool-provenance-2026-10-26")
     const out = headers()
     expect(out["User-Agent"]).toBe(`claude-cli/${CLAUDE_FAST_CLI_VERSION} (external, cli)`)
-    expect(out["User-Agent"]).toContain("2.1.319")
+    expect(out["User-Agent"]).toContain("2.1.331")
     expect(out["X-Stainless-Runtime-Version"]).toBe("v26.12.1")
     expect(out["X-Stainless-Package-Version"]).toBe("0.128.0")
+    expect(out["x-claude-1p-request-class"]).toBe("main")
+  })
+
+  test("first-party classes distinguish foreground agents from compaction", () => {
+    const base = { accessToken: "private-token", sessionId: "session", contextTag: false }
+    expect(fastHeaders({ ...base, requestClass: "compaction" })["x-claude-1p-request-class"]).toBe(
+      "main",
+    )
+    expect(fastHeaders({ ...base, subagent: true })["x-claude-1p-request-class"]).toBe(
+      "blocking-subagent",
+    )
+    expect(
+      fastHeaders({ ...base, subagent: true, firstPartyRequestClass: "background-task" })[
+        "x-claude-1p-request-class"
+      ],
+    ).toBe("background-task")
+    expect(
+      fastHeaders({ ...base, firstPartyRequestClass: "untrusted" })["x-claude-1p-request-class"],
+    ).toBe("main")
   })
 
   test("sends the tool-usage header on every request, empty on a first turn", () => {

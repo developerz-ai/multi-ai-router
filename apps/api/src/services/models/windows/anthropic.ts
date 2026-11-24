@@ -20,6 +20,7 @@ export const ANTHROPIC_WINDOWS: ContextTable = {
   "claude-fable-5-1": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-opus-5-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-sonnet-5-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
+  "claude-haiku-5-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-opus-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-opus-5-fast": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },
   "claude-sonnet-5": { contextTokens: 1_000_000, maxOutputTokens: 128_000 },

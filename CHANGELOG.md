@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.78.0] — 2026-11-24
+
+### Changed
+
+- Recalibrate Claude subscription fast transport for CLI 2.1.331 / Agent SDK 0.3.331: verified native binary, request-class headers, checksum/suffix captures and local TLS comparison. SDK retains login/refresh and host tools stay disabled.
+- Ship Haiku 5.5 in the subscription catalog and update Fable/Haiku fallback labels to the current family. Add Fable 5.2 prices and Haiku 5.5 prices, including its above-100k prompt tier and 1h cache writes.
+
 ## [2.77.0] — 2026-11-24
 
 ### Security
@@ -2540,3 +2547,4 @@ your tooling config.
 [2.76.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.0
 [2.76.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.1
 [2.77.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.77.0
+[2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0

@@ -44,7 +44,7 @@ describe("pricing a metered attempt", () => {
    * edited prices as unknown and its spend silently reads NULL until a row names it.
    */
   test("a model with no row of its own is unknown — a sibling's price is never borrowed", () => {
-    for (const model of ["claude-opus-5-6", "claude-sonnet-5-6", "claude-fable-5-2"]) {
+    for (const model of ["claude-opus-5-6", "claude-sonnet-5-6", "claude-fable-5-3"]) {
       expect(lookupRates("anthropic-api", model)).toBeNull()
     }
   })
@@ -102,6 +102,19 @@ describe("pricing a metered attempt", () => {
     expect(priced("claude-opus-5")).toBe("30.000000")
     expect(priced("claude-sonnet-5-5")).toBe("12.000000")
     expect(priced("claude-fable-5-1")).toBe("60.000000")
+    expect(priced("claude-fable-5-2")).toBe("48.000000")
+  })
+
+  test("Haiku 5.5 changes its whole card only above 100k total prompt tokens", () => {
+    const price = (cached: number) =>
+      estimateCost({
+        provider: "anthropic-oauth",
+        model: "claude-haiku-5-5",
+        billing: "subscription",
+        tokens: tokens({ tokensIn: 90_000, cacheReadTokens: cached, tokensOut: 1_000 }),
+      })
+    expect(price(10_000)).toMatchObject({ costEstimate: "0.009600", costBasis: "notional" })
+    expect(price(10_001)).toMatchObject({ costEstimate: "0.048000", costBasis: "notional" })
   })
 
   test("a subscription values the current lineup too, rather than recording NULL", () => {

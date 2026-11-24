@@ -30,7 +30,7 @@ function native(extra: string) {
     system: [
       {
         type: "text",
-        text: `x-anthropic-billing-header: cc_version=2.1.319.abc; cc_entrypoint=cli; cch=12345; ${extra}`,
+        text: `x-anthropic-billing-header: cc_version=2.1.331.abc; cc_entrypoint=cli; cch=12345; ${extra}`,
       },
       { type: "text", text: HUMAN_IDENTITY },
     ],
@@ -38,6 +38,10 @@ function native(extra: string) {
 }
 
 describe("Claude fast request", () => {
+  test("an older native wire version falls back before inference", () => {
+    const old = JSON.parse(JSON.stringify(native("")).replace("2.1.331", "2.1.319"))
+    expect(prepare(old)).toBeNull()
+  })
   test("calibrates integrity, isolates identity, and leaves input untouched", () => {
     const original = JSON.stringify(basic)
     const result = prepare(basic)

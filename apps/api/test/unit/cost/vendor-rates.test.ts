@@ -132,6 +132,14 @@ describe("anthropic — platform.claude.com pricing, read 2026-11-03", () => {
   test("the current lineup", () => {
     expectCard("anthropic-api", "claude-opus-5-5", [4, 20, 0.2, 5])
     expectCard("anthropic-api", "claude-opus-5", [5, 25, 0.5, 6.25])
+    expectCard("anthropic-api", "claude-fable-5-2", [8, 40, 0.2, 10])
+    expectTieredCard(
+      "anthropic-api",
+      "claude-haiku-5-5",
+      [0.1, 0.5, 0.01, 0.125],
+      100_001,
+      [0.5, 2.5, 0.05, 0.625],
+    )
     expectCard("anthropic-api", "claude-fable-5-1", [10, 50, 0.25, 12.5])
     expectCard("anthropic-api", "claude-fable-5", [10, 50, 1, 12.5])
     expectCard("anthropic-api", "claude-mythos-5", [10, 50, 1, 12.5])
@@ -154,7 +162,7 @@ describe("anthropic — platform.claude.com pricing, read 2026-11-03", () => {
     expectCard("anthropic-api", "claude-3-haiku", [0.25, 1.25, 0.025, 0.3125])
   })
 
-  test("no Anthropic model publishes a long-context tier", () => {
+  test("the larger Anthropic models have no long-context premium", () => {
     // Anthropic's 4.6-and-later models carry a 1M context window at standard pricing, so there is
     // no second card to state.
     for (const model of ["claude-opus-5-5", "claude-sonnet-5", "claude-fable-5-1"]) {
