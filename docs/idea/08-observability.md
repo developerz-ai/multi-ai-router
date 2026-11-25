@@ -151,7 +151,13 @@ reads as a promise. Every rule names the module that owns it.
 | Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's are derived from the published multiples its pricing page states (read 0.1x, or the footnoted lower multiple; write 1.25x for the 5-minute TTL, 2x for the 1-hour TTL), rather than restated per row. The usage object states the TTL split (`usage.cache_creation.ephemeral_1h_input_tokens`), so a 1-hour write is priced at 2x at estimate time; the split is not persisted — the row keeps one `cacheWriteTokens` counter and its `cost_estimate` already carries the split. A write with no stated split, and any operator override (which has no 1-hour field), prices at the 5-minute rate, so writes read low, never high |
 | Estimated where computed | On the attempt, when the attempt ran. The price table and the alias map both change; a report needs what it cost then, not what the same tokens would cost today |
 
-Price provenance: the Anthropic and OpenAI rows for `claude-sonnet-5-5`, `gpt-6.2-sol` and
+Claude prices added 2026-11-24: Fable 5.2 is $8/$40 per MTok with $0.20 cache reads;
+Haiku 5.5 is $0.10/$0.50 through 100,000 total prompt tokens and $0.50/$2.50 above that
+threshold. The higher card prices the entire request, including cache tokens and output.
+Both include the published 5m/1h cache-write rates and apply to subscription notional cost too.
+
+Price provenance: the Anthropic and OpenAI rows for `claude-fable-5-2`, `claude-haiku-5-5`,
+`claude-sonnet-5-5`, `gpt-6.2-sol` and
 `gpt-6.1-terra` were read 2026-11-24; the rest of both tables keep 2026-11-03. Sonnet 5.5 cache
 reads are the published 0.05x ($0.10 / MTok), not the standard 0.1x. GPT-5.6 Sol's $4 / $20 is
 promotional "until November 30, 2026" and is due a re-read in December.

@@ -93,7 +93,7 @@ describe("building a subscription's catalog rows", () => {
       ...Object.keys(CLAUDE_SUBSCRIPTION_ALIASES),
     ])
     expect(rows.every((row) => row.listingSource === "shipped")).toBe(true)
-    expect(rows.find((row) => row.modelId === "fable")?.resolvedModel).toBe("claude-fable-5-1")
+    expect(rows.find((row) => row.modelId === "fable")?.resolvedModel).toBe("claude-fable-5-2")
     expect(rows.find((row) => row.modelId === "sonnet")?.resolvedModel).toBe("claude-sonnet-5-5")
     expect(rows.find((row) => row.modelId === "opus")?.resolvedModel).toBe("claude-opus-5-5")
     // Every shipped model has a shipped window — a fallback with unknown sizes would be half a row.
@@ -102,10 +102,10 @@ describe("building a subscription's catalog rows", () => {
 
   test("aliases resolve to the latest of each family", () => {
     expect(CLAUDE_SUBSCRIPTION_ALIASES).toEqual({
-      fable: "claude-fable-5-1",
+      fable: "claude-fable-5-2",
       opus: "claude-opus-5-5",
       sonnet: "claude-sonnet-5-5",
-      haiku: "claude-haiku-4-5",
+      haiku: "claude-haiku-5-5",
     })
   })
 
@@ -232,8 +232,8 @@ describe("what an account contributes to GET /v1/models", () => {
     // The shipped family aliases and canonical ids the handshake did not spell are still there —
     // a client typing `--model opus` or `fable` must find it — each resolving to the latest family member.
     expect(byId.get("opus")).toBe("claude-opus-5-5")
-    expect(byId.get("fable")).toBe("claude-fable-5-1")
-    expect(byId.get("haiku")).toBe("claude-haiku-4-5")
+    expect(byId.get("fable")).toBe("claude-fable-5-2")
+    expect(byId.get("haiku")).toBe("claude-haiku-5-5")
     expect(byId.has("claude-sonnet-5")).toBe(true)
     // Nothing is listed twice.
     expect(new Set(listed.map((model) => model.id)).size).toBe(listed.length)

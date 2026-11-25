@@ -7,8 +7,8 @@ import { createCliProbe } from "../claude-sdk/cli-probe"
 import { resolveClaudeCli } from "../claude-sdk/resolve-cli"
 import { CLAUDE_FAST_CLI_VERSION } from "./integrity"
 
-// Independently compared with native captures and the SDK 0.3.319 manifest (Linux x64/glibc).
-const VERIFIED_BINARY = "dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed"
+// Independently compared with native captures and the SDK 0.3.331 manifest (Linux x64/glibc).
+const VERIFIED_BINARY = "4c00839cf46beb2b38ec310105f2d538f7f9321fe46c636299b74bcab94626b1"
 
 /**
  * The runtime whose TLS ClientHello and header framing the calibration compared, deliberately a

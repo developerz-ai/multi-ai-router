@@ -1,7 +1,7 @@
 import { arch, platform } from "node:os"
 import { CLAUDE_FAST_CLI_VERSION } from "./integrity"
 
-// Provenance: CLI 2.1.319 OAuth captures, 2026-11-07. See docs/research/claude-wire.md.
+// Provenance: CLI 2.1.331 OAuth captures, 2026-11-24. See docs/research/claude-wire.md.
 export const HUMAN_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 export const SDK_IDENTITY = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 export const FAST_URL = "https://api.anthropic.com/v1/messages?beta=true"
@@ -86,6 +86,7 @@ export function fastHeaders(input: {
   betas?: string | null
   contextTag: boolean
   requestClass?: string | null
+  firstPartyRequestClass?: string | null
   subagent?: boolean
   agentType?: string | null
   toolNames?: readonly string[]
@@ -93,6 +94,17 @@ export function fastHeaders(input: {
   const beta = new Set<string>(FAST_BETAS)
   for (const value of input.betas?.split(",") ?? []) if (value.trim()) beta.add(value.trim())
   if (input.contextTag) beta.add("context-1m-2025-08-07")
+  const requestClass =
+    input.requestClass &&
+    ["main", "subagent", "workflow", "compaction", "auxiliary", "side_reply"].includes(
+      input.requestClass,
+    )
+      ? input.requestClass
+      : input.subagent
+        ? "subagent"
+        : input.promptId
+          ? "main"
+          : "auxiliary"
   return {
     Accept: "application/json",
     Authorization: `Bearer ${input.accessToken}`,
@@ -112,18 +124,16 @@ export function fastHeaders(input: {
     "anthropic-dangerous-direct-browser-access": "true",
     "anthropic-version": "2023-06-01",
     "x-app": "cli",
+    // Native compaction remains `main`; foreground Agent work is `blocking-subagent`.
+    "x-claude-1p-request-class":
+      input.firstPartyRequestClass &&
+      ["main", "blocking-subagent", "background-task"].includes(input.firstPartyRequestClass)
+        ? input.firstPartyRequestClass
+        : requestClass === "subagent"
+          ? "blocking-subagent"
+          : "main",
     ...(input.promptId ? { "x-claude-code-prompt-id": input.promptId } : {}),
-    "x-claude-code-request-class":
-      input.requestClass &&
-      ["main", "subagent", "workflow", "compaction", "auxiliary", "side_reply"].includes(
-        input.requestClass,
-      )
-        ? input.requestClass
-        : input.subagent
-          ? "subagent"
-          : input.promptId
-            ? "main"
-            : "auxiliary",
+    "x-claude-code-request-class": requestClass,
     ...(input.subagent && input.agentType && /^[A-Za-z0-9_-]{1,64}$/.test(input.agentType)
       ? { "x-claude-code-agent-type": input.agentType }
       : {}),

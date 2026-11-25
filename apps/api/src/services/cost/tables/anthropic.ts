@@ -1,4 +1,4 @@
-import type { ModelTable, RateCard } from "../rates"
+import { type ModelTable, type RateCard, tiered } from "../rates"
 
 /**
  * Anthropic's published per-Mtok API prices.
@@ -74,6 +74,10 @@ function anthropicRates(
  *  truth: the router cannot route to an offering it cannot name.
  */
 export const ANTHROPIC_MODELS: ModelTable = {
+  /** Published model pages, read 2026-11-24: Fable 5.2 cache reads remain 0.025x. */
+  "claude-fable-5-2": anthropicRates(8, 40, 0.025),
+  /** Haiku 5.5 prices the entire prompt at the higher card only above 100k tokens. */
+  "claude-haiku-5-5": tiered(anthropicRates(0.1, 0.5), 100_001, anthropicRates(0.5, 2.5)),
   /**
    * Claude Opus 5.5 — $4 / $20, the current Opus tier and the first priced *below* its predecessor.
    * Cache reads are footnoted at 0.05x ($0.20), not the standard 0.1x.

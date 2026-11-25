@@ -471,3 +471,77 @@ per-process CA trust, redaction defaults, explicit model selection — is unchan
 These are local invoker and CLI observations, not evidence of deployed-router behavior,
 cross-account concurrency safety or account-enforcement outcomes. Live captures remain opt-in,
 billed and absent from CI.
+
+## Fast-mode recalibration, 2026-11-24
+
+Registry SDK `0.3.331` ships CLI `2.1.331`. The workstation's unmodified Linux x64/glibc
+binary matches its manifest: SHA-256
+`4c00839cf46beb2b38ec310105f2d538f7f9321fe46c636299b74bcab94626b1`, 398622992 bytes.
+The initial six private captures under `tmp/claude-http/runs/2026-11-24T12-23-*` and
+`12-24-*` cover interactive PTY, print, SDK, conversation/manual compaction, subagents
+and automatic compaction. All **16/16** request checksums and suffixes match the existing
+projection, seed and prompt sampling. Old calibrated versions remain available to the
+offline verifier. Private bodies, identifiers and credentials remain outside git.
+
+The local TLS stub comparison reports `sameJa3: true` and `sameHeaderOrder: true` with
+Bun `1.4.4`. Stainless remains `0.128.0`, native runtime `v26.12.1`; the base beta list,
+cache controls, billing envelope and quota header vocabulary remain unchanged. Interactive
+thinking-display updates remain an additional beta when the caller requests that display.
+The CLI now adds `x-claude-1p-request-class` before the prompt-id header. The collector
+retains known class enums only. Interactive and compaction requests use first-party `main`;
+foreground Agent requests use `blocking-subagent` while their code request class is `subagent`.
+The router preserves an allowlisted incoming first-party class and otherwise derives these two
+observed classes from the request kind. It also observes `x-cc-atis`, which stays redacted and is
+intentionally not reconstructed or replayed: its semantics have not been calibrated. These
+checks establish transport compatibility, not complete native equivalence or quota parity.
+
+A direct invoker canary on the explicitly selected local research account and
+`claude-opus-5-5` returned 200 for a client-executed echo tool round trip and streaming.
+The second turn read all 10,416 cache tokens created by the first; three quota readings
+were delivered and no concurrency permit remained held. This is local inference evidence;
+production rollout still requires both deployments' own health and smoke checks.
+The same three-leg direct canary also passed with explicit `claude-haiku-5-5` and
+`claude-fable-5-2`; each upstream `message_start.model` matched the requested ID.
+
+The SDK's no-inference handshake resolves `haiku` to `claude-haiku-5-5`, `sonnet` to
+`claude-sonnet-5-5` and `opus` to `claude-opus-5-5`; its Fable row is
+`claude-fable-5-2[1m]`, resolving to `claude-fable-5-2`.
+Published [Fable 5.2](https://platform.claude.com/docs/en/models/fable-5-2/overview) and
+[Haiku 5.5](https://platform.claude.com/docs/en/models/haiku-5-5/overview) pages confirm
+1M context / 128k output. Fable is $8/$40 per MTok, $0.20 cache read, $10/$16 cache
+writes (5m/1h). Haiku is $0.10/$0.50 through 100,000 prompt tokens and $0.50/$2.50
+above it, including the published cache cards. Prices describe API spend or subscription
+notional cost; availability and extra-usage requirements remain account-specific.
+
+
+### Subagent and forced-tool follow-up, 2026-11-24
+
+A fresh `bin/claude-trace subagents --model claude-opus-5-5 --private-wire`
+capture actually started the arithmetic Agent, completed its child turn and returned
+to the parent: three 200 responses and **3/3** matching checksums. The child
+retained `cc_is_subagent=true`; first-party/code classes remain
+`blocking-subagent` / `subagent`. The worker has no tools; all other host tools
+remain explicitly denied.
+
+Selected-account direct HTTP replays of the calibrated 2.1.331 envelope tested
+native `tool_choice:any`, named forcing and the adapted form independently:
+
+| Model | Native any | Native named | Auto adaptation with explicit tool prompt |
+| --- | --- | --- | --- |
+| Opus 5.5 | 400 | 400 | 200 tool_use |
+| Sonnet 5.5 | 400 | 400 | 200 tool_use |
+| Fable 5.2 | 400 | 400 | 200 tool_use |
+| Haiku 5.5 | 200 tool_use | 200 tool_use | 200 tool_use |
+
+The refusals name tool choice, without a thinking block. Haiku's native any also
+returned 200 with disabled and adaptive thinking; enabled thinking with an explicit
+1024-token budget returned 400 naming both thinking and tool choice. Preserve
+Haiku's native force and let upstream validate incompatible combinations; do not
+weaken every model based on the other families' refusal. These are live operator
+diagnostics, never CI tests. Private captures remain outside git.
+
+A real SDK client using an isolated empty config directory and a temporary
+Claude-account-scoped router key also completed Agent delegation through the
+deployed router: task-started observed, tool-free child computed 42, parent
+returned 42. Agent execution stayed in the diagnostic client; the router only
+forwarded inference/tool traffic. The temporary key was revoked afterward.

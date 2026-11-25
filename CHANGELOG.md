@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.78.0] — 2026-11-24
+## [2.79.0] — 2026-11-25
 
 ### Added
 
@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The rule "a router-made `429` while an eligible account is in scope is a bug" (`CLAUDE.md`) is narrowed, with the owner's authorization (developerz-ai/developerz.ai#10277), to allow this one capacity answer after the bounded gate wait. The `concurrency.ts` header and `docs/clients.md` no longer say a capacity wait never fails a request.
+
+## [2.78.1] — 2026-11-24
+
+### Fixed
+
+- Preserve native forced named/any tool choice on Claude Haiku 5.5 instead of weakening it to auto. Opus, Sonnet and Fable retain their required adaptation; SDK host-tool isolation stays unchanged.
+
+## [2.78.0] — 2026-11-24
+
+### Changed
+
+- Recalibrate Claude subscription fast transport for CLI 2.1.331 / Agent SDK 0.3.331: verified native binary, request-class headers, checksum/suffix captures and local TLS comparison. SDK retains login/refresh and host tools stay disabled.
+- Ship Haiku 5.5 in the subscription catalog and update Fable/Haiku fallback labels to the current family. Add Fable 5.2 prices and Haiku 5.5 prices, including its above-100k prompt tier and 1h cache writes.
 
 ## [2.77.0] — 2026-11-24
 
@@ -2553,3 +2566,5 @@ your tooling config.
 [2.76.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.76.1
 [2.77.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.77.0
 [2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0
+[2.78.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.1
+[2.79.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.79.0

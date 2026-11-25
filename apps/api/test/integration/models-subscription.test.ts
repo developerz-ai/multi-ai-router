@@ -98,7 +98,7 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
       context_length: 1_000_000,
       max_completion_tokens: 128_000,
     })
-    expect(body.data.find((row) => row.id === "fable")?.resolved_model).toBe("claude-fable-5-1")
+    expect(body.data.find((row) => row.id === "fable")?.resolved_model).toBe("claude-fable-5-2")
     expect(body.data.find((row) => row.id === "claude-opus-5")).not.toHaveProperty("resolved_model")
   })
 
@@ -119,8 +119,8 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
       max_tokens: 128_000,
     })
     expect(body.data.find((row) => row.id === "haiku")).toMatchObject({
-      max_input_tokens: 200_000,
-      max_tokens: 64_000,
+      max_input_tokens: 1_000_000,
+      max_tokens: 128_000,
     })
   })
 
@@ -197,7 +197,7 @@ describe("GET /v1/models on a pool of Claude subscriptions", () => {
     const res = await app.request("/v1/models/haiku", { headers: bearer() })
 
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ id: "haiku", resolved_model: "claude-haiku-4-5" })
+    expect(await res.json()).toMatchObject({ id: "haiku", resolved_model: "claude-haiku-5-5" })
   })
 
   test("(b) with a live SDK listing, the listing is what the pool advertises", async () => {

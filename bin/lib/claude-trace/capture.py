@@ -73,6 +73,13 @@ def request(flow: http.HTTPFlow):
     headers = {name.lower(): value if name.lower() in SAFE_HEADERS or
                name.lower().startswith('x-stainless-') else identity(value) if name.lower() in {'x-claude-code-session-id', 'x-claude-code-prompt-id', 'x-client-request-id'} else '<redacted>'
                for name, value in flow.request.headers.items()}
+    # Only known request-class enums survive; unknown values may contain private identifiers.
+    for name in ('x-claude-code-request-class', 'x-claude-1p-request-class'):
+        value = flow.request.headers.get(name)
+        if value in {'main', 'subagent', 'workflow', 'compaction', 'auxiliary', 'side_reply',
+                     'blocking-subagent', 'background-task', 'summary-extraction',
+                     'followup-generation'}:
+            headers[name] = value
     raw = flow.request.content or b''
     try:
         body = shape(json.loads(raw)) if raw else None

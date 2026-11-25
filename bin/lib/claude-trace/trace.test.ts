@@ -169,6 +169,25 @@ describe("captured CLI integrity projection", () => {
       matches: true,
     })
   })
+  test("calibrates 2.1.331 with the captured seed and prompt suffix", () => {
+    const current = {
+      model: "claude-opus-5-5",
+      messages: [{ role: "user", content: "Remember marker TRACE_42. Reply with only TRACE_OK." }],
+      system: [
+        {
+          type: "text",
+          text: "x-anthropic-billing-header: cc_version=2.1.331.17a; cc_entrypoint=cli; cch=37adf; cc_turn_origin=human;",
+        },
+      ],
+      max_tokens: 64,
+      stream: true,
+    }
+    expect(inspectIntegrity(JSON.stringify(current))).toMatchObject({
+      expected: "37adf",
+      actual: "37adf",
+      matches: true,
+    })
+  })
   test("routing projection ignores model, output cap and fallback fields, but detects conversation changes", () => {
     expect(
       inspectIntegrity(
@@ -193,6 +212,9 @@ describe("captured CLI integrity projection", () => {
     )
   })
   test("version suffix uses original user text, not inserted context", () => {
+    expect(versionSuffix("Remember marker TRACE_42. Reply with only TRACE_OK.", "2.1.331")).toBe(
+      "17a",
+    )
     expect(versionSuffix("Remember the marker ORCHID_42. Reply briefly.", "2.1.301")).toBe("e0b")
     expect(versionSuffix("Remember marker TRACE_42. Reply with only TRACE_OK.", "2.1.319")).toBe(
       "797",

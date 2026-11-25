@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto"
 import { z } from "zod"
 
-export const CLAUDE_FAST_CLI_VERSION = "2.1.319"
-// The seed is per observed CLI build, not per release. 2.1.319 reuses the 2.1.301 seed:
-// 15/15 private print/sdk/conversation/subagent/autocompact captures matched on 2026-11-07.
+export const CLAUDE_FAST_CLI_VERSION = "2.1.331"
+// Per observed build: 16/16 interactive/print/sdk/conversation/subagent/autocompact
+// bodies matched the existing seed on 2026-11-24. Historical captures remain verifiable.
 const SEEDS: Readonly<Record<string, bigint>> = {
   "2.1.301": 0x4d659218e32a3268n,
+  "2.1.319": 0x4d659218e32a3268n,
   [CLAUDE_FAST_CLI_VERSION]: 0x4d659218e32a3268n,
 }
 const record = z.record(z.string(), z.unknown())
