@@ -1,7 +1,16 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import type { ProviderId, ProviderPreferences } from "@multi-ai-router/core"
-import { loadCatalog } from "../../src/services/catalog"
-import { accountRow } from "../support/account-row"
+import {
+  createAccountRepository,
+  createDatabase,
+  type DatabaseHandle,
+  defaultMigrationsFolder,
+  runMigrations,
+} from "@multi-ai-router/db"
+import { createRuntime } from "../../src/composition"
+import { parseEnv } from "../../src/config/env"
+import { createLogger } from "../../src/logging/logger"
+import type { RoutableAccount } from "../../src/services/dataplane"
 import { account } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, post } from "./harness"
 
@@ -10,6 +19,10 @@ import { bearer, CRYPTOR, harness, post } from "./harness"
  * same-dialect passthrough and on a translated body alike — and nothing else changes: an account
  * without preferences, and every account whose surface takes no `provider` field, is sent the bytes
  * it was sent before. The upstream is a mock.
+ *
+ * The price-sort half boots the real composition root with the operator's env variable set, so a
+ * regression in `createWarmState`'s forwarding cannot be hidden by a test that hands `loadCatalog`
+ * the ids and preferences itself.
  */
 
 const CODING: ProviderPreferences = {
@@ -120,37 +133,71 @@ describe("openrouter provider preferences on egress", () => {
   })
 })
 
-describe("price-sort defaults on the spend-driving OpenRouter models", () => {
-  const ACCOUNT_ID = "8b609813-f618-409c-85e9-60373a618fcf"
+const url = process.env.DATABASE_URL ?? ""
+const baseEnv: Record<string, string> = {
+  DATABASE_URL: url,
+  ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+  ADMIN_OIDC_CLIENT_ID: "multi-ai-router-test",
+  ADMIN_OIDC_REDIRECT_URI: "https://router.test/api/admin/auth/oidc/callback",
+  ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
+  ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+}
+const logger = createLogger({ level: "error", write: () => undefined })
 
-  async function catalogAccount(): Promise<ReturnType<typeof account>> {
-    const { accounts } = await loadCatalog(
-      {
-        read: async () => ({
-          accounts: [accountRow({ id: ACCOUNT_ID, provider: "openrouter" })],
-          pools: [],
-          members: [],
-          windows: [],
-          recoveries: [],
-        }),
-      },
-      undefined,
-      { accountIds: new Set([ACCOUNT_ID]), preferences: CODING },
-    )
-    const loaded = accounts[0]
-    if (loaded === undefined) throw new Error("configured account missing from catalog")
-    return {
-      ...loaded,
-      // The catalog never carries the credential itself; the composition root injects it at
-      // request time. The harness takes it on the fixture, with the mock upstream's key.
-      authMaterial: CRYPTOR.encrypt("sk-upstream-mock"),
-    }
+let handle: DatabaseHandle | undefined
+let runtime: ReturnType<typeof createRuntime> | undefined
+let accountId = ""
+
+beforeAll(async () => {
+  if (url === "") return
+  await runMigrations({ url, migrationsFolder: defaultMigrationsFolder() })
+  handle = createDatabase({ url, maxConnections: 2 })
+  const row = await createAccountRepository(handle.db).create({
+    label: `price-sort fixture ${crypto.randomUUID()}`,
+    provider: "openrouter",
+  })
+  accountId = row.id
+  const env = parseEnv({ ...baseEnv, OPENROUTER_PRICE_SORT_ACCOUNTS: accountId })
+  runtime = createRuntime({
+    env,
+    database: handle.db,
+    sql: handle.sql,
+    dbPoolStats: handle.poolStats,
+    logger,
+  })
+  await runtime.catalog.refresh()
+}, 60_000)
+
+afterAll(async () => {
+  try {
+    if (accountId !== "" && handle !== undefined)
+      await createAccountRepository(handle.db).delete(accountId)
+  } finally {
+    await handle?.close()
+    handle = undefined
+    runtime = undefined
   }
+})
 
+async function catalogAccount(): Promise<RoutableAccount> {
+  const loaded = runtime?.catalog.account(accountId)
+  if (loaded === undefined) throw new Error("configured account missing from warm catalog")
+  return {
+    ...loaded,
+    // The catalog never carries the credential itself; the composition root injects it at
+    // request time. The harness takes it on the fixture, with the mock upstream's key.
+    authMaterial: CRYPTOR.encrypt("sk-upstream-mock"),
+  }
+}
+
+describe.skipIf(url === "")("price-sort defaults on the spend-driving OpenRouter models", () => {
   for (const model of ["deepseek/deepseek-v4.1-flash", "tencent/hy4-flash"]) {
     test(`${model}: price-sort reaches the upstream and the model name is untouched`, async () => {
       const body = JSON.stringify({ model, messages: [{ role: "user", content: "fix" }] })
       const loaded = await catalogAccount()
+      expect(loaded.driver.providerPreferences).toEqual(CODING)
+      // The account id was handed to the real composition root only through the env map. If
+      // `createWarmState` stops forwarding it, the catalog has no price-sort preference to inject.
       const { app, upstream } = harness({
         accounts: [loaded],
         responses: [

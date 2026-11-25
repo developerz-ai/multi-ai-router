@@ -593,9 +593,12 @@ Only `openrouter` accounts named in the variable are touched; other providers ca
 
 This is the supported non-spending lever for a metered coding key under spend pressure. Price sort
 asks OpenRouter to serve the **same requested model** through a cheaper eligible provider and a
-lower-cost quantization, so a deepseek/deepseek-v4.1-flash or tencent/hy4-flash turn costs less per
-request without renaming, downgrading or substituting the model, changing a router key's capacity,
-weight, priority or scope, moving any account between pools, or touching an alert threshold.
+lower-cost quantization, so a deepseek/deepseek-v4.1-flash or tencent/hy4-flash turn can cost less
+per request without renaming, downgrading or substituting the model, changing a router key's
+capacity, weight, priority or scope, moving any account between pools, or touching an alert
+threshold. The saving is conditional: a client that sends its own `provider.sort`, such as
+`"throughput"`, overrides the default, and a turn costs less only when a cheaper eligible provider
+or quantization is actually available at that moment.
 `RouterSpendLimitNear` is an external OpenRouter key notification, not a router threshold: it is
 untouched. Fallbacks stay enabled, so price sort is not a narrower provider filter. The variable is
 **empty by default**, so nothing changes for an operator who does not set it.

@@ -12,14 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OPENROUTER_PRICE_SORT_ACCOUNTS` gives named OpenRouter coding accounts a stored-preference-shaped
   default of `{sort: price, quantizations: [fp8, bf16], allow_fallbacks: true}`, injected at warm
   catalog load. Empty by default; a stored account preference, the client's own `provider` fields,
-  other providers and unnamed accounts are unchanged. This is a non-spending mitigation: the same
-  model is served more cheaply, with no key, capacity, scope, model, pool-policy or alert change.
+  other providers and unnamed accounts are unchanged. This is a non-spending mitigation: where the
+  effective preferences and upstream prices allow it, the same model is served more cheaply, with no
+  key, capacity, scope, model, pool-policy or alert change. A client that sends its own `sort` (for
+  example `throughput`) keeps that choice, so savings are conditional rather than guaranteed.
   Spec: `docs/idea/03-providers.md#openrouter--provider-preferences-key-caps-and-per-model-throttles`.
 
 ### Changed
 
-- Recovered findings for metered OpenRouter account `8b609813-f618-409c-85e9-60373a618fcf`
-  (`openrouter-dz-coding-30d`): pool `openrouter-coding` is `priority-failover`, not `quota-aware`; its
+- Recovered findings for a metered OpenRouter coding account: pool `openrouter-coding` is
+  `priority-failover`, not `quota-aware`; its
   `spend_limit` window is advisory and continuous; spend is driven by
   `deepseek/deepseek-v4.1-flash` and `tencent/hy4-flash`; the pool's other member serves only free
   models, so offloading paid traffic to it is impossible. `RouterSpendLimitNear` does not exist in

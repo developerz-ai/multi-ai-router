@@ -7,6 +7,7 @@ import {
   type QuotaWindowRow,
   type RecoveryRow,
 } from "@multi-ai-router/db"
+import { parseEnv } from "../../../src/config/env"
 import { type CatalogSources, loadCatalog } from "../../../src/services/catalog"
 import type { ProviderPreferenceDefaults } from "../../../src/services/catalog/load"
 import { resolveModel } from "../../../src/services/routing"
@@ -254,6 +255,25 @@ describe("provider preference defaults from warm config", () => {
   function defaults(ids: readonly string[]): ProviderPreferenceDefaults {
     return { accountIds: new Set(ids), preferences: PRICE_SORT }
   }
+
+  const env = {
+    DATABASE_URL: "postgres://test",
+    ADMIN_OIDC_ISSUER_URL: "https://sso.test",
+    ADMIN_OIDC_CLIENT_ID: "test",
+    ADMIN_OIDC_REDIRECT_URI: "https://router.test/callback",
+    ADMIN_OIDC_ADMIN_EMAIL: "admin@test",
+    ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+  }
+
+  test("the env list takes UUIDs and ignores blanks, but refuses a model-style glob", () => {
+    const parsed = (accounts?: string) =>
+      parseEnv(accounts === undefined ? env : { ...env, OPENROUTER_PRICE_SORT_ACCOUNTS: accounts })
+        .openRouterPriceSort.accountIds
+    expect(parsed(`${NAMED}, ,${OTHER}`)).toEqual([NAMED, OTHER])
+    expect(parsed("")).toEqual([])
+    expect(parsed(undefined)).toEqual([])
+    expect(() => parsed("8b609813*")).toThrow("OPENROUTER_PRICE_SORT_ACCOUNTS")
+  })
 
   test("a named openrouter account with no stored preference receives the price sort", async () => {
     const { accounts } = await loadCatalog(
