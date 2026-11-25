@@ -81,3 +81,12 @@ test("CLAUDE_SDK_QUEUE_WAIT_MS refuses a wait that defeats its own purpose", () 
       .claudeSdkQueueWaitMs,
   ).toBe(59_999)
 })
+
+// An existing deployment that only lowered the attempt deadline never chose the new knob's default:
+// refusing its boot would be a regression. Only a value the operator SET is refused.
+test("an unset CLAUDE_SDK_QUEUE_WAIT_MS never refuses boot: the default yields to a short deadline", () => {
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "120000" }).claudeSdkQueueWaitMs).toBe(60_000)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "60000" }).claudeSdkQueueWaitMs).toBe(30_000)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "20000" }).claudeSdkQueueWaitMs).toBe(10_000)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "1" }).claudeSdkQueueWaitMs).toBe(1)
+})

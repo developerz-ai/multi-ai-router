@@ -248,7 +248,7 @@ The router walks the eligible accounts before it answers with an error, so a fai
 you was tried across the pool, with two exceptions: a full replica ends the walk over Claude
 subscription accounts early (below), and an operator who sets `ROUTING_MAX_ATTEMPTS` lowered the
 walk to up to `ROUTING_MAX_ATTEMPTS` accounts, so with a cap of 1 a failed first attempt leaves
-its eligible siblings untried. A Claude subscription request queues for a subprocess slot for
+its eligible siblings untried. A Claude subscription request queues for a slot at the shared Claude concurrency gate (fast-mode and Agent-SDK turns alike) for
 up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next account. When an
 account stayed at its in-flight limit through the wait and nothing could serve the request you get
 `429 account_at_capacity`. When the replica's own ceiling refused a candidate, the remaining Claude

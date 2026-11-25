@@ -12,6 +12,9 @@ const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
  */
 export const CLAUDE_QUEUE_WAIT_MAX_MS = 240_000
 
+/** The wait when the operator set none: a minute, unless the attempt deadline leaves less room. */
+const DEFAULT_QUEUE_WAIT_MS = 60_000
+
 type QueueWaitEnv = {
   readonly CLAUDE_SDK_QUEUE_WAIT_MS?: number
   readonly UPSTREAM_TIMEOUT_MS?: number
@@ -22,10 +25,16 @@ type QueueWaitEnv = {
  * before the answer, and at or past the attempt deadline (`UPSTREAM_TIMEOUT_MS`) the deadline
  * ends the request first, so the budget never expires and nothing is ever told the gate was full.
  * (A value past the timer range is already refused by `numeric-bounds.ts`.)
+ *
+ * The refusal is for a value the operator SET. An unset knob is a default the operator never chose,
+ * so a deployment that only lowered `UPSTREAM_TIMEOUT_MS` below it must still boot: the default is
+ * clamped to half the deadline instead (at least 1 ms), so the wait still expires first.
  */
 export function readClaudeQueueWaitMs(raw: QueueWaitEnv, ctx: z.RefinementCtx): number {
-  const waitMs = raw.CLAUDE_SDK_QUEUE_WAIT_MS ?? 60_000
   const deadlineMs = raw.UPSTREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_TIMEOUT_MS
+  if (raw.CLAUDE_SDK_QUEUE_WAIT_MS === undefined)
+    return Math.min(DEFAULT_QUEUE_WAIT_MS, Math.max(1, Math.floor(deadlineMs / 2)))
+  const waitMs = raw.CLAUDE_SDK_QUEUE_WAIT_MS
   const issue = (message: string) =>
     ctx.addIssue({ code: "custom", path: ["CLAUDE_SDK_QUEUE_WAIT_MS"], message })
   if (waitMs > CLAUDE_QUEUE_WAIT_MAX_MS)

@@ -284,10 +284,21 @@ describe("a full global gate, with the gate wait bounded", () => {
     await untilQueued(r.concurrency)
     r.time.advance(KNOB)
     const res = await pending
-    const body = (await res.json()) as { error: { code?: string } }
+    const body = (await res.json()) as {
+      error: { code?: string; router: Record<string, unknown> }
+    }
 
     expect(res.status).toBe(503)
     expect(body.error.code).toBe("no_healthy_account")
+    // The OpenAI dialect carries the same machine-readable verdict and Retry-After as /v1/messages.
+    expect(res.headers.get("retry-after")).toBe("30")
+    expect(body.error.router).toMatchObject({
+      wall: "capacity",
+      scope: "router",
+      signal: "router-at-capacity",
+      retry_after_s: 30,
+      retryable: true,
+    })
     expect(lines.find((entry) => entry.msg === "upstream attempt failed")).toMatchObject({
       failureKind: "router-full",
       signal: "router-at-capacity",

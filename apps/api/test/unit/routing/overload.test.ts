@@ -176,4 +176,23 @@ describe("planning after overloaded", () => {
       planNextAttempt(pair, progress, full, { overloadRetries: 1, overloadRetryBaseMs: 1 }),
     ).toMatchObject({ action: "stop" })
   })
+
+  // A refused Claude provider says nothing about an API-key provider's busy backend: the wait on
+  // the overloaded API account must survive a later router-full from the Claude gate.
+  test("an API-key account that answered overloaded is still waited out after Claude was router-full", () => {
+    const api = account("api", { provider: "anthropic-api" })
+    const sub = account("sub", { provider: "anthropic-oauth" })
+    const mixed = candidates(api, sub)
+    const full: AttemptFailure = { kind: "router-full", message: "router-at-capacity" }
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "api"), "api", "overloaded")
+    progress = noteGateFull(recordAttempt(progress, "sub"), "anthropic-oauth", full)
+    progress = noteOverload(progress, "sub", "router-full")
+    expect(progress.refusedProviders).toEqual(["anthropic-oauth"])
+    const decision = planNextAttempt(mixed, progress, full, {
+      overloadRetries: 1,
+      overloadRetryBaseMs: 1_000,
+    })
+    expect(decision).toMatchObject({ action: "retry-in-place", delayMs: 1_000 })
+    expect(decision.action === "retry-in-place" && decision.candidate.account.id).toBe("api")
+  })
 })
