@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Native Claude subscription fast-path requests no longer forward harness fingerprints in system text that provoked pool-wide `claude-sdk:extra-usage-gated` refusals and retry storms. The shared scrub rules now run on native text before integrity stamping; conservative text and native attribution headers survive, and the Agent SDK path is unchanged.
+
 ## [2.78.1] — 2026-11-24
 
 ### Fixed

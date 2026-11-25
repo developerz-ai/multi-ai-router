@@ -36,10 +36,12 @@ import { removeLines, replaceSpans, type SpanRule } from "./scrub-spans"
  * - **Conservative.** Nothing else is touched: tool policy, tone rules, task guidance, and any
  *   user `CLAUDE.md` content the harness appended all pass through verbatim.
  *
- * **This is the Agent-SDK egress path only.** An API-key account is plain HTTP with the caller's
- * own credential and no impersonation to detect, and every other provider is a passthrough where
- * rewriting the caller's prompt would be the router substituting words the client never wrote
- * (docs/idea/11-anthropic-agent-sdk.md §8).
+ * **Both Claude subscription transports are in scope:** the Agent SDK egress path and the native
+ * direct-HTTP fast path, which scrubs system text in place in `prepareFastRequest` before the
+ * rebuilt body is integrity-stamped (docs/standards/harness-fingerprint-scrubbing.md). An API-key
+ * account is plain HTTP with the caller's own credential and no impersonation to detect, and every
+ * other provider is a passthrough where rewriting the caller's prompt would be the router
+ * substituting words the client never wrote (docs/idea/11-anthropic-agent-sdk.md §8).
  */
 
 /**
