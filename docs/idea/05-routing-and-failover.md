@@ -817,8 +817,8 @@ query (model list, usage gauge) keep the unbounded queue.
 Which half the caller was still queued on decides the failure kind:
 
 - **`account-full`**: the account's own in-flight limit. Retryable and **blameless**: no cooldown, no
-  strike, no recovery probe, no model hold (`breaker.ts` leaves it untouched; a designated probe
-  settles `uncertain`). The chain fails over to the next eligible account as for any retryable kind.
+  strike, no recovery probe, no model hold (`breaker.ts` leaves it untouched; no recovery permit
+  is consumed). The chain fails over to the next eligible account as for any retryable kind.
   Recorded `no_healthy_account` with `errorClass: account-at-capacity` and no `httpStatus` (no
   upstream was reached).
 - **`router-full`**: the replica's global ceiling. Same blameless treatment, and because that gate is

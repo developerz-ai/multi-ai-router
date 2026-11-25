@@ -47,6 +47,8 @@ function gateRefusal(error: SdkGateWaitExpiredError, retryAfterSeconds: number):
     // No upstream was reached: the gate in front of it was full.
     upstream: null,
     errorClass: signal,
+    // The attempt log's `signal` field: no classification exists to carry it.
+    upstreamSignal: signal,
     verdict: account
       ? new AccountAtCapacityError(message, { retryAfterSeconds, detail: { signal } })
       : new NoHealthyAccountError(message, {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { opaqueAccountRef } from "../../src/errors/account-ref"
+import type { Logger } from "../../src/logging/logger"
 import { createSdkConcurrency, createSdkInvoker, type SdkInvocation } from "../../src/providers"
 import { sdkQueryStream, sdkTurn } from "../unit/claude-sdk/fixtures"
 import { manualGateClock } from "../unit/claude-sdk/manual-gate-clock"
@@ -42,6 +43,7 @@ function router(options: {
   readonly accounts: Parameters<typeof harness>[0]["accounts"]
   readonly global: number
   readonly perAccount: number
+  readonly logger?: Logger
 }) {
   const time = manualGateClock()
   const concurrency = createSdkConcurrency(
@@ -69,6 +71,7 @@ function router(options: {
       return real(invocation)
     },
     claudeQueueWaitMs: KNOB,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   })
   return { ...h, time, concurrency, asked }
 }
@@ -256,6 +259,39 @@ describe("a full global gate, with the gate wait bounded", () => {
     expect(rows("sub-a")[0]).toMatchObject({ errorClass: "account-at-capacity", httpStatus: null })
     expect(rows("sub-b")).toHaveLength(1)
     expect(rows("sub-b")[0]).toMatchObject({ errorClass: "router-at-capacity", httpStatus: null })
+    holder.release()
+  })
+
+  test("the OpenAI dialect hears no_healthy_account, and the attempt log names the signal", async () => {
+    const lines: Record<string, unknown>[] = []
+    const logger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (msg, fields) => void lines.push({ msg, ...fields }),
+      error: () => {},
+      child: () => logger,
+    }
+    const r = router({ accounts: subs("sub-a"), global: 1, perAccount: 4, logger })
+    const holder = await r.concurrency.acquire("holder", live())
+
+    const pending = r.app.request(
+      "/v1/chat/completions",
+      post(
+        JSON.stringify({ model: "claude-opus-5", messages: [{ role: "user", content: "hi" }] }),
+        bearer(),
+      ),
+    )
+    await untilQueued(r.concurrency)
+    r.time.advance(KNOB)
+    const res = await pending
+    const body = (await res.json()) as { error: { code?: string } }
+
+    expect(res.status).toBe(503)
+    expect(body.error.code).toBe("no_healthy_account")
+    expect(lines.find((entry) => entry.msg === "upstream attempt failed")).toMatchObject({
+      failureKind: "router-full",
+      signal: "router-at-capacity",
+    })
     holder.release()
   })
 })
