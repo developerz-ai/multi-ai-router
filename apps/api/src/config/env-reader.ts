@@ -6,6 +6,7 @@ import { worstCaseTickMs } from "../services/routing/exhausted-retest"
 import { readAdminBodiesEnv } from "./admin-bodies"
 import { readBackgroundEnv } from "./background"
 import { readClaudeLoginEnv } from "./claude-login"
+import { readClaudeQueueWaitMs } from "./claude-queue-wait"
 import { readClaudeSdkPacingEnv } from "./claude-sdk-pacing"
 import { readCliOwnershipEnv } from "./cli-ownership"
 import { readEgressProxyEnv } from "./egress-proxy"
@@ -181,8 +182,9 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
     // A Claude request waits at the subprocess gate for at most this long in total, then moves on to
     // the next account. 60 s clears an ordinary burst (the p90 Claude call is 38 s) and stays under
-    // the 300 s idle cut every client applies to a silent call.
-    claudeSdkQueueWaitMs: raw.CLAUDE_SDK_QUEUE_WAIT_MS ?? 60_000,
+    // the 300 s idle cut every client applies to a silent call; a value that defeats that is
+    // refused at boot (`claude-queue-wait.ts`).
+    claudeSdkQueueWaitMs: readClaudeQueueWaitMs(raw, ctx),
     // How near an access token's expiry counts as "inside the refresh window", where only one
     // subprocess may cross at a time (`providers/claude-sdk/credential-freshness.ts`). 300 s is the
     // buffer Meridian settled on for the same token endpoint, and it comfortably covers a spawn

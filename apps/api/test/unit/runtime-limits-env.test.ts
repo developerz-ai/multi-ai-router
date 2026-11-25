@@ -58,3 +58,26 @@ test("runtime limits read their variables and refuse zero where zero is no setti
   for (const name of ["KEY_VERIFY_MAX_PENDING", "TRUST_PROXY_HOPS", "USAGE_RETRY_BUFFER_MAX"])
     expect(() => parseEnv({ ...base, [name]: "0" })).toThrow(EnvValidationError)
 })
+
+test("CLAUDE_SDK_QUEUE_WAIT_MS refuses a wait that defeats its own purpose", () => {
+  expect(parseEnv(base).claudeSdkQueueWaitMs).toBe(60_000)
+  expect(parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "240000" }).claudeSdkQueueWaitMs).toBe(
+    240_000,
+  )
+  // Past the 300 s idle cut clients apply to a silent call, with headroom: the answer would arrive late.
+  expect(() => parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "240001" })).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS.*at most 240000/s,
+  )
+  // Past the timer range it never fires (numeric-bounds.ts refuses it too).
+  expect(() => parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "2147483648" })).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS/,
+  )
+  // At or past the attempt deadline the deadline ends the request first.
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "60000", UPSTREAM_TIMEOUT_MS: "60000" }),
+  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS.*less than UPSTREAM_TIMEOUT_MS/s)
+  expect(
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "59999", UPSTREAM_TIMEOUT_MS: "60000" })
+      .claudeSdkQueueWaitMs,
+  ).toBe(59_999)
+})
