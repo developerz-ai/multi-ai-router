@@ -39,6 +39,14 @@ describe("dispatchOptionsFromEnv", () => {
     expect(options.selection?.unknownResetRetryAfterSeconds).toBe(30)
   })
 
+  test("the gate wait budget reaches the dispatcher: 60 s by default, CLAUDE_SDK_QUEUE_WAIT_MS when set", () => {
+    expect(dispatchOptionsFromEnv(parseEnv(base)).claudeQueueWaitMs).toBe(60_000)
+    expect(
+      dispatchOptionsFromEnv(parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "1234" }))
+        .claudeQueueWaitMs,
+    ).toBe(1234)
+  })
+
   test("ROUTING_BOUND_ACCOUNT_COOLING_DOWN=rebind reaches selection", () => {
     const options = dispatchOptionsFromEnv(
       parseEnv({ ...base, ROUTING_BOUND_ACCOUNT_COOLING_DOWN: "rebind" }),
