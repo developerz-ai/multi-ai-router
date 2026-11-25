@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test"
 import type { ProviderId, ProviderPreferences } from "@multi-ai-router/core"
 import {
   createAccountRepository,
@@ -10,7 +10,7 @@ import {
 import { createRuntime } from "../../src/composition"
 import { parseEnv } from "../../src/config/env"
 import { createLogger } from "../../src/logging/logger"
-import type { RoutableAccount } from "../../src/services/dataplane"
+import { createCredentialCipher } from "../../src/services/crypto/cipher"
 import { account } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, post } from "./harness"
 
@@ -55,16 +55,14 @@ async function sent(input: {
   preferences?: ProviderPreferences
   path: "/v1/chat/completions" | "/v1/messages"
   body: string
-  account?: ReturnType<typeof account>
 }): Promise<string> {
   const { app, upstream } = harness({
     accounts: [
-      input.account ??
-        account("a", {
-          provider: input.provider,
-          cipher: CRYPTOR,
-          ...(input.preferences === undefined ? {} : { providerPreferences: input.preferences }),
-        }),
+      account("a", {
+        provider: input.provider,
+        cipher: CRYPTOR,
+        ...(input.preferences === undefined ? {} : { providerPreferences: input.preferences }),
+      }),
     ],
     responses: [chatCompletion],
   })
@@ -155,6 +153,9 @@ beforeAll(async () => {
   const row = await createAccountRepository(handle.db).create({
     label: `price-sort fixture ${crypto.randomUUID()}`,
     provider: "openrouter",
+    authMaterial: createCredentialCipher({ key: new Uint8Array(32).fill(7) }).encrypt(
+      "fixture-key",
+    ),
   })
   accountId = row.id
   const env = parseEnv({ ...baseEnv, OPENROUTER_PRICE_SORT_ACCOUNTS: accountId })
@@ -179,14 +180,40 @@ afterAll(async () => {
   }
 })
 
-async function catalogAccount(): Promise<RoutableAccount> {
-  const loaded = runtime?.catalog.account(accountId)
-  if (loaded === undefined) throw new Error("configured account missing from warm catalog")
-  return {
-    ...loaded,
-    // The catalog never carries the credential itself; the composition root injects it at
-    // request time. The harness takes it on the fixture, with the mock upstream's key.
-    authMaterial: CRYPTOR.encrypt("sk-upstream-mock"),
+async function runtimeSent(body: string): Promise<string> {
+  if (runtime === undefined) throw new Error("runtime missing")
+  const calls: string[] = []
+  const upstream = spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      async (input: string | URL | Request) => {
+        if (!(input instanceof Request)) throw new Error("expected upstream Request")
+        calls.push(await input.clone().text())
+        return chatCompletion()
+      },
+      { preconnect: fetch.preconnect },
+    ),
+  )
+  try {
+    const res = await runtime.dispatcher.dispatch({
+      ingress: "openai-chat",
+      request: new Request("http://router.test/v1/chat/completions", post(body)),
+      key: {
+        id: crypto.randomUUID(),
+        name: "test",
+        prefix: "test",
+        scope: { kind: "accounts", accountIds: [accountId] },
+        rateLimitRequests: null,
+        rateLimitWindowSeconds: null,
+        expiresAt: null,
+      },
+      requestId: crypto.randomUUID(),
+    })
+    expect(res.status).toBe(200)
+    await res.text()
+    expect(calls).toHaveLength(1)
+    return calls[0] ?? ""
+  } finally {
+    upstream.mockRestore()
   }
 }
 
@@ -194,31 +221,7 @@ describe.skipIf(url === "")("price-sort defaults on the spend-driving OpenRouter
   for (const model of ["deepseek/deepseek-v4.1-flash", "tencent/hy4-flash"]) {
     test(`${model}: price-sort reaches the upstream and the model name is untouched`, async () => {
       const body = JSON.stringify({ model, messages: [{ role: "user", content: "fix" }] })
-      const loaded = await catalogAccount()
-      expect(loaded.driver.providerPreferences).toEqual(CODING)
-      // The account id was handed to the real composition root only through the env map. If
-      // `createWarmState` stops forwarding it, the catalog has no price-sort preference to inject.
-      const { app, upstream } = harness({
-        accounts: [loaded],
-        responses: [
-          () =>
-            Response.json({
-              id: "chatcmpl_1",
-              object: "chat.completion",
-              created: 1,
-              model,
-              choices: [
-                { index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" },
-              ],
-              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-            }),
-        ],
-      })
-      const res = await app.request("/v1/chat/completions", post(body, bearer()))
-      expect(res.status).toBe(200)
-      await res.text()
-      expect(upstream.calls).toHaveLength(1)
-      const sentBody = JSON.parse(upstream.calls[0]?.body ?? "")
+      const sentBody = JSON.parse(await runtimeSent(body))
       expect(sentBody.provider).toEqual(CODING)
       expect(sentBody.model).toBe(model)
     })
@@ -230,12 +233,7 @@ describe.skipIf(url === "")("price-sort defaults on the spend-driving OpenRouter
       provider: { sort: "throughput", require_parameters: true },
       messages: [{ role: "user", content: "fix" }],
     })
-    const loaded = await catalogAccount()
-    const { app, upstream } = harness({ accounts: [loaded], responses: [chatCompletion] })
-    const res = await app.request("/v1/chat/completions", post(body, bearer()))
-    expect(res.status).toBe(200)
-    await res.text()
-    expect(JSON.parse(upstream.calls[0]?.body ?? "").provider).toEqual({
+    expect(JSON.parse(await runtimeSent(body)).provider).toEqual({
       ...CODING,
       sort: "throughput",
       require_parameters: true,
