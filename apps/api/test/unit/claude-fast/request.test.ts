@@ -106,6 +106,41 @@ describe("Claude fast request", () => {
     expect(child?.text).toContain(SDK_IDENTITY)
     expect(child?.text).not.toContain("cc_turn_origin=")
   })
+  test("native system blocks lose harness fingerprints but keep conservative text and attribution", () => {
+    // Verbatim from scrub.test.ts: opencode's `environment()` preamble plus the two identity
+    // lines that make Anthropic meter a subscription request as a third-party app. A native
+    // client's own CLI preset already carries the environment section, so the appended copy is
+    // the duplicate that gates the whole pool behind Extra Usage.
+    const fingerprint = `Here is some useful information about the environment you are running in:
+<env>
+  Working directory: /home/router/workspace/router/router.ai
+  Workspace root folder: /home/router/workspace/router/router.ai
+  Is directory a git repo: yes
+  Platform: linux
+</env>
+You are powered by the model named Claude Opus 5. The exact model ID is claude-opus-5.
+You are OpenCode, the best coding agent on the planet.`
+    const conservative = "Tone: terse.\nTool policy: never write outside the repo."
+    const request = native("cc_turn_origin=task_notification; cc_prompt_index=2; cc_turn_index=3;")
+    request.system.push({ type: "text", text: `${conservative}\n\n${fingerprint}` })
+
+    const result = prepare(request)
+    if (!result) throw new Error("missing prepared body")
+    const body = JSON.parse(result.text)
+    const systemText = body.system
+      .map((entry: { text?: unknown }) => (typeof entry.text === "string" ? entry.text : ""))
+      .join("\n")
+
+    expect(systemText).not.toContain("Here is some useful information about the environment")
+    expect(systemText).not.toContain("<env>")
+    expect(systemText).not.toContain("Working directory")
+    expect(systemText).not.toContain("You are powered by the model named")
+    expect(systemText).not.toContain("You are OpenCode, the best coding agent on the planet.")
+    expect(systemText).toContain(conservative)
+    expect(systemText).toContain("cc_turn_origin=task_notification;")
+    expect(body.system[0].text).toContain("x-anthropic-billing-header:")
+    expect(inspectIntegrity(result.text).matches).toBe(true)
+  })
   test("unknown native CLI versions fall back instead of guessing integrity", () => {
     const body = native("")
     body.system[0] = {

@@ -226,4 +226,12 @@ warn line, as `upstreamMessage`, beside its classifier rule as `signal`. Other s
 status-shaped verdict and also log that text and signal. A classification marked
 `requestAttributable` or `permanentForRequest` carries the flag onto the attempt's failure on this
 transport as on the Agent SDK's, so a fast-path `claude-sdk:extra-usage-gated` (`400` or `429`)
-fails over without cooling the account (2.70.1).
+fails over without cooling the account (2.70.1). That classification limits the blast radius: the
+same prompt is refused on every account, so a chain of them is a retry storm.
+
+Native fast-path system text is now scrubbed in place for `scrub.ts` harness fingerprints inside
+`prepareFastRequest`, before the rebuilt body is integrity-stamped, so the refusal is prevented at
+the source instead of only classified after an upstream rejects it. Conservative text and the
+native attribution header survive; the SDK path and the scrub rules themselves are unchanged.
+This is the same fleet rule every Claude subscription transport follows
+(`docs/standards/harness-fingerprint-scrubbing.md`).
