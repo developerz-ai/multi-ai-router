@@ -1,3 +1,4 @@
+import type { ProviderPreferences } from "@multi-ai-router/core"
 import { DEFAULT_MAX_BODY_BYTES } from "../services/dataplane/body/read"
 import type { DataPlaneConfig, FailoverConfig, TranslationConfig } from "./env-routing-types"
 import type { ParsedEnv } from "./env-schema"
@@ -7,6 +8,10 @@ export function readRoutingEnv(raw: ParsedEnv): {
   readonly dataPlane: DataPlaneConfig
   readonly failover: FailoverConfig
   readonly translation: TranslationConfig
+  readonly openRouterPriceSort: {
+    readonly accountIds: readonly string[]
+    readonly preferences: ProviderPreferences
+  }
 } {
   return {
     // Defaults mirror the layer constants they override, so an unset variable
@@ -50,6 +55,14 @@ export function readRoutingEnv(raw: ParsedEnv): {
       thinkingDefaultModels: raw.OPENAI_CHAT_THINKING_DEFAULT_MODELS ?? [],
       maxSseFrameBytes: raw.MAX_TRANSLATION_SSE_FRAME_BYTES ?? 16_777_216,
       dropLogWindowSeconds: raw.TRANSLATION_DROP_LOG_WINDOW_SECONDS ?? 3_600,
+    },
+    openRouterPriceSort: {
+      accountIds: raw.OPENROUTER_PRICE_SORT_ACCOUNTS ?? [],
+      preferences: {
+        sort: "price",
+        quantizations: ["fp8", "bf16"],
+        allow_fallbacks: true,
+      },
     },
   }
 }

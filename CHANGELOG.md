@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `OPENROUTER_PRICE_SORT_ACCOUNTS` gives named OpenRouter coding accounts a stored-preference-shaped
+  default of `{sort: price, quantizations: [fp8, bf16], allow_fallbacks: true}`, injected at warm
+  catalog load. Empty by default; a stored account preference, the client's own `provider` fields,
+  other providers and unnamed accounts are unchanged. This is a non-spending mitigation: where the
+  effective preferences and upstream prices allow it, the same model is served more cheaply, with no
+  key, capacity, scope, model, pool-policy or alert change. A client that sends its own `sort` (for
+  example `throughput`) keeps that choice, so savings are conditional rather than guaranteed.
+  Spec: `docs/idea/03-providers.md#openrouter--provider-preferences-key-caps-and-per-model-throttles`.
+
+### Changed
+
+- Recovered findings for a metered OpenRouter coding account: pool `openrouter-coding` is
+  `priority-failover`, not `quota-aware`; its
+  `spend_limit` window is advisory and continuous; spend is driven by
+  `deepseek/deepseek-v4.1-flash` and `tencent/hy4-flash`; the pool's other member serves only free
+  models, so offloading paid traffic to it is impossible. `RouterSpendLimitNear` does not exist in
+  this repo; it is an external OpenRouter key notification.
+- The failed recovery attempt (PR #501) is not present in this checkout: no quota-aware soft-limit
+  code or schema remains. Its failure causes were the wrong policy target (headroom ranking in a
+  `priority-failover` pool with an advisory window), a 28-file diff that spread into types, schema
+  and fixtures, a red `bin/check` gate (file-size on `types.ts`, Drizzle numeric/string and fixture
+  type errors, lint) and 18 unresolved handoffs. Instead of resuming it, this change uses the lever
+  that already ships: the account `providerPreferences` object, supplied as a config default only
+  to the named coding accounts.
+- Release path for this change: merging to `main` runs the quality gate and publishes no image.
+  A `v*` tag runs `bin/verify-version` and `release.yml`, which publish the multi-arch `ghcr.io`
+  image; deploy the version stamped by that tagged commit (source `2.78.1` at the time of writing).
+
 ### Fixed
 
 - Native Claude subscription fast-path requests no longer forward harness fingerprints in system text that provoked pool-wide `claude-sdk:extra-usage-gated` refusals and retry storms. The shared scrub rules now run on native text before integrity stamping; conservative text and native attribution headers survive, and the Agent SDK path is unchanged.
