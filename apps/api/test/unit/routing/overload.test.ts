@@ -5,6 +5,7 @@ import {
   type BreakerState,
   HEALTHY,
   NO_ATTEMPTS,
+  noteGateFull,
   noteOverload,
   planNextAttempt,
   recordAttempt,
@@ -160,5 +161,19 @@ describe("planning after overloaded", () => {
     expect(planNextAttempt(chain, progress, overloaded, options)).toMatchObject({ delayMs: 1_000 })
     progress = recordAttempt(progress, "b", "overload")
     expect(planNextAttempt(chain, progress, overloaded, options)).toMatchObject({ delayMs: 2_000 })
+  })
+
+  // The replica's gate is shared by every account of its provider: after it refused the request, a
+  // pause on an earlier busy account of that provider lands on the same gate.
+  test("a provider the chain was refused at (router-full) is not waited out in place", () => {
+    const sub = { provider: "anthropic-oauth" } as const
+    const pair = candidates(account("a", sub), account("b", sub))
+    const full: AttemptFailure = { kind: "router-full", message: "router-at-capacity" }
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "a"), "a", "overloaded")
+    progress = noteGateFull(recordAttempt(progress, "b"), "anthropic-oauth", full)
+    progress = noteOverload(progress, "b", "router-full")
+    expect(
+      planNextAttempt(pair, progress, full, { overloadRetries: 1, overloadRetryBaseMs: 1 }),
+    ).toMatchObject({ action: "stop" })
   })
 })

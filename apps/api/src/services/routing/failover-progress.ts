@@ -36,6 +36,11 @@ export function waitOutOverload(
   if (progress.overloadRetries >= cap) return { action: "stop", reason: exhausted }
   const candidate = ordered.find((entry) => entry.account.id === busyId)
   if (candidate === undefined) return { action: "stop", reason: exhausted }
+  // A provider the chain refused (its gate full for this request, or its wire refusing this body)
+  // is not asked again after a pause either: the wait would land on the very gate or wire that
+  // just refused it.
+  if (progress.refusedProviders?.includes(candidate.account.provider) === true)
+    return { action: "stop", reason: exhausted }
   const base = Math.max(0, options.overloadRetryBaseMs ?? 0)
   return {
     action: "retry-in-place",
