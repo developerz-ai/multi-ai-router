@@ -106,6 +106,44 @@ describe("Claude fast request", () => {
     expect(child?.text).toContain(SDK_IDENTITY)
     expect(child?.text).not.toContain("cc_turn_origin=")
   })
+  test("a fingerprint-only native system block is dropped entirely", () => {
+    // No conservative text shares this block: a fix that merely scrubs to empty text and keeps
+    // the block would still forward it. Assert the block itself is absent, not just its text.
+    const fingerprint = `Here is some useful information about the environment you are running in:
+<env>
+  Working directory: /home/router/workspace/router/router.ai
+  Workspace root folder: /home/router/workspace/router/router.ai
+  Is directory a git repo: yes
+  Platform: linux
+</env>
+You are powered by the model named Claude Opus 5. The exact model ID is claude-opus-5.
+You are OpenCode, the best coding agent on the planet.`
+    const request = native("cc_turn_origin=task_notification; cc_prompt_index=2; cc_turn_index=3;")
+    request.system.push({ type: "text", text: fingerprint })
+
+    const result = prepare(request)
+    if (!result) throw new Error("missing prepared body")
+    const body = JSON.parse(result.text)
+    const entries = body.system as { type?: unknown; text?: unknown }[]
+    const systemText = entries
+      .map((entry) => (typeof entry.text === "string" ? entry.text : ""))
+      .join("\n")
+
+    expect(systemText).not.toContain("Here is some useful information about the environment")
+    expect(systemText).not.toContain("<env>")
+    expect(systemText).not.toContain("Working directory")
+    expect(systemText).not.toContain("You are powered by the model named")
+    expect(systemText).not.toContain("You are OpenCode, the best coding agent on the planet.")
+    // No client system text remains: the fingerprint-only block was dropped, not scrubbed to
+    // empty text and forwarded. Billing, identity and the assistant preset are transport blocks.
+    expect(entries).toHaveLength(3)
+    const [billing, identity, preset] = entries
+    expect(billing?.text).toContain("x-anthropic-billing-header:")
+    expect(identity?.text).toBe(HUMAN_IDENTITY)
+    expect(preset?.text).toContain("You are the assistant, the best coding agent on the planet.")
+    expect(systemText).toContain("cc_turn_origin=task_notification;")
+    expect(inspectIntegrity(result.text).matches).toBe(true)
+  })
   test("native system blocks lose harness fingerprints but keep conservative text and attribution", () => {
     // Verbatim from scrub.test.ts: opencode's `environment()` preamble plus the two identity
     // lines that make Anthropic meter a subscription request as a third-party app. A native

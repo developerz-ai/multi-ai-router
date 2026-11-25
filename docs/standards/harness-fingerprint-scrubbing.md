@@ -36,12 +36,17 @@ in it, whichever transport carries the request:
 - The Agent SDK path scrubs where the prompt crosses into `query()` (`claude-sdk/options.ts`).
 - The native fast path scrubs **in place** on the client's native system text inside
   `prepareFastRequest` (`claude-fast/request.ts`), before the rebuilt body is integrity-stamped.
-  Native attribution headers and non-prompt fields are not prompt text and are preserved.
+  Non-prompt fields are preserved; the billing block is rebuilt with `cc_version` pinned to the
+  calibrated CLI version, `cc_turn_origin=sdk` rewritten to `human`, a fresh `cch` stamped over the
+  rebuilt body, and the retained attribution fields (for example `cc_turn_origin`, `cc_prompt_id`,
+  `cc_is_subagent`, `cc_prev_req`, prompt and turn indexes) carried into the new header.
 
-Only matched fingerprint text may be removed or rewritten. Conservative text and the native
-attribution header survive; an SDK fallback that is already scrubbed must not be scrubbed into a
-different prompt. API-key accounts send the caller's own credential and no harness impersonation is
-detected there; other providers are passthrough and their prompts are not rewritten.
+Only matched fingerprint text may be removed or rewritten. Conservative text and the retained
+attribution fields survive; the rebuilt header's checksum is validated against the assembled body,
+not compared to the incoming bytes. An SDK fallback that is already scrubbed must not be scrubbed
+into a different prompt. API-key accounts send the caller's own credential and no harness
+impersonation is detected there; other providers are passthrough and their prompts are not
+rewritten.
 
 ## Required test
 
@@ -52,8 +57,11 @@ the **wire body the transport prepares**, not from a helper called in isolation:
    block and an opencode identity line.
 2. Assert the fingerprint is absent from the prepared body for a native request. A test that checks
    only the SDK path passes while the native path still sends it.
-3. Assert conservative text and the native attribution header survive byte-for-byte, and that
-   scrubbing the same text again changes nothing.
+3. Assert conservative text and the attribution fields the transport retains survive in the
+   prepared header. For `claude-fast`, also validate the rebuilt `cch` with `inspectIntegrity`
+   (a valid native request's header is not byte-for-byte unchanged: `prepareFastRequest` rebuilds
+   it and changes `cc_turn_origin=sdk` to `human`). Assert that scrubbing the prompt text again
+   changes nothing.
 4. Leave `scrub.test.ts` green. The rules do not change when a transport starts applying them.
 
 A transport that skips the scrub is a defect even when classification stops the account from being
