@@ -583,6 +583,29 @@ curl -s -X PATCH "$MAR/api/admin/accounts/<id>" -H "Authorization: Bearer $ADMIN
 
 The console's account edit form shows a **Provider preferences** JSON box for these accounts only.
 
+**Config default for named coding accounts.** `OPENROUTER_PRICE_SORT_ACCOUNTS` is a comma-separated
+list of Account ids whose warm catalog entry is given
+`{"sort":"price","quantizations":["fp8","bf16"],"allow_fallbacks":true}` when the row has no
+stored `providerPreferences`. It is injected at catalog load, not on the request path: no Postgres
+query is added to a request, and the same field-by-field rule above still applies, so a client's own
+`provider` object wins and a stored preference or an empty variable leaves the row exactly as it was.
+Only `openrouter` accounts named in the variable are touched; other providers cannot take the object.
+
+This is the supported non-spending lever for a metered coding key under spend pressure. Price sort
+asks OpenRouter to serve the **same requested model** through a cheaper eligible provider and a
+lower-cost quantization, so a deepseek/deepseek-v4.1-flash or tencent/hy4-flash turn costs less per
+request without renaming, downgrading or substituting the model, changing a router key's capacity,
+weight, priority or scope, moving any account between pools, or touching an alert threshold.
+`RouterSpendLimitNear` is an external OpenRouter key notification, not a router threshold: it is
+untouched. Fallbacks stay enabled, so price sort is not a narrower provider filter. The variable is
+**empty by default**, so nothing changes for an operator who does not set it.
+
+The earlier quota-aware soft-limit attempt (#501) was aimed at the wrong lever. The coding account's
+pool uses `priority-failover`, not `quota-aware`, and its `spend_limit` quota window is advisory,
+so ranking accounts by remaining headroom would neither reorder that pool nor slow the paid spend.
+Its only pool peer serves free models only, so switching policy cannot offload a paid workload
+either. Reducing the unit cost of the same traffic is the lever that applies here.
+
 **Key caps that reset.** `openrouter` declares a `quotaRead` (`drivers/openrouter-key.ts`) on
 `GET https://openrouter.ai/api/v1/key` (openrouter.ai/docs/api-reference/limits, read 2026-11-14):
 `limit`, `limit_reset` (`daily` | `weekly` | `monthly` | null), `limit_remaining`. It becomes one

@@ -13,6 +13,7 @@ import type { readMetricInventoryEnv } from "./metric-inventory"
 import type { PoolRoster } from "./pool-roster"
 import type { readRecoveryEnv } from "./recovery"
 import type { readRelayLifetimesEnv } from "./relay-lifetimes"
+import type { readRoutingEnv } from "./routing-env"
 import type { RuntimeLimitsConfig } from "./runtime-limits"
 import type { readUpstreamStreamEnv } from "./upstream-stream"
 import type { readUsageReadEnv } from "./usage-read"
@@ -257,4 +258,5 @@ export interface Env {
   readonly egressProxy: EgressProxyEnv
   readonly oauthRefresh: OAuthRefreshConfig
   readonly translation: TranslationConfig
+  readonly openRouterPriceSort: ReturnType<typeof readRoutingEnv>["openRouterPriceSort"]
 }

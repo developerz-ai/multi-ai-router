@@ -149,10 +149,17 @@ export function createWarmState(
   const catalogSnapshots = createCatalogSnapshotRepository(database)
   const catalog = createRoutingCatalog({
     load: () =>
-      loadCatalog(catalogSnapshots, {
-        now,
-        memoryMs: env.routingLimits.modelRemovalMemoryDays * 86_400_000,
-      }),
+      loadCatalog(
+        catalogSnapshots,
+        {
+          now,
+          memoryMs: env.routingLimits.modelRemovalMemoryDays * 86_400_000,
+        },
+        {
+          accountIds: new Set(env.openRouterPriceSort.accountIds),
+          preferences: env.openRouterPriceSort.preferences,
+        },
+      ),
     onInstalled: (loaded) => {
       reconcileSdkQuota(loaded)
       recoveryComponents?.reconcile(loaded)

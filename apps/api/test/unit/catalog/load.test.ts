@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import type { ProviderPreferences } from "@multi-ai-router/core"
 import {
   type AccountBreakerRow,
   type AccountRow,
@@ -7,6 +8,7 @@ import {
   type RecoveryRow,
 } from "@multi-ai-router/db"
 import { type CatalogSources, loadCatalog } from "../../../src/services/catalog"
+import type { ProviderPreferenceDefaults } from "../../../src/services/catalog/load"
 import { resolveModel } from "../../../src/services/routing"
 import { accountRow as durableAccountRow } from "../../support/account-row"
 
@@ -236,6 +238,72 @@ describe("what the catalog carries off the account row", () => {
       ]),
     )
     expect(accounts.map((account) => account.billing)).toEqual(["subscription", "metered"])
+  })
+})
+
+describe("provider preference defaults from warm config", () => {
+  const PRICE_SORT: ProviderPreferences = {
+    sort: "price",
+    quantizations: ["fp8", "bf16"],
+    allow_fallbacks: true,
+  }
+  const STORED: ProviderPreferences = { sort: "throughput", allow_fallbacks: false }
+  const NAMED = "11111111-1111-4111-8111-111111111111"
+  const OTHER = "22222222-2222-4222-8222-222222222222"
+
+  function defaults(ids: readonly string[]): ProviderPreferenceDefaults {
+    return { accountIds: new Set(ids), preferences: PRICE_SORT }
+  }
+
+  test("a named openrouter account with no stored preference receives the price sort", async () => {
+    const { accounts } = await loadCatalog(
+      sources([row({ id: NAMED, provider: "openrouter", providerPreferences: null })]),
+      undefined,
+      defaults([NAMED]),
+    )
+    expect(accounts[0]?.driver.providerPreferences).toEqual(PRICE_SORT)
+  })
+
+  test("a stored preference always wins over the default", async () => {
+    const { accounts } = await loadCatalog(
+      sources([row({ id: NAMED, provider: "openrouter", providerPreferences: STORED })]),
+      undefined,
+      defaults([NAMED]),
+    )
+    expect(accounts[0]?.driver.providerPreferences).toEqual(STORED)
+  })
+
+  test("an unlisted openrouter account and a named non-openrouter account are unchanged", async () => {
+    const { accounts } = await loadCatalog(
+      sources([
+        row({ id: NAMED, provider: "openrouter", providerPreferences: null }),
+        row({ id: OTHER, provider: "openrouter", providerPreferences: null }),
+        row({
+          id: "33333333-3333-4333-8333-333333333333",
+          provider: "zai",
+          providerPreferences: null,
+        }),
+      ]),
+      undefined,
+      defaults([NAMED, "33333333-3333-4333-8333-333333333333"]),
+    )
+    expect(accounts.map((account) => "providerPreferences" in account.driver)).toEqual([
+      true,
+      false,
+      false,
+    ])
+  })
+
+  test("with no configured ids the driver is byte-identical to today", async () => {
+    const rows = [
+      row({ id: NAMED, provider: "openrouter", providerPreferences: null }),
+      row({ id: OTHER, provider: "openrouter", providerPreferences: STORED }),
+    ]
+    const withConfig = await loadCatalog(sources(rows), undefined, defaults([]))
+    const withoutConfig = await loadCatalog(sources(rows))
+    expect(withConfig.accounts.map((account) => account.driver)).toEqual(
+      withoutConfig.accounts.map((account) => account.driver),
+    )
   })
 })
 

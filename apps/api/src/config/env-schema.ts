@@ -252,6 +252,9 @@ export const ENV_FIELDS = {
   // a forced `tool_choice` to a matched model is sent `enable_thinking: false`
   // (docs/idea/06-protocol-translation.md). Empty/unset matches nothing — dormant by default.
   OPENAI_CHAT_THINKING_DEFAULT_MODELS: modelGlobList.optional(),
+  // Account ids whose OpenRouter requests get a price-sort `provider` preference at warm catalog
+  // load when the account has no stored one. Same list grammar as the model knobs; empty is off.
+  OPENROUTER_PRICE_SORT_ACCOUNTS: modelGlobList.optional(),
 } as const
 
 export const boundedEnvSchema = z.object(ENV_FIELDS).superRefine(validateNumericBounds)

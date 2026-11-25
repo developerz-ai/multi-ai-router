@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { ProviderId, ProviderPreferences } from "@multi-ai-router/core"
+import { loadCatalog } from "../../src/services/catalog"
+import { accountRow } from "../support/account-row"
 import { account } from "../unit/dataplane/fixtures"
 import { bearer, CRYPTOR, harness, post } from "./harness"
 
@@ -40,14 +42,16 @@ async function sent(input: {
   preferences?: ProviderPreferences
   path: "/v1/chat/completions" | "/v1/messages"
   body: string
+  account?: ReturnType<typeof account>
 }): Promise<string> {
   const { app, upstream } = harness({
     accounts: [
-      account("a", {
-        provider: input.provider,
-        cipher: CRYPTOR,
-        ...(input.preferences === undefined ? {} : { providerPreferences: input.preferences }),
-      }),
+      input.account ??
+        account("a", {
+          provider: input.provider,
+          cipher: CRYPTOR,
+          ...(input.preferences === undefined ? {} : { providerPreferences: input.preferences }),
+        }),
     ],
     responses: [chatCompletion],
   })
@@ -113,5 +117,81 @@ describe("openrouter provider preferences on egress", () => {
       body: MESSAGES,
     })
     expect(translated).not.toContain('"provider"')
+  })
+})
+
+describe("price-sort defaults on the spend-driving OpenRouter models", () => {
+  const ACCOUNT_ID = "8b609813-f618-409c-85e9-60373a618fcf"
+
+  async function catalogAccount(): Promise<ReturnType<typeof account>> {
+    const { accounts } = await loadCatalog(
+      {
+        read: async () => ({
+          accounts: [accountRow({ id: ACCOUNT_ID, provider: "openrouter" })],
+          pools: [],
+          members: [],
+          windows: [],
+          recoveries: [],
+        }),
+      },
+      undefined,
+      { accountIds: new Set([ACCOUNT_ID]), preferences: CODING },
+    )
+    const loaded = accounts[0]
+    if (loaded === undefined) throw new Error("configured account missing from catalog")
+    return {
+      ...loaded,
+      // The catalog never carries the credential itself; the composition root injects it at
+      // request time. The harness takes it on the fixture, with the mock upstream's key.
+      authMaterial: CRYPTOR.encrypt("sk-upstream-mock"),
+    }
+  }
+
+  for (const model of ["deepseek/deepseek-v4.1-flash", "tencent/hy4-flash"]) {
+    test(`${model}: price-sort reaches the upstream and the model name is untouched`, async () => {
+      const body = JSON.stringify({ model, messages: [{ role: "user", content: "fix" }] })
+      const loaded = await catalogAccount()
+      const { app, upstream } = harness({
+        accounts: [loaded],
+        responses: [
+          () =>
+            Response.json({
+              id: "chatcmpl_1",
+              object: "chat.completion",
+              created: 1,
+              model,
+              choices: [
+                { index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }),
+        ],
+      })
+      const res = await app.request("/v1/chat/completions", post(body, bearer()))
+      expect(res.status).toBe(200)
+      await res.text()
+      expect(upstream.calls).toHaveLength(1)
+      const sentBody = JSON.parse(upstream.calls[0]?.body ?? "")
+      expect(sentBody.provider).toEqual(CODING)
+      expect(sentBody.model).toBe(model)
+    })
+  }
+
+  test("a client-supplied provider still wins field by field on an injected account", async () => {
+    const body = JSON.stringify({
+      model: "deepseek/deepseek-v4.1-flash",
+      provider: { sort: "throughput", require_parameters: true },
+      messages: [{ role: "user", content: "fix" }],
+    })
+    const loaded = await catalogAccount()
+    const { app, upstream } = harness({ accounts: [loaded], responses: [chatCompletion] })
+    const res = await app.request("/v1/chat/completions", post(body, bearer()))
+    expect(res.status).toBe(200)
+    await res.text()
+    expect(JSON.parse(upstream.calls[0]?.body ?? "").provider).toEqual({
+      ...CODING,
+      sort: "throughput",
+      require_parameters: true,
+    })
   })
 })
