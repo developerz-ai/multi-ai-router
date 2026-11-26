@@ -77,6 +77,30 @@ describe("a caller with a wait budget", () => {
     expect(concurrency.inFlight).toBe(0)
   })
 
+  test("with the budget spent, a different account's acquire on a full global gate refuses at once and keeps nothing", async () => {
+    const { time, concurrency } = gate({ global: 1, perAccount: 4 })
+    const holder = await concurrency.acquire("acct-x", live())
+    const budget = createSdkWaitBudget(KNOB)
+
+    // Spend the whole budget queued on the global half.
+    const spending = expiry(concurrency.acquire("acct-y", live(), budget))
+    await turns()
+    time.advance(KNOB)
+    expect((await spending).half).toBe("global")
+    expect(budget.remaining()).toBe(0)
+
+    // A different account has a free account slot but the global gate is full: the global half
+    // expires immediately, with no timer armed, no queued waiter and no account permit retained.
+    const refused = await expiry(concurrency.acquire("acct-z", live(), budget))
+    expect(refused.half).toBe("global")
+    expect(time.armed).toBe(0)
+    expect(concurrency.queued).toBe(0)
+    expect(concurrency.inFlightFor("acct-z")).toBe(0)
+    expect(concurrency.inFlight).toBe(1)
+    holder.release()
+    expect(concurrency.inFlight).toBe(0)
+  })
+
   test("granted inside its budget, it resolves and holds its slot", async () => {
     const { time, concurrency } = gate({ global: 4, perAccount: 1 })
     const holder = await concurrency.acquire("acct-a", live())
@@ -102,17 +126,19 @@ describe("a caller with a wait budget", () => {
     const holder = await concurrency.acquire("acct-a", live())
     const granted: string[] = []
 
-    const first = concurrency
-      .acquire("acct-a", live(), createSdkWaitBudget(KNOB))
-      .then((slot) => (granted.push("first"), slot))
+    const first = concurrency.acquire("acct-a", live(), createSdkWaitBudget(KNOB)).then((slot) => {
+      granted.push("first")
+      return slot
+    })
     await turns()
     time.advance(10_000)
     // Arrives later with its own, shorter budget: it expires while the others still queue.
     const second = expiry(concurrency.acquire("acct-a", live(), createSdkWaitBudget(5_000)))
     await turns()
-    const third = concurrency
-      .acquire("acct-a", live(), createSdkWaitBudget(KNOB))
-      .then((slot) => (granted.push("third"), slot))
+    const third = concurrency.acquire("acct-a", live(), createSdkWaitBudget(KNOB)).then((slot) => {
+      granted.push("third")
+      return slot
+    })
     await turns()
     expect(concurrency.queued).toBe(3)
 
