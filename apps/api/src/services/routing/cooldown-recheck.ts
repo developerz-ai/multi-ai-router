@@ -40,7 +40,14 @@ export function cooldownRecheckDue(
     (account.status === "cooling_down" && held === undefined) ||
     spent.some((window) => window.resetsAt === undefined)
   if (noStatedEnd) return true
-  if (!running && spent.length === 0) return false
+  if (!running && spent.length === 0) {
+    // A cooling_down account whose cooldown has expired is half-open: its
+    // stated reset has passed, so it needs a probe to verify recovery. In
+    // priority-failover pools it never sees a client request, so the
+    // background recheck must send it instead of waiting for a request
+    // that never comes.
+    return account.status === "cooling_down"
+  }
 
   const clearsAt = Math.max(
     running ? held.getTime() : 0,

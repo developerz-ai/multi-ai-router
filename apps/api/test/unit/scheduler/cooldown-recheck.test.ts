@@ -52,9 +52,12 @@ describe("cooldownRecheckDue", () => {
     expect(due(account("a", { ...cooling(at(60_000)), quotaWindows: [spent()] }))).toBe(true)
   })
 
-  test("a healthy account, and one already half-open, are not", () => {
+  test("a healthy account is not due", () => {
     expect(due(account("a"))).toBe(false)
-    expect(due(account("a", cooling(at(-1))))).toBe(false)
+  })
+
+  test("an expired cooling_down account IS due: half-open, no spent windows", () => {
+    expect(due(account("a", cooling(at(-1))))).toBe(true)
   })
 
   test.each(["exhausted", "needs_reauth", "disabled"] as const)("%s is never due", (status) => {
