@@ -140,5 +140,18 @@ test("an unset CLAUDE_SDK_QUEUE_WAIT_MS derives 0 when the deadline is too short
   expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "2" }).claudeSdkQueueWaitMs).toBe(0)
   expect(() =>
     parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "1", UPSTREAM_TIMEOUT_MS: "1" }),
-  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS.*at most 0/s)
+  ).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS.*at most 0: an attempt deadline of 1 ms leaves no room for any wait \(set by UPSTREAM_TIMEOUT_MS\); unset the wait/s,
+  )
+  // A tie names both knobs: either one could be the one that set D.
+  expect(() =>
+    parseEnv({
+      ...base,
+      CLAUDE_SDK_QUEUE_WAIT_MS: "300",
+      UPSTREAM_TIMEOUT_MS: "100",
+      UPSTREAM_STREAM_TIMEOUT_MS: "100",
+      UPSTREAM_FIRST_BYTE_TIMEOUT_MS: "1",
+      UPSTREAM_IDLE_TIMEOUT_MS: "1",
+    }),
+  ).toThrow(/deadline of 100 ms \(set by UPSTREAM_TIMEOUT_MS and UPSTREAM_STREAM_TIMEOUT_MS\)/s)
 })
