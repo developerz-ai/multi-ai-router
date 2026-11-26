@@ -50,9 +50,10 @@ export const PRICE_TABLE_AS_OF = PRICE_SOURCES.map((source) => source.snapshotAs
  * Seven providers are absent and stay absent, because for each of them a shipped number would be a
  * fiction rather than a stale fact:
  *
- * - `openrouter` — the price is whichever upstream it routed to, decided per request. It reports
- *   the figure itself in the response body; reading that is a separate change, and inventing a
- *   table meanwhile would price every route as one.
+ * - `openrouter` — the price is whichever upstream it routed to, decided per request, so a table
+ *   would price every route as one. It reports what it billed in the response's `usage.cost`, and
+ *   that figure prices the attempt (`providers/drivers/openrouter-cost.ts`, `estimateCost`). A
+ *   provider that reports its price ships no table, so a rate found for it is an operator override.
  * - `kilo`, `nvidia` — their free models cost nothing and neither publishes a card for them; a
  *   funded Kilo key is billed per route, as OpenRouter's is. An operator who wants a hard zero in
  *   the reports sets a price override.

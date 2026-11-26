@@ -113,6 +113,7 @@ export function relaySuccess(
           // Counts are recorded only when the upstream stated a sample: on any outcome, an
           // unread response measured nothing, and its row says null rather than zero.
           tokens: facts.usageStated ? counts : undefined,
+          reportedCost: facts.reportedCost ?? null,
           priced: ctx.runtime.operation !== "count-tokens",
           // An answer cut short with no usage stated was still generated: unknown, never free.
           usageRead:
@@ -226,7 +227,11 @@ export function relaySuccess(
       // A JSON body's usage reads only at its end, and `whole` says the end has been observed.
       const facts = whole ? observation.finish() : observation.snapshot()
       const attribution = ctx.runtime.attribution(attempt, servable)
-      return usageCostFields(facts, attemptCost({ ...attribution, tokens: facts.counts }))
+      const reportedCost = facts.reportedCost ?? null
+      return usageCostFields(
+        facts,
+        attemptCost({ ...attribution, tokens: facts.counts, reportedCost }),
+      )
     },
   }
   return relayTranslatedResponse({

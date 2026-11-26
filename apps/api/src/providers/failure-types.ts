@@ -193,4 +193,13 @@ export interface ResponseObservationDescriptor {
    * adds no cut of its own.
    */
   readonly streamCap?: { readonly signal: string }
+  /**
+   * What the upstream says it billed for this attempt, in US dollars, read off a `usage` object the
+   * observer already parsed (a final stream chunk, or a whole JSON body). `undefined` when the
+   * object states no figure, or one this driver cannot trust. Only an upstream that bills per
+   * request at a price no table can know (an aggregator) declares one; it is never a frame parse of
+   * its own, so it costs nothing on a frame without usage
+   * (docs/idea/08-observability.md#a-cost-the-upstream-reports).
+   */
+  readonly reportedCost?: (usage: Record<string, unknown>) => number | undefined
 }

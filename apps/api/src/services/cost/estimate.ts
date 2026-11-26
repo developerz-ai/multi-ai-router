@@ -20,7 +20,11 @@ import type { RateCard, RateLookup } from "./rates"
  * |---|---|---|
  * | `metered` | A priced model on a pay-per-token account | Real spend |
  * | `notional` | A priced model on a **subscription** account — a flat fee has no per-request charge, so this is an attribution: "what this would have cost on the API" | A separate total, never summed with metered |
- * | `unknown` | No shipped rate for that provider + model | NULL, never zero |
+ * | `unknown` | No shipped rate for that provider + model, and no figure the upstream reported | NULL, never zero |
+ *
+ * A rate, when one is known, prices the attempt. Absent one, a figure the upstream itself reported
+ * (`CostInput.reportedCost`) is booked as it stands. A provider that reports its price ships no table
+ * (`prices.ts`), so a rate there is the operator's own override, and the operator's word wins.
  *
  * docs/idea/08-observability.md#cost-estimation.
  */
@@ -29,6 +33,8 @@ export interface CostEstimate {
   /** Dollars, as a decimal string at the column's scale. Null when no rate is known. */
   readonly costEstimate: string | null
   readonly costBasis: CostBasis
+  /** `reported`: the upstream's own figure for what it billed. Absent: priced from a rate. */
+  readonly source?: "reported"
 }
 
 /** No rate, no number. `unknown` is a reported fact, not a default that stands in for one. */
@@ -70,6 +76,11 @@ export interface CostInput {
    * which is also what a router booted without a database-backed book must do.
    */
   readonly prices?: RateLookup
+  /**
+   * Dollars the upstream itself says it billed for this attempt
+   * (`ResponseObservationDescriptor.reportedCost`). Read only when no rate is known.
+   */
+  readonly reportedCost?: number | null
 }
 
 /** Price one attempt. */
@@ -81,7 +92,7 @@ export function estimateCost(input: CostInput): CostEstimate {
     billing: input.billing ?? DEFAULT_ACCOUNT_BILLING,
     cacheWriteTokens: tokens.cacheWriteTokens,
   })
-  if (rates === null) return UNKNOWN_COST
+  if (rates === null) return reported(input)
 
   // The prompt is every input direction, cached or not: what a long-context tier is measured
   // against is how much context the request carried, not how much of it missed the cache.
@@ -98,6 +109,18 @@ export function estimateCost(input: CostInput): CostEstimate {
       oneHour * (card.cacheWrite1hPerMtok ?? card.cacheWritePerMtok)) /
     PER_MTOK
 
+  return priced(dollars, input.billing)
+}
+
+/** The upstream's own figure, or unknown when it stated none. */
+function reported(input: CostInput): CostEstimate {
+  const dollars = input.reportedCost
+  if (dollars === undefined || dollars === null) return UNKNOWN_COST
+  const estimate = priced(dollars, input.billing)
+  return estimate.costEstimate === null ? estimate : { ...estimate, source: "reported" }
+}
+
+function priced(dollars: number, billing: AccountBilling | undefined): CostEstimate {
   // A count an upstream reported wrong can price past what the column holds. Unknown is both the
   // honest answer and the writable one: a value the column rejects fails the insert and takes every
   // other record batched with it down too.
@@ -107,8 +130,5 @@ export function estimateCost(input: CostInput): CostEstimate {
   // Rounding can cross the exact integer ceiling even when the unrounded double is below it.
   if (Number(costEstimate) >= COST_CEILING) return UNKNOWN_COST
 
-  return {
-    costEstimate,
-    costBasis: BASIS[input.billing ?? DEFAULT_ACCOUNT_BILLING],
-  }
+  return { costEstimate, costBasis: BASIS[billing ?? DEFAULT_ACCOUNT_BILLING] }
 }

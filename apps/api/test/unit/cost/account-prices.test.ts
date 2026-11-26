@@ -276,3 +276,37 @@ test("GPT-6 model coverage on openai-api and openai-oauth (#181)", () => {
     },
   ])
 })
+
+test("a provider that reports its own cost is not listed as unpriced (OpenRouter's usage.cost)", () => {
+  const reporting = [
+    {
+      id: "or",
+      label: "OpenRouter",
+      provider: "openrouter" as const,
+      billing: "metered" as const,
+      models: ["nvidia/nemotron-3-ultra-550b-a55b"],
+    },
+    {
+      id: "or-uncatalogued",
+      label: "OpenRouter, no models",
+      provider: "openrouter" as const,
+      billing: "metered" as const,
+      models: [],
+    },
+    {
+      id: "compat",
+      label: "Compatible",
+      provider: "openai-compatible" as const,
+      billing: "metered" as const,
+      models: ["house-model"],
+    },
+  ]
+  expect(unpricedModels(reporting, lookupRates)).toEqual([
+    {
+      accountId: "compat",
+      provider: "openai-compatible",
+      model: "house-model",
+      reason: "missing_rate",
+    },
+  ])
+})
