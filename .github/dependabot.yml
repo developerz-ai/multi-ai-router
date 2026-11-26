@@ -1,7 +1,8 @@
 # Weekly, with minor and patch updates grouped per ecosystem; a major update arrives on its own.
-# Owner, 2026-11-26: weekly at most, grouped, quiet. Advisories come through here (dz devops.watch is
-# off), and each ecosystem batches its security bumps into one PR via an `applies-to:
-# security-updates` group. At most 3 open PRs per ecosystem.
+# Owner, 2026-11-26: version updates weekly at most, grouped, at most 3 open per ecosystem.
+# Advisories come through here too (dz devops.watch is off): security updates run as soon as an
+# advisory lands, outside the schedule and that limit, and an `applies-to: security-updates` group
+# batches them into one PR per ecosystem.
 # The 14-day cooldown lets a compromised release get caught before it reaches us. Security updates
 # are unaffected.
 version: 2

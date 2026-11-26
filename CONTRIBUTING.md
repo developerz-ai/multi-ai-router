@@ -95,9 +95,10 @@ Other commands you'll use often:
 A PR adds its entry under `## [Unreleased]` in `CHANGELOG.md` and does not
 bump the version. Releases are weekly (owner, 2026-11-26): the Monday
 `release-due` checkup (`.dz/schedules/release-due.md`) judges the window and
-the release PR bumps the version in every file `docs/RELEASING.md` step 1
+files a **Release due** issue; whoever takes it opens the release PR, which bumps the version in every file `docs/RELEASING.md` step 1
 lists, with `bin/verify-version` proving the tree agrees with itself. The one
-off-cycle release is a fix for a published high or critical advisory
+off-cycle release is a fix for a published advisory rated high or critical,
+or KEV-listed
 (`.dz/schedules/security-release.md`). Which digit the release moves is a
 rule, not a mood (#258), read off everything under `## [Unreleased]`:
 

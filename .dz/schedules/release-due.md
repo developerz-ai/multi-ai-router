@@ -1,6 +1,6 @@
 # Brief: is a release needed?
 
-Weekly checkup, Mondays 03:00 UTC, fired by `schedules: release-due`. This checkup is the only thing that cuts a release, at most one a week (owner, 2026-11-26): a merge, a fix, a fix count, a PR or an interactive session never cuts one, unless the owner explicitly asks for that specific release.
+Weekly checkup, Mondays 03:00 UTC, fired by `schedules: release-due`. This checkup is the only regular release decision, at most one release a week; it files the ask below, and whoever takes it opens the release PR and tags (owner, 2026-11-26): a merge, a fix, a fix count, a PR or an interactive session never cuts one, unless the owner explicitly asks for that specific release.
 
 Nothing ships from `main`: a release is a `v*` tag, and `release.yml` publishes the multi-arch image
 to `ghcr.io/developerz-ai/multi-ai-router`. This brief only judges and files; it never tags.
