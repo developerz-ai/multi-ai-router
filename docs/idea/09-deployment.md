@@ -6,6 +6,45 @@ purge, quota floor) are also shipped — in-process jittered timers, one `pg_try
 task, last run and outcome recorded to `ScheduledTaskRun` — and the retention windows below are what
 they sweep against.
 
+### Repair provenance and reviewable anchors
+
+This section records a documentation repair, not a new deployment capability. An earlier task text
+for this work was discarded at intake as `task_problem:injection`, so no model read it and no change
+was made from it; the earlier attempt failed at `bin/setup` because the box's port 5433 was in use.
+This pass restates the ask from the available context and puts reviewable anchors beside the claims,
+rather than reproducing the discarded text. The completed design behind the ask has no PR and no
+merged repo artifact: its conclusions are cited here as conclusions, never as shipped implementation.
+
+The safety claims above and below rest on these code paths, each checkable on its own:
+
+- Scheduler task safety: `apps/api/src/scheduler/lock.ts:4` (`advisoryTaskLock`) wraps each
+  background task in the dedicated advisory-lock pool. This makes one replica run a given sweep, not
+  the whole router multi-replica safe.
+- Per-account refresh mutual exclusion: `packages/db/src/credential-refresh-lock.ts:36`
+  (`createCredentialRefreshLockPool`) leases one advisory session per account, in a namespace
+  distinct from tasks and migrations.
+- Claude account ownership: `apps/api/src/providers/claude-sdk/account-ownership.ts:13`
+  (`createAccountCliOwnership`) drives the local ownership lifecycle, and migration `0054` stores
+  the fenced TTL lease. This is storage ownership for one account, not fleet-wide session or login
+  coordination.
+- Durable breaker propagation: production writes the breaker through
+  `apps/api/src/composition/warm-state.ts:62` (`createHealthStore`'s `onBreaker` feeds
+  `breakerWriter.record`), flushed by `createBreakerWriter` in
+  `apps/api/src/services/dataplane/breaker-writer.ts:11` and started at
+  `apps/api/src/composition/runtime-lifecycle.ts:105`; the same file's `onProbeHold` records the
+  half-open hold. Another replica learns of it through the catalog refresh path:
+  `apps/api/src/composition/warm-state.ts:150` (`createRoutingCatalog`, wired with
+  `refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000` and an `onInstalled` that calls
+  `health.reconcile`), whose timer is `createRoutingCatalog` in
+  `apps/api/src/services/catalog/store.ts:74`. `apps/api/test/integration/replica-breaker.test.ts`
+  covers the writer and catalog timer path (line 28), independent stores and restart (line 304),
+  and the bounded per-replica ceiling; production PR #482 added the ceiling test. These
+  are tests of a bounded propagation path, not live two-replica validation.
+
+Remaining gates stay open. Shared RWX/NFS storage is explicitly not an answer to attachment fencing
+(see below). The ownership design is unmerged: nothing here claims the exclusive attachment design
+clears the outstanding local-state or fleet-wide gates. Continue to deploy **one replica**.
+
 ## Account ownership and storage handoff
 
 Account ownership is not general multi-replica support. Continue to deploy **one replica**
@@ -347,7 +386,7 @@ and fails the build for any numeric knob that is neither refused nor explained
 | `CLAUDE_OWNERSHIP_CLEANUP_MAX_DEPTH` | no | `64` | Maximum credential cleanup recursion depth; positive, at most 256. |
 | `CLAUDE_OWNERSHIP_OPERATION_TIMEOUT_MS` | no | `15000` | Bound for native provisioning/revocation/cleanup operations; positive, at most 60000 ms. Unknown guardian exits retain durable markers and defer cleanup; never retire them using age or PID guesses. |
 | `CLAUDE_SDK_MAX_CONCURRENCY` | no | `10` | Claude subscription turns in flight on this replica: the shared Claude concurrency limit. An Agent-SDK turn spawns a `claude` subprocess (~245 MB native binary, measured; see [Sizing](#sizing)), and a warm fast-mode HTTP turn takes a slot of the same gate without one, so the gate can be full with no CLI child running. It is a **memory** bound, not a throughput one: size against RAM, not CPUs. Requests over the ceiling queue for up to `CLAUDE_SDK_QUEUE_WAIT_MS`, then try the next account. Bounds every spawner, including the console's **Test now** button. Watch `router_sdk_subprocesses` and `router_sdk_subprocess_queue_depth` to size it against real traffic, and check fast-mode traffic as well as subprocesses when the gate reads full. |
-| `CLAUDE_SDK_QUEUE_WAIT_MS` | no | `60000` | The most one Claude subscription **request** waits at the shared Claude concurrency gate (fast-mode HTTP turns and Agent-SDK subprocesses alike), in total across every account it tries (one budget per request, not per attempt). Past it the account is skipped (`account-full`) and the walk goes on; when an account stayed at its in-flight limit through the wait and none took the request the client gets `429 account_at_capacity` after about one wait, and when only the replica's own ceiling refused, `503 no_healthy_account` with signal `router-at-capacity` (the other Claude accounts are then skipped, not tried). 60 s clears an ordinary burst and stays under the 300 s idle cut clients apply to a silent call. Does **not** bind the console's Test now, the idle probe, the credential keepalive or the model-list and usage-gauge reads: nobody is waiting on those, and refusing the keepalive would skip a token refresh. Positive integer, milliseconds, **at most `240000`** (clients cut a silent call at 300 s; 60 s of headroom keeps the answer inside that cut) and **less than `UPSTREAM_TIMEOUT_MS`** (the attempt deadline would end the request before the wait could); both refused at boot when the operator sets them. Left unset, the default is clamped to half of a `UPSTREAM_TIMEOUT_MS` below 60 s, so lowering the deadline alone never refuses boot. |
+| `CLAUDE_SDK_QUEUE_WAIT_MS` | no | `60000` | The most one Claude subscription **request** waits at the shared Claude concurrency gate (fast-mode HTTP turns and Agent-SDK subprocesses alike), in total across every account it tries (one budget per request, not per attempt). Past it the account is skipped (`account-full`) and the walk goes on; when an account stayed at its in-flight limit through the wait and none took the request the client gets `429 account_at_capacity` after about one wait, and when only the replica's own ceiling refused, `503 no_healthy_account` with signal `router-at-capacity` (the other Claude accounts are then skipped, not tried). 60 s clears an ordinary burst and stays under the 300 s idle cut clients apply to a silent call. Does **not** bind the console's Test now, the idle probe, the credential keepalive or the model-list and usage-gauge reads: nobody is waiting on those, and refusing the keepalive would skip a token refresh. Positive integer, milliseconds, **at most `240000`** (clients cut a silent call at 300 s; 60 s of headroom keeps the answer inside that cut) and **less than `UPSTREAM_TIMEOUT_MS`** (the attempt deadline would end the request before the wait could); both refused at boot when the operator sets them. Left unset, the wait is `min(60000, max(1, floor(UPSTREAM_TIMEOUT_MS / 2)))`: half the attempt timeout rounded down, with a 1 ms floor and a 60 s cap, so it starts to shrink below a 120000 ms deadline (90000 gives 45000) and lowering the deadline alone never refuses boot. When that derived wait would reach the deadline (a deadline of 2 ms or less) it is `0` instead: a full gate refuses at once, without queueing, so the capacity verdict still comes back before the deadline. |
 | `CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT` | no | `4` | The same ceiling for any one subscription Account — what stops one Account's burst starving the pool. Values above `CLAUDE_SDK_MAX_CONCURRENCY` are legal and simply never bind. |
 | `CLAUDE_SDK_CREDENTIAL_KEEPALIVE` | no | `true` | Gives a logged-in subscription account whose **access** token is cold one small real turn **before** the sweep's turn-free gauge read touches its directory. A real turn runs to completion and so persists the rotated refresh token; a turn-free probe is ended before that write and spends the token for nothing ([11-anthropic-agent-sdk.md §3](11-anthropic-agent-sdk.md)). Costs one small turn per cold account per sweep, bounded by `IDLE_ACCOUNT_PROBE_BATCH_SIZE`. `false` warms nothing: a cold account keeps its old gauge and catalog until a client's turn refreshes it, and no probe ever spends its refresh token. |
 | `CLAUDE_SDK_CREDENTIAL_KEEPALIVE_INTERVAL_SECONDS` | no | `180` | How often the `credential_keepalive` task looks for a subscription whose access token the `claude` CLI would refresh right now (inside its 300 s lead, or expired) and gives it one small real turn so the CLI refreshes before the token lapses. Reads timestamps only. **Refused at boot** when `interval × (1 + SCHEDULER_JITTER_FRACTION)` reaches 300 s — ticks that far apart can step over the whole window; the *default* shrinks under a wide jitter instead. Off with `CLAUDE_SDK_CREDENTIAL_KEEPALIVE=false`. |
@@ -546,7 +585,7 @@ Two operational consequences:
 
 | | |
 |---|---|
-| **One replica, not a horizontal fleet** | Before doing work, each background task takes a Postgres advisory lock named for that task; exactly one replica runs a given sweep and the others skip. Account ownership adds a separate fenced TTL lease, while durable account breaker clocks, half-open probe holds and existing Postgres recovery generations/single-use permits cover cooldown persistence, probe admission and designated recovery admission. This is not general multi-replica safety. Continue running **one replica**: warm caches, key/session bindings, per-key rate-limit windows and pending login/OAuth device-flow state remain per-process. Admin login budgets are shared in Postgres, but password concurrency remains per-process. A horizontal fleet still requires shared per-key rate limits, durable pending login/device flows and shared SDK in-flight session coordination. Account storage additionally requires the exclusive attachment contract above. |
+| **One replica, not a horizontal fleet** | Task-level safety only: before doing work, each background task takes a Postgres advisory lock named for that task (`apps/api/src/scheduler/lock.ts:4`); exactly one replica runs a given sweep and the others skip. Account ownership adds a separate fenced TTL lease, while durable account breaker clocks, half-open probe holds and existing Postgres recovery generations/single-use permits cover cooldown persistence, probe admission and designated recovery admission. This is not general multi-replica safety. Continue running **one replica**: warm caches, key/session bindings, per-key rate-limit windows and pending login/OAuth device-flow state remain per-process. Admin login budgets are shared in Postgres, but password concurrency remains per-process. A horizontal fleet still requires shared per-key rate limits, durable pending login/device flows and shared SDK in-flight session coordination. Account storage additionally requires the exclusive attachment contract above. |
 | **Every run is recorded** | Task, start, finish, outcome, and items processed land in a `ScheduledTaskRun` row, surfaced in the admin UI. That record is how you tell a task that is idle from one that is wedged — see Troubleshooting. |
 
 ### Breaker propagation is conditional, not immediate

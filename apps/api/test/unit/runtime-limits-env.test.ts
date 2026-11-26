@@ -88,5 +88,19 @@ test("an unset CLAUDE_SDK_QUEUE_WAIT_MS never refuses boot: the default yields t
   expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "120000" }).claudeSdkQueueWaitMs).toBe(60_000)
   expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "60000" }).claudeSdkQueueWaitMs).toBe(30_000)
   expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "20000" }).claudeSdkQueueWaitMs).toBe(10_000)
-  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "1" }).claudeSdkQueueWaitMs).toBe(1)
+  // Half the attempt timeout rounded down, 60 s cap: it starts to shrink below a 120000 ms deadline.
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "119999" }).claudeSdkQueueWaitMs).toBe(59_999)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "90000" }).claudeSdkQueueWaitMs).toBe(45_000)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "3" }).claudeSdkQueueWaitMs).toBe(1)
+})
+
+// A derived wait that would reach the deadline (a deadline of 2 ms or less) is not a wait at all: it
+// is 0, which the gate reads as "admit now or refuse now", so the capacity verdict is returned
+// before the deadline instead of racing it. An operator-set value is still refused, never derived.
+test("an unset CLAUDE_SDK_QUEUE_WAIT_MS derives 0 when the deadline is too short to hold a wait", () => {
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "1" }).claudeSdkQueueWaitMs).toBe(0)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "2" }).claudeSdkQueueWaitMs).toBe(0)
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "1", UPSTREAM_TIMEOUT_MS: "1" }),
+  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS.*less than UPSTREAM_TIMEOUT_MS/s)
 })

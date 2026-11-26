@@ -1,4 +1,4 @@
-import type { QuotaWindowState } from "@multi-ai-router/core"
+import type { ProviderPreferences, QuotaWindowState } from "@multi-ai-router/core"
 import {
   type AccountBreakerRow,
   type AccountRow,
@@ -41,9 +41,20 @@ export interface RemovalMemory {
   readonly memoryMs: number
 }
 
+/**
+ * Price-sort fallbacks for named OpenRouter accounts, installed at warm catalog load so the
+ * request path never reads config. A stored Account preference always wins; the client's own
+ * `provider` field still wins field by field at egress.
+ */
+export interface ProviderPreferenceDefaults {
+  readonly accountIds: ReadonlySet<string>
+  readonly preferences: ProviderPreferences
+}
+
 export async function loadCatalog(
   sources: CatalogSources,
   removalMemory?: RemovalMemory,
+  providerPreferenceDefaults?: ProviderPreferenceDefaults,
 ): Promise<CatalogData> {
   // One repeatable-read snapshot: another replica may commit a complete pool edit between
   // statements, but this load must never combine its old policy with its new membership.
@@ -91,6 +102,7 @@ export async function loadCatalog(
         recoveryByAccount.get(row.id),
         removalHorizon(removalMemory),
         breakerByAccount.get(row.id),
+        providerPreferenceDefaults,
       ),
     ),
     pools: poolRows.map((pool) => ({
@@ -115,6 +127,7 @@ function toRoutableAccount(
   recovery: RecoveryRow | undefined,
   removedAfter: number,
   candidate?: AccountBreakerRow,
+  providerPreferenceDefaults?: ProviderPreferenceDefaults,
 ): RoutableAccount {
   const breaker =
     candidate !== undefined &&
@@ -174,7 +187,13 @@ function toRoutableAccount(
       baseUrl: row.baseUrl,
       dialect: row.dialect,
       modelAliases: row.modelAliases,
-      ...(row.providerPreferences === null ? {} : { providerPreferences: row.providerPreferences }),
+      ...(row.providerPreferences !== null
+        ? { providerPreferences: row.providerPreferences }
+        : providerPreferenceDefaults !== undefined &&
+            row.provider === "openrouter" &&
+            providerPreferenceDefaults.accountIds.has(row.id)
+          ? { providerPreferences: providerPreferenceDefaults.preferences }
+          : {}),
     },
     billing: row.billing,
     authMaterial: row.authMaterial,

@@ -583,6 +583,32 @@ curl -s -X PATCH "$MAR/api/admin/accounts/<id>" -H "Authorization: Bearer $ADMIN
 
 The console's account edit form shows a **Provider preferences** JSON box for these accounts only.
 
+**Config default for named coding accounts.** `OPENROUTER_PRICE_SORT_ACCOUNTS` is a comma-separated
+list of Account ids whose warm catalog entry is given
+`{"sort":"price","quantizations":["fp8","bf16"],"allow_fallbacks":true}` when the row has no
+stored `providerPreferences`. It is injected at catalog load, not on the request path: no Postgres
+query is added to a request, and the same field-by-field rule above still applies, so a client's own
+`provider` object wins and a stored preference or an empty variable leaves the row exactly as it was.
+Only `openrouter` accounts named in the variable are touched; other providers cannot take the object.
+
+This is the supported non-spending lever for a metered coding key under spend pressure. Price sort
+asks OpenRouter to serve the **same requested model** through a cheaper eligible provider and a
+lower-cost quantization, so a deepseek/deepseek-v4.1-flash or tencent/hy4-flash turn can cost less
+per request without renaming, downgrading or substituting the model, changing a router key's
+capacity, weight, priority or scope, moving any account between pools, or touching an alert
+threshold. The saving is conditional: a client that sends its own `provider.sort`, such as
+`"throughput"`, overrides the default, and a turn costs less only when a cheaper eligible provider
+or quantization is actually available at that moment.
+`RouterSpendLimitNear` is an external OpenRouter key notification, not a router threshold: it is
+untouched. Fallbacks stay enabled, so price sort is not a narrower provider filter. The variable is
+**empty by default**, so nothing changes for an operator who does not set it.
+
+The earlier quota-aware soft-limit attempt (#501) was aimed at the wrong lever. The coding account's
+pool uses `priority-failover`, not `quota-aware`, and its `spend_limit` quota window is advisory,
+so ranking accounts by remaining headroom would neither reorder that pool nor slow the paid spend.
+Its only pool peer serves free models only, so switching policy cannot offload a paid workload
+either. Reducing the unit cost of the same traffic is the lever that applies here.
+
 **Key caps that reset.** `openrouter` declares a `quotaRead` (`drivers/openrouter-key.ts`) on
 `GET https://openrouter.ai/api/v1/key` (openrouter.ai/docs/api-reference/limits, read 2026-11-14):
 `limit`, `limit_reset` (`daily` | `weekly` | `monthly` | null), `limit_remaining`. It becomes one
@@ -797,11 +823,28 @@ Two lanes are pinned because they cost nothing, and a third was already here:
 | Provider | Account | What limits it (read 2026-11-23) |
 |---|---|---|
 | `kilo` | no credential | 200 free requests an hour per address. A signed-in key is counted per account |
-| `nvidia` | free developer key | about 40 requests a minute and 10,000 a day, varying by model. Terms: development, not serving end users |
-| `openrouter` | any key | `:free` ids: 20 requests a minute; 50 a day, or 1,000 once the workspace has bought $10 |
+| `nvidia` | free developer key | up to 40 requests a minute and 10,000 a day, varying by model ([catalog rate limits](https://build.nvidia.com/api/runtime/content/copy.yaml); separate from the [key page](https://build.nvidia.com/settings/api-keys)). Terms: development, not serving end users |
+| `openrouter` | any key | `:free` ids: 20 requests a minute; 50 a day, or 1,000 a day once the vendor account has spent $10 (published tier table, openrouter.ai). Fees and any one-credit rounding tolerance are documented separately and do not change these caps. The daily quota belongs to the vendor account, not a workspace. |
 
 Anything else that gives tokens away over the OpenAI wire (Token Harbor, Requesty, Cloudflare Workers AI) is an
 `openai-compatible` account with its base URL and key.
+
+### Workers AI and terminal agents
+
+Select the Cloudflare Workers AI preset under `openai-compatible`. Replace `ACCOUNT_ID` in the
+base URL and supply a Workers AI API token for that account. Workers Free stops at 10,000 Neurons
+per day, resetting at 00:00 UTC. Workers Paid can bill above the allowance, so use an account on
+Workers Free if you need a hard spending boundary. Request the declared model by its exact ID.
+Workers AI is outside the `free` ranking because the same model IDs can incur charges on Workers Paid.
+[Cloudflare pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) ·
+[Compatible API](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/)
+
+| Terminal agent | Supported path |
+|---|---|
+| OpenCode | Use the official client for its free hosted chat models. The Console inference API reserves those models for OpenCode. [Inference API](https://opencode.ai/docs/console/api/inference/) |
+| Gemini CLI | Google ended consumer sign-in on June 18, 2026. For router inference use a separate Gemini Developer API key from a free-tier AI Studio project with the existing `gemini` driver. [Consumer migration](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals) · [API limits](https://ai.google.dev/gemini-api/docs/rate-limits) |
+| Freebuff | Use the interactive client for its hosted allowance. The upstream request for a free headless interface remains open. [Upstream issue](https://github.com/CodebuffAI/freebuff/issues/947) |
+| Aider and Plandex | Configure each client with its own upstream model backend. Aider can use Ollama, and Plandex can self-host its server. Neither client supplies a free hosted inference API for the router. [Aider providers](https://aider.chat/docs/llms.html) · [Plandex quick start](https://github.com/plandex-ai/plandex/blob/main/docs/docs/quick-start.md) |
 
 **The free tier is a driver fact.** `ProviderDriver.freeTier` states how the tier is reached, where the key comes
 from, the published allowance and the day it was read; `GET /api/admin/providers` carries it and the console's

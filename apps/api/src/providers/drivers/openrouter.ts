@@ -115,7 +115,7 @@ export const openRouterDriver: ProviderDriver = {
   freeTier: {
     access: "free-key",
     url: "https://openrouter.ai/workspaces/default/keys",
-    note: "Models ending in :free cost nothing: 20 requests a minute, 50 a day, or 1,000 a day once the workspace has bought $10 of credit. The allowance is the workspace's, so a second key adds nothing.",
+    note: "Models ending in :free cost nothing: 20 requests a minute; 50 a day; or 1,000 a day once the account has spent $10 (OpenRouter's published tier table, openrouter.ai). The daily quota belongs to the vendor account, not a workspace — a second key adds nothing. OpenRouter's own page documents fees and any one-credit rounding tolerance separately; neither changes these caps. A negative balance can refuse free ids too.",
     verifiedAt: "2026-11-23",
   },
   // The key's own spend cap and its next reset (`openrouter-key.ts`).

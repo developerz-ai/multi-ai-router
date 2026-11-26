@@ -7,17 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.79.0] — 2026-11-25
+## [2.80.0] — 2026-11-26
 
 ### Added
 
-- `CLAUDE_SDK_QUEUE_WAIT_MS` (default `60000`): the most one Claude subscription request waits at the shared Claude concurrency gate, in total. The gate's slots are taken by every Claude subscription turn, warm fast-mode HTTP turns as well as Agent-SDK subprocesses, so it can be full with no CLI child running: operators checking a full gate look at fast-mode traffic too, not only at subprocesses. A request that cannot get a slot within it is told so and moves on, instead of waiting silently until its attempt deadline (`UPSTREAM_TIMEOUT_MS`, 600 s) behind a client that cuts a silent call at 300 s. One budget per request, not per attempt: the next candidate, the fast transport's fallback to the SDK and a busy-session retry all draw on what is left, so a walk over N full accounts answers after about one wait. Both halves of the gate are bounded, by the same budget. Test now, the idle probe, the credential keepalive, the model list and the usage-gauge read keep the unbounded queue: nobody is waiting on them, and refusing the keepalive would skip a token refresh. The caps (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) do not change. A value above 240000 (clients cut a silent call at 300 s, so a longer wait answers after the client has gone) or at or above `UPSTREAM_TIMEOUT_MS` (the attempt deadline would end the request first) is refused at boot by name. Only a value the operator sets is refused: when the knob is unset and `UPSTREAM_TIMEOUT_MS` is lowered below the 60000 default, the default yields to half the deadline instead, so an existing deployment that never chose this knob still boots.
+- `CLAUDE_SDK_QUEUE_WAIT_MS` (default `60000`): the most one Claude subscription request waits at the shared Claude concurrency gate, in total. The gate's slots are taken by every Claude subscription turn, warm fast-mode HTTP turns as well as Agent-SDK subprocesses, so it can be full with no CLI child running: operators checking a full gate look at fast-mode traffic too, not only at subprocesses. A request that cannot get a slot within it is told so and moves on, instead of waiting silently until its attempt deadline (`UPSTREAM_TIMEOUT_MS`, 600 s) behind a client that cuts a silent call at 300 s. One budget per request, not per attempt: the next candidate, the fast transport's fallback to the SDK and a busy-session retry all draw on what is left, so a walk over N full accounts answers after about one wait. Both halves of the gate are bounded, by the same budget. Test now, the idle probe, the credential keepalive, the model list and the usage-gauge read keep the unbounded queue: nobody is waiting on them, and refusing the keepalive would skip a token refresh. The caps (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) do not change. A value above 240000 (clients cut a silent call at 300 s, so a longer wait answers after the client has gone) or at or above `UPSTREAM_TIMEOUT_MS` (the attempt deadline would end the request first) is refused at boot by name. Only a value the operator sets is refused: when the knob is unset the wait is `min(60000, max(1, floor(UPSTREAM_TIMEOUT_MS / 2)))` (half the attempt timeout rounded down, 1 ms floor, 60 s cap; it starts to shrink below a 120000 ms deadline, so 90000 gives 45000), so an existing deployment that never chose this knob still boots. When that derived wait would reach the deadline (a deadline of 2 ms or less) it is `0` instead: a saturated gate admits or refuses at once, without queueing, so the capacity verdict is returned before the deadline rather than racing a 1 ms wait.
 - Two failure kinds for a full gate, both retryable and blameless (no cooldown, no strike, no recovery probe, no model hold): `account-full` (the account's in-flight limit) fails over to the next eligible account; `router-full` (the replica's global ceiling) also stops the chain offering further Claude subscription candidates in that request, while an account of another kind is still tried. The usage row's `errorClass` is `account-at-capacity` / `router-at-capacity`, with no `httpStatus`.
 - `429 account_at_capacity` (wall `clock`, scope `pool`, `signal: account-at-capacity`, `Retry-After` 30 s from `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): at least one eligible Claude account stayed at its in-flight limit through the wait and no account took the request. It is that account gate's verdict, not proof that every account was full throughout: a later candidate may have been refused by the replica's ceiling instead, and the `429` still outranks that. When only the replica's ceiling refused, the answer is the existing `503 no_healthy_account` with wall `capacity`, scope `router`, `signal: router-at-capacity`; the remaining Claude accounts were skipped, not tried. At prod's 8/8 ceilings a saturated account also fills the global gate, so the typical answer is the `429` after about one wait.
 
 ### Changed
 
+- Documentation only: repair `docs/idea/09-deployment.md` with reviewable implementation anchors for the scheduler advisory lock, the per-account refresh lease, Claude account ownership and the durable breaker path; cite the production breaker writer and catalog refresh symbols beside the propagation tests. Keep the one-supported-replica wording consistent and distinguish task-level advisory-lock safety from whole-router safety. Record that the earlier task text was discarded at intake as `task_problem:injection` (so no model read it) and that this pass restates the ask with anchors instead of reproducing it. Outstanding local-state and fleet-wide gates remain open; shared RWX/NFS storage and the unmerged ownership design are not claimed to clear them. No runtime change; no replicas enabled; no version bump for a documentation-only change.
+
 - The rule "a router-made `429` while an eligible account is in scope is a bug" (`CLAUDE.md`) is narrowed, with the owner's authorization (developerz-ai/developerz.ai#10277), to allow this one capacity answer after the bounded gate wait. The `concurrency.ts` header and `docs/clients.md` no longer say a capacity wait never fails a request.
+
+## [2.79.0] — 2026-11-25
+
+### Added
+
+- Add a Cloudflare Workers AI preset with three models available on Workers Free.
+
+- `OPENROUTER_PRICE_SORT_ACCOUNTS` gives named OpenRouter coding accounts a stored-preference-shaped
+  default of `{sort: price, quantizations: [fp8, bf16], allow_fallbacks: true}`, injected at warm
+  catalog load. Empty by default; a stored account preference, the client's own `provider` fields,
+  other providers and unnamed accounts are unchanged. This is a non-spending mitigation: where the
+  effective preferences and upstream prices allow it, the same model is served more cheaply, with no
+  key, capacity, scope, model, pool-policy or alert change. A client that sends its own `sort` (for
+  example `throughput`) keeps that choice, so savings are conditional rather than guaranteed.
+  Spec: `docs/idea/03-providers.md#openrouter--provider-preferences-key-caps-and-per-model-throttles`.
+
+### Changed
+
+- Recovered findings for a metered OpenRouter coding account: pool `openrouter-coding` is
+  `priority-failover`, not `quota-aware`; its
+  `spend_limit` window is advisory and continuous; spend is driven by
+  `deepseek/deepseek-v4.1-flash` and `tencent/hy4-flash`; the pool's other member serves only free
+  models, so offloading paid traffic to it is impossible. `RouterSpendLimitNear` does not exist in
+  this repo; it is an external OpenRouter key notification.
+- The failed recovery attempt (PR #501) is not present in this checkout: no quota-aware soft-limit
+  code or schema remains. Its failure causes were the wrong policy target (headroom ranking in a
+  `priority-failover` pool with an advisory window), a 28-file diff that spread into types, schema
+  and fixtures, a red `bin/check` gate (file-size on `types.ts`, Drizzle numeric/string and fixture
+  type errors, lint) and 18 unresolved handoffs. Instead of resuming it, this change uses the lever
+  that already ships: the account `providerPreferences` object, supplied as a config default only
+  to the named coding accounts.
+- Release path for this change: merging to `main` runs the quality gate and publishes no image.
+  A `v*` tag runs `bin/verify-version` and `release.yml`, which publish the multi-arch `ghcr.io`
+  image; deploy the version stamped by that tagged commit (source `2.78.1` at the time of writing).
+
+### Fixed
+
+- Native Claude subscription fast-path requests no longer forward harness fingerprints in system text that provoked pool-wide `claude-sdk:extra-usage-gated` refusals and retry storms. The shared scrub rules now run on native text before integrity stamping; conservative text and native attribution headers survive, and the Agent SDK path is unchanged.
 
 ## [2.78.1] — 2026-11-24
 
@@ -2568,3 +2608,4 @@ your tooling config.
 [2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0
 [2.78.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.1
 [2.79.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.79.0
+[2.80.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.80.0

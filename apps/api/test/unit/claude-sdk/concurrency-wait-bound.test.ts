@@ -60,6 +60,23 @@ describe("a caller with a wait budget", () => {
     holder.release()
   })
 
+  // The degenerate deadline (<= 2 ms) derives a 0 wait: admission-or-refusal with no queueing and
+  // no timer, so the capacity verdict is returned before a deadline that short can fire.
+  test("a zero budget takes a free slot, and refuses a full gate at once without queueing", async () => {
+    const { time, concurrency } = gate({ global: 4, perAccount: 1 })
+
+    const free = await concurrency.acquire("acct-a", live(), createSdkWaitBudget(0))
+    expect(concurrency.inFlightFor("acct-a")).toBe(1)
+
+    const refused = await expiry(concurrency.acquire("acct-a", live(), createSdkWaitBudget(0)))
+    expect(refused.half).toBe("account")
+    expect(concurrency.queued).toBe(0)
+    expect(time.armed).toBe(0)
+
+    free.release()
+    expect(concurrency.inFlight).toBe(0)
+  })
+
   test("granted inside its budget, it resolves and holds its slot", async () => {
     const { time, concurrency } = gate({ global: 4, perAccount: 1 })
     const holder = await concurrency.acquire("acct-a", live())

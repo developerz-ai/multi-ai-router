@@ -33,6 +33,24 @@ import { USAGE_READ_ENV_FIELDS } from "./usage-read"
 import { USAGE_REPORT_ENV_FIELDS } from "./usage-report"
 
 /**
+ * A comma-separated list of account UUIDs. Blank entries are dropped and an empty list is valid,
+ * but every nonblank entry must be a UUID: the catalog looks these up with an exact `Set.has`, so
+ * a model-style glob would silently enable nothing.
+ */
+const accountIdList = z
+  .string()
+  .transform((value) =>
+    value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  )
+  .refine(
+    (entries) => entries.every((entry) => z.uuid().safeParse(entry).success),
+    "must be a comma-separated list of UUIDs (blank entries are ignored)",
+  )
+
+/**
  * Every variable this module parses, deliberately kept as a flat list of names and parsers: the
  * *reason* a given knob is bounded the way it is belongs in
  * docs/idea/09-deployment.md#environment-reference, which is where an operator reading the error
@@ -253,6 +271,10 @@ export const ENV_FIELDS = {
   // a forced `tool_choice` to a matched model is sent `enable_thinking: false`
   // (docs/idea/06-protocol-translation.md). Empty/unset matches nothing — dormant by default.
   OPENAI_CHAT_THINKING_DEFAULT_MODELS: modelGlobList.optional(),
+  // Account ids whose OpenRouter requests get a price-sort `provider` preference at warm catalog
+  // load when the account has no stored one. Unlike model ids, account ids take no globs: the
+  // catalog matches them with exact `Set.has`, so a glob would silently enable nothing. Empty is off.
+  OPENROUTER_PRICE_SORT_ACCOUNTS: accountIdList.optional(),
 } as const
 
 export const boundedEnvSchema = z.object(ENV_FIELDS).superRefine(validateNumericBounds)

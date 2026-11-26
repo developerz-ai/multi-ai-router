@@ -28,12 +28,17 @@ type QueueWaitEnv = {
  *
  * The refusal is for a value the operator SET. An unset knob is a default the operator never chose,
  * so a deployment that only lowered `UPSTREAM_TIMEOUT_MS` below it must still boot: the default is
- * clamped to half the deadline instead (at least 1 ms), so the wait still expires first.
+ * `min(60000, floor(deadline / 2))`, half the attempt timeout rounded down with a 60 s cap, so it starts
+ * to shrink below a 120000 ms deadline (90000 gives 45000) and the wait still expires first. A deadline
+ * of 2 ms or less leaves no room for any wait (half of it rounded down, floored at 1 ms, would tie
+ * or nearly tie the deadline, and a saturated gate could time out before its capacity verdict), so
+ * the derived wait is 0: the gate admits at once or refuses at once, never queues, and the capacity
+ * verdict comes back before the deadline. Boot stays compatible, since only a SET value is refused.
  */
 export function readClaudeQueueWaitMs(raw: QueueWaitEnv, ctx: z.RefinementCtx): number {
   const deadlineMs = raw.UPSTREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_TIMEOUT_MS
   if (raw.CLAUDE_SDK_QUEUE_WAIT_MS === undefined)
-    return Math.min(DEFAULT_QUEUE_WAIT_MS, Math.max(1, Math.floor(deadlineMs / 2)))
+    return deadlineMs <= 2 ? 0 : Math.min(DEFAULT_QUEUE_WAIT_MS, Math.floor(deadlineMs / 2))
   const waitMs = raw.CLAUDE_SDK_QUEUE_WAIT_MS
   const issue = (message: string) =>
     ctx.addIssue({ code: "custom", path: ["CLAUDE_SDK_QUEUE_WAIT_MS"], message })

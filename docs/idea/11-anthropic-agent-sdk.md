@@ -1284,9 +1284,13 @@ tone rules, task guidance and any user `CLAUDE.md` content the harness appended 
 A prompt that was *only* a fingerprint scrubs to nothing, and nothing means the option is omitted,
 exactly as for a client that sent no system prompt at all.
 
-**Agent-SDK egress only.** An API-key account is plain HTTP under the caller's own credential with no
-impersonation to detect, and every other provider is a passthrough where rewriting the caller's
-prompt would be the router substituting words the client never wrote.
+**Both Claude subscription transports are in scope.** The Agent SDK scrubs as the prompt crosses into
+`query()`; the native direct-HTTP fast path scrubs system text in place in `prepareFastRequest` before
+the rebuilt body is integrity-stamped. The fleet rule is in
+`docs/standards/harness-fingerprint-scrubbing.md`. API-key accounts are excluded, being plain HTTP
+under the caller's own credential with no impersonation to detect, and every other provider is a
+passthrough where rewriting the caller's prompt would be the router substituting words the client
+never wrote.
 
 ---
 

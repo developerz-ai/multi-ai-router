@@ -90,7 +90,11 @@ export function prepareFastRequest(input: {
     )
     .flatMap((entry) => {
       if (entry.type !== "text" || typeof entry.text !== "string") return [entry]
-      const text = nativeText ? entry.text : scrubSystemPrompt(entry.text)
+      // A native request still carries its CLI's own preset, but a harness can append its own
+      // `system` blocks: the duplicate `<env>` preamble (and other harness identity lines) is the
+      // `claude-sdk:extra-usage-gated` tell on this egress too. Scrub exactly as the SDK path
+      // does; `null` drops the whole block rather than sending an empty one.
+      const text = scrubSystemPrompt(entry.text)
       return typeof text === "string" ? [{ ...entry, text }] : []
     })
   const firstUser = original.messages.find((message) => message.role === "user")
