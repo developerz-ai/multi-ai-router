@@ -10,12 +10,14 @@ import {
 import { createWaiterQueue } from "./waiter-queue"
 
 /**
- * How many `claude` subprocesses may run at once, globally and per Account.
+ * How many Claude subscription turns may run at once, globally and per Account.
  *
- * Every `query()` spawns a process running a ~200 MB native binary, so this is a memory bound, not
- * a connection pool: exceeding it does not slow the router down, it exhausts the container
+ * Every Agent-SDK `query()` spawns a process running a ~200 MB native binary, and a warm fast-mode
+ * HTTP turn takes a slot of the same gate without one, so this is a memory bound, not a
+ * connection pool: exceeding it does not slow the router down, it exhausts the container
  * (docs/idea/11-anthropic-agent-sdk.md#1-why-the-sdk-path). Excess callers **queue**, but only up
- * to `CLAUDE_SDK_QUEUE_WAIT_MS` per request, then try the next account (`gate-wait.ts`): a request
+ * to `CLAUDE_SDK_QUEUE_WAIT_MS` per request; an account-gate expiry then tries the next account
+ * and a global-gate expiry skips the remaining Claude accounts (`gate-wait.ts`): a request
  * that waited 400 ms is a served request, while one that waits out its whole attempt deadline is a
  * client-side timeout nobody can read. A caller that passes no budget (the probes, the credential
  * keepalive) keeps the unbounded queue.

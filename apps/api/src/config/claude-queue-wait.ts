@@ -25,11 +25,13 @@ type QueueWaitEnv = {
  * The one rule bounding the wait. D is the shortest clock that can end the attempt that is queued:
  * `min(UPSTREAM_TIMEOUT_MS, UPSTREAM_STREAM_TIMEOUT_MS)`. A streamed fast-mode attempt's total clock
  * starts before the gate wait, and the SDK/non-streamed deadline is `UPSTREAM_TIMEOUT_MS`, so the
- * shorter of the two ends the request first. The wait may use at most half of D, so the work that
- * spends none of the budget (parsing, and a credential-refresh wait before the gate timer starts)
- * leaves the other half: at the default `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` (20000) that work
- * cannot push an expiring wait past D and end the request as an unprepared 503. A larger
- * operator-set refresh wait is outside this rule and is not bounded by it. Never above
+ * shorter of the two ends the request first. The wait may use at most half of D, which leaves the
+ * other half as HEADROOM for the work that spends none of the budget (parsing, and a
+ * credential-refresh wait before the gate timer starts). Headroom is not a guarantee: it covers
+ * that work only when D >= 2 x the work, and the refresh wait alone can take up to
+ * `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` (default 20000), so below a D of 40000 an expiring wait
+ * can still be pushed past D and the attempt time out before it returns a capacity verdict. A
+ * larger operator-set refresh wait is outside this rule altogether. Never above
  * {@link CLAUDE_QUEUE_WAIT_MAX_MS}, and 0 for a D of 2 ms or less (half of it, floored at 1 ms,
  * would tie the deadline).
  */
@@ -45,9 +47,10 @@ export function claudeQueueWaitCeilingMs(deadlineMs: number): number {
  *
  * The refusal is for a value the operator SET. An unset knob is a default the operator never chose,
  * so a deployment that only lowered a deadline must still boot: the default is
- * `min(60000, ceiling)`, which starts to shrink below a 120000 ms D (90000 gives 45000) and, at the
- * default credential-refresh wait, expires first. A D of 2 ms or less leaves no room for any wait, so the derived wait is 0: the gate
- * admits at once or refuses at once, never queues.
+ * `min(60000, ceiling)`, which starts to shrink below a 120000 ms D (90000 gives 45000). That
+ * default is headroom, not a guarantee, for the reason above: with D below 40000 the pre-gate work
+ * can still outlast the shortened wait. A D of 2 ms or less leaves no room for any wait, so the
+ * derived wait is 0: the gate admits at once or refuses at once, never queues.
  */
 export function readClaudeQueueWaitMs(raw: QueueWaitEnv, ctx: z.RefinementCtx): number {
   const attemptMs = raw.UPSTREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_TIMEOUT_MS

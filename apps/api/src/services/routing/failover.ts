@@ -84,10 +84,7 @@ export interface FailoverProgress {
    * candidates is offered again in this chain, whatever a later attempt says. Absent: none.
    */
   readonly refusedProviders?: readonly string[]
-  /**
-   * The subset of {@link refusedProviders} whose refusal was the router's own full gate
-   * ({@link noteGateFull}). The overload wait stops for these and for no other refusal. Absent: none.
-   */
+  /** The gate-full subset of `refusedProviders` ({@link noteGateFull}); only it stops an overload wait. */
   readonly gateRefusedProviders?: readonly string[]
 }
 

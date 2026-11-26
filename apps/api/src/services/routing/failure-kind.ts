@@ -39,7 +39,7 @@ export type FailureKind =
    */
   | "account-full"
   /**
-   * SDK path: this replica's whole subprocess ceiling held for the bounded gate wait. One gate is
+   * SDK path: this replica's shared Claude concurrency limit (`CLAUDE_SDK_MAX_CONCURRENCY`) held for the bounded gate wait. One gate is
    * shared by every Claude subscription account, so the chain offers no further subscription
    * candidate in this request (`noteGateFull`); an account of another kind is still tried.
    */

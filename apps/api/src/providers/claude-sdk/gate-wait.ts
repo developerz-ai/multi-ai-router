@@ -50,7 +50,7 @@ export const REAL_GATE_TIMER: SdkGateTimer = {
 /**
  * A budgeted caller ran out of wait before the gate admitted it. Typed so the attempt can tell a
  * full gate from a crashed subprocess: `half` says which gate was full, and so whose fault it is
- * (one account's in-flight limit, or the replica's whole subprocess ceiling).
+ * (one account's in-flight limit, or the replica's shared Claude concurrency limit, `CLAUDE_SDK_MAX_CONCURRENCY`).
  */
 export class SdkGateWaitExpiredError extends Error {
   readonly half: SdkGateHalf

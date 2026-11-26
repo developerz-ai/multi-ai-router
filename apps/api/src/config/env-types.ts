@@ -143,15 +143,18 @@ export interface Env {
   /** Opt-in direct HTTP for warm Claude credentials; SDK continues to own login/refresh. */
   readonly claudeFastMode: boolean
   /**
-   * `claude` subprocesses in flight on this replica — every `query()` spawns a ~245 MB native
-   * binary (measured, see docs/idea/09-deployment.md#sizing), so this is a memory bound, not a
-   * throughput one. Excess requests queue for up to `claudeSdkQueueWaitMs`, then try the next
-   * account. The per-account ceiling is what stops one Account's burst starving the pool.
+   * Claude subscription turns in flight on this replica: the shared Claude concurrency limit. An
+   * Agent-SDK `query()` spawns a ~245 MB native binary (measured, see
+   * docs/idea/09-deployment.md#sizing) and a warm fast-mode HTTP turn takes a slot of the same
+   * gate without one, so this is a memory bound, not a throughput one. Excess requests queue for
+   * up to `claudeSdkQueueWaitMs`; an account-gate expiry then tries the next account, while a
+   * global-gate expiry skips the remaining Claude accounts (another kind is still tried). The
+   * per-account ceiling is what stops one Account's burst starving the pool.
    */
   readonly claudeSdkMaxConcurrency: number
   readonly claudeSdkMaxConcurrencyPerAccount: number
   /**
-   * `CLAUDE_SDK_QUEUE_WAIT_MS`: the most one request waits at the subprocess gate, in total across
+   * `CLAUDE_SDK_QUEUE_WAIT_MS`: the most one request waits at the shared Claude concurrency gate, in total across
    * every account it tries, before it is told the account (`account_at_capacity`) or the replica
    * (`router-at-capacity`) is full. Probes and the credential keepalive are not bound by it.
    */
