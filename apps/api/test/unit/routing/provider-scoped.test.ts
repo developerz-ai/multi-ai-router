@@ -84,6 +84,24 @@ describe("a provider-scoped 4xx", () => {
     expect(decision.action === "retry-in-place" && decision.candidate.account.id).toBe("or")
   })
 
+  // On main the overload wait never read the refused set: a busy account of the SAME provider that
+  // later refused the body's wire is still asked again after the pause. Only the router's own full
+  // gate (`gateRefusedProviders`) stops that wait.
+  test("a same-provider account that said overloaded is still waited out after a wire refusal", () => {
+    const busy: AttemptFailure = { kind: "overloaded", status: 529, message: "busy" }
+    const pair = candidates(gemini("g1"), gemini("g2"))
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "g1"), "g1", busy.kind)
+    progress = noteProviderScoped(recordAttempt(progress, "g2"), "gemini", wire)
+    expect(progress.refusedProviders).toEqual(["gemini"])
+    expect(progress.gateRefusedProviders).toBeUndefined()
+    const decision = planNextAttempt(pair, progress, wire, {
+      overloadRetries: 1,
+      overloadRetryBaseMs: 1_000,
+    })
+    expect(decision).toMatchObject({ action: "retry-in-place", delayMs: 1_000 })
+    expect(decision.action === "retry-in-place" && decision.candidate.account.id).toBe("g1")
+  })
+
   test("never strikes the breaker", () => {
     expect(recordFailure(HEALTHY, wire, NOW)).toBe(HEALTHY)
   })

@@ -84,6 +84,11 @@ export interface FailoverProgress {
    * candidates is offered again in this chain, whatever a later attempt says. Absent: none.
    */
   readonly refusedProviders?: readonly string[]
+  /**
+   * The subset of {@link refusedProviders} whose refusal was the router's own full gate
+   * ({@link noteGateFull}). The overload wait stops for these and for no other refusal. Absent: none.
+   */
+  readonly gateRefusedProviders?: readonly string[]
 }
 
 export const NO_ATTEMPTS: FailoverProgress = {
@@ -152,8 +157,8 @@ export function planNextAttempt(
     return { action: "stop", reason: "request-wall" }
   // Nothing waits out a vendor's wire or an account's settings: the same body draws the same
   // refusal after any pause. Only another account that said `overloaded` earlier in the chain is
-  // still worth asking again, and not one whose provider is in `refusedProviders` (the router's own
-  // full gate, a wire-scoped refusal): that is not waited out either.
+  // still worth asking again, and not one whose provider is in `gateRefusedProviders` (the router's
+  // own full gate): that is not waited out either. A wire-scoped refusal does not stop the wait.
   const stop = (exhausted: FailoverStopReason): FailoverDecision =>
     walkedPast && progress.overloadedAccountId === undefined
       ? { action: "stop", reason: "provider-wall" }
