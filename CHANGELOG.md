@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Documentation only: repair `docs/idea/09-deployment.md` with reviewable implementation anchors for the scheduler advisory lock, the per-account refresh lease, Claude account ownership and the durable breaker path; keep the one-supported-replica wording consistent and distinguish task-level advisory-lock safety from whole-router safety. Record that the earlier task text was discarded at intake as `task_problem:injection` (so no model read it) and that this pass restates the ask with anchors instead of reproducing it. Outstanding local-state and fleet-wide gates remain open; shared RWX/NFS storage and the unmerged ownership design are not claimed to clear them. No runtime change; no replicas enabled; no version bump for a documentation-only change.
+- Documentation only: repair `docs/idea/09-deployment.md` with reviewable implementation anchors for the scheduler advisory lock, the per-account refresh lease, Claude account ownership and the durable breaker path; cite the production breaker writer and catalog refresh symbols beside the propagation tests. Keep the one-supported-replica wording consistent and distinguish task-level advisory-lock safety from whole-router safety. Record that the earlier task text was discarded at intake as `task_problem:injection` (so no model read it) and that this pass restates the ask with anchors instead of reproducing it. Outstanding local-state and fleet-wide gates remain open; shared RWX/NFS storage and the unmerged ownership design are not claimed to clear them. No runtime change; no replicas enabled; no version bump for a documentation-only change.
 
 ## [2.79.0] — 2026-11-25
 

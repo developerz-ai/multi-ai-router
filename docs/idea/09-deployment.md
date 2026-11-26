@@ -27,8 +27,18 @@ The safety claims above and below rest on these code paths, each checkable on it
   (`createAccountCliOwnership`) drives the local ownership lifecycle, and migration `0054` stores
   the fenced TTL lease. This is storage ownership for one account, not fleet-wide session or login
   coordination.
-- Durable breaker propagation: `apps/api/test/integration/replica-breaker.test.ts` covers the
-  writer and catalog timer path; production PR #482 added the per-replica ceiling test. These
+- Durable breaker propagation: production writes the breaker through
+  `apps/api/src/composition/warm-state.ts:62` (`createHealthStore`'s `onBreaker` feeds
+  `breakerWriter.record`), flushed by `createBreakerWriter` in
+  `apps/api/src/services/dataplane/breaker-writer.ts:11` and started at
+  `apps/api/src/composition/runtime-lifecycle.ts:105`; the same file's `onProbeHold` records the
+  half-open hold. Another replica learns of it through the catalog refresh path:
+  `apps/api/src/composition/warm-state.ts:150` (`createRoutingCatalog`, wired with
+  `refreshIntervalMs: env.dataPlane.catalogRefreshSeconds * 1_000` and an `onInstalled` that calls
+  `health.reconcile`), whose timer is `createRoutingCatalog` in
+  `apps/api/src/services/catalog/store.ts:74`. `apps/api/test/integration/replica-breaker.test.ts`
+  covers the writer and catalog timer path (line 28), independent stores and restart (line 304),
+  and the bounded per-replica ceiling; production PR #482 added the ceiling test. These
   are tests of a bounded propagation path, not live two-replica validation.
 
 Remaining gates stay open. Shared RWX/NFS storage is explicitly not an answer to attachment fencing
