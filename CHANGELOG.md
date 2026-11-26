@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [2.80.0] — 2026-11-26
 
+### Fixed
+- `cooldown_recheck` re-tests an account whose cooldown has expired but that holds no spent quota window
+  and no recovery row (#525). Such an account in a `priority-failover` pool starved: a healthy fallback kept
+  winning selection, so no client request ever arrived to send the half-open probe. The background task now
+  sends it, and a success returns the account to `active`. Spec: `docs/idea/05-routing-and-failover.md`.
 - `openrouter` attempts record the cost OpenRouter reports (`usage.cost`, USD credits; on BYOK the fee plus `cost_details.upstream_inference_cost`) as their metered `cost_estimate`, read off the usage object the response observer already parses for tokens — JSON bodies and the final stream chunk alike, with no extra parse and the passthrough bytes untouched. They recorded `unknown` before: 144k prod attempts in a week, Nemotron 3 Ultra among them, showed no spend. A missing or malformed figure stays `unknown`; an operator price override for the model still wins. A response the router writes states the figure with `cost_source: "reported"`, and Settings' price coverage no longer lists OpenRouter models as unpriced (`docs/idea/08-observability.md#a-cost-the-upstream-reports`).
 
 ### Changed
@@ -2606,3 +2611,4 @@ your tooling config.
 [2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0
 [2.78.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.1
 [2.79.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.79.0
+[2.80.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.80.0
