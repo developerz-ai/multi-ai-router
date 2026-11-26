@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.79.0] — 2026-11-25
+
 ### Added
+
+- Add a Cloudflare Workers AI preset with three models available on Workers Free.
 
 - `OPENROUTER_PRICE_SORT_ACCOUNTS` gives named OpenRouter coding accounts a stored-preference-shaped
   default of `{sort: price, quantizations: [fp8, bf16], allow_fallbacks: true}`, injected at warm
@@ -2589,3 +2593,4 @@ your tooling config.
 [2.77.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.77.0
 [2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0
 [2.78.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.1
+[2.79.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.79.0

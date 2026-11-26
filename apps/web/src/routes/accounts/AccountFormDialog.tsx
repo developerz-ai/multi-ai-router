@@ -214,7 +214,9 @@ export function AccountFormDialog(props: AccountFormDialogProps) {
             hint="This provider has no pinned endpoint — supply the one this account should reach."
             label="Base URL"
             onInput={(event) => setBaseUrl(event.currentTarget.value)}
+            pattern="(?!https://api[.]cloudflare[.]com/client/v4/accounts/ACCOUNT_ID/).*"
             required
+            title="Replace ACCOUNT_ID with your Cloudflare account ID if using Workers AI."
             type="url"
             value={baseUrl()}
           />
