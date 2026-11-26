@@ -22,7 +22,7 @@ export function recoveryBlocksBackground(account: AccountSnapshot, now: Date): b
   )
 }
 /**
- * A failed or uncertain recovery whose own `nextAllowedAt` has passed, on an account nothing else
+ * An expired cooldown or a failed or uncertain recovery whose own `nextAllowedAt` has passed, on an account nothing else
  * holds out: usable status, no breaker clock still running, no spent window. Only a new probe clears
  * that gate, and with no client traffic none arrives, so the router opens one itself
  * (`dataplane/recovery-probe.ts`). A spent window or a running clock is left to that clock: probing
@@ -34,8 +34,14 @@ export function recoveryAwaitsProbe(
   threshold: number,
 ): boolean {
   const recovery = account.recovery
-  if (recovery?.state !== "failed" && recovery?.state !== "uncertain") return false
-  if (recovery.nextAllowedAt.getTime() > now.getTime()) return false
+  if (recovery === undefined) {
+    if (account.status !== "cooling_down" || account.health.cooldownUntil === undefined)
+      return false
+    if (account.health.cooldownReason === "credential-rejected") return false
+  } else {
+    if (recovery.state !== "failed" && recovery.state !== "uncertain") return false
+    if (recovery.nextAllowedAt.getTime() > now.getTime()) return false
+  }
   if (account.status !== "active" && account.status !== "cooling_down") return false
   const until = account.health.cooldownUntil
   if (until !== undefined && until.getTime() > now.getTime()) return false

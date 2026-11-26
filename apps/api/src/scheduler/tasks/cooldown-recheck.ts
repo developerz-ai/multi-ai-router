@@ -41,10 +41,9 @@ import { createExhaustedRetest, type ExhaustedRetestPorts } from "./exhausted-re
  * stand. Folded as a verdict, a reset-less `429` would replace a provider's instant with our backoff
  * arithmetic, once an hour, for as long as the window lasted.
  *
- * **Not the recovery permit.** That gate deliberately refuses a clock the provider reported
- * (`routing/filter.ts`, `recoveryAwaitsProbe`), because it retries every cycle: prod, 2026-10-06,
- * a certain-429 probe every cooldown for days. This is the same probe on an hourly clock instead,
- * with a start guard of its own that admits `cooling_down` and refuses everything else.
+ * **Not the recovery permit.** This hourly look is for clocks still running or unknown. Expired
+ * cooldowns without a spent window go through durable automatic recovery instead, so a failed probe
+ * observes its recovery deadline before another attempt.
  *
  * **Per replica, not per fleet.** Each replica keeps its own timer, and the advisory lock only stops
  * two runs overlapping. So every replica rechecks the cooldowns in its own memory, and "one per

@@ -10,6 +10,7 @@ import type { RecoveryProbeResult } from "../../../src/services/dataplane/recove
 import { overlayHealth } from "../../../src/services/dataplane/snapshot"
 import type { RoutableAccount } from "../../../src/services/dataplane/types"
 import { cooldownRecheckDue, readingReopened } from "../../../src/services/routing/cooldown-recheck"
+import { recoveryAwaitsProbe } from "../../../src/services/routing/recovery-filter"
 import { accountRow } from "../../support/account-row"
 import { account, at, health, NOW, subscription, window } from "../routing/fixtures"
 
@@ -56,8 +57,10 @@ describe("cooldownRecheckDue", () => {
     expect(due(account("a"))).toBe(false)
   })
 
-  test("an expired cooling_down account IS due: half-open, no spent windows", () => {
-    expect(due(account("a", cooling(at(-1))))).toBe(true)
+  test("an expired cooldown goes through automatic recovery, not the permit-free recheck", () => {
+    const expired = account("a", cooling(at(-1)))
+    expect(due(expired)).toBe(false)
+    expect(recoveryAwaitsProbe(expired, NOW, 1)).toBe(true)
   })
 
   test.each(["exhausted", "needs_reauth", "disabled"] as const)("%s is never due", (status) => {
