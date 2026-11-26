@@ -1,5 +1,6 @@
 import { createHttpDriver } from "../driver"
 import type { ProviderDriver } from "../types"
+import { readOpenRouterCost } from "./openrouter-cost"
 import { openRouterKeyRead } from "./openrouter-key"
 import { OPENROUTER_RULES, parseOpenRouterRateLimit, readOpenRouterFacts } from "./openrouter-rules"
 
@@ -99,6 +100,8 @@ const driver = createHttpDriver({
     },
   ],
   modelScopedRateLimits: FREE_VARIANT,
+  // The per-route price no table can hold: OpenRouter states what it billed (`openrouter-cost.ts`).
+  responseObservation: { terminalPolicy: "evidence-only", reportedCost: readOpenRouterCost },
   readFacts: readOpenRouterFacts,
   parseRateLimit: parseOpenRouterRateLimit,
   rules: OPENROUTER_RULES,

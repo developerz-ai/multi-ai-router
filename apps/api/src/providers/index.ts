@@ -259,6 +259,7 @@ export {
   PROVIDER_REGISTRY,
   providerCatalogSweep,
   providerIdleProbeModel,
+  providerReportsCost,
   providerShippedPrices,
 } from "./registry"
 export type {

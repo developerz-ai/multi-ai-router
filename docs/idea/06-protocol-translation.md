@@ -825,7 +825,7 @@ A response **the router writes** states what the attempt cost, in its `usage`, O
 | Field | Meaning |
 |---|---|
 | `cost` | USD, a JSON number. The `UsageRecord`'s own `cost_estimate`: one pricing path (`attemptCost`, `dataplane/records.ts`), so the long-context tier and the operator's price book apply, priced on the upstream's counts and the post-alias model |
-| `cost_source` | Always `estimated`: the router prices from a table, nothing here is a provider's measurement |
+| `cost_source` | `estimated` when the router priced the counts from a rate; `reported` when the figure is the upstream's own statement of what it billed (OpenRouter's `usage.cost`, [08](08-observability.md#a-cost-the-upstream-reports)) |
 | `cost_basis` | `metered`, or `notional` on a subscription account: what the call would have cost on the API, an attribution and not a spend ([08](08-observability.md#cost-estimation)) |
 
 Where it rides: the body's `usage` on a whole response; on a stream, the one final usage frame.

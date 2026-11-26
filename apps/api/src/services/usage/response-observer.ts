@@ -6,7 +6,7 @@ import type {
   ResponseObserver,
 } from "./response-observer-types"
 import { protocolFailure, readResponseTerminal } from "./response-terminal"
-import { readResponseUsage } from "./response-usage"
+import { readResponseUsage, responseObject, statedUsage } from "./response-usage"
 import { ZERO_TOKENS } from "./tokens"
 
 export function createResponseObserver(spec: ResponseObservationSpec): ResponseObserver {
@@ -15,6 +15,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
   let counts = ZERO_TOKENS
   let usageInvalid = false
   let usageStated = false
+  let reportedCost: number | null = null
   let evidenceUnavailable = false
   let unavailableReason: ResponseObservationFacts["unavailableReason"] = null
   let terminal: ResponseObservationFacts["terminal"] = "none"
@@ -37,6 +38,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
       counts: Object.freeze({ ...counts }),
       usageInvalid,
       usageStated,
+      reportedCost,
       evidenceUnavailable,
       unavailableReason,
       terminal,
@@ -45,6 +47,14 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
       provider: provider === null ? null : Object.freeze({ ...provider }),
     })
     return cached
+  }
+  // Read off the usage object this parse already holds, and only for a driver that states one: no
+  // frame is parsed for it. The latest figure stated wins; one the driver cannot trust is ignored.
+  const readReportedCost = (body: unknown, event: string | undefined): number | undefined => {
+    const read = spec.descriptor?.reportedCost
+    if (read === undefined) return undefined
+    const usage = responseObject(statedUsage(spec.dialect, body, event))
+    return usage === undefined ? undefined : read(usage)
   }
   const framing = createResponseFraming({
     contentType: spec.contentType,
@@ -68,6 +78,7 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
         usageStated ||= reading.counts !== counts
         counts = reading.counts
         usageInvalid ||= reading.invalid
+        reportedCost = readReportedCost(body, event) ?? reportedCost
       }
       const observed = readResponseTerminal(spec.dialect, body, event)
       const providerClassification = spec.descriptor?.inspectPayload?.(body, event) ?? null

@@ -160,6 +160,11 @@ export function providerIdleProbeModel(id: ProviderId): string | undefined {
   return support.transport === "http" ? support.driver.idleProbeModel : support.idleProbeModel
 }
 
+/** Whether this provider states what it billed per response (`responseObservation.reportedCost`). */
+export function providerReportsCost(id: ProviderId): boolean {
+  return httpDriver(id)?.responseObservation?.reportedCost !== undefined
+}
+
 /** How this provider's shipped price rows read (`ProviderDriver.shippedPrices`). */
 export function providerShippedPrices(id: ProviderId): "list" | "notional" {
   return httpDriver(id)?.shippedPrices ?? "list"

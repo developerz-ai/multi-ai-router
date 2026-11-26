@@ -55,6 +55,7 @@ export function observingModelOutput(
   let seen = false
   return {
     ...(tally === undefined ? {} : { eventTypes: tally.counts }),
+    ...(descriptor?.reportedCost === undefined ? {} : { reportedCost: descriptor.reportedCost }),
     terminalPolicy: descriptor?.terminalPolicy ?? "evidence-only",
     get contentFrames() {
       return seen && inspect === undefined && tally === undefined ? "skip" : "inspect"

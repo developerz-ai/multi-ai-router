@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `openrouter` attempts record the cost OpenRouter reports (`usage.cost`, USD credits; on BYOK the fee plus `cost_details.upstream_inference_cost`) as their metered `cost_estimate`, read off the usage object the response observer already parses for tokens — JSON bodies and the final stream chunk alike, with no extra parse and the passthrough bytes untouched. They recorded `unknown` before: 144k prod attempts in a week, Nemotron 3 Ultra among them, showed no spend. A missing or malformed figure stays `unknown`; an operator price override for the model still wins. A response the router writes states the figure with `cost_source: "reported"`, and Settings' price coverage no longer lists OpenRouter models as unpriced (`docs/idea/08-observability.md#a-cost-the-upstream-reports`).
+
 ### Changed
 
 - Process only: the maintainer's inactivity clocks are 60 days: idle branches are archive-tagged and deleted, quiet issues swept, unanswered repro requests and PRs waiting on their author closed after 60 days (`.dz/maintainer/maintainer.yml`). No runtime change.
