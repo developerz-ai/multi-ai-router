@@ -6,6 +6,35 @@ purge, quota floor) are also shipped — in-process jittered timers, one `pg_try
 task, last run and outcome recorded to `ScheduledTaskRun` — and the retention windows below are what
 they sweep against.
 
+### Repair provenance and reviewable anchors
+
+This section records a documentation repair, not a new deployment capability. An earlier task text
+for this work was discarded at intake as `task_problem:injection`, so no model read it and no change
+was made from it; the earlier attempt failed at `bin/setup` because the box's port 5433 was in use.
+This pass restates the ask from the available context and puts reviewable anchors beside the claims,
+rather than reproducing the discarded text. The completed design behind the ask has no PR and no
+merged repo artifact: its conclusions are cited here as conclusions, never as shipped implementation.
+
+The safety claims above and below rest on these code paths, each checkable on its own:
+
+- Scheduler task safety: `apps/api/src/scheduler/lock.ts:4` (`advisoryTaskLock`) wraps each
+  background task in the dedicated advisory-lock pool. This makes one replica run a given sweep, not
+  the whole router multi-replica safe.
+- Per-account refresh mutual exclusion: `packages/db/src/credential-refresh-lock.ts:36`
+  (`createCredentialRefreshLockPool`) leases one advisory session per account, in a namespace
+  distinct from tasks and migrations.
+- Claude account ownership: `apps/api/src/providers/claude-sdk/account-ownership.ts:13`
+  (`createAccountCliOwnership`) drives the local ownership lifecycle, and migration `0054` stores
+  the fenced TTL lease. This is storage ownership for one account, not fleet-wide session or login
+  coordination.
+- Durable breaker propagation: `apps/api/test/integration/replica-breaker.test.ts` covers the
+  writer and catalog timer path; production PR #482 added the per-replica ceiling test. These
+  are tests of a bounded propagation path, not live two-replica validation.
+
+Remaining gates stay open. Shared RWX/NFS storage is explicitly not an answer to attachment fencing
+(see below). The ownership design is unmerged: nothing here claims the exclusive attachment design
+clears the outstanding local-state or fleet-wide gates. Continue to deploy **one replica**.
+
 ## Account ownership and storage handoff
 
 Account ownership is not general multi-replica support. Continue to deploy **one replica**
@@ -545,7 +574,7 @@ Two operational consequences:
 
 | | |
 |---|---|
-| **One replica, not a horizontal fleet** | Before doing work, each background task takes a Postgres advisory lock named for that task; exactly one replica runs a given sweep and the others skip. Account ownership adds a separate fenced TTL lease, while durable account breaker clocks, half-open probe holds and existing Postgres recovery generations/single-use permits cover cooldown persistence, probe admission and designated recovery admission. This is not general multi-replica safety. Continue running **one replica**: warm caches, key/session bindings, per-key rate-limit windows and pending login/OAuth device-flow state remain per-process. Admin login budgets are shared in Postgres, but password concurrency remains per-process. A horizontal fleet still requires shared per-key rate limits, durable pending login/device flows and shared SDK in-flight session coordination. Account storage additionally requires the exclusive attachment contract above. |
+| **One replica, not a horizontal fleet** | Task-level safety only: before doing work, each background task takes a Postgres advisory lock named for that task (`apps/api/src/scheduler/lock.ts:4`); exactly one replica runs a given sweep and the others skip. Account ownership adds a separate fenced TTL lease, while durable account breaker clocks, half-open probe holds and existing Postgres recovery generations/single-use permits cover cooldown persistence, probe admission and designated recovery admission. This is not general multi-replica safety. Continue running **one replica**: warm caches, key/session bindings, per-key rate-limit windows and pending login/OAuth device-flow state remain per-process. Admin login budgets are shared in Postgres, but password concurrency remains per-process. A horizontal fleet still requires shared per-key rate limits, durable pending login/device flows and shared SDK in-flight session coordination. Account storage additionally requires the exclusive attachment contract above. |
 | **Every run is recorded** | Task, start, finish, outcome, and items processed land in a `ScheduledTaskRun` row, surfaced in the admin UI. That record is how you tell a task that is idle from one that is wedged — see Troubleshooting. |
 
 ### Breaker propagation is conditional, not immediate
