@@ -21,7 +21,7 @@ import type { Candidate } from "./types"
  * full gate refused it this request, and a wait would meet the same gate. Then the chain stops and
  * the client hears `503` + `Retry-After` (`UpstreamOverloadedError`), not a router-made `429` for
  * the overload itself. A held `account_at_capacity` (rank 70) outranks `upstream_overloaded` (65),
- * so a chain that also met a full gate can still end on the capacity answer.
+ * so a chain that also met a full ACCOUNT gate can still end on the capacity answer.
  */
 export function waitOutOverload(
   ordered: readonly Candidate[],

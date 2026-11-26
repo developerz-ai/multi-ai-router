@@ -62,9 +62,11 @@ export function readClaudeQueueWaitMs(raw: QueueWaitEnv, ctx: z.RefinementCtx): 
   if (waitMs > ceilingMs) {
     const setBy = streamMs < attemptMs ? "UPSTREAM_STREAM_TIMEOUT_MS" : "UPSTREAM_TIMEOUT_MS"
     const why =
-      ceilingMs === CLAUDE_QUEUE_WAIT_MAX_MS
-        ? "clients cut a silent call at 300 s, so a longer wait answers after the client has gone"
-        : `the wait may use at most half of the attempt deadline of ${deadlineMs} ms (set by ${setBy}), the rest being spent before and after it; lower the wait or raise ${setBy}`
+      ceilingMs === 0
+        ? `an attempt deadline of ${deadlineMs} ms leaves no room for any wait (set by ${setBy}); unset the wait for a zero wait, or raise ${setBy}`
+        : ceilingMs === CLAUDE_QUEUE_WAIT_MAX_MS
+          ? "clients cut a silent call at 300 s, so a longer wait answers after the client has gone"
+          : `the wait may use at most half of the attempt deadline of ${deadlineMs} ms (set by ${setBy}), the rest being spent before and after it; lower the wait or raise ${setBy}`
     ctx.addIssue({
       code: "custom",
       path: ["CLAUDE_SDK_QUEUE_WAIT_MS"],

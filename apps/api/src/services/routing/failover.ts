@@ -75,6 +75,7 @@ export interface FailoverProgress {
    * The account that last answered `overloaded` and has answered nothing else since
    * ({@link noteOverload}). Once the walk runs out it is the one waited out, whatever the last
    * account said: a later seat's own limit must not decide whether a busy one is asked again.
+   * Not waited out when its provider is in `gateRefusedProviders` ({@link waitOutOverload}).
    */
   readonly overloadedAccountId?: string
   /** Request-attributable refusals so far ({@link noteRequestAttributable}). Absent: none. */

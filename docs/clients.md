@@ -245,11 +245,13 @@ name is served as that model and nothing else. What to add, and what each needs:
 ## Errors, retries and timeouts
 
 The router walks the eligible accounts, up to `ROUTING_MAX_ATTEMPTS` of them when the operator set that cap, before it answers with an error, but only a retryable
-failure (a `429`, a `5xx`, a timeout, a refused credential) fails over to the next account: a
-terminal error, such as an upstream `4xx` that is not flagged as account- or vendor-specific (a bad
-request is bad at every account), is returned from the first account that gave it. Two further
-limits end a walk of retryable failures early: a full replica ends the walk over Claude
-subscription accounts (below), and with a `ROUTING_MAX_ATTEMPTS` of 1 a failed first attempt leaves
+failure (for example a `429`, a `5xx`, a timeout, a refused credential) fails over to the next
+account: a terminal error, such as an upstream `4xx` that is not flagged as account- or
+vendor-specific (a bad request is bad at every account), ends the walk at the account that returned
+it, and the client gets the chain's highest-ranked held answer (an earlier `429` `quota_exhausted`
+or `account_at_capacity` outranks a relayed upstream `4xx`). Further limits end a walk of retryable
+failures early: the request wall, a full replica (which ends the walk over Claude subscription
+accounts, below), and with a `ROUTING_MAX_ATTEMPTS` of 1 a failed first attempt leaves
 its eligible siblings untried. A Claude subscription request queues for a slot at the shared Claude concurrency gate (fast-mode and Agent-SDK turns alike) for
 up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next account. When an
 account stayed at its in-flight limit through the wait and nothing could serve the request, the
@@ -371,7 +373,7 @@ On every data-plane answer, success or failure, stream or not, before the first 
 
 - **Set your SDK's own retries to `0` or `1`** (`maxRetries` in the OpenAI, Anthropic and Vercel AI
   SDKs). One request to the router already tries the eligible accounts on a retryable
-  failure (a terminal error ends the walk at the first account), up to `ROUTING_MAX_ATTEMPTS`
+  failure (a terminal error ends the walk at the account that returned it), up to `ROUTING_MAX_ATTEMPTS`
   accounts when your operator set that cap (a full replica ends the walk over Claude subscription
   accounts early, see above). Three SDK retries
   multiplied by several keys on the same router send the same failing request 4×K times, all to a

@@ -795,7 +795,7 @@ final account said, so a later seat's own limit cannot decide it, and unless its
 at the router's own full gate (`router-full`, below), which a wait would meet again — after `ROUTING_OVERLOAD_RETRY_BASE_MS` (default
 1000), doubling, `ROUTING_OVERLOAD_RETRIES` times (default 2; `0` asks no more; its own budget,
 apart from the stale-session replay's, so neither spends the other) — always before a
-byte is on the wire. Still overloaded: the client hears **`503 upstream_overloaded`** with a
+byte is on the wire. Still overloaded: the client hears **`503 upstream_overloaded`** (unless a higher-ranked held answer outranks it, such as a `429` `account_at_capacity` or `quota_exhausted`) with a
 `Retry-After` (the upstream's own when it stated one, else
 `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), never a router-made `429 quota_exhausted`. Prod,
 2026-11-07 00:22..01:56Z: Go's overload read as `rate-limited` cooled both Go seats, spent their
