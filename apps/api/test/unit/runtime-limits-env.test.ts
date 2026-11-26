@@ -72,14 +72,52 @@ test("CLAUDE_SDK_QUEUE_WAIT_MS refuses a wait that defeats its own purpose", () 
   expect(() => parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "2147483648" })).toThrow(
     /CLAUDE_SDK_QUEUE_WAIT_MS/,
   )
-  // At or past the attempt deadline the deadline ends the request first.
+  // The wait is spent before the attempt's own work (credential refresh, parsing), so it may use at
+  // most half the attempt deadline: a value just under the deadline would lose the race anyway.
   expect(() =>
     parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "60000", UPSTREAM_TIMEOUT_MS: "60000" }),
-  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS.*less than UPSTREAM_TIMEOUT_MS/s)
+  ).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS: 60000 must be at most 30000.*deadline of 60000 ms \(set by UPSTREAM_TIMEOUT_MS\)/s,
+  )
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "59999", UPSTREAM_TIMEOUT_MS: "60000" }),
+  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS/)
   expect(
-    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "59999", UPSTREAM_TIMEOUT_MS: "60000" })
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "30000", UPSTREAM_TIMEOUT_MS: "60000" })
       .claudeSdkQueueWaitMs,
-  ).toBe(59_999)
+  ).toBe(30_000)
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "30001", UPSTREAM_TIMEOUT_MS: "60000" }),
+  ).toThrow(/at most 30000/)
+})
+
+// A streamed fast-mode attempt's total clock starts before the gate wait, so a short stream total
+// bounds the wait exactly as a short attempt deadline does, and the refusal names the knob that set it.
+test("CLAUDE_SDK_QUEUE_WAIT_MS is bounded by UPSTREAM_STREAM_TIMEOUT_MS too", () => {
+  // The first-byte and idle clocks may not outlast the stream total, so a short one sets them too.
+  const stream = (total: string) => ({
+    ...base,
+    UPSTREAM_STREAM_TIMEOUT_MS: total,
+    UPSTREAM_FIRST_BYTE_TIMEOUT_MS: "1",
+    UPSTREAM_IDLE_TIMEOUT_MS: "1",
+  })
+  expect(() => parseEnv({ ...stream("100"), CLAUDE_SDK_QUEUE_WAIT_MS: "300" })).toThrow(
+    /300 must be at most 50.*deadline of 100 ms \(set by UPSTREAM_STREAM_TIMEOUT_MS\)/s,
+  )
+  expect(parseEnv({ ...stream("100"), CLAUDE_SDK_QUEUE_WAIT_MS: "50" }).claudeSdkQueueWaitMs).toBe(
+    50,
+  )
+  // Unset: the default yields to it, and boot is never refused.
+  expect(parseEnv(stream("100")).claudeSdkQueueWaitMs).toBe(50)
+  expect(parseEnv(stream("1")).claudeSdkQueueWaitMs).toBe(0)
+  // A stream total above the attempt deadline is not the binding one.
+  expect(
+    parseEnv({
+      ...base,
+      UPSTREAM_TIMEOUT_MS: "60000",
+      UPSTREAM_STREAM_TIMEOUT_MS: "3600000",
+    }).claudeSdkQueueWaitMs,
+  ).toBe(30_000)
 })
 
 // An existing deployment that only lowered the attempt deadline never chose the new knob's default:
@@ -102,5 +140,5 @@ test("an unset CLAUDE_SDK_QUEUE_WAIT_MS derives 0 when the deadline is too short
   expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "2" }).claudeSdkQueueWaitMs).toBe(0)
   expect(() =>
     parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "1", UPSTREAM_TIMEOUT_MS: "1" }),
-  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS.*less than UPSTREAM_TIMEOUT_MS/s)
+  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS.*at most 0/s)
 })
