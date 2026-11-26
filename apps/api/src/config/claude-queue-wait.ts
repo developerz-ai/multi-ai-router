@@ -42,7 +42,7 @@ export function claudeQueueWaitCeilingMs(deadlineMs: number): number {
 /**
  * Refuses a wait above {@link claudeQueueWaitCeilingMs}: past 240000 the client is gone before the
  * answer, and past half of D the deadline can end the request first, so the budget never expires and
- * nothing is ever told the gate was full. The message names the value, D and the knob that set D.
+ * nothing is ever told the gate was full. The message names the value, and, except above 240000, D and the knob that set D.
  * (A value past the timer range is already refused by `numeric-bounds.ts`.)
  *
  * The refusal is for a value the operator SET. An unset knob is a default the operator never chose,
@@ -60,7 +60,12 @@ export function readClaudeQueueWaitMs(raw: QueueWaitEnv, ctx: z.RefinementCtx): 
   if (raw.CLAUDE_SDK_QUEUE_WAIT_MS === undefined) return Math.min(DEFAULT_QUEUE_WAIT_MS, ceilingMs)
   const waitMs = raw.CLAUDE_SDK_QUEUE_WAIT_MS
   if (waitMs > ceilingMs) {
-    const setBy = streamMs < attemptMs ? "UPSTREAM_STREAM_TIMEOUT_MS" : "UPSTREAM_TIMEOUT_MS"
+    const setBy =
+      streamMs === attemptMs
+        ? "UPSTREAM_TIMEOUT_MS and UPSTREAM_STREAM_TIMEOUT_MS"
+        : streamMs < attemptMs
+          ? "UPSTREAM_STREAM_TIMEOUT_MS"
+          : "UPSTREAM_TIMEOUT_MS"
     const why =
       ceilingMs === 0
         ? `an attempt deadline of ${deadlineMs} ms leaves no room for any wait (set by ${setBy}); unset the wait for a zero wait, or raise ${setBy}`
