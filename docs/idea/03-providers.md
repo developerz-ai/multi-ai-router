@@ -823,8 +823,8 @@ Two lanes are pinned because they cost nothing, and a third was already here:
 | Provider | Account | What limits it (read 2026-11-23) |
 |---|---|---|
 | `kilo` | no credential | 200 free requests an hour per address. A signed-in key is counted per account |
-| `nvidia` | free developer key | about 40 requests a minute and 10,000 a day, varying by model. Terms: development, not serving end users |
-| `openrouter` | any key | `:free` ids: 20 requests a minute; 50 a day, or 1,000 once the workspace has bought $10 |
+| `nvidia` | free developer key | up to 40 requests a minute and 10,000 a day, varying by model ([catalog rate limits](https://build.nvidia.com/api/runtime/content/copy.yaml); separate from the [key page](https://build.nvidia.com/settings/api-keys)). Terms: development, not serving end users |
+| `openrouter` | any key | `:free` ids: 20 requests a minute; 50 a day, or 1,000 a day once the vendor account has spent $10 (published tier table, openrouter.ai). Fees and any one-credit rounding tolerance are documented separately and do not change these caps. The daily quota belongs to the vendor account, not a workspace. |
 
 Anything else that gives tokens away over the OpenAI wire (Token Harbor, Requesty, Cloudflare Workers AI) is an
 `openai-compatible` account with its base URL and key.
