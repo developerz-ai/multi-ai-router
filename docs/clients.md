@@ -252,8 +252,9 @@ its eligible siblings untried. A Claude subscription request queues for a slot a
 up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next account. When an
 account stayed at its in-flight limit through the wait and nothing could serve the request you get
 `429 account_at_capacity`. When the replica's own ceiling refused a candidate, the remaining Claude
-accounts are not asked (an account of another kind still is), and unless an account at its limit
-already decided the answer, it is `503 no_healthy_account` with signal `router-at-capacity`. Either
+accounts are not asked (an account of another kind still is). When only the replica's ceiling
+refused, the answer is `503 no_healthy_account` with signal `router-at-capacity`; a higher-ranked
+answer from another candidate (an account at its limit, or a relayed upstream answer) wins over it. Either
 arrives after about that long, never a silent wait. What follows is what the code does today
 (`packages/core/src/errors.ts`, `packages/core/src/wall.ts`, `apps/api/src/errors/`,
 `apps/api/src/services/dataplane/`).
