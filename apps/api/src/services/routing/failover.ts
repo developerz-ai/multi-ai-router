@@ -80,11 +80,11 @@ export interface FailoverProgress {
   /** Request-attributable refusals so far ({@link noteRequestAttributable}). Absent: none. */
   readonly requestAttributable?: number
   /**
-   * Providers that refused this body for their own wire ({@link noteProviderScoped}). None of their
-   * candidates is offered again in this chain, whatever a later attempt says. Absent: none.
+   * Providers whose untried candidates the planner skips for the rest of this chain: a wire refusal
+   * ({@link noteProviderScoped}) or this router's own full gate ({@link noteGateFull}). Absent: none.
    */
   readonly refusedProviders?: readonly string[]
-  /** The gate-full subset of `refusedProviders` ({@link noteGateFull}); only it stops an overload wait. */
+  /** The gate-full subset of `refusedProviders` ({@link noteGateFull}): only it stops an overload wait. */
   readonly gateRefusedProviders?: readonly string[]
 }
 

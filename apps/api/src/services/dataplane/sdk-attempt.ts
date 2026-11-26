@@ -62,7 +62,7 @@ export interface SdkAttemptInput {
   readonly onUpstreamStarted?: () => void
   readonly timeoutMs: number
   /**
-   * The request's bounded wait at the subprocess gate (`CLAUDE_SDK_QUEUE_WAIT_MS`), shared by every
+   * The request's bounded wait at the shared Claude concurrency gate (`CLAUDE_SDK_QUEUE_WAIT_MS`), shared by every
    * attempt of the request so a walk over full accounts costs one knob. Absent: the unbounded queue.
    */
   readonly gateWait?: SdkGateWait

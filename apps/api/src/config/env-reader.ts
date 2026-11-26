@@ -180,7 +180,7 @@ export function readParsedEnv(raw: ParsedEnv, ctx: z.RefinementCtx): Env {
     claudeFastMode: raw.CLAUDE_FAST_MODE ?? true,
     claudeSdkMaxConcurrency: raw.CLAUDE_SDK_MAX_CONCURRENCY ?? 10,
     claudeSdkMaxConcurrencyPerAccount: raw.CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT ?? 4,
-    // A Claude request waits at the subprocess gate for at most this long in total, then moves on to
+    // A Claude request waits at the shared Claude concurrency gate for at most this long in total, then moves on to
     // the next account. 60 s clears an ordinary burst (the p90 Claude call is 38 s) and stays under
     // the 300 s idle cut every client applies to a silent call; a value that defeats that is
     // refused at boot (`claude-queue-wait.ts`).

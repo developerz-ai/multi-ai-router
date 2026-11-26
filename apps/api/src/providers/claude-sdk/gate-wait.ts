@@ -1,5 +1,5 @@
 /**
- * The bounded wait at the Claude subprocess gate (`concurrency.ts`).
+ * The bounded wait at the shared Claude concurrency gate (`concurrency.ts`).
  *
  * A request that cannot get a slot within `CLAUDE_SDK_QUEUE_WAIT_MS` is given an explicit answer
  * instead of waiting silently until its attempt deadline: a client that cuts a silent call at

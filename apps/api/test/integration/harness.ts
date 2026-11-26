@@ -61,7 +61,7 @@ export interface HarnessOptions {
   readonly selection?: SelectionOptions
   /** Extra failover knobs (overload retries); `maxAttempts` stays its own option. */
   readonly failover?: { readonly overloadRetries?: number; readonly overloadRetryBaseMs?: number }
-  /** `CLAUDE_SDK_QUEUE_WAIT_MS`. Omitted, the Claude subprocess gate queues without a bound. */
+  /** `CLAUDE_SDK_QUEUE_WAIT_MS`. Omitted, the shared Claude concurrency gate queues without a bound. */
   readonly claudeQueueWaitMs?: number
   /**
    * The Claude subscription transport, stubbed at the `SdkInvoker` boundary. Omitted means this

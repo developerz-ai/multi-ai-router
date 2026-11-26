@@ -48,7 +48,7 @@ export interface SdkInvocation {
   readonly body: Uint8Array | null
   readonly signal: AbortSignal
   /**
-   * The request's bounded wait at the subprocess gate, read by both transports at every acquire:
+   * The request's bounded wait at the shared Claude concurrency gate, read by both transports at every acquire:
    * the fast transport's own, its fallback to the SDK, and a busy-session retry all draw on one
    * budget (`gate-wait.ts`). Absent: the unbounded queue, which is what every probe keeps.
    */

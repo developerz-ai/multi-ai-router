@@ -59,9 +59,9 @@ import { createWaiterQueue } from "./waiter-queue"
 const NOT_GRANTED = "the Agent SDK slot was released before it was granted"
 
 export interface SdkConcurrencyLimits {
-  /** Subprocesses in flight across every Account on this replica. */
+  /** Claude turns in flight across every Account on this replica. */
   readonly global: number
-  /** Subprocesses in flight for any one Account. Bounded above by `global` in practice. */
+  /** Claude turns in flight for any one Account. Bounded above by `global` in practice. */
   readonly perAccount: number
 }
 
@@ -84,7 +84,7 @@ export interface SdkConcurrency {
    * still queued on.
    */
   acquire(accountId: string, signal: AbortSignal, budget?: SdkWaitBudget): Promise<SdkSlot>
-  /** Subprocess slots held across all Accounts. Observability and tests; nothing routes on it. */
+  /** Claude turn slots held across all Accounts. Observability and tests; nothing routes on it. */
   readonly inFlight: number
   /** Callers waiting on either gate. */
   readonly queued: number

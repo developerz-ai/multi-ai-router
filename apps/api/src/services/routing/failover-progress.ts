@@ -17,8 +17,11 @@ import type { Candidate } from "./types"
  * Every account was asked and one said `overloaded`: the provider's shared backend is busy, which a
  * short wait fixes and another account does not. So that account is asked again after
  * `overloadRetryBaseMs`, doubling per retry, `overloadRetries` times — before any byte is on the
- * wire, as every retry here. Then the chain stops and the client hears `503` + `Retry-After`
- * (`UpstreamOverloadedError`), never a router-made `429`.
+ * wire, as every retry here — unless its provider is in `gateRefusedProviders`: the router's own
+ * full gate refused it this request, and a wait would meet the same gate. Then the chain stops and
+ * the client hears `503` + `Retry-After` (`UpstreamOverloadedError`), not a router-made `429` for
+ * the overload itself. A held `account_at_capacity` (rank 70) outranks `upstream_overloaded` (65),
+ * so a chain that also met a full gate can still end on the capacity answer.
  */
 export function waitOutOverload(
   ordered: readonly Candidate[],

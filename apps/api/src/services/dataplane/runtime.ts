@@ -35,7 +35,7 @@ export interface RuntimeInput {
   readonly quotaSpentThreshold?: number
   readonly unknownResetRetryAfterSeconds?: number
   /**
-   * `CLAUDE_SDK_QUEUE_WAIT_MS`: how long one request may queue at the Claude subprocess gate, in
+   * `CLAUDE_SDK_QUEUE_WAIT_MS`: how long one request may queue at the shared Claude concurrency gate, in
    * total, before it is told the account or the replica is full. Absent: the queue is unbounded,
    * as it is for a dispatcher built without it (a test).
    */
