@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Process only: releases are weekly: the Monday `release-due` checkup decides and files a **Release due** issue, and the release PR and tag follow from it; a PR no longer bumps the version or tags (`CLAUDE.md`, `CONTRIBUTING.md`). The one off-cycle release is a fix for a published advisory rated high or critical, or KEV-listed. The free-model re-rank runs weekly, dz advisory watch is off and Dependabot batches security bumps into one PR per ecosystem. No runtime change.
+
 - Documentation only: repair `docs/idea/09-deployment.md` with reviewable implementation anchors for the scheduler advisory lock, the per-account refresh lease, Claude account ownership and the durable breaker path; cite the production breaker writer and catalog refresh symbols beside the propagation tests. Keep the one-supported-replica wording consistent and distinguish task-level advisory-lock safety from whole-router safety. Record that the earlier task text was discarded at intake as `task_problem:injection` (so no model read it) and that this pass restates the ask with anchors instead of reproducing it. Outstanding local-state and fleet-wide gates remain open; shared RWX/NFS storage and the unmerged ownership design are not claimed to clear them. No runtime change; no replicas enabled; no version bump for a documentation-only change.
 
 - The rule "a router-made `429` while an eligible account is in scope is a bug" (`CLAUDE.md`) is narrowed, with the owner's authorization (developerz-ai/developerz.ai#10277), to allow this one capacity answer after the bounded gate wait. The `concurrency.ts` header and `docs/clients.md` no longer say a capacity wait never fails a request.

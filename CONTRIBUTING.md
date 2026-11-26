@@ -92,10 +92,15 @@ Other commands you'll use often:
 
 ## Version bumps
 
-Every PR ships a version: the same PR updates `CHANGELOG.md` and bumps the
-version in every file `docs/RELEASING.md` step 1 lists, and
-`bin/verify-version` proves the tree agrees with itself. Which digit moves is
-a rule, not a mood (#258):
+A PR adds its entry under `## [Unreleased]` in `CHANGELOG.md` and does not
+bump the version. Releases are weekly (owner, 2026-11-26): the Monday
+`release-due` checkup (`.dz/schedules/release-due.md`) judges the window and
+files a **Release due** issue; whoever takes it opens the release PR, which bumps the version in every file `docs/RELEASING.md` step 1
+lists, with `bin/verify-version` proving the tree agrees with itself. The one
+off-cycle release is a fix for a published advisory rated high or critical,
+or KEV-listed
+(`.dz/schedules/security-release.md`). Which digit the release moves is a
+rule, not a mood (#258), read off everything under `## [Unreleased]`:
 
 - An **addition** takes a **minor** bump (`2.37.9` → `2.38.0`): a new price
   row, a new endpoint, a new env knob, a new provider — anything that ships
@@ -103,9 +108,9 @@ a rule, not a mood (#258):
 - **Fixes, docs, tests and refactors** take a **patch** bump (`2.37.9` →
   `2.37.10`): a change that adds no capability.
 
-A PR whose changelog section opens with `Added` while its version moves a
+A release whose changelog section holds an `Added` while its version moves a
 patch is wrong whichever way it happened — a price row once shipped as a
-patch (#256) — so read the digit off the changelog group before bumping.
+patch (#256) — so read the digit off the changelog groups before bumping.
 
 ## Non-negotiables
 

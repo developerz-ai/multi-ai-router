@@ -1,4 +1,8 @@
 # Weekly, with minor and patch updates grouped per ecosystem; a major update arrives on its own.
+# Owner, 2026-11-26: version updates weekly at most, grouped, at most 3 open per ecosystem.
+# Advisories come through here too (dz devops.watch is off): security updates run as soon as an
+# advisory lands, outside the schedule and that limit, and an `applies-to: security-updates` group
+# batches them into one PR per ecosystem.
 # The 14-day cooldown lets a compromised release get caught before it reaches us. Security updates
 # are unaffected.
 version: 2
@@ -9,24 +13,32 @@ updates:
       interval: "weekly"
       day: "sunday"
       time: "16:00"
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
       bun-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "sunday"
       time: "16:00"
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
       docker-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      docker-security:
+        applies-to: security-updates
+        patterns: ["*"]
     ignore:
       # The bun image moves with .bun-version and ci.yml's BUN_VERSION as one change; the drift test
       # in apps/api/test/integration/image-pins.test.ts fails a bump of the image alone.
@@ -37,21 +49,29 @@ updates:
       interval: "weekly"
       day: "sunday"
       time: "16:00"
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
       docker-compose-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      docker-compose-security:
+        applies-to: security-updates
+        patterns: ["*"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "sunday"
       time: "16:00"
+    open-pull-requests-limit: 3
     cooldown:
       default-days: 14
     groups:
       github-actions-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      github-actions-security:
+        applies-to: security-updates
+        patterns: ["*"]

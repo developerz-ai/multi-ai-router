@@ -6,7 +6,7 @@ import type { ProviderId } from "@multi-ai-router/core"
  *
  * A table rather than a computed score, because the judgement has no formula: an intelligence index
  * says nothing about a model whose host refuses most requests, and half the rows have no index. It
- * is re-ranked daily by `.dz/schedules/free-providers.md`, which owns the order and cites its evidence.
+ * is re-ranked weekly by `.dz/schedules/free-providers.md`, which owns the order and cites its evidence.
  *
  * A row says where a model is free **by id**: the same weights are free under one provider's id and
  * billed under another's, so an id is listed only for a provider that never bills it. That is why
