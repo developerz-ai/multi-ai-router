@@ -133,6 +133,11 @@ export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
   "router-full",
 ]
 
+/** This router's own Claude gate was full (the account's limit or the replica's ceiling), before any upstream was asked. */
+export function isGateFull(kind: FailureKind): kind is "account-full" | "router-full" {
+  return kind === "account-full" || kind === "router-full"
+}
+
 /**
  * A failure that is a verdict even though the upstream never started: the request's own refusal
  * ({@link AttemptFailure.requestAttributable}), or this router's full gate (`account-full`,
@@ -141,11 +146,7 @@ export const RETRYABLE_FAILURE_KINDS: readonly FailureKind[] = [
  * fault, which would end a walk of full accounts as "could not be prepared".
  */
 export function isUnstartedVerdict(failure: Pick<AttemptFailure, "kind" | "requestAttributable">) {
-  return (
-    failure.requestAttributable === true ||
-    failure.kind === "account-full" ||
-    failure.kind === "router-full"
-  )
+  return failure.requestAttributable === true || isGateFull(failure.kind)
 }
 
 export function isRetryable(kind: FailureKind): boolean {

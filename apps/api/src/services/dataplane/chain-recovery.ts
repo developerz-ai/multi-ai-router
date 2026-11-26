@@ -1,5 +1,5 @@
 import { accountLevelReading, isModelLevelReading } from "../../providers"
-import type { AttemptFailure } from "../routing"
+import { type AttemptFailure, isGateFull } from "../routing"
 import type { AttemptOutcome } from "./attempt"
 import type { ChainContext } from "./chain"
 import { breakerOptionsFor } from "./health"
@@ -41,11 +41,7 @@ export function recordChainFailure(
   // designated probe settles `uncertain` so its permit is not spent on someone else's outage.
   // The router's own gate was full (`account-full`, `router-full`): equally blameless, and the same
   // settlement. No strike, no limiter reading, and a designated probe's permit is not spent on it.
-  if (
-    outcome.failure.kind === "overloaded" ||
-    outcome.failure.kind === "account-full" ||
-    outcome.failure.kind === "router-full"
-  ) {
+  if (outcome.failure.kind === "overloaded" || isGateFull(outcome.failure.kind)) {
     recovery?.finish("uncertain")
     return
   }

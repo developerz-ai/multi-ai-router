@@ -71,6 +71,7 @@ export {
   type AttemptFailure,
   classifyStatus,
   type FailureKind,
+  isGateFull,
   isRetryable,
   isUnstartedVerdict,
   RETRYABLE_FAILURE_KINDS,

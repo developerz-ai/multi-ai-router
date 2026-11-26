@@ -44,6 +44,7 @@ function router(options: {
   readonly global: number
   readonly perAccount: number
   readonly logger?: Logger
+  readonly unknownResetRetryAfterSeconds?: number
 }) {
   const time = manualGateClock()
   const concurrency = createSdkConcurrency(
@@ -65,7 +66,12 @@ function router(options: {
   const h = harness({
     accounts: options.accounts,
     responses: [() => jsonResponse(200, API_MESSAGE)],
-    selection: { unpooledPolicy: "priority-failover" },
+    selection: {
+      unpooledPolicy: "priority-failover",
+      ...(options.unknownResetRetryAfterSeconds === undefined
+        ? {}
+        : { unknownResetRetryAfterSeconds: options.unknownResetRetryAfterSeconds }),
+    },
     invokeSdk: (invocation: SdkInvocation) => {
       asked.push(invocation.accountId)
       return real(invocation)
@@ -161,6 +167,30 @@ describe("a full Claude account, with the gate wait bounded", () => {
       expect(breaker.status).toBe("active")
       expect(breaker.consecutiveFailures).toBe(0)
     }
+    for (const holder of holders) holder.release()
+  })
+
+  test("Retry-After follows ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS, not a constant 30", async () => {
+    const r = router({
+      accounts: subs("sub-a", "sub-b"),
+      global: 4,
+      perAccount: 1,
+      unknownResetRetryAfterSeconds: 7,
+    })
+    const holders = [
+      await r.concurrency.acquire("sub-a", live()),
+      await r.concurrency.acquire("sub-b", live()),
+    ]
+
+    const pending = r.app.request("/v1/messages", post(MESSAGE, bearer()))
+    await untilQueued(r.concurrency)
+    r.time.advance(KNOB)
+    const res = await pending
+    const body = (await res.json()) as { error: { router: { retry_after_s: number } } }
+
+    expect(res.status).toBe(429)
+    expect(res.headers.get("retry-after")).toBe("7")
+    expect(body.error.router.retry_after_s).toBe(7)
     for (const holder of holders) holder.release()
   })
 
