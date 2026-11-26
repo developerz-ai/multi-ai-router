@@ -73,14 +73,16 @@ escalate:
   ask_before_acting: [breaking_change]
 
 schedules:
-  # Weekly and judged, so a merge never cuts a release. Thursday: one weekday per repo in the fleet.
+  # Weekly and judged, so a merge never cuts a release. Monday, the only release slot (owner,
+  # 2026-11-26: weekly, never one per fix or per PR).
   - name: release-due
-    days: [thu]
+    days: [mon]
     hours_utc: [3]
     brief_file: .dz/schedules/release-due.md
-  # The one exception, so a confirmed security fix does not wait up to a week for the slot above.
+  # The one exception, so a published high/critical or KEV-listed advisory fix does not wait up to a week for the
+  # slot above. It only files an ask on the strict criteria in its brief (owner, 2026-11-26).
   - name: security-release
-    days: [mon, tue, wed, fri, sat, sun]
+    days: [tue, wed, thu, fri, sat, sun]
     hours_utc: [5]
     brief_file: .dz/schedules/security-release.md
   # Weekly: CI, review and security are event-driven or have their own daily slot above.
@@ -92,25 +94,25 @@ schedules:
     days: [mon]
     hours_utc: [8]
     brief_file: .dz/schedules/improve.md
-  # Daily: free tiers move daily, and the router serves `free` in the order this one keeps.
+  # Weekly (owner, 2026-11-26: not so many daily PRs). Wednesday, so its PR lands mid-window and
+  # ships with the next Monday release.
   - name: free-providers
-    days: [mon, tue, wed, thu, fri, sat, sun]
+    days: [wed]
     hours_utc: [6]
     brief_file: .dz/schedules/free-providers.md
 
-# devops: first-tier security advisories (KEV, NVD, GitHub, OSV, EPSS) are read against
-# the versions this repo runs, and a fix is filed at once when one is in a vulnerable
-# range; it claims ahead of routine work. It runs on your boxes and your key. `off` stops it.
+# devops: off (owner, 2026-11-26: one PR per advisory was too much noise). Advisories arrive through
+# Dependabot instead: version bumps weekly, security bumps grouped into one PR per ecosystem
+# (.github/dependabot.yml).
 devops:
-  watch: advisories
+  watch: off
 
 # Added by the developerz.ai maintainer agent: blocks from the current template this file did not have. Each states the value already in effect; edit it like any other key.
 
-# branches: on at 60 because this file exists. A branch with no new commit
-# this long is tagged archive/<branch>/<date> at its last commit, then deleted.
-# false keeps every branch. See /docs/maintainer-yml.
+# branches: a branch with no new commit this long is tagged archive/<branch>/<date> at its last
+# commit, then deleted. 14 (owner, 2026-11-26: keep the repos cleaned). false keeps every branch.
 branches:
-  close_inactive_after_days: 60
+  close_inactive_after_days: 14
 
 # scout: the platform's daily survey of this repo files only what is already BROKEN
 # (red CI, failing tests, a security advisory, a broken build or link), never an

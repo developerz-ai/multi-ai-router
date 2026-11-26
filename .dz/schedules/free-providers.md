@@ -1,6 +1,6 @@
 # Brief: which free models are worth it
 
-Daily. Owner, 2026-11-23: the router figures out the free models and delivers the smartest first; it is
+Weekly, Wednesdays (owner, 2026-11-26: not so many daily PRs). Owner, 2026-11-23: the router figures out the free models and delivers the smartest first; it is
 this agent's job to research, benchmark and rank them. The audience is developerz.ai and its
 infrastructure: agents that call tools, and small text jobs.
 
@@ -42,7 +42,7 @@ provider that bills it for some accounts (`groq`, `gemini`): the table would cal
 
 ## Ship
 
-- A change of order, a removal, a new id, or a note that no longer matches its vendor: **one PR a day**, the
+- A change of order, a removal, a new id, or a note that no longer matches its vendor: **one PR a week**, the
   evidence in its body (source, date, and the probe's status line per model), `FREE_RANKING_AS_OF` set to
   today, `bin/check` green, a `CHANGELOG.md` line.
 - A removal ships even when nothing else moved: a dead id costs every `free` request an attempt.

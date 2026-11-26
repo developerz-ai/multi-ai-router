@@ -4,7 +4,7 @@
  * paste rather than a documentation hunt.
  *
  * Data only. Nothing here is contacted, and no row grants anything: an operator still makes the key
- * and the Account. Re-checked daily by `.dz/schedules/free-providers.md`.
+ * and the Account. Re-checked weekly by `.dz/schedules/free-providers.md`.
  *
  * `models` are the ids that cost nothing there, and they are what the Account should declare: the
  * same key bills every other id once it holds credit.
