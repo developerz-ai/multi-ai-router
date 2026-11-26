@@ -170,6 +170,34 @@ describe("a full Claude account, with the gate wait bounded", () => {
     for (const holder of holders) holder.release()
   })
 
+  test("both full: the OpenAI dialect renders the account_at_capacity error code", async () => {
+    const r = router({ accounts: subs("sub-a", "sub-b"), global: 4, perAccount: 1 })
+    const holders = [
+      await r.concurrency.acquire("sub-a", live()),
+      await r.concurrency.acquire("sub-b", live()),
+    ]
+
+    const pending = r.app.request(
+      "/v1/chat/completions",
+      post(
+        JSON.stringify({ model: "claude-opus-5", messages: [{ role: "user", content: "hi" }] }),
+        bearer(),
+      ),
+    )
+    await untilQueued(r.concurrency)
+    r.time.advance(KNOB)
+    const res = await pending
+    const body = (await res.json()) as {
+      error: { code?: string; message: string; router: { signal: string } }
+    }
+
+    expect(res.status).toBe(429)
+    expect(body.error.code).toBe("account_at_capacity")
+    expect(body.error.message).toBe(ACCOUNT_FULL)
+    expect(body.error.router.signal).toBe("account-at-capacity")
+    for (const holder of holders) holder.release()
+  })
+
   test("Retry-After follows ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS, not a constant 30", async () => {
     const r = router({
       accounts: subs("sub-a", "sub-b"),

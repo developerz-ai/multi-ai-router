@@ -215,11 +215,20 @@ describe("a caller with a wait budget", () => {
     const slot = await first
     expect(budget.remaining()).toBe(KNOB - 40_000)
 
+    // The request then spends 10 s outside any queue (the account walk, a refresh). That time is
+    // not charged to the budget: only time spent queued is.
+    time.advance(10_000)
+    expect(budget.remaining()).toBe(KNOB - 40_000)
+
     // The next acquire of the same request, on another account, queues on the global half and
-    // gets only what is left: 20 s, not another 60.
+    // gets only what is left: 20 s from its own queueing, not another 60 and not 10 s because the
+    // request is already 50 s old.
     const next = expiry(concurrency.acquire("acct-b", live(), budget))
     await turns()
-    time.advance(20_000)
+    time.advance(19_999)
+    await turns()
+    expect(concurrency.queued).toBe(1)
+    time.advance(1)
     expect((await next).half).toBe("global")
     expect(budget.remaining()).toBe(0)
     slot.release()
