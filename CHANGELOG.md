@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.80.0] — 2026-11-26
-
 ### Added
 
 - `CLAUDE_SDK_QUEUE_WAIT_MS` (default `60000`): the most one Claude subscription request waits at the shared Claude concurrency gate, in total. The gate's slots are taken by every Claude subscription turn, warm fast-mode HTTP turns as well as Agent-SDK subprocesses, so it can be full with no CLI child running: operators checking a full gate look at fast-mode traffic too, not only at subprocesses. A request that cannot get a slot within it is told so and moves on, instead of waiting silently until its attempt deadline (`UPSTREAM_TIMEOUT_MS`, 600 s) behind a client that cuts a silent call at 300 s. One budget per request, not per attempt: the next candidate, the fast transport's fallback to the SDK and a busy-session retry all draw on what is left, so a walk over N full accounts answers after about one wait. Both halves of the gate are bounded, by the same budget. Test now, the idle probe, the credential keepalive, the model list and the usage-gauge read keep the unbounded queue: nobody is waiting on them, and refusing the keepalive would skip a token refresh. The caps (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) do not change. The wait is bounded by one rule: with D the shorter of `UPSTREAM_TIMEOUT_MS` and `UPSTREAM_STREAM_TIMEOUT_MS` (a streamed fast-mode attempt's total clock starts before the gate wait, and work that spends none of the budget, such as a credential-refresh wait or request parsing, comes before it), the wait may be at most `min(240000, floor(D / 2))`. A value the operator sets above that is refused at boot, naming the value, D and the knob that set D (240000 because clients cut a silent call at 300 s; half of D so the wait expires before the deadline can end the request). Only a value the operator sets is refused: when the knob is unset the wait is `min(60000, floor(D / 2))` (half the shorter deadline rounded down, 60 s cap; it starts to shrink below a 120000 ms D, so 90000 gives 45000), so an existing deployment that never chose this knob still boots. When D is 2 ms or less that derived wait is `0` instead: a saturated gate admits or refuses at once, without queueing, so the capacity verdict is returned before the deadline rather than racing a 1 ms wait.
@@ -2608,4 +2606,3 @@ your tooling config.
 [2.78.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.0
 [2.78.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.1
 [2.79.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.79.0
-[2.80.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.80.0
