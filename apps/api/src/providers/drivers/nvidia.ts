@@ -71,7 +71,7 @@ export const nvidiaDriver: ProviderDriver = {
   freeTier: {
     access: "free-key",
     url: "https://build.nvidia.com/settings/api-keys",
-    note: "Free developer key (email and phone check): up to 40 requests a minute and 10,000 a day, varying by model. Terms: prototyping and development, not serving end users.",
+    note: "Free developer key: up to 40 requests a minute and 10,000 a day, varying by model — public catalog rate-limit evidence from build.nvidia.com, separate from signing up; a gated or broken signup link is not allowance evidence. Terms: prototyping and development, not serving end users.",
     verifiedAt: "2026-11-23",
   },
 }
