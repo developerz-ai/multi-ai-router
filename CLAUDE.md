@@ -141,7 +141,7 @@ Changes are made the way a senior engineer on this codebase would make them.
 - **The router's job is to serve.** When accounts go bad, wait briefly and reroute to a good one; slower is fine. A router-made `429` while an eligible account is in scope is a bug, never "honest". Bookkeeping (recovery permits, probe holds, bindings) must never keep a healthy account out of rotation.
 - **Every gate needs an exit.** Any state that blocks routing or background work must name what clears it and when. A state that only a request can clear needs that request to actually arrive.
 - **Tests ship with the fix, failure case first,** asserting the prod fingerprint. Update a test that encoded the wrong rule; never delete it.
-- **Leave the trail straight.** The same PR updates `docs/idea/`, `CHANGELOG.md` and the version. Done means merged, tagged, and the image published.
+- **Leave the trail straight.** The same PR updates `docs/idea/` and `CHANGELOG.md` under `## [Unreleased]`. It does not bump the version or tag: releases are weekly, cut only by the Monday `release-due` checkup (`.dz/schedules/release-due.md`), except a fix for a published high/critical advisory (owner, 2026-11-26). Done means merged.
 
 ## Testing
 

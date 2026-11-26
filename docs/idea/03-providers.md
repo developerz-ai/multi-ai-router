@@ -857,7 +857,7 @@ they were for (`modelScoped`), and the account keeps serving the rest. Kilo's ho
 five-minute re-test.
 
 **The ranking.** `FREE_MODEL_RANKING` (`services/models/free-ranking.ts`) orders free models smartest first and
-says by id where each is free. It is judged daily by `.dz/schedules/free-providers.md` and shipped in the image, so
+says by id where each is free. It is judged weekly by `.dz/schedules/free-providers.md` and shipped in the image, so
 no request depends on somebody else's list. An id is listed only under a provider that never bills it: `groq` and
 `gemini` are absent because the same id is billed on a paid plan. `GET /v1/free-models` lists what the presenting
 key reaches for nothing, in that order; a name some in-scope account would bill is left out, because the router
