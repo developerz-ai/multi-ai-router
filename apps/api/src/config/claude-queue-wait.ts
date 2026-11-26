@@ -1,7 +1,7 @@
 import type { z } from "zod"
 
-/** The attempt deadline's default (`routing-env.ts`), read here only when the operator left it unset. */
-const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000
+import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "../services/dataplane/dispatcher-config"
+import { DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS } from "./upstream-stream"
 
 /**
  * The most `CLAUDE_SDK_QUEUE_WAIT_MS` may be: 240 s. Clients cut a silent call at 300 s, and the
@@ -18,37 +18,54 @@ const DEFAULT_QUEUE_WAIT_MS = 60_000
 type QueueWaitEnv = {
   readonly CLAUDE_SDK_QUEUE_WAIT_MS?: number
   readonly UPSTREAM_TIMEOUT_MS?: number
+  readonly UPSTREAM_STREAM_TIMEOUT_MS?: number
 }
 
 /**
- * Refuses a wait that cannot do its job: past {@link CLAUDE_QUEUE_WAIT_MAX_MS} the client is gone
- * before the answer, and at or past the attempt deadline (`UPSTREAM_TIMEOUT_MS`) the deadline
- * ends the request first, so the budget never expires and nothing is ever told the gate was full.
+ * The one rule bounding the wait. D is the shortest clock that can end the attempt that is queued:
+ * `min(UPSTREAM_TIMEOUT_MS, UPSTREAM_STREAM_TIMEOUT_MS)`. A streamed fast-mode attempt's total clock
+ * starts before the gate wait, and the SDK/non-streamed deadline is `UPSTREAM_TIMEOUT_MS`, so the
+ * shorter of the two ends the request first. The wait may use at most half of D, so the work that
+ * spends none of the budget (parsing, a credential-refresh wait of up to
+ * `CLAUDE_SDK_CREDENTIAL_REFRESH_WAIT_MS` before the gate timer starts) cannot push an expiring
+ * wait past D and end the request as an unprepared 503. Never above
+ * {@link CLAUDE_QUEUE_WAIT_MAX_MS}, and 0 for a D of 2 ms or less (half of it, floored at 1 ms,
+ * would tie the deadline).
+ */
+export function claudeQueueWaitCeilingMs(deadlineMs: number): number {
+  return deadlineMs <= 2 ? 0 : Math.min(CLAUDE_QUEUE_WAIT_MAX_MS, Math.floor(deadlineMs / 2))
+}
+
+/**
+ * Refuses a wait above {@link claudeQueueWaitCeilingMs}: past 240000 the client is gone before the
+ * answer, and past half of D the deadline can end the request first, so the budget never expires and
+ * nothing is ever told the gate was full. The message names the value, D and the knob that set D.
  * (A value past the timer range is already refused by `numeric-bounds.ts`.)
  *
  * The refusal is for a value the operator SET. An unset knob is a default the operator never chose,
- * so a deployment that only lowered `UPSTREAM_TIMEOUT_MS` below it must still boot: the default is
- * `min(60000, floor(deadline / 2))`, half the attempt timeout rounded down with a 60 s cap, so it starts
- * to shrink below a 120000 ms deadline (90000 gives 45000) and the wait still expires first. A deadline
- * of 2 ms or less leaves no room for any wait (half of it rounded down, floored at 1 ms, would tie
- * or nearly tie the deadline, and a saturated gate could time out before its capacity verdict), so
- * the derived wait is 0: the gate admits at once or refuses at once, never queues, and the capacity
- * verdict comes back before the deadline. Boot stays compatible, since only a SET value is refused.
+ * so a deployment that only lowered a deadline must still boot: the default is
+ * `min(60000, ceiling)`, which starts to shrink below a 120000 ms D (90000 gives 45000) and always
+ * expires first. A D of 2 ms or less leaves no room for any wait, so the derived wait is 0: the gate
+ * admits at once or refuses at once, never queues.
  */
 export function readClaudeQueueWaitMs(raw: QueueWaitEnv, ctx: z.RefinementCtx): number {
-  const deadlineMs = raw.UPSTREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_TIMEOUT_MS
-  if (raw.CLAUDE_SDK_QUEUE_WAIT_MS === undefined)
-    return deadlineMs <= 2 ? 0 : Math.min(DEFAULT_QUEUE_WAIT_MS, Math.floor(deadlineMs / 2))
+  const attemptMs = raw.UPSTREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_TIMEOUT_MS
+  const streamMs = raw.UPSTREAM_STREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS
+  const deadlineMs = Math.min(attemptMs, streamMs)
+  const ceilingMs = claudeQueueWaitCeilingMs(deadlineMs)
+  if (raw.CLAUDE_SDK_QUEUE_WAIT_MS === undefined) return Math.min(DEFAULT_QUEUE_WAIT_MS, ceilingMs)
   const waitMs = raw.CLAUDE_SDK_QUEUE_WAIT_MS
-  const issue = (message: string) =>
-    ctx.addIssue({ code: "custom", path: ["CLAUDE_SDK_QUEUE_WAIT_MS"], message })
-  if (waitMs > CLAUDE_QUEUE_WAIT_MAX_MS)
-    issue(
-      `must be at most ${CLAUDE_QUEUE_WAIT_MAX_MS}: clients cut a silent call at 300 s, so a longer wait answers after the client has gone`,
-    )
-  else if (waitMs >= deadlineMs)
-    issue(
-      `must be less than UPSTREAM_TIMEOUT_MS (${deadlineMs}): the attempt deadline would end the request before the wait could`,
-    )
+  if (waitMs > ceilingMs) {
+    const setBy = streamMs < attemptMs ? "UPSTREAM_STREAM_TIMEOUT_MS" : "UPSTREAM_TIMEOUT_MS"
+    const why =
+      ceilingMs === CLAUDE_QUEUE_WAIT_MAX_MS
+        ? "clients cut a silent call at 300 s, so a longer wait answers after the client has gone"
+        : `the wait may use at most half of the attempt deadline of ${deadlineMs} ms (set by ${setBy}), the rest being spent before and after it; lower the wait or raise ${setBy}`
+    ctx.addIssue({
+      code: "custom",
+      path: ["CLAUDE_SDK_QUEUE_WAIT_MS"],
+      message: `${waitMs} must be at most ${ceilingMs}: ${why}`,
+    })
+  }
   return waitMs
 }
