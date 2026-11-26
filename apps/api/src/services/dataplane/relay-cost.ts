@@ -46,7 +46,10 @@ export function usageCostFields(facts: CountFacts, estimate: CostEstimate): Usag
   if (estimate.costEstimate === null || estimate.costBasis === "unknown") return null
   if (facts.usageInvalid || facts.evidenceUnavailable) return null
   const { tokensIn, tokensOut, cacheReadTokens, cacheWriteTokens } = facts.counts
-  if (tokensIn + tokensOut + cacheReadTokens + cacheWriteTokens === 0) return null
+  // Zero counts priced at a rate are a zero nobody billed; a reported zero is the upstream's own
+  // statement that it billed nothing, and the row records it as such.
+  const total = tokensIn + tokensOut + cacheReadTokens + cacheWriteTokens
+  if (total === 0 && estimate.source !== "reported") return null
   return {
     cost: Number(estimate.costEstimate),
     cost_source: estimate.source ?? "estimated",

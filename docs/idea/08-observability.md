@@ -115,8 +115,8 @@ request fact; it never invents an upstream account or a token charge.
 
 ## Cost estimation
 
-A response the router writes (translated, or folded from a forced stream) also states the estimate as
-`usage.cost`, `cost_source` and `cost_basis`; a byte relay cannot, so it states none. See
+A response the router writes (translated, or folded from a forced stream) also states the attempt's
+cost as `usage.cost`, `cost_source` and `cost_basis`; a byte relay cannot, so it states none. See
 [06-protocol-translation.md](06-protocol-translation.md).
 
 What the three fields mean to a client that books them (wire shape:
@@ -124,8 +124,8 @@ What the three fields mean to a client that books them (wire shape:
 
 | Field | Meaning |
 |---|---|
-| `usage.cost` | Dollars this router's price book assigns the attempt that served the answer: the shipped table under the operator's overrides, priced on the upstream model. When the basis is `unknown` all three fields are **absent** (`dataplane/relay-cost.ts`) — never `0` for "nobody knows" |
-| `cost_source` | Always `estimated`: computed from token counts and the price book, never an upstream's invoice line |
+| `usage.cost` | Dollars for the attempt that served the answer, the row's own `cost_estimate`. A rate prices it when one is known — the operator's override first, then the shipped table, on the upstream (post-alias) model; with no rate, the figure the upstream itself reported billing ([below](#a-cost-the-upstream-reports)). When the basis is `unknown` all three fields are **absent** (`dataplane/relay-cost.ts`) — never `0` for "nobody knows". A rate-priced attempt with zero counts states none; a reported `0` is stated |
+| `cost_source` | `estimated` — computed from token counts and a rate (override or shipped). `reported` — the upstream's own statement of what it billed (OpenRouter's `usage.cost`), used only when no rate is known, so an override always shows as `estimated` |
 | `cost_basis` | `metered` — a pay-per-token account; the figure estimates real spend at the book's rate. `notional` — a **subscription** account; the figure is an *attribution* at the vendor's API list price, **not spend**: the subscription's flat fee is the spend. A consumer billing its own customers must not book a `notional` figure as a measured upstream charge |
 
 Which provider served the answer is `x-router-provider`, not the presence of a cost: a client that
@@ -213,7 +213,7 @@ figure is the attempt's cost. Today that is `openrouter` alone: every completion
 | Basis | The Account's, as for every priced attempt: `metered` on a pay-per-token account, which is what OpenRouter's balance is. The figure is what was billed, so it is spend, not an estimate |
 | On the wire | A response the router writes states it with `cost_source: "reported"` ([06](06-protocol-translation.md#per-call-cost-on-the-wire)); a same-dialect relay is OpenRouter's own bytes and already carries it |
 | Coverage | Settings' unpriced list omits a reporting provider's models and catalog (`providerReportsCost`): without a rate they are still priced. An override written for one still wins over the reported figure |
-| Not persisted apart | The row keeps `cost_estimate` and `cost_basis`; no column says the figure was reported rather than estimated. The provider names it: an `openrouter` row with a cost is a reported one unless an override covers its model |
+| Not persisted apart | The row keeps `cost_estimate` and `cost_basis`; no column says the figure was reported rather than estimated. While an override exists, an `openrouter` row priced after it took effect is override-estimated and any other is reported. Once the override is deleted, stored rows **cannot** be told apart: an override-estimated row and a reported one read the same, and nothing records which source priced which row. Only the wire's `cost_source` said so, at the time |
 
 Prod, 2026-11-19..26: 144k attempts on one OpenRouter account — 784M input, 153M output, 7.99B
 cache-read tokens, Nemotron 3 Ultra among them — recorded `unknown`, so their spend was invisible.
