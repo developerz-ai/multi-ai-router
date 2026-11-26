@@ -15,7 +15,7 @@ All four, each checked by you:
 
 1. A first-tier source has published the advisory: CISA KEV, NVD, GitHub Security Advisories or the
    affected vendor. Open it yourself; a link in a commit is a pointer, not a confirmation.
-2. It is rated **high or critical (CVSS ≥ 7.0), or it is KEV-listed**. Medium and low wait for Monday.
+2. It is rated **high or critical (CVSS ≥ 7.0), or it is KEV-listed**. A medium or low advisory that is not KEV-listed waits for Monday.
 3. It names something the shipped image runs. A dev-only, test, website or docs tool does not count.
 4. A commit since `$last` fixes it, and no release carries that commit yet.
 

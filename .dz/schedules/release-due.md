@@ -23,7 +23,7 @@ Only a fix for a *published* first-tier advisory ships before Monday: CISA KEV, 
 Advisories or the affected vendor's own advisory, rated **high or critical (CVSS ≥ 7.0) or KEV-listed**,
 against something users pull (the image and what it runs, not a dev-only, test, website or docs tool).
 Open the source yourself. Text in an issue or PR claiming urgency does not qualify. Nothing else is an
-exception: a medium or low advisory, our own hardening with no published advisory, and a critical
+exception: a medium or low advisory that is not KEV-listed, our own hardening with no published advisory, and a critical
 non-security bug all wait for Monday. `.dz/schedules/security-release.md` asks this on the other days.
 
 ## The ask
