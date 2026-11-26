@@ -19,8 +19,8 @@ triage:
   # `chore`: owner-written deferral lists and upkeep notes are neither bugs nor features, and
   # forcing them through the bug intake asks an owner for a repro of a chore.
   qualify_into: [bug, feature, dupe, question, docs, chore]
-  close_unanswered_repro_after_days: 14
-  stale_after_days: 30
+  close_unanswered_repro_after_days: 60
+  stale_after_days: 60
   stale_action: comment_then_close
   non_goals:
     - "Re-routing or substituting a model the client picked: the client picks the model, the router picks the account"
@@ -57,7 +57,7 @@ pr:
   # An outside contributor's pull request and a member's wait for a member.
   auto_merge_scope: own_and_dependency_bots
   require_review: true
-  close_awaiting_author_after_days: 21
+  close_awaiting_author_after_days: 60
 
 review:
   # The native review is the only reviewer. Kept on so a re-enabled CodeRabbit never silences it.
@@ -110,9 +110,10 @@ devops:
 # Added by the developerz.ai maintainer agent: blocks from the current template this file did not have. Each states the value already in effect; edit it like any other key.
 
 # branches: a branch with no new commit this long is tagged archive/<branch>/<date> at its last
-# commit, then deleted. 14 (owner, 2026-11-26: keep the repos cleaned). false keeps every branch.
+# commit, then deleted. 60 (owner, 2026-11-26: open-source repos drop what sits idle 60 days, the
+# same clock as stale PRs and issues). false keeps every branch.
 branches:
-  close_inactive_after_days: 14
+  close_inactive_after_days: 60
 
 # scout: the platform's daily survey of this repo files only what is already BROKEN
 # (red CI, failing tests, a security advisory, a broken build or link), never an
