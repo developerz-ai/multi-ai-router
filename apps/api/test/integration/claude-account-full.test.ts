@@ -180,8 +180,10 @@ describe("a full Claude account, with the gate wait bounded", () => {
 
     expect(res.status).toBe(429)
     expect(r.asked).toEqual(["sub-a", "sub-b", "sub-c"])
-    // The one advance above is all the time the walk ever waited.
-    expect(r.time.now()).toBe(KNOB)
+    // The one advance above is all the time the walk ever waited: no timer is left armed and no
+    // waiter is left queued once the answer is out.
+    expect(r.time.armed).toBe(0)
+    expect(r.concurrency.queued).toBe(0)
     expect(r.usage.rows.filter((row) => row.errorClass === "account-at-capacity")).toHaveLength(3)
     for (const holder of holders) holder.release()
   })

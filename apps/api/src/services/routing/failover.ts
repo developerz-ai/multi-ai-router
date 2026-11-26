@@ -152,7 +152,8 @@ export function planNextAttempt(
     return { action: "stop", reason: "request-wall" }
   // Nothing waits out a vendor's wire or an account's settings: the same body draws the same
   // refusal after any pause. Only another account that said `overloaded` earlier in the chain is
-  // still worth asking again.
+  // still worth asking again, and not one whose provider is in `refusedProviders` (the router's own
+  // full gate, a wire-scoped refusal): that is not waited out either.
   const stop = (exhausted: FailoverStopReason): FailoverDecision =>
     walkedPast && progress.overloadedAccountId === undefined
       ? { action: "stop", reason: "provider-wall" }
