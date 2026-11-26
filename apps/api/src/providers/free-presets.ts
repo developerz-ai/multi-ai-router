@@ -28,6 +28,16 @@ export interface FreePreset {
  */
 export const FREE_PRESETS: readonly FreePreset[] = [
   {
+    // https://developers.cloudflare.com/workers-ai/platform/pricing/ (2026-11-25).
+    id: "cloudflare-workers-ai",
+    name: "Cloudflare Workers AI",
+    baseUrl: "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
+    keyUrl: "https://developers.cloudflare.com/workers-ai/get-started/rest-api/",
+    models: ["@cf/openai/gpt-oss-120b", "@cf/qwen/qwen3.8-27b", "@cf/openai/gpt-oss-20b"],
+    note: "Replace ACCOUNT_ID in the base URL. Workers Free includes 10,000 Neurons per day; Workers Paid bills over that allocation.",
+    kind: "standing",
+  },
+  {
     id: "token-harbor",
     name: "Token Harbor",
     baseUrl: "https://tokenharbor.ai/v1",

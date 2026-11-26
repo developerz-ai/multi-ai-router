@@ -829,6 +829,23 @@ Two lanes are pinned because they cost nothing, and a third was already here:
 Anything else that gives tokens away over the OpenAI wire (Token Harbor, Requesty, Cloudflare Workers AI) is an
 `openai-compatible` account with its base URL and key.
 
+### Workers AI and terminal agents
+
+Select the Cloudflare Workers AI preset under `openai-compatible`. Replace `ACCOUNT_ID` in the
+base URL and supply a Workers AI API token for that account. Workers Free stops at 10,000 Neurons
+per day, resetting at 00:00 UTC. Workers Paid can bill above the allowance, so use an account on
+Workers Free if you need a hard spending boundary. Request the declared model by its exact ID.
+Workers AI is outside the `free` ranking because the same model IDs can incur charges on Workers Paid.
+[Cloudflare pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) ·
+[Compatible API](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/)
+
+| Terminal agent | Supported path |
+|---|---|
+| OpenCode | Use the official client for its free hosted chat models. The Console inference API reserves those models for OpenCode. [Inference API](https://opencode.ai/docs/console/api/inference/) |
+| Gemini CLI | Google ended consumer sign-in on June 18, 2026. For router inference use a separate Gemini Developer API key from a free-tier AI Studio project with the existing `gemini` driver. [Consumer migration](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals) · [API limits](https://ai.google.dev/gemini-api/docs/rate-limits) |
+| Freebuff | Use the interactive client for its hosted allowance. The upstream request for a free headless interface remains open. [Upstream issue](https://github.com/CodebuffAI/freebuff/issues/947) |
+| Aider and Plandex | Configure each client with its own upstream model backend. Aider can use Ollama, and Plandex can self-host its server. Neither client supplies a free hosted inference API for the router. [Aider providers](https://aider.chat/docs/llms.html) · [Plandex quick start](https://github.com/plandex-ai/plandex/blob/main/docs/docs/quick-start.md) |
+
 **The free tier is a driver fact.** `ProviderDriver.freeTier` states how the tier is reached, where the key comes
 from, the published allowance and the day it was read; `GET /api/admin/providers` carries it and the console's
 add form shows it. Nothing in routing or cost reads it: the upstream's own `429` is what enforces a limit.
