@@ -305,7 +305,7 @@ test.skipIf(!databaseUrl)(
           headers: { "content-type": "application/json" },
         })
       },
-      { cooldownMs: 1_000, backoffMs: 50 },
+      { cooldownMs: 3_000, backoffMs: 50 },
     )
     try {
       expireCooldown(f)
@@ -316,6 +316,18 @@ test.skipIf(!databaseUrl)(
       expect(failed?.state).toBe("failed")
       expect(failed?.nextAllowedAt.getTime()).toBeGreaterThan(Date.now())
       for (let i = 0; i < 3; i++) await f.components.coordinator.tick()
+      expect(starts).toBe(1)
+      const breakerUntil = f.health.stateOf(f.account.id).breaker.cooldownUntil
+      expect(breakerUntil).toBeDefined()
+      if (breakerUntil === undefined || failed === undefined)
+        throw new Error("missing retry clocks")
+      await sleep(Math.max(0, breakerUntil.getTime() - Date.now()) + 50)
+      expect(Date.now()).toBeGreaterThanOrEqual(breakerUntil.getTime())
+      expect(Date.now()).toBeLessThan(failed.nextAllowedAt.getTime())
+      await f.components.coordinator.tick()
+      await sleep(QUIET_MS)
+      expect(Date.now()).toBeLessThan(failed.nextAllowedAt.getTime())
+      expect((await f.recovery())?.state).toBe("failed")
       expect(starts).toBe(1)
       await sleep(Math.max(0, (failed?.nextAllowedAt.getTime() ?? 0) - Date.now()) + 50)
       await f.components.coordinator.tick()
