@@ -834,9 +834,7 @@ The client hears the held answer after the walk. `account-full` is `429 account_
 `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`: a full gate names no instant and the router invents
 none), ranked `70` beside `quota_exhausted` (the sooner wait wins between them). `router-full` is the
 existing `503 no_healthy_account` with wall `capacity`, scope `router`, `signal: router-at-capacity`,
-ranked `30`, so an earlier `account-full` outranks it. At prod's ceilings (8 global, 8 per account) a
-saturated account A also fills the global gate, so the typical answer is A's `account-full` `429` after
-one wait, with B refused on the global half at once.
+ranked `30`, so an `account-full` outranks it whichever the walk reached first.
 
 This is a router-made `429` while eligible accounts are in scope, by design: a saturated account is
 still eligible (concurrency is not part of the Filter stage). The rule in `CLAUDE.md` is narrowed to
