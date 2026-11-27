@@ -889,12 +889,14 @@ upstream broke after its first byte (below). Additive: the sentence is unchanged
 `test/unit/errors/frozen-sentences.test.ts` until developerz.ai reads this object alone. Not on an
 upstream's own error the router relays — those are the provider's words, in-stream or not — nor on
 a translator's rendering of one, nor on the HTML sign-in callback pages; the `x-router-*` headers
-below name the account. The Claude subscription fast transport's refusals do carry it, because that
-body never holds the provider's own words: `claude-fast/response.ts` replaces them with a router
+below name the account. The Claude subscription fast transport's refusals of the classes in the table
+below do carry it, because that body never holds the provider's own words: `claude-fast/response.ts` replaces them with a router
 sentence. So each is rendered as the router's own error, in every dialect; the `429` and `503` rows
 go through the same `toRouterError` mapping the Agent-SDK path uses for the same rule. Anthropic's scrubbed text goes to the
 attempt log as `upstreamMessage` and nowhere else. The classes (an upstream's own error body stays
-byte-faithful and envelope-less):
+byte-faithful and envelope-less, and any other kind the transport rewords, such as a server error
+answered as `502` or an auth or payment refusal, keeps its status-shaped answer with no
+`error.router`):
 
 | Refusal | Answer | `wall` | `scope` | `signal` | `Retry-After` |
 |---|---|---|---|---|---|

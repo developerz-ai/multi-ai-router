@@ -160,10 +160,11 @@ function verdictOf(
     (stated.seconds === undefined
       ? undefined
       : new Date(context.now.getTime() + stated.seconds * 1000))
-  // A model-scoped refusal carries the refused model's own reading (`withModelScope`), which is the
-  // one that holds; the account's unified reading must not set a model hold's wait. It is merged
-  // here and the classification's copy cleared, because `toRouterError` reads the classification's
-  // reading ahead of `context.signal`, and would otherwise drop the stated wait.
+  // The classification's own reading when it has one, else the account's. A model-scoped refusal
+  // always has one (`withModelScope` sets the refused model's), so the account's reading never sets
+  // a model hold's wait. It is merged here and the classification's copy cleared, because
+  // `toRouterError` reads the classification's reading ahead of `context.signal`, and would
+  // otherwise drop the stated wait.
   const reading = fast.classification.rateLimit ?? rateLimit
   const verdict = toRouterError(
     { ...fast.classification, rateLimit: null },

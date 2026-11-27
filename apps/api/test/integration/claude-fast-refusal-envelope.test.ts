@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { ownedInvoker } from "../../src/composition/owned-invoker"
+import type { RateLimitSignal } from "../../src/providers"
 import { createFastInvoker } from "../../src/providers/claude-fast/invoker"
+import { fastRefusal } from "../../src/providers/claude-fast/response"
 import { createSdkConcurrency } from "../../src/providers/claude-sdk/concurrency"
 import {
   EXTRA_USAGE_GATED,
@@ -8,6 +10,7 @@ import {
   WINDOW_SPENT,
 } from "../../src/providers/claude-sdk/failure-rules-vocabulary"
 import { createSdkQuotaStore } from "../../src/providers/claude-sdk/quota"
+import { errorResponseFailure } from "../../src/services/dataplane/sdk-attempt-response"
 import { NOW, subscriptionAccount } from "../unit/dataplane/fixtures"
 import { bearer, harness, post, settle } from "./harness"
 
@@ -505,5 +508,70 @@ describe("an overloaded upstream", () => {
     expect(response.status).toBe(503)
     expect(router.retry_after_s).toBe(47)
     expect(response.headers.get("retry-after")).toBe("47")
+  })
+})
+
+// At the `errorResponseFailure` boundary, where the account's reading is handed in beside the
+// refusal: the two sources the integration cases above cannot set apart.
+describe("the verdict at the errorResponseFailure boundary", () => {
+  const verdictOf = async (
+    upstream: Response,
+    accountReading: RateLimitSignal | null,
+  ): Promise<{ retryAfterSeconds?: number; resetsAt?: Date; resetSource?: unknown }> => {
+    const { failure, response } = fastRefusal(upstream, await upstream.clone().text())
+    const outcome = await errorResponseFailure(response, accountReading, failure, {
+      now: NOW,
+      unknownResetRetryAfterSeconds: 47,
+    })
+    if (outcome.kind !== "failure") throw new Error(`expected a failure, got ${outcome.kind}`)
+    const verdict = outcome.verdict as
+      | { retryAfterSeconds?: number; resetsAt?: Date; detail?: { resetSource?: unknown } }
+      | undefined
+    if (verdict === undefined) throw new Error("expected a router verdict")
+    return {
+      ...(verdict.retryAfterSeconds === undefined
+        ? {}
+        : { retryAfterSeconds: verdict.retryAfterSeconds }),
+      ...(verdict.resetsAt === undefined ? {} : { resetsAt: verdict.resetsAt }),
+      resetSource: verdict.detail?.resetSource,
+    }
+  }
+
+  test("a later estimated reset than a retry-after date keeps its own source", async () => {
+    const estimated = new Date(NOW.getTime() + 3_600_000)
+    const verdict = await verdictOf(
+      anthropicError(429, "rate_limit_error", "Usage limit reached", {
+        "retry-after": new Date(NOW.getTime() + 120_000).toUTCString(),
+      }),
+      { limited: true, windows: [], resetsAt: estimated, resetSource: "estimated" },
+    )
+    expect(verdict).toEqual({
+      retryAfterSeconds: 3600,
+      resetsAt: estimated,
+      resetSource: "estimated",
+    })
+  })
+
+  test("a model window waits for the model's reset, not a later account reset", async () => {
+    const modelReset = Math.floor(NOW.getTime() / 1000) + 3600
+    const verdict = await verdictOf(
+      anthropicError(429, "rate_limit_error", "You've hit your Opus limit", {
+        "anthropic-ratelimit-unified-status": "rejected",
+        "anthropic-ratelimit-unified-representative-claim": "seven_day_opus",
+        "anthropic-ratelimit-unified-reset": String(modelReset),
+        "retry-after": "600",
+      }),
+      {
+        limited: true,
+        windows: [],
+        resetsAt: new Date(NOW.getTime() + 7_200_000),
+        resetSource: "provider-reported",
+      },
+    )
+    expect(verdict).toEqual({
+      retryAfterSeconds: 3600,
+      resetsAt: new Date(modelReset * 1000),
+      resetSource: "provider-reported",
+    })
   })
 })
