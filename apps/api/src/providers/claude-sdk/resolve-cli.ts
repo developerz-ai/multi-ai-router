@@ -48,6 +48,9 @@ export type CliResolution =
   | { readonly ok: true; readonly source: CliSource; readonly path: string; readonly bytes: number }
   | { readonly ok: false; readonly attempts: readonly CliAttempt[] }
 
+/** The one rung that won. */
+export type UsableCli = Extract<CliResolution, { ok: true }>
+
 /** What the filesystem says about one candidate. `missing` also covers "exists but is not a file". */
 export type FileFacts =
   | { readonly kind: "missing" }

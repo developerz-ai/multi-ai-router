@@ -13,7 +13,7 @@ import { buildSdkPrompt } from "./prompt"
 import type { IgnoredOption } from "./reasoning"
 import { renderSdkResponse, type StreamPacing, type Ticker } from "./render"
 import { readSdkRequest } from "./request"
-import { type CliResolution, resolveClaudeCli } from "./resolve-cli"
+import { type CliResolution, resolveClaudeCli, type UsableCli } from "./resolve-cli"
 import { createPassthrough, type Passthrough } from "./tools"
 import { admitTurn, type TurnAdmission } from "./turn-admission"
 import { holdPrompt, observeTurn } from "./turn-lifecycle"
@@ -295,6 +295,3 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
     }
   }
 }
-
-/** The one rung that won, as `resolve-cli.ts` reports it. */
-type UsableCli = Extract<CliResolution, { ok: true }>
