@@ -21,7 +21,7 @@
 import type { AccountStatus, AuthKind, ResetSource } from "@multi-ai-router/core"
 import { backoffMs, boundedReportedReset, reportedResetSource } from "./backoff"
 import { refusalStands, rejectCredential } from "./credential-rejection"
-import type { AttemptFailure } from "./failure-kind"
+import { type AttemptFailure, isGateFull } from "./failure-kind"
 
 /**
  * Why a cooldown is not an ordinary one. Absent on every cooldown a limit or a failure streak formed.
@@ -126,6 +126,9 @@ export function recordFailure(
   // Provoked by the request's content, not the account (plan 101, 05.14): a cooldown here would walk
   // one client's refusal across the pool and answer every other tenant `429`.
   if (failure.requestAttributable === true) return state
+  // This router's own gate being full: the account is healthy and busy, so no cooldown, no strike
+  // and no recovery probe follows (`isGateFull`: `account-full`, `router-full`).
+  if (isGateFull(failure.kind)) return state
   switch (failure.kind) {
     // Faults whose cause is the **request**, not the account. They say nothing about this
     // account's health, so they leave its streak and its status exactly where they were.

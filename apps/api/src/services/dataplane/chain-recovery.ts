@@ -1,5 +1,5 @@
 import { accountLevelReading, isModelLevelReading } from "../../providers"
-import type { AttemptFailure } from "../routing"
+import { type AttemptFailure, isGateFull } from "../routing"
 import type { AttemptOutcome } from "./attempt"
 import type { ChainContext } from "./chain"
 import { breakerOptionsFor } from "./health"
@@ -39,7 +39,9 @@ export function recordChainFailure(
   // The provider's shared backend was busy: nothing about this account either way. No strike, no
   // limiter reading folded in (Go's overloaded `429` would otherwise cool the seat), and a
   // designated probe settles `uncertain` so its permit is not spent on someone else's outage.
-  if (outcome.failure.kind === "overloaded") {
+  // The router's own gate was full (`account-full`, `router-full`): equally blameless, and the same
+  // settlement. No strike, no limiter reading, and a designated probe's permit is not spent on it.
+  if (outcome.failure.kind === "overloaded" || isGateFull(outcome.failure.kind)) {
     recovery?.finish("uncertain")
     return
   }

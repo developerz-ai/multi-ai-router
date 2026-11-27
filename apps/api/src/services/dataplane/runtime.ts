@@ -1,5 +1,10 @@
-import type { Dialect } from "@multi-ai-router/core"
-import type { SdkInvoker, SdkQuotaStore, SessionStore } from "../../providers"
+import { DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS, type Dialect } from "@multi-ai-router/core"
+import {
+  createSdkWaitBudget,
+  type SdkInvoker,
+  type SdkQuotaStore,
+  type SessionStore,
+} from "../../providers"
 import type { RateLookup } from "../cost"
 import type { CredentialCipher } from "../crypto/cipher"
 import type { ReasoningSealer } from "../crypto/reasoning-seal"
@@ -10,7 +15,7 @@ import type { HealthStore } from "./health"
 import type { ServableCandidate } from "./plan"
 import type { AttemptRecordInput, AttemptTiming } from "./records"
 import type { RecoveryAccess } from "./recovery-access"
-import type { SdkSessionContext } from "./sdk-attempt"
+import type { SdkGateWait, SdkSessionContext } from "./sdk-attempt"
 import { createSilentHold, type SilentHold } from "./silent-hold"
 import type { DataPlaneClock, FetchLike, UpstreamOperation } from "./types"
 import type { StreamDeadlines } from "./upstream-deadline"
@@ -29,6 +34,12 @@ export interface RuntimeInput {
   readonly recovery?: RecoveryAccess
   readonly quotaSpentThreshold?: number
   readonly unknownResetRetryAfterSeconds?: number
+  /**
+   * `CLAUDE_SDK_QUEUE_WAIT_MS`: how long one request may queue at the shared Claude concurrency gate, in
+   * total, before it is told the account or the replica is full. Absent: the queue is unbounded,
+   * as it is for a dispatcher built without it (a test).
+   */
+  readonly queueWaitMs?: number
   readonly health: HealthStore
   readonly cipher: Pick<CredentialCipher, "decrypt">
   readonly call: FetchLike
@@ -113,6 +124,13 @@ export interface DispatchRuntime extends RuntimeInput {
   readonly session: SdkSessionContext | undefined
   /** One per request, so every attempt and every recovery re-run of its chain shares it. */
   readonly silentHold: SilentHold | undefined
+  /**
+   * This request's gate wait, made on first use so a request that never reaches a subscription
+   * account allocates nothing. One budget for the whole request: every attempt, the fast
+   * transport's fallback to the SDK and a busy-session retry draw on what is left. A recovery-wait
+   * re-run of the chain is the same request and shares it. Undefined: no bound is configured.
+   */
+  readonly gateWait: (() => SdkGateWait) | undefined
   attribution(attempt: number, servable: ServableCandidate): AttemptAttribution
   /**
    * Router overhead is total router time minus time spent waiting on upstreams.
@@ -149,9 +167,21 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
   }
 
   const store = input.sessions
+  const queueWaitMs = input.queueWaitMs
+  let gateWait: SdkGateWait | undefined
 
   return {
     ...input,
+
+    gateWait:
+      queueWaitMs === undefined
+        ? undefined
+        : () =>
+            (gateWait ??= {
+              budget: createSdkWaitBudget(queueWaitMs),
+              retryAfterSeconds:
+                input.unknownResetRetryAfterSeconds ?? DEFAULT_UNKNOWN_RESET_RETRY_AFTER_SECONDS,
+            }),
 
     silentHold:
       input.streamDeadlines === undefined ? undefined : createSilentHold(input.streamDeadlines),

@@ -5,6 +5,7 @@ import {
   type BreakerState,
   HEALTHY,
   NO_ATTEMPTS,
+  noteGateFull,
   noteOverload,
   planNextAttempt,
   recordAttempt,
@@ -160,5 +161,38 @@ describe("planning after overloaded", () => {
     expect(planNextAttempt(chain, progress, overloaded, options)).toMatchObject({ delayMs: 1_000 })
     progress = recordAttempt(progress, "b", "overload")
     expect(planNextAttempt(chain, progress, overloaded, options)).toMatchObject({ delayMs: 2_000 })
+  })
+
+  // The replica's gate is shared by every account of its provider: after it refused the request, a
+  // pause on an earlier busy account of that provider lands on the same gate.
+  test("a provider the chain was refused at (router-full) is not waited out in place", () => {
+    const sub = { provider: "anthropic-oauth" } as const
+    const pair = candidates(account("a", sub), account("b", sub))
+    const full: AttemptFailure = { kind: "router-full", message: "router-at-capacity" }
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "a"), "a", "overloaded")
+    progress = noteGateFull(recordAttempt(progress, "b"), "anthropic-oauth", full)
+    progress = noteOverload(progress, "b", "router-full")
+    expect(
+      planNextAttempt(pair, progress, full, { overloadRetries: 1, overloadRetryBaseMs: 1 }),
+    ).toMatchObject({ action: "stop" })
+  })
+
+  // A refused Claude provider says nothing about an API-key provider's busy backend: the wait on
+  // the overloaded API account must survive a later router-full from the Claude gate.
+  test("an API-key account that answered overloaded is still waited out after Claude was router-full", () => {
+    const api = account("api", { provider: "anthropic-api" })
+    const sub = account("sub", { provider: "anthropic-oauth" })
+    const mixed = candidates(api, sub)
+    const full: AttemptFailure = { kind: "router-full", message: "router-at-capacity" }
+    let progress = noteOverload(recordAttempt(NO_ATTEMPTS, "api"), "api", "overloaded")
+    progress = noteGateFull(recordAttempt(progress, "sub"), "anthropic-oauth", full)
+    progress = noteOverload(progress, "sub", "router-full")
+    expect(progress.refusedProviders).toEqual(["anthropic-oauth"])
+    const decision = planNextAttempt(mixed, progress, full, {
+      overloadRetries: 1,
+      overloadRetryBaseMs: 1_000,
+    })
+    expect(decision).toMatchObject({ action: "retry-in-place", delayMs: 1_000 })
+    expect(decision.action === "retry-in-place" && decision.candidate.account.id).toBe("api")
   })
 })

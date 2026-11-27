@@ -7,6 +7,9 @@ import { atLeastOne } from "./fields"
  */
 const timerMs = atLeastOne.refine((value) => value <= 2_147_483_647, "must fit a timer")
 
+/** `UPSTREAM_STREAM_TIMEOUT_MS` when unset: the whole streamed attempt, headers to last byte. */
+export const DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS = 3_600_000
+
 export const UPSTREAM_STREAM_ENV_FIELDS = {
   UPSTREAM_FIRST_BYTE_TIMEOUT_MS: timerMs.optional(),
   UPSTREAM_IDLE_TIMEOUT_MS: timerMs.optional(),
@@ -20,7 +23,7 @@ export function readUpstreamStreamEnv(raw: UpstreamStreamEnv, ctx: z.RefinementC
   const upstreamStream = {
     firstByteMs: raw.UPSTREAM_FIRST_BYTE_TIMEOUT_MS ?? 300_000,
     idleMs: raw.UPSTREAM_IDLE_TIMEOUT_MS ?? 55_000,
-    totalMs: raw.UPSTREAM_STREAM_TIMEOUT_MS ?? 3_600_000,
+    totalMs: raw.UPSTREAM_STREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS,
     wallHoldMs: raw.UPSTREAM_STREAM_WALL_HOLD_MS ?? 5_000,
   }
   for (const [name, value] of [

@@ -137,6 +137,7 @@ export const ENV_FIELDS = {
   CLAUDE_FAST_MODE: flag.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY: atLeastOne.optional(),
   CLAUDE_SDK_MAX_CONCURRENCY_PER_ACCOUNT: atLeastOne.optional(),
+  CLAUDE_SDK_QUEUE_WAIT_MS: atLeastOne.optional(),
   CLAUDE_SDK_CREDENTIAL_KEEPALIVE: flag.optional(),
   CLAUDE_SDK_CREDENTIAL_COLD_MARGIN_SECONDS: wholeNumber.optional(),
   CLAUDE_SDK_CREDENTIAL_REFRESH_SKEW_SECONDS: wholeNumber.optional(),

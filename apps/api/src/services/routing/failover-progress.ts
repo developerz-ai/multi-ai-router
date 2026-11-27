@@ -17,8 +17,10 @@ import type { Candidate } from "./types"
  * Every account was asked and one said `overloaded`: the provider's shared backend is busy, which a
  * short wait fixes and another account does not. So that account is asked again after
  * `overloadRetryBaseMs`, doubling per retry, `overloadRetries` times — before any byte is on the
- * wire, as every retry here. Then the chain stops and the client hears `503` + `Retry-After`
- * (`UpstreamOverloadedError`), never a router-made `429`.
+ * wire, as every retry here — unless its provider is in `gateRefusedProviders`: the router's own
+ * full gate refused it this request, and a wait would meet the same gate. Then the chain stops and
+ * the client hears `503` + `Retry-After` (`UpstreamOverloadedError`), not a router-made `429` for
+ * the overload itself.
  */
 export function waitOutOverload(
   ordered: readonly Candidate[],
@@ -36,6 +38,12 @@ export function waitOutOverload(
   if (progress.overloadRetries >= cap) return { action: "stop", reason: exhausted }
   const candidate = ordered.find((entry) => entry.account.id === busyId)
   if (candidate === undefined) return { action: "stop", reason: exhausted }
+  // A provider whose gate refused this request is not asked again after a pause either: the wait
+  // would land on the very gate that just refused it. Only the gate set is read here: a provider
+  // that refused the body for its own wire ({@link noteProviderScoped}) is still waited out when
+  // it said `overloaded` earlier, as it was before the gate wait existed.
+  if (progress.gateRefusedProviders?.includes(candidate.account.provider) === true)
+    return { action: "stop", reason: exhausted }
   const base = Math.max(0, options.overloadRetryBaseMs ?? 0)
   return {
     action: "retry-in-place",
@@ -83,6 +91,27 @@ export function noteOverload(
   if (progress.overloadedAccountId !== accountId) return progress
   const { overloadedAccountId: _forgotten, ...rest } = progress
   return rest
+}
+
+/**
+ * Folds a `router-full` refusal into the progress: the replica's one global gate is full for the
+ * whole request, so no further candidate that dispatches through it is offered. Records the provider
+ * in {@link FailoverProgress.refusedProviders} (the planner skips its candidates: the Claude
+ * subscription provider is the only one served by the Agent-SDK transport, so that refuses exactly
+ * the candidates behind the gate, and an account of another kind is still tried) and in
+ * {@link FailoverProgress.gateRefusedProviders}, the only set the overload wait reads. Pure; returns
+ * a new value.
+ */
+export function noteGateFull(
+  progress: FailoverProgress,
+  provider: string,
+  failure: Pick<AttemptFailure, "kind">,
+): FailoverProgress {
+  if (failure.kind !== "router-full") return progress
+  const refused = noteProviderScoped(progress, provider, { providerScoped: true })
+  const gated = refused.gateRefusedProviders ?? []
+  if (gated.includes(provider)) return refused
+  return { ...refused, gateRefusedProviders: [...gated, provider] }
 }
 
 /** Called the instant the first byte reaches the client. From here nothing may be retried. */

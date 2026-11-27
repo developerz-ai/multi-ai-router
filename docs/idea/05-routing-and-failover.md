@@ -803,6 +803,37 @@ The prefill tag was observed later the same day at 14:56 / 15:06 / 15:07Z and ha
 wrong cooldown effect. Both OpenCode lanes share the matcher so these explicit backend tags
 cannot drift between their drivers; generic words such as "limit" or "capacity" are not matched.
 
+### `account-full` and `router-full`: the router's own gate is full
+
+At the shared Claude concurrency gate (`providers/claude-sdk/concurrency.ts`) a Claude subscription request takes its account's permit and then the replica's global one. It queues for them for at most `CLAUDE_SDK_QUEUE_WAIT_MS`
+(default 60 000) **in total, per request**: one budget, drawn on by every later acquire of the same
+request (the next candidate, the fast transport's fallback to the SDK, a busy-session retry). With
+nothing left, an acquire takes a slot that is free at once or fails at once. Only the two request
+paths pass a budget; the Test now probe (and through it the idle probe, the credential keepalive and
+`cooldown_recheck`) and the idle query (model list, usage gauge) keep the unbounded queue.
+
+Which half the caller was still queued on decides the failure kind:
+
+- **`account-full`**: the account's own in-flight limit. Retryable and **blameless**: no cooldown, no
+  strike, no recovery probe, no model hold (`breaker.ts` leaves it untouched; no recovery permit
+  is consumed). Recorded `no_healthy_account` with `errorClass: account-at-capacity` and no
+  `httpStatus` (no upstream was reached).
+- **`router-full`**: the replica's global ceiling. Same blameless treatment. Recorded
+  `errorClass: router-at-capacity`.
+
+Both fire before the upstream starts, so the chain takes the failure tail for them as a verdict
+(`isUnstartedVerdict`): a usage row, an attempt-failed log line, a fold into the held answer.
+
+Wire shape. `account-full` is `429 account_at_capacity` (wall `clock`, scope `pool`,
+`signal: account-at-capacity`, `Retry-After` `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`: a full gate
+names no instant and the router invents none). `router-full` is the existing `503 no_healthy_account`
+with wall `capacity`, scope `router`, `signal: router-at-capacity`. Behaviour is pinned by
+`apps/api/test/integration/claude-account-full.test.ts`.
+
+The `429` is a router-made answer while eligible accounts are in scope, by design: a saturated
+account is still eligible (concurrency is not part of the Filter stage). The rule in `CLAUDE.md` is
+narrowed to allow exactly this capacity answer (developerz-ai/developerz.ai#10277).
+
 `ROUTING_FAILURE_THRESHOLD`, `ROUTING_BASE_BACKOFF_MS`, and `ROUTING_MAX_BACKOFF_MS` are the
 operator's numbers for the two tables above, and the health store supplies them on **every**
 transition it makes — including the one a rate-limit header folds in without any failure being

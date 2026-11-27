@@ -242,6 +242,9 @@ const FAILURE_OUTCOMES: Readonly<Record<FailureKind, UsageOutcome>> = {
   connection: "upstream_error",
   "server-error": "upstream_error",
   overloaded: "upstream_error",
+  // A capacity fault with no upstream reached (`usage.ts`): the gate was full, not the provider.
+  "account-full": "no_healthy_account",
+  "router-full": "no_healthy_account",
   "client-error": "client_error",
   // The caller named a model this account does not serve: a client-side choice, not a pool fault.
   // Recorded only when no other account served it either — a failover that succeeds records success.

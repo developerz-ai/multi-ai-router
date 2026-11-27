@@ -37,6 +37,7 @@ export function dispatch(
       quota: runtime.quota,
       now: runtime.clock.now,
       timeoutMs: runtime.timeoutMs,
+      ...(runtime.gateWait === undefined ? {} : { gateWait: runtime.gateWait() }),
       ...(ctx.streamRequested === true && runtime.sdkStreamDeadlines !== undefined
         ? { stream: runtime.sdkStreamDeadlines }
         : {}),

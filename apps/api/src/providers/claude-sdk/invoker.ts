@@ -138,6 +138,7 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
         { freshness, concurrency: deps.concurrency },
         invocation.accountId,
         invocation.signal,
+        invocation.queueWait,
       )
     const first = await admit()
 

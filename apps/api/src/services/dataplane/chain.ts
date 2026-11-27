@@ -4,6 +4,7 @@ import {
   type Candidate,
   type FailureKind,
   inPlaceReason,
+  isUnstartedVerdict,
   NO_ATTEMPTS,
   planNextAttempt,
   recordAttempt,
@@ -60,8 +61,7 @@ import { ClientCancelledError } from "./relay-cancellation"
 export type { ChainContext } from "./chain-context"
 
 export async function runChain(ctx: ChainContext): Promise<Response> {
-  // Mutable for one reason: a half-open candidate another request is already probing is removed, so
-  // the planner walks past it instead of re-offering the same refusal forever.
+  // Mutable: a half-open candidate another request is already probing is dropped from the plan.
   let ordered: readonly Candidate[] = ctx.plan.map((entry) => entry.candidate)
   const byId = new Map(ctx.plan.map((entry) => [entry.candidate.account.id, entry]))
   const { runtime } = ctx
@@ -201,8 +201,8 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     assertUnstartedCancellation(outcome, lifetime.started(), ctx.request.signal)
     if (outcome.kind === "success") lifetime.onStarted()
 
-    // A request-attributable refusal is a verdict even unstarted (R1): it takes the failure tail.
-    const verdict = outcome.kind === "failure" && outcome.failure.requestAttributable === true
+    // A request-attributable refusal or a full gate is a verdict even unstarted: failure tail.
+    const verdict = outcome.kind === "failure" && isUnstartedVerdict(outcome.failure)
     if (
       outcome.kind === "admission-refused" ||
       (outcome.kind === "failure" && !lifetime.started() && !verdict)

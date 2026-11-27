@@ -168,6 +168,19 @@ export class UpstreamOverloadedError extends RetryableRouterError {
 }
 
 /**
+ * The request waited the bounded gate wait (`CLAUDE_SDK_QUEUE_WAIT_MS`) at its account gate.
+ * `429` plus a `Retry-After`. The gate refusal itself cools nothing. Behaviour is pinned by
+ * `apps/api/test/integration/claude-account-full.test.ts`.
+ *
+ * The router's own answer while eligible accounts are in scope, by design and by an owner-authorized
+ * narrowing of the "never a router-made 429" rule (CLAUDE.md, developerz-ai/developerz.ai#10277).
+ */
+export class AccountAtCapacityError extends RetryableRouterError {
+  readonly code = "account_at_capacity"
+  readonly status = 429
+}
+
+/**
  * Stored credential material could not be decrypted — a wrong or rotated `ENCRYPTION_KEY`, or a
  * corrupt record. The message never carries ciphertext, key material, or plaintext.
  */

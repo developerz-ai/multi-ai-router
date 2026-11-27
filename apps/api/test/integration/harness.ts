@@ -61,6 +61,8 @@ export interface HarnessOptions {
   readonly selection?: SelectionOptions
   /** Extra failover knobs (overload retries); `maxAttempts` stays its own option. */
   readonly failover?: { readonly overloadRetries?: number; readonly overloadRetryBaseMs?: number }
+  /** `CLAUDE_SDK_QUEUE_WAIT_MS`. Omitted, the shared Claude concurrency gate queues without a bound. */
+  readonly claudeQueueWaitMs?: number
   /**
    * The Claude subscription transport, stubbed at the `SdkInvoker` boundary. Omitted means this
    * router serves no subscription account — no `claude` CLI is ever spawned either way.
@@ -185,6 +187,9 @@ export function harness(options: HarnessOptions) {
           ...(options.upstreamErrorMaxBytes === undefined
             ? {}
             : { upstreamErrorMaxBytes: options.upstreamErrorMaxBytes }),
+          ...(options.claudeQueueWaitMs === undefined
+            ? {}
+            : { claudeQueueWaitMs: options.claudeQueueWaitMs }),
           failover: { maxAttempts: options.maxAttempts ?? 3, ...options.failover },
           upstreamStream: options.upstreamStream ?? HARNESS_STREAM_DEADLINES,
           ...(options.selection === undefined ? {} : { selection: options.selection }),

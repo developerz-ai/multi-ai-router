@@ -39,6 +39,11 @@ export interface DispatchOptions {
   /** `UPSTREAM_TIMEOUT_MS`: a non-streamed HTTP attempt's whole deadline, and an SDK attempt's. */
   readonly upstreamTimeoutMs?: number
   /**
+   * `CLAUDE_SDK_QUEUE_WAIT_MS`: one request's total wait at the shared Claude concurrency gate. Absent, the
+   * gate queues without a bound, as it did before the knob existed.
+   */
+  readonly claudeQueueWaitMs?: number
+  /**
    * A streamed HTTP attempt's first-byte, idle and total clocks (`upstream-deadline.ts`). Absent, a
    * stream is bounded by `upstreamTimeoutMs` alone, as before these clocks existed.
    */

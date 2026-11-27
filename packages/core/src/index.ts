@@ -65,6 +65,7 @@ export type {
   RouterErrorCode,
 } from "./errors"
 export {
+  AccountAtCapacityError,
   AdminAuthError,
   CredentialDecryptError,
   CreditsExhaustedError,

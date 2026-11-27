@@ -52,6 +52,7 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     maxTranslationSseFrameBytes: env.translation.maxSseFrameBytes,
     translationDropLogWindowMs: env.translation.dropLogWindowSeconds * 1_000,
     upstreamTimeoutMs: failover.upstreamTimeoutMs,
+    claudeQueueWaitMs: env.claudeSdkQueueWaitMs,
     // A streamed attempt's clocks: failover on a hung upstream, an honest error on a stalled stream,
     // and a total sized for long generations rather than for hangs (`dataplane/upstream-deadline.ts`).
     upstreamStream: env.upstreamStream,

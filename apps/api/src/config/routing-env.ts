@@ -1,5 +1,6 @@
 import type { ProviderPreferences } from "@multi-ai-router/core"
 import { DEFAULT_MAX_BODY_BYTES } from "../services/dataplane/body/read"
+import { DEFAULT_UPSTREAM_TIMEOUT_MS } from "../services/dataplane/dispatcher-config"
 import type { DataPlaneConfig, FailoverConfig, TranslationConfig } from "./env-routing-types"
 import type { ParsedEnv } from "./env-schema"
 
@@ -44,7 +45,7 @@ export function readRoutingEnv(raw: ParsedEnv): {
       authFailureMaxCooldownMs: raw.ROUTING_AUTH_FAILURE_MAX_COOLDOWN_MS ?? 14_400_000,
       halfOpenHoldMs: raw.ROUTING_HALF_OPEN_HOLD_MS ?? 30_000,
       unknownResetRetryAfterSeconds: raw.ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS ?? 30,
-      upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? 600_000,
+      upstreamTimeoutMs: raw.UPSTREAM_TIMEOUT_MS ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
       upstreamErrorMaxBytes: raw.UPSTREAM_ERROR_MAX_BYTES ?? 65_536,
       responseObservationMaxBytes: raw.UPSTREAM_RESPONSE_OBSERVATION_MAX_BYTES ?? 65_536,
       boundAccountCoolingDown: raw.ROUTING_BOUND_ACCOUNT_COOLING_DOWN ?? "fail",

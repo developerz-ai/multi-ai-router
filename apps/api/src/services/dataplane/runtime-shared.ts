@@ -18,6 +18,7 @@ export function sharedRuntimeInput(
     ...(options.selection?.quotaSpentThreshold === undefined
       ? {}
       : { quotaSpentThreshold: options.selection.quotaSpentThreshold }),
+    ...(options.claudeQueueWaitMs === undefined ? {} : { queueWaitMs: options.claudeQueueWaitMs }),
     ...(deps.recovery === undefined ? {} : { recovery: deps.recovery }),
     cipher: deps.cipher,
     call,

@@ -1,6 +1,7 @@
 import {
   type AttemptFailure,
   type FailoverProgress,
+  noteGateFull,
   noteOverload,
   noteProviderScoped,
   noteRequestAttributable,
@@ -25,7 +26,8 @@ export function noteFailure(
   const { account } = servable
   const attributed = noteRequestAttributable(progress, failure)
   const scoped = noteProviderScoped(attributed, account.driver.provider, failure)
-  return noteOverload(scoped, account.id, failure.kind)
+  const gated = noteGateFull(scoped, account.driver.provider, failure)
+  return noteOverload(gated, account.id, failure.kind)
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  AccountAtCapacityError,
   AdminAuthError,
   CredentialDecryptError,
   CreditsExhaustedError,
@@ -40,6 +41,12 @@ const cases: readonly ErrorCase[] = [
     status: 503,
   },
   { name: "QuotaExhaustedError", ctor: QuotaExhaustedError, code: "quota_exhausted", status: 429 },
+  {
+    name: "AccountAtCapacityError",
+    ctor: AccountAtCapacityError,
+    code: "account_at_capacity",
+    status: 429,
+  },
   {
     name: "CreditsExhaustedError",
     ctor: CreditsExhaustedError,

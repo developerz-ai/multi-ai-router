@@ -1,5 +1,6 @@
 import type { AsyncBackgroundStartGuard, UpstreamStartGuard } from "../upstream-admission"
 import type { SdkFailure } from "./errors"
+import type { SdkWaitBudget } from "./gate-wait"
 import type { TruncatedTurn } from "./render"
 import type { SessionPlan } from "./session"
 import type { SdkUsageGaugeObservation } from "./usage-gauge"
@@ -46,6 +47,12 @@ export interface SdkInvocation {
   /** Anthropic Messages request bytes. Null only when the client sent no body at all. */
   readonly body: Uint8Array | null
   readonly signal: AbortSignal
+  /**
+   * The request's bounded wait at the shared Claude concurrency gate, read by both transports at every acquire:
+   * the fast transport's own, its fallback to the SDK, and a busy-session retry all draw on one
+   * budget (`gate-wait.ts`). Absent: the unbounded queue, which is what every probe keeps.
+   */
+  readonly queueWait?: SdkWaitBudget
   /**
    * `resume`, `forkSession` + `resumeSessionAt`, or nothing — already decided. A launch must apply
    * it verbatim: re-deriving it here would put the same correctness decision in two places, and

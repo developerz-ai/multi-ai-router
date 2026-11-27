@@ -58,3 +58,131 @@ test("runtime limits read their variables and refuse zero where zero is no setti
   for (const name of ["KEY_VERIFY_MAX_PENDING", "TRUST_PROXY_HOPS", "USAGE_RETRY_BUFFER_MAX"])
     expect(() => parseEnv({ ...base, [name]: "0" })).toThrow(EnvValidationError)
 })
+
+test("CLAUDE_SDK_QUEUE_WAIT_MS refuses a wait that defeats its own purpose", () => {
+  expect(parseEnv(base).claudeSdkQueueWaitMs).toBe(60_000)
+  expect(parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "240000" }).claudeSdkQueueWaitMs).toBe(
+    240_000,
+  )
+  // Past the 300 s idle cut clients apply to a silent call, with headroom: the answer would arrive late.
+  expect(() => parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "240001" })).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS.*at most 240000/s,
+  )
+  // Past the timer range it never fires (numeric-bounds.ts refuses it too).
+  expect(() => parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "2147483648" })).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS/,
+  )
+  // The wait is spent before the attempt's own work (credential refresh, parsing), so it may use at
+  // most half the attempt deadline: a value just under the deadline would lose the race anyway.
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "60000", UPSTREAM_TIMEOUT_MS: "60000" }),
+  ).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS: 60000 must be at most 30000.*deadline of 60000 ms \(set by UPSTREAM_TIMEOUT_MS\)/s,
+  )
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "59999", UPSTREAM_TIMEOUT_MS: "60000" }),
+  ).toThrow(/CLAUDE_SDK_QUEUE_WAIT_MS/)
+  expect(
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "30000", UPSTREAM_TIMEOUT_MS: "60000" })
+      .claudeSdkQueueWaitMs,
+  ).toBe(30_000)
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "30001", UPSTREAM_TIMEOUT_MS: "60000" }),
+  ).toThrow(/at most 30000/)
+})
+
+// A streamed fast-mode attempt's total clock starts before the gate wait, so a short stream total
+// bounds the wait exactly as a short attempt deadline does, and the refusal names the knob that set it.
+test("CLAUDE_SDK_QUEUE_WAIT_MS is bounded by UPSTREAM_STREAM_TIMEOUT_MS too", () => {
+  // The first-byte and idle clocks may not outlast the stream total, so a short one sets them too.
+  const stream = (total: string) => ({
+    ...base,
+    UPSTREAM_STREAM_TIMEOUT_MS: total,
+    UPSTREAM_FIRST_BYTE_TIMEOUT_MS: "1",
+    UPSTREAM_IDLE_TIMEOUT_MS: "1",
+  })
+  expect(() => parseEnv({ ...stream("100"), CLAUDE_SDK_QUEUE_WAIT_MS: "300" })).toThrow(
+    /300 must be at most 50.*deadline of 100 ms \(set by UPSTREAM_STREAM_TIMEOUT_MS\)/s,
+  )
+  expect(parseEnv({ ...stream("100"), CLAUDE_SDK_QUEUE_WAIT_MS: "50" }).claudeSdkQueueWaitMs).toBe(
+    50,
+  )
+  // Unset: the default yields to it, and boot is never refused.
+  expect(parseEnv(stream("100")).claudeSdkQueueWaitMs).toBe(50)
+  expect(parseEnv(stream("1")).claudeSdkQueueWaitMs).toBe(0)
+  // A stream total above the attempt deadline is not the binding one.
+  expect(
+    parseEnv({
+      ...base,
+      UPSTREAM_TIMEOUT_MS: "60000",
+      UPSTREAM_STREAM_TIMEOUT_MS: "3600000",
+    }).claudeSdkQueueWaitMs,
+  ).toBe(30_000)
+})
+
+// The refusal names D and the knob that set it, except when the ceiling is the 240000 cap
+// (D of 480000 ms or more): then it only says why 240000 is the limit.
+test("CLAUDE_SDK_QUEUE_WAIT_MS refusal names D and its knob below the 240000 cap, and omits them at it", () => {
+  const deadlines = (attempt: string, stream: string) => ({
+    ...base,
+    UPSTREAM_TIMEOUT_MS: attempt,
+    UPSTREAM_STREAM_TIMEOUT_MS: stream,
+    CLAUDE_SDK_QUEUE_WAIT_MS: "300000",
+  })
+  expect(() => parseEnv(deadlines("400000", "3600000"))).toThrow(
+    /300000 must be at most 200000.*deadline of 400000 ms \(set by UPSTREAM_TIMEOUT_MS\)/s,
+  )
+  // One ms under the cap's D: the ceiling is floor(479999 / 2) = 239999, so D and its knob are named.
+  expect(() => parseEnv(deadlines("479999", "3600000"))).toThrow(
+    /300000 must be at most 239999.*deadline of 479999 ms \(set by UPSTREAM_TIMEOUT_MS\)/s,
+  )
+  for (const [attempt, stream] of [
+    ["480000", "3600000"],
+    ["3600000", "480000"],
+  ] as const) {
+    let message = ""
+    try {
+      parseEnv(deadlines(attempt, stream))
+    } catch (err) {
+      message = String(err instanceof Error ? err.message : err)
+    }
+    expect(message).toMatch(/300000 must be at most 240000: clients cut a silent call at 300 s/)
+    expect(message).not.toMatch(/deadline of|set by UPSTREAM/)
+  }
+})
+
+// An existing deployment that only lowered the attempt deadline never chose the new knob's default:
+// refusing its boot would be a regression. Only a value the operator SET is refused.
+test("an unset CLAUDE_SDK_QUEUE_WAIT_MS never refuses boot: the default yields to a short deadline", () => {
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "120000" }).claudeSdkQueueWaitMs).toBe(60_000)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "60000" }).claudeSdkQueueWaitMs).toBe(30_000)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "20000" }).claudeSdkQueueWaitMs).toBe(10_000)
+  // Half the attempt timeout rounded down, 60 s cap: it starts to shrink below a 120000 ms deadline.
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "119999" }).claudeSdkQueueWaitMs).toBe(59_999)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "90000" }).claudeSdkQueueWaitMs).toBe(45_000)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "3" }).claudeSdkQueueWaitMs).toBe(1)
+})
+
+// A derived wait that would reach the deadline (a deadline of 2 ms or less) is not a wait at all: it
+// is 0, which the gate reads as "admit now or refuse now", so the capacity verdict is returned
+// before the deadline instead of racing it. An operator-set value is still refused, never derived.
+test("an unset CLAUDE_SDK_QUEUE_WAIT_MS derives 0 when the deadline is too short to hold a wait", () => {
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "1" }).claudeSdkQueueWaitMs).toBe(0)
+  expect(parseEnv({ ...base, UPSTREAM_TIMEOUT_MS: "2" }).claudeSdkQueueWaitMs).toBe(0)
+  expect(() =>
+    parseEnv({ ...base, CLAUDE_SDK_QUEUE_WAIT_MS: "1", UPSTREAM_TIMEOUT_MS: "1" }),
+  ).toThrow(
+    /CLAUDE_SDK_QUEUE_WAIT_MS.*at most 0: an attempt deadline of 1 ms leaves no room for any wait \(set by UPSTREAM_TIMEOUT_MS\); unset the wait/s,
+  )
+  // A tie names both knobs: either one could be the one that set D.
+  expect(() =>
+    parseEnv({
+      ...base,
+      CLAUDE_SDK_QUEUE_WAIT_MS: "300",
+      UPSTREAM_TIMEOUT_MS: "100",
+      UPSTREAM_STREAM_TIMEOUT_MS: "100",
+      UPSTREAM_FIRST_BYTE_TIMEOUT_MS: "1",
+      UPSTREAM_IDLE_TIMEOUT_MS: "1",
+    }),
+  ).toThrow(/deadline of 100 ms \(set by UPSTREAM_TIMEOUT_MS and UPSTREAM_STREAM_TIMEOUT_MS\)/s)
+})

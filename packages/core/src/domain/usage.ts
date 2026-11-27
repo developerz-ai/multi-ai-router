@@ -139,6 +139,8 @@ const OUTCOME_BY_ERROR_CODE: Readonly<Record<RouterErrorCode, UsageOutcome>> = {
   upstream_auth_failed: "upstream_auth_failed",
   upstream_timeout: "upstream_timeout",
   upstream_overloaded: "upstream_error",
+  // Capacity fault group: nothing in scope could serve, and not for quota, credits or scope.
+  account_at_capacity: "no_healthy_account",
   credential_decrypt_failed: "credential_decrypt_failed",
   translation_failed: "translation_failed",
   request_too_large: "request_too_large",
