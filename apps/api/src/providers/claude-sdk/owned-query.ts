@@ -1,6 +1,8 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { AsyncBackgroundStartGuard, UpstreamStartGuard } from "../upstream-admission"
+import type { SdkInvocation } from "./invoke"
 import type { OwnerLaunch } from "./owner-launch"
+import type { ScrubRuleName } from "./scrub"
 
 export type OwnerLaunchFactory = (accountId: string) => OwnerLaunch
 /** SDK construction only starts an idle guardian; readiness precedes both final guards. */
@@ -38,5 +40,24 @@ export async function ownedQuery<T>(input: {
   } catch (error) {
     owner?.cancel()
     throw error
+  }
+}
+
+/**
+ * The invocation's start callback, preceded by the Agent SDK's transport report: this invoker, the
+ * model it passes `query()`, and the scrub rules its launch applied (#509). The SDK runs only after
+ * a fast fallback or with fast mode off, so its report is the last and names the outcome.
+ */
+export function reportingStart(
+  invocation: Pick<SdkInvocation, "model" | "onTransport" | "onUpstreamStarted">,
+  scrubRules: readonly ScrubRuleName[] | undefined,
+): () => void {
+  return () => {
+    invocation.onTransport?.({
+      transport: "sdk",
+      model: invocation.model,
+      ...(scrubRules === undefined ? {} : { scrubRules }),
+    })
+    invocation.onUpstreamStarted?.()
   }
 }

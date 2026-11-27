@@ -1,6 +1,7 @@
 import type { AsyncBackgroundStartGuard, UpstreamStartGuard } from "../upstream-admission"
 import type { SdkFailure } from "./errors"
 import type { SdkWaitBudget } from "./gate-wait"
+import type { SdkRefusalEvidence, SdkTransportReport } from "./invoke-evidence"
 import type { TruncatedTurn } from "./render"
 import type { SessionPlan } from "./session"
 import type { SdkUsageGaugeObservation } from "./usage-gauge"
@@ -83,7 +84,13 @@ export interface SdkInvocation {
    * and every fact was silently lost in production while each half still passed its own test. Every
    * wrapper spreads the invocation, so none can drop this.
    */
-  readonly onRefusal?: (failure: SdkFailure) => void
+  readonly onRefusal?: (failure: SdkFailure, evidence?: SdkRefusalEvidence) => void
+  /**
+   * Called where an invoker starts its upstream attempt, beside `onUpstreamStarted`: which invoker
+   * it is, the model it sends and the scrub rules that changed its system prompt. A later report
+   * replaces an earlier one, so the invoker that produced the outcome owns it (#509).
+   */
+  readonly onTransport?: (report: SdkTransportReport) => void
   /**
    * Called at most once per turn, when it ended with content blocks still open — the turn stopped
    * mid-answer, and the renderer answered with an error rather than a completion. The detail is
@@ -131,5 +138,7 @@ export interface SdkSessionReport {
    */
   readonly assistantUuid?: string
 }
+
+export type { SdkRefusalEvidence, SdkTransportReport } from "./invoke-evidence"
 
 export type SdkInvoker = (invocation: SdkInvocation) => Promise<Response>

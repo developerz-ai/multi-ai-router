@@ -63,7 +63,9 @@ export {
 export type {
   SdkInvocation,
   SdkInvoker,
+  SdkRefusalEvidence,
   SdkSessionReport,
+  SdkTransportReport,
   SdkTruncatedTurn,
 } from "./claude-sdk/invoke"
 export type { SdkInvokerDeps, SdkQueryFn, SdkQueryStream } from "./claude-sdk/invoker"

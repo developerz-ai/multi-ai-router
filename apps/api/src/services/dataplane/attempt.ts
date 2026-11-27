@@ -3,6 +3,7 @@ import type { RouterError } from "@multi-ai-router/core"
 import type { FailureClassification, RateLimitSignal } from "../../providers"
 import { UpstreamAdmissionRefused } from "../../providers/upstream-admission"
 import type { AttemptFailure } from "../routing"
+import type { AttemptEvidence } from "./attempt-evidence"
 import {
   attemptReading,
   failoverKind,
@@ -78,6 +79,8 @@ export type AttemptOutcome =
        * the upstream's own (`docs/idea/08-observability.md`, `httpStatus`).
        */
       readonly answeredStatus?: number
+      /** What the attempt-failed line carries beyond the verdict (`attempt-evidence.ts`, #509). */
+      readonly evidence?: AttemptEvidence
     }
 
 /**

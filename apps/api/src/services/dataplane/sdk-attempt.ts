@@ -14,6 +14,7 @@ import {
 } from "../../providers/upstream-admission"
 import { type AttemptOutcome, attemptDeadline } from "./attempt"
 import type { SdkServableCandidate } from "./plan"
+import { createEvidenceCapture, withEvidence } from "./sdk-attempt-evidence"
 import { failure, invocationFailure, NO_TRANSPORT } from "./sdk-attempt-failure"
 import {
   errorResponseFailure,
@@ -137,6 +138,7 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       : upstreamDeadline({ stream: input.stream, client: total, deferred: true })
   const attemptSignal = clocks?.signal ?? total
   let refusal: SdkFailure | undefined
+  const evidence = createEvidenceCapture()
 
   let response: Response
   try {
@@ -158,9 +160,11 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
       session: turn.plan,
       onSession: (report) => turn.remember(report.sdkSessionId, report.assistantUuid),
       onRateLimit: rateLimit.capture,
-      onRefusal: (failure) => {
+      onRefusal: (failure, refused) => {
         refusal = failure
+        evidence.onRefusalEvidence(refused)
       },
+      onTransport: evidence.onTransport,
       onTruncatedTurn: truncatedTurnLog(input.log, plan.account.id),
     })
     clocks?.headersArrived()
@@ -172,7 +176,8 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
     turn.release("failed")
     rateLimit.close()
     if (error instanceof UpstreamAdmissionRefused) return { kind: "admission-refused" }
-    return invocationFailure(error, input, turn, rateLimit.signal(), attemptSignal)
+    const thrown = invocationFailure(error, input, turn, rateLimit.signal(), attemptSignal)
+    return withEvidence(thrown, evidence.evidence(false))
   }
 
   // The renderer answers a non-streaming turn that ended in an upstream `error` event with the
@@ -188,7 +193,8 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
     clocks?.release()
     turn.release("failed")
     try {
-      return await errorResponseFailure(response, rateLimit.signal(), refusal)
+      const answered = await errorResponseFailure(response, rateLimit.signal(), refusal)
+      return withEvidence(answered, evidence.evidence(refusal !== undefined))
     } finally {
       rateLimit.close()
     }

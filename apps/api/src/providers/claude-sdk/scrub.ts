@@ -145,22 +145,62 @@ const GENERIC_BRAND = "the assistant"
 const BLANK_RUN = /\n{3,}/g
 
 /**
+ * The rules in the order they run, each under the name the upstream-refusal log line reports it by
+ * (`services/dataplane/attempt-log.ts`, #509). A rule is reported when its own substitution changed
+ * the text; the closing tidy (blank runs, trailing whitespace) is no rule and reports nothing.
+ */
+const RULES = [
+  ["opencode-identity-line", (text: string) => replaceSpans(text, OPENCODE_IDENTITY_LINE)],
+  ["opencode-feedback-block", (text: string) => replaceSpans(text, OPENCODE_FEEDBACK_BLOCK)],
+  ["opencode-docs-paragraph", (text: string) => replaceSpans(text, OPENCODE_DOCS_PARAGRAPH)],
+  [
+    "opencode-objectivity-brand",
+    (text: string) => text.replace(OPENCODE_OBJECTIVITY_BRAND, GENERIC_OBJECTIVITY),
+  ],
+  ["omo-agent-identity-block", (text: string) => replaceSpans(text, OMO_AGENT_IDENTITY_BLOCK)],
+  [
+    "omo-identity-line",
+    (text: string) => removeLines(text, OMO_IDENTITY_OPENER, OMO_IDENTITY_MARKER),
+  ],
+  ["omo-env-block", (text: string) => replaceSpans(text, OMO_ENV_BLOCK)],
+  ["powered-by-line", (text: string) => text.replace(POWERED_BY_LINE, "")],
+  ["env-preamble-block", (text: string) => replaceSpans(text, ENV_PREAMBLE_BLOCK)],
+  ["brand-tokens", (text: string) => text.replace(BRAND_TOKENS, GENERIC_BRAND)],
+] as const
+
+export type ScrubRuleName = (typeof RULES)[number][0]
+
+export const SCRUB_RULE_NAMES: readonly ScrubRuleName[] = RULES.map(([name]) => name)
+
+/** A scrubbed prompt and the names, in table order, of the rules that changed it. */
+export interface ScrubReport {
+  readonly text: string
+  readonly rules: readonly ScrubRuleName[]
+}
+
+/**
+ * One system-prompt string, scrubbed, with the rules that fired. Names only: the report never
+ * carries a word of the prompt, so it may reach a log line the prompt itself never does.
+ */
+export function scrubWithReport(prompt: string): ScrubReport {
+  if (prompt === "") return { text: prompt, rules: [] }
+  let text = prompt
+  const rules: ScrubRuleName[] = []
+  for (const [name, apply] of RULES) {
+    const next = apply(text)
+    if (next !== text) rules.push(name)
+    text = next
+  }
+  return { text: text.replace(BLANK_RUN, "\n\n").trimEnd(), rules }
+}
+
+/**
  * One system-prompt string, scrubbed. Returns the input unchanged when it carries no fingerprint,
  * and the empty string when the whole prompt *was* one — {@link scrubSystemPrompt} decides what
  * that means for the SDK option.
  */
 export function scrubHarnessFingerprints(prompt: string): string {
-  if (prompt === "") return prompt
-  let text = replaceSpans(prompt, OPENCODE_IDENTITY_LINE)
-  text = replaceSpans(text, OPENCODE_FEEDBACK_BLOCK)
-  text = replaceSpans(text, OPENCODE_DOCS_PARAGRAPH)
-  text = text.replace(OPENCODE_OBJECTIVITY_BRAND, GENERIC_OBJECTIVITY)
-  text = replaceSpans(text, OMO_AGENT_IDENTITY_BLOCK)
-  text = removeLines(text, OMO_IDENTITY_OPENER, OMO_IDENTITY_MARKER)
-  text = replaceSpans(text, OMO_ENV_BLOCK)
-  text = text.replace(POWERED_BY_LINE, "")
-  text = replaceSpans(text, ENV_PREAMBLE_BLOCK)
-  return text.replace(BRAND_TOKENS, GENERIC_BRAND).replace(BLANK_RUN, "\n\n").trimEnd()
+  return scrubWithReport(prompt).text
 }
 
 /**
@@ -175,11 +215,29 @@ export function scrubHarnessFingerprints(prompt: string): string {
 export function scrubSystemPrompt(
   prompt: string | readonly string[],
 ): string | readonly string[] | null {
-  if (typeof prompt === "string") {
-    const scrubbed = scrubHarnessFingerprints(prompt)
-    return scrubbed === "" ? null : scrubbed
-  }
+  return scrubSystemPromptWithReport(prompt).prompt
+}
 
-  const parts = prompt.map(scrubHarnessFingerprints).filter((part) => part !== "")
-  return parts.length === 0 ? null : parts
+/** {@link scrubSystemPrompt}, plus the union of the rules that fired on any part, in table order. */
+export function scrubSystemPromptWithReport(prompt: string | readonly string[]): {
+  readonly prompt: string | readonly string[] | null
+  readonly rules: readonly ScrubRuleName[]
+} {
+  if (typeof prompt === "string") {
+    const { text, rules } = scrubWithReport(prompt)
+    return { prompt: text === "" ? null : text, rules }
+  }
+  const reports = prompt.map(scrubWithReport)
+  const parts = reports.map((report) => report.text).filter((part) => part !== "")
+  return {
+    prompt: parts.length === 0 ? null : parts,
+    rules: unionScrubRules(reports.map((report) => report.rules)),
+  }
+}
+
+/** The rules any of several reports named, once each, in table order. */
+export function unionScrubRules(
+  lists: readonly (readonly ScrubRuleName[])[],
+): readonly ScrubRuleName[] {
+  return SCRUB_RULE_NAMES.filter((name) => lists.some((rules) => rules.includes(name)))
 }
