@@ -57,6 +57,20 @@ const flexCapacityRule: ClassificationRule = {
 const REQUEST_TOO_LARGE = /^request too large for model/i
 
 /**
+ * Provenance: Groq validates the body strictly and refuses a property it does not name with `400`,
+ * `type: "invalid_request_error"`, no `code`: `property 'reasoning' is unsupported`
+ * (github.com/musistudio/claude-code-router/issues/1458), inside a message as `'messages.2' : for
+ * 'role:assistant' the following must be satisfied[('messages.2' : property 'reasoning' is
+ * unsupported, did you mean 'role'?)]` (github.com/karthink/gptel/issues/774, `HTTP/2 400`).
+ * The property name is quoted, so the wording read here is `property … is unsupported` with the
+ * name removed. Prod 2026-11-27: an OpenRouter-native `reasoning` on `free` stopped the chain here
+ * and the vendors behind Groq were never asked. Blast radius: a match moves the request to the
+ * next vendor; a miss ends the chain as the client's mistake. A malformed body ("value must be a
+ * string") carries other wording and still stops at Groq.
+ */
+const UNSUPPORTED_PROPERTY = /\bproperty\s+is unsupported\b/i
+
+/**
  * Provenance: `model_decommissioned` (400) and `model_not_found` (404), console.groq.com/docs/changelog
  * (the batch error file "uses the same codes as the synchronous API"). Blast radius: without them a
  * retired id ends the chain as the client's mistake.
@@ -78,6 +92,12 @@ export const groqDriver = createHttpDriver({
     providerScoped(
       messageRule("invalid-request", "groq:request-too-large", REQUEST_TOO_LARGE, {
         statuses: [413],
+      }),
+    ),
+    providerScoped(
+      messageRule("invalid-request", "groq:unsupported-field", UNSUPPORTED_PROPERTY, {
+        statuses: [400],
+        types: ["invalid_request_error"],
       }),
     ),
     codeRule("model-unsupported", "groq:model-code", MODEL_CODES),
