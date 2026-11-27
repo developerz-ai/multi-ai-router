@@ -155,17 +155,18 @@ function verdictOf(
   const kind = fast?.classification.kind
   if (fast === undefined || (kind !== "rate-limited" && kind !== "overloaded")) return {}
   const stated = parseRetryAfter(response.headers)
+  const seconds = stated.seconds
   const header =
     stated.at ??
-    (stated.seconds === undefined
-      ? undefined
-      : new Date(context.now.getTime() + stated.seconds * 1000))
-  // The classification's own reading when it has one, else the account's. A model-scoped refusal
-  // always has one (`withModelScope` sets the refused model's), so the account's reading never sets
-  // a model hold's wait. It is merged here and the classification's copy cleared, because
+    (seconds === undefined ? undefined : new Date(context.now.getTime() + seconds * 1000))
+  // The classification's own reading when it has one. A model-scoped refusal without one (the text
+  // rule `claude-sdk:model-window-spent`, which names no reset) never takes the account's: that
+  // reading is another window, so the model hold waits for the stated retry-after, else the
+  // operator's wait. The reading is merged here and the classification's copy cleared, because
   // `toRouterError` reads the classification's reading ahead of `context.signal`, and would
   // otherwise drop the stated wait.
-  const reading = fast.classification.rateLimit ?? rateLimit
+  const reading =
+    fast.classification.rateLimit ?? (fast.classification.modelScoped === true ? null : rateLimit)
   const verdict = toRouterError(
     { ...fast.classification, rateLimit: null },
     {
@@ -177,7 +178,7 @@ function verdictOf(
               limited: false,
               windows: [],
               ...reading,
-              ...(stated.seconds === undefined ? {} : { retryAfterSeconds: stated.seconds }),
+              ...(seconds === undefined ? {} : { retryAfterSeconds: seconds }),
               ...winningReset(header, stated.at !== undefined, reading),
             },
       now: context.now,

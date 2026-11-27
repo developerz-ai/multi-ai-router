@@ -574,4 +574,29 @@ describe("the verdict at the errorResponseFailure boundary", () => {
       resetSource: "provider-reported",
     })
   })
+
+  // A model window named only by the refusal's text has no reading of its own. The account's
+  // reading is another window, so it never sets the model hold's wait.
+  const modelWindowByText = (headers: Record<string, string>) =>
+    anthropicError(429, "rate_limit_error", "You've hit your Opus limit", headers)
+  const accountTwoHours: RateLimitSignal = {
+    limited: true,
+    windows: [],
+    resetsAt: new Date(NOW.getTime() + 7_200_000),
+    resetSource: "provider-reported",
+  }
+
+  test("a model window with no reset of its own waits for the stated retry-after", async () => {
+    const verdict = await verdictOf(modelWindowByText({ "retry-after": "600" }), accountTwoHours)
+    expect(verdict).toEqual({
+      retryAfterSeconds: 600,
+      resetsAt: new Date(NOW.getTime() + 600_000),
+      resetSource: "provider-reported",
+    })
+  })
+
+  test("a model window with no reset and no retry-after takes the operator's wait", async () => {
+    const verdict = await verdictOf(modelWindowByText({}), accountTwoHours)
+    expect(verdict).toEqual({ retryAfterSeconds: 47, resetSource: undefined })
+  })
 })
