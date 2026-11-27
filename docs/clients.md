@@ -259,7 +259,7 @@ up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total. The two answers a f
 
 | Status | `code` | `error.router.wall` | Meaning | Retry? |
 |---|---|---|---|---|
-| `400` | `invalid_request` (also an unknown `x-router-usage` value), `translation_failed` | `request` | The request is wrong, or cannot be translated faithfully into the account's dialect. Also the answer when two or more accounts in one chain refuse the request itself (e.g. a Claude subscription's "Extra Usage" gate), or when the one account refuses it permanently: the request, not the pool, is the problem — never a `429`. `error.router.signal` names the refusal that ended the walk (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`). The same signal `claude-sdk:extra-usage-gated` also rides a `429` with wall `clock` (out of extra usage, a top-up or a reset clears it): read `wall`, not the signal alone | No. Change the request |
+| `400` | `invalid_request` (also an unknown `x-router-usage` value), `translation_failed` | `request` | The request is wrong, or cannot be translated faithfully into the account's dialect. Also the answer when two or more accounts in one chain refuse the request itself (e.g. a Claude subscription's "Extra Usage" gate), or when the one account refuses it permanently: the request, not the pool, is the problem — never a `429`. `error.router.signal` names the refusal that ended the walk (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`) | No. Change the request |
 | `400` | relayed upstream refusal | none | The upstream refused the request. Its own words, relayed | No. A bad request is bad at every account |
 | `400` | `context_length_exceeded` (OpenAI shape) / `prompt is too long: …` (Anthropic shape) | none | The prompt does not fit the context window, whatever status the upstream used | Compact the transcript, then retry |
 | `401` | `key_revoked` | `human` | Router key revoked, unknown, expired, malformed or missing, or Bearer and `x-api-key` disagree | No. Ask the operator |
@@ -283,9 +283,10 @@ up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total. The two answers a f
 
 Any other `4xx`/`5xx` that an upstream sends and the router relays keeps the upstream's status and
 its words, translated into your dialect when the account speaks another one. A relayed error has no
-`error.router`, except a Claude subscription's fast-transport refusal, whose body is a sentence the
-router wrote and which is rendered as the router's own error: `invalid_request` (`wall: request`),
-`quota_exhausted` for a spent window or a throttle, or `upstream_overloaded` (`wall: clock`, `scope: account`,
+`error.router`, except these Claude subscription fast-transport refusals, whose body is a sentence
+the router wrote and which are rendered as the router's own error: an `invalid-request` refusal and
+the request wall as `invalid_request` (`wall: request`), a `rate-limited` refusal as
+`quota_exhausted`, and an `overloaded` one as `upstream_overloaded` (both `wall: clock`, `scope: account`,
 `signal` the classifier's token, `Retry-After` the router's own). The `x-router-*` headers below still name the account that said it.
 
 During a restart, a request can also fail before it reaches the router, depending on what sits in

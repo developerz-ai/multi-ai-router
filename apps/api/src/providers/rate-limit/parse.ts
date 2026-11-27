@@ -132,7 +132,7 @@ function toWindow(limiter: string, draft: Draft): RateLimitWindow {
   }
 }
 
-interface RetryAfter {
+export interface RetryAfter {
   seconds?: number
   at?: Date
 }
@@ -151,7 +151,7 @@ function positiveDelay(value: string): number | undefined {
 }
 
 /** `retry-after` is seconds or an HTTP-date; `retry-after-ms` is what OpenAI sometimes sends. */
-function parseRetryAfter(headers: Headers): RetryAfter {
+export function parseRetryAfter(headers: Headers): RetryAfter {
   const millis = positiveDelay(headers.get("retry-after-ms")?.trim() ?? "")
   if (millis !== undefined) return { seconds: millis / 1000 }
 

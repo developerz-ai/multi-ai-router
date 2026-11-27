@@ -2,6 +2,7 @@ import { InvalidRequestError, type RouterError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import type { RateLimitSignal, SdkFailure, SdkInvocation } from "../../providers"
 import { toRouterError } from "../../providers/failure/router-error"
+import { parseRetryAfter } from "../../providers/rate-limit/parse"
 import { type AttemptOutcome, failoverKind } from "./attempt"
 import type { SdkAttemptInput } from "./sdk-attempt"
 /**
@@ -79,9 +80,9 @@ export function releasingWith(response: Response, release: () => void): Response
  * kind keeps its status-shaped verdict: handing it to `classification` would render it through
  * `toRouterError` instead (`chain-error.ts`) and change what the client reads for a `401` or `402`.
  *
- * The verdict is the only consumer of the refusal's own `retry-after`: it is read into a local
- * reading and never assigned to `rateLimit`, which `recordChainFailure` feeds to the limiter, so a
- * bare `retry-after` on a throttle cools nothing it did not already.
+ * The refusal's own `retry-after` is read for this verdict alone, by the HTTP path's parser
+ * (`rate-limit/parse.ts`). It is never passed to `onRateLimit` (`rateLimitCapture`), so it does not
+ * reach the account's quota reading.
  */
 export async function errorResponseFailure(
   response: Response,
@@ -153,8 +154,8 @@ function verdictOf(
     }
   const kind = fast?.classification.kind
   if (fast === undefined || (kind !== "rate-limited" && kind !== "overloaded")) return {}
-  const stated = Number(response.headers.get("retry-after"))
-  const usable = Number.isFinite(stated) && stated > 0
+  const stated = parseRetryAfter(response.headers)
+  const usable = stated.seconds !== undefined || stated.at !== undefined
   const verdict = toRouterError(fast.classification, {
     // A header the upstream stated is a reading for this verdict alone (see the note above).
     signal: usable
@@ -162,7 +163,9 @@ function verdictOf(
           limited: false,
           windows: [],
           ...rateLimit,
-          retryAfterSeconds: stated,
+          ...(stated.seconds === undefined ? {} : { retryAfterSeconds: stated.seconds }),
+          // The later of the reading's reset and the header's, as `latestResetDeadline` keeps.
+          ...(stated.at === undefined ? {} : { resetsAt: laterOf(stated.at, rateLimit?.resetsAt) }),
           resetSource: rateLimit?.resetSource ?? "provider-reported",
         }
       : rateLimit,
@@ -173,6 +176,10 @@ function verdictOf(
     clientMessage: fast.clientMessage,
   })
   return verdict === null ? {} : { verdict }
+}
+
+function laterOf(left: Date, right: Date | undefined): Date {
+  return right !== undefined && right > left ? right : left
 }
 
 /**

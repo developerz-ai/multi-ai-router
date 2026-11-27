@@ -3,6 +3,7 @@ import { ownedInvoker } from "../../src/composition/owned-invoker"
 import { createFastInvoker } from "../../src/providers/claude-fast/invoker"
 import { createSdkConcurrency } from "../../src/providers/claude-sdk/concurrency"
 import {
+  EXTRA_USAGE_GATED,
   EXTRA_USAGE_SPENT,
   WINDOW_SPENT,
 } from "../../src/providers/claude-sdk/failure-rules-vocabulary"
@@ -14,8 +15,9 @@ import { bearer, harness, post, settle } from "./harness"
  * developerz-ai/multi-ai-router#508 (epic developerz-ai/developerz.ai#10277). A Claude refusal the
  * fast transport answers with a sentence the router wrote used to be relayed envelope-less: the
  * consumer could not tell a `429` that means "too many at once" from a spent window, nor read the
- * 529 as the transient it is. Every class below now carries `error.router`, rendered through the
- * same `toRouterError` mapping the Agent-SDK path uses, and the request wall names its signal.
+ * 529 as the transient it is. Every class below now carries `error.router`, the `429` and `503` ones
+ * rendered through the same `toRouterError` mapping the Agent-SDK path uses, and the request wall
+ * names its signal.
  */
 
 const GATED =
@@ -126,8 +128,9 @@ const resetAt = new Date(RESET_SECONDS * 1000).toISOString()
 describe("the request wall names the signal that ended it", () => {
   test("a permanent refusal on a one-account chain", async () => {
     const h = fastRouter(() => anthropicError(400, "invalid_request_error", GATED))
-    const { response, router } = await ask(h)
+    const { response, error, router } = await ask(h)
     expect(response.status).toBe(400)
+    expect(error.message).toBe(EXTRA_USAGE_GATED)
     expect(response.headers.get("retry-after")).toBeNull()
     expect(router).toMatchObject({
       wall: "request",
@@ -144,15 +147,20 @@ describe("the request wall names the signal that ended it", () => {
     const h = fastRouter(() => anthropicError(429, "rate_limit_error", OUT_OF_EXTRA), {
       accounts: 2,
     })
-    const { response, router } = await ask(h)
+    const { response, error, router } = await ask(h)
     expect(response.status).toBe(400)
     expect(response.headers.get("retry-after")).toBeNull()
+    expect(error.message).toBe(EXTRA_USAGE_SPENT)
     expect(router).toMatchObject({
       wall: "request",
+      scope: "request",
       signal: "claude-sdk:extra-usage-gated",
       retryable: false,
+      reset_at: null,
       retry_after_s: null,
     })
+    expect(breaker(h, "sub")).toBe("active")
+    expect(breaker(h, "sub-2")).toBe("active")
   })
 })
 
@@ -168,6 +176,7 @@ describe("out of extra usage on a chain the request wall did not end", () => {
       scope: "account",
       signal: "claude-sdk:extra-usage-gated",
       retryable: true,
+      reset_at: null,
     })
     expect(response.headers.get("retry-after")).toBe(String(router.retry_after_s))
     expect(breaker(h)).toBe("active")
@@ -254,6 +263,10 @@ describe("a bare upstream throttle", () => {
     })
     expect(response.headers.get("retry-after")).toBe("17")
     expect(breaker(h)).toBe("cooling_down")
+    // The breaker's own estimate, not the header's 17 s: the header cools nothing.
+    const cooling = h.health.stateOf("sub").breaker
+    expect(cooling.cooldownSource).toBe("estimated")
+    expect(cooling.cooldownUntil?.getTime()).toBeLessThan(h.clock.now().getTime() + 17_000)
     // The header is the verdict's alone: it never reaches the account's quota reading.
     expect(h.quota.snapshot("sub", h.clock.now())).toBeNull()
   })
@@ -270,6 +283,46 @@ describe("a bare upstream throttle", () => {
     // The operator's knob, not core's default of 30.
     expect(router.retry_after_s).toBe(47)
     expect(response.headers.get("retry-after")).toBe("47")
+  })
+
+  // Read by the same parser the HTTP path uses (`rate-limit/parse.ts`): `delay-seconds` digits or
+  // an HTTP-date. A hex or exponent number is neither, so it states no wait.
+  for (const header of ["1e9", "0x10"]) {
+    test(`a retry-after of ${header} is not a wait, so the operator's wait answers`, async () => {
+      const h = fastRouter(
+        () =>
+          anthropicError(429, "rate_limit_error", "Number of request tokens has exceeded.", {
+            "retry-after": header,
+          }),
+        { unknownResetRetryAfterSeconds: 47 },
+      )
+      const { response, router } = await ask(h)
+      expect(response.status).toBe(429)
+      expect(router.reset_at).toBeNull()
+      expect(router.reset_source ?? null).toBeNull()
+      expect(router.retry_after_s).toBe(47)
+      expect(response.headers.get("retry-after")).toBe("47")
+    })
+  }
+
+  test("a retry-after HTTP-date is the reset", async () => {
+    const at = new Date(NOW.getTime() + 120_000)
+    const h = fastRouter(
+      () =>
+        anthropicError(429, "rate_limit_error", "Number of request tokens has exceeded.", {
+          "retry-after": at.toUTCString(),
+        }),
+      { unknownResetRetryAfterSeconds: 47 },
+    )
+    const { response, router } = await ask(h)
+    expect(response.status).toBe(429)
+    expect(router).toMatchObject({
+      reset_at: at.toISOString(),
+      reset_source: "provider-reported",
+      retry_after_s: 120,
+    })
+    expect(response.headers.get("retry-after")).toBe("120")
+    expect(h.quota.snapshot("sub", h.clock.now())).toBeNull()
   })
 })
 
