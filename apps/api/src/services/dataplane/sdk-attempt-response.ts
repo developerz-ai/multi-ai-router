@@ -160,24 +160,32 @@ function verdictOf(
     (stated.seconds === undefined
       ? undefined
       : new Date(context.now.getTime() + stated.seconds * 1000))
-  const verdict = toRouterError(fast.classification, {
-    // A header the upstream stated is a reading for this verdict alone (see the note above).
-    signal:
-      header === undefined
-        ? rateLimit
-        : {
-            limited: false,
-            windows: [],
-            ...rateLimit,
-            ...(stated.seconds === undefined ? {} : { retryAfterSeconds: stated.seconds }),
-            ...winningReset(header, stated.at !== undefined, rateLimit),
-          },
-    now: context.now,
-    ...(context.unknownResetRetryAfterSeconds === undefined
-      ? {}
-      : { unknownResetRetryAfterSeconds: context.unknownResetRetryAfterSeconds }),
-    clientMessage: fast.clientMessage,
-  })
+  // A model-scoped refusal carries the refused model's own reading (`withModelScope`), which is the
+  // one that holds; the account's unified reading must not set a model hold's wait. It is merged
+  // here and the classification's copy cleared, because `toRouterError` reads the classification's
+  // reading ahead of `context.signal`, and would otherwise drop the stated wait.
+  const reading = fast.classification.rateLimit ?? rateLimit
+  const verdict = toRouterError(
+    { ...fast.classification, rateLimit: null },
+    {
+      // A header the upstream stated is a reading for this verdict alone (see the note above).
+      signal:
+        header === undefined
+          ? reading
+          : {
+              limited: false,
+              windows: [],
+              ...reading,
+              ...(stated.seconds === undefined ? {} : { retryAfterSeconds: stated.seconds }),
+              ...winningReset(header, stated.at !== undefined, reading),
+            },
+      now: context.now,
+      ...(context.unknownResetRetryAfterSeconds === undefined
+        ? {}
+        : { unknownResetRetryAfterSeconds: context.unknownResetRetryAfterSeconds }),
+      clientMessage: fast.clientMessage,
+    },
+  )
   return verdict === null ? {} : { verdict }
 }
 

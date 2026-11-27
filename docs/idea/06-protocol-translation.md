@@ -901,8 +901,8 @@ byte-faithful and envelope-less):
 | `invalid-request` (an upstream `400`/`413`/`422`, 2.55.0) | `400 invalid_request` | `request` | `account` | the classifier's token (e.g. `claude-sdk:api-status-400`) | none |
 | The request wall: a permanent refusal on a one-account chain, or two request-attributable refusals in one chain | `400 invalid_request` | `request` | `request` | the walled refusal's own token (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`); both transports | none |
 | Out of extra usage, chain not walled | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:extra-usage-gated` | the later of the reading's reset and the stated wait, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
-| A spent plan or model window | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:rate-limited`, `plan-window-spent`, `model-window-spent`, `overage-required` | the reset the quota headers name |
-| A bare upstream throttle | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:api-status-429` | the upstream's `retry-after`, read by the HTTP path's parser (`rate-limit/parse.ts`: seconds or an HTTP-date; `reset_at` is when it ends, source `provider-reported`), else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
+| A spent plan or model window | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:rate-limited`, `plan-window-spent`, `model-window-spent`, `overage-required` | the later of the reading's reset and the stated wait, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
+| A bare upstream throttle | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:api-status-429` | the later of the reading's reset and the stated wait, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
 | Overloaded (`529`, or `503`) | `503 upstream_overloaded` | `clock` | `account` | `claude-sdk:overloaded` | the upstream's delay-seconds `retry-after` (an HTTP-date is not read, as on the HTTP path), else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`; `reset_at` null |
 
 The upstream's own `retry-after` is read for the verdict alone: it never reaches the account's quota

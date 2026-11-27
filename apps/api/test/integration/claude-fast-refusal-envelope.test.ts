@@ -285,6 +285,45 @@ describe("a spent plan window carries its reset", () => {
     expect(((await other.json()) as { model: string }).model).toBe(HAIKU)
     expect(h.health.stateOf("sub").refusedModels?.has(HAIKU)).toBe(false)
   })
+
+  // The refused model's reading and a stated wait meet under the same rule as every other row:
+  // the later of the two is the wait.
+  const modelWindow =
+    (retryAfter: string, claimReset: Record<string, string> = {}) =>
+    (model: string) =>
+      model === HAIKU
+        ? servedStream(HAIKU)
+        : anthropicError(429, "rate_limit_error", "You've hit your Opus limit", {
+            "anthropic-ratelimit-unified-status": "rejected",
+            "anthropic-ratelimit-unified-representative-claim": "seven_day_opus",
+            ...claimReset,
+            "retry-after": retryAfter,
+          })
+  const opusReset = { "anthropic-ratelimit-unified-reset": String(RESET_SECONDS) }
+
+  for (const [title, retryAfter, claimReset, seconds] of [
+    ["a stated retry-after later than the model's reset is the wait", "7200", opusReset, 7200],
+    ["the model's reset later than a stated retry-after is the wait", "120", opusReset, 3600],
+    ["a stated retry-after is the wait when the model's claim names no reset", "600", {}, 600],
+  ] as const) {
+    test(title, async () => {
+      const h = fastRouter(modelWindow(retryAfter, claimReset), {
+        unknownResetRetryAfterSeconds: 47,
+      })
+      const { response, router } = await ask(h)
+      expect(response.status).toBe(429)
+      expect(router).toMatchObject({
+        wall: "clock",
+        signal: "claude-sdk:model-window-spent",
+        retry_after_s: seconds,
+        reset_at: new Date(h.clock.now().getTime() + seconds * 1000).toISOString(),
+        reset_source: "provider-reported",
+      })
+      expect(response.headers.get("retry-after")).toBe(String(seconds))
+      expect(breaker(h)).toBe("active")
+      expect(h.health.stateOf("sub").refusedModels?.has(OPUS)).toBe(true)
+    })
+  }
 })
 
 describe("a bare upstream throttle", () => {
@@ -408,7 +447,7 @@ describe("a stated retry-after beside a reading that names a reset", () => {
     })
   })
 
-  test("a reading's reset later than the header date is the reset, with its own source", async () => {
+  test("a reading's reset later than the header date is the reset", async () => {
     const h = fastRouter(limited(new Date(NOW.getTime() + 120_000)))
     const { response, router } = await ask(h)
     expect(router).toMatchObject({
