@@ -63,7 +63,7 @@ export interface SdkAttemptInput {
   readonly timeoutMs: number
   /**
    * The request's bounded wait at the shared Claude concurrency gate (`CLAUDE_SDK_QUEUE_WAIT_MS`), shared by every
-   * attempt of the request so a walk over full accounts costs one knob. Absent: the unbounded queue.
+   * attempt of the request. Absent: the unbounded queue.
    */
   readonly gateWait?: SdkGateWait
   /** First-byte and idle clocks for a streamed turn, from the moment the upstream starts. */

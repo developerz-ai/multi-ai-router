@@ -4,8 +4,7 @@
  * A request that cannot get a slot within `CLAUDE_SDK_QUEUE_WAIT_MS` is given an explicit answer
  * instead of waiting silently until its attempt deadline: a client that cuts a silent call at
  * 300 s would otherwise read a long gate wait as a timeout nobody can explain. The budget belongs to
- * the **request**, not the attempt, so a walk over N full accounts costs one knob in total and not N
- * of them. A caller that passes none keeps the unbounded queue (the probe, the keepalive).
+ * the **request**, not the attempt. A caller that passes none keeps the unbounded queue (the probe, the keepalive).
  */
 
 /** The half of the two-gate pair a caller was still queued on when its budget ran out. */

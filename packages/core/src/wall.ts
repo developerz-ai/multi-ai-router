@@ -52,7 +52,6 @@ const WALL_OF: Readonly<Record<RouterErrorCode, { wall: Wall; scope: WallScope }
   upstream_auth_failed: { wall: "human", scope: "account" },
   upstream_timeout: { wall: "capacity", scope: "account" },
   upstream_overloaded: { wall: "clock", scope: "pool" },
-  // Judged after the walk asked every eligible account in scope, so the verdict is the pool's.
   account_at_capacity: { wall: "clock", scope: "pool" },
   credential_decrypt_failed: { wall: "human", scope: "account" },
   translation_failed: { wall: "request", scope: "request" },

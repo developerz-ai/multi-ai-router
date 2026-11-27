@@ -143,7 +143,7 @@ export function isGateFull(kind: FailureKind): kind is "account-full" | "router-
  * ({@link AttemptFailure.requestAttributable}), or this router's full gate (`account-full`,
  * `router-full`), which fires before any upstream is asked. Such an attempt takes the failure tail
  * (a usage row, a log line, a fold into the held answer) instead of being dropped as a preparation
- * fault, which would end a walk of full accounts as "could not be prepared".
+ * fault.
  */
 export function isUnstartedVerdict(failure: Pick<AttemptFailure, "kind" | "requestAttributable">) {
   return failure.requestAttributable === true || isGateFull(failure.kind)

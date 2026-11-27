@@ -584,7 +584,7 @@ that pool — the policy never runs across the union.
 | `529` | Retry with the overload budget, as `overloaded` — whether or not Anthropic's `overloaded_error` body survived a rewriting proxy. Never a breaker strike. |
 | Connection failure / timeout | Retry the next candidate. Count toward the failure streak. A **streamed** HTTP attempt's timeout before response headers is the first-byte clock (see *Upstream deadlines* below). |
 | `4xx` other than `429`, `408`, `425` | **Do not retry.** A bad request is bad at every account; returning the upstream's error is the honest answer. |
-| a `4xx` about the vendor's wire (`providerScoped`, driver-classified: Gemini refusing a missing thought signature or a field outside Google's schema) | **Skip that provider's remaining candidates and retry the next one of another provider.** No breaker strike, no model hold, no recovery probe. The skip lasts the whole chain. When no other provider is left the chain stops as `provider-wall` and the client hears that upstream `4xx` itself; an account that answered `overloaded` earlier is still asked again first, unless its provider was refused at the router's own full gate (`router-full`, below). |
+| a `4xx` about the vendor's wire (`providerScoped`, driver-classified: Gemini refusing a missing thought signature or a field outside Google's schema) | **Skip that provider's remaining candidates and retry the next one of another provider.** No breaker strike, no model hold, no recovery probe. The skip lasts the whole chain. When no other provider is left the chain stops as `provider-wall` and the client hears that upstream `4xx` itself; an account that answered `overloaded` earlier is still asked again first. |
 | a `4xx` about this account's own settings (`accountScoped`: an OpenRouter provider filter or data policy that leaves no endpoint, a request larger than the account's in-flight budget) | **Retry the next candidate, same provider included.** No strike, no hold. With none left the chain stops as `provider-wall` and the upstream's own `4xx` is the answer. |
 | The upstream refuses the **model name** (`model-unsupported`, driver-classified: the `claude` CLI's "There's an issue with the selected model … may not exist or you may not have access to it", Codex's "`<model>` model is not supported when using Codex with a ChatGPT account") | **Retry the next candidate**, before any byte reaches the client. **No breaker strike, no cooldown, no recovery probe** — the account answered correctly about a name it never served, and the next account may serve that vendor. Recorded as `client_error`. When every candidate refused it, the client hears the first refusal itself: Codex's own `400`, or for a subscription a router-authored `404` "the Claude subscription does not serve the requested model". Routing's [model family](#candidate-filtering) keeps most of these from being attempted at all; this row is for what the family admits and the upstream still refuses. Until 2026-10-04 the first read `unknown` (a `502` that struck the breaker) and the second `invalid-request` (no failover). |
 | **In-stream refusal on a 200 stream** (Codex `response.failed` or bare `error` event; classified by the `openai-oauth` driver hook, not the HTTP `rules` array) | Codes `invalid_prompt`, `invalid_request_error`, `context_length_exceeded`, `unsupported_parameter`, `unsupported_value`, `invalid_json_schema` → `invalid-request` (failover reads `client-error`; the breaker is **not** struck — a request-shaped refusal is bad at every account, but the account is not unwell). Codes `usage_limit_reached`, `rate_limit_exceeded` → `rate-limited`; the observer forces `rateLimit: null` so the verdict carries no estimated reset, and the breaker trips on the **first** hit (a stream-only rate limit is a fact about the account, not about the request). Code `account_deactivated`, and only from `response.error.code` of a frame whose own JSON `type` is `response.failed` (the one place the Codex CLI reads them; every other shape is retried or skipped there) `insufficient_quota`, `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` → `credits-exhausted`; the account moves to `exhausted` on the first hit (no clock, human action only). Any other code, or no code, → `server-error` (fail-closed; three in a row cool the account). The verdict's `errorClass` is the closed `codex:stream-error:<code>` signal (or `codex:stream-error:other`); the usage row carries the signal, never the upstream message. The code decides when there is one (top level, then the nested error object's `code`): a listed code maps as above, any other code is `server-error`. Exception: a quota code at `response.error.code` of a frame whose own JSON `type` is `response.failed` decides even beside a root `code` or `error`, which the Codex CLI ignores on that frame. Only when there is no code is the nested error object's `type` read, and only for the limit and deactivated codes above, never a quota code, which the Codex CLI's stream parser reads only as a code (the same lists the HTTP rules use, which read `type` even beside a code; in-stream, a code always decides): `invalid_request_error` is OpenAI's catch-all *type*, carried by account-level refusals such as `invalid_api_key` too, so a type never marks a refusal request-shaped. The flat event's own `type` is the event name `error` and is never read as a code. A frame too large for the observation cap is salvaged with its `error` and `code` kept (and MiniMax's `base_resp.status_code`, so an oversized in-body MiniMax failure still reads as one), so a large echoed prompt does not hide the code; an error object too large to keep is dropped and the failure classifies `server-error`, never success. The salvaged frame is read as `JSON.parse` reads it: a repeated `error`, `response` or `message` keeps its **last** copy (under a repeated parent, the members captured under the copy it replaced are released, not merged into it), and an escaped slot key (`"usage"` written `"\u0075sage"`) is matched as the key it decodes to — a key that is not pure ASCII, an invalid escape, or a raw key over 32 bytes matches no slot — so the code read is the code the frame ends with. Only the latest root `error` shape controls the placeholder: an object too large to keep is read as `{}`, while a later non-object replaces that flag and is omitted if it cannot fit. |
@@ -791,13 +791,12 @@ chain, Test now, the idle and recovery probes — cools the account,
 a designated recovery probe that draws one settles `uncertain` (its permit is not spent), and the
 hourly recheck reads it as still cooling. The chain walks the remaining accounts first, with no wait;
 once every one was asked it asks the account that last answered `overloaded` again — whatever the
-final account said, so a later seat's own limit cannot decide it, and unless its provider was refused
-at the router's own full gate (`router-full`, below), which a wait would meet again — after `ROUTING_OVERLOAD_RETRY_BASE_MS` (default
+final account said, so a later seat's own limit cannot decide it — after `ROUTING_OVERLOAD_RETRY_BASE_MS` (default
 1000), doubling, `ROUTING_OVERLOAD_RETRIES` times (default 2; `0` asks no more; its own budget,
 apart from the stale-session replay's, so neither spends the other) — always before a
 byte is on the wire. Still overloaded: the client hears **`503 upstream_overloaded`** with a
 `Retry-After` (the upstream's own when it stated one, else
-`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), unless a higher-ranked held answer outranks it (such as a `429` `account_at_capacity` or `quota_exhausted`); never a router-made `429 quota_exhausted` for the overload itself. Prod,
+`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`), never a router-made `429 quota_exhausted`. Prod,
 2026-11-07 00:22..01:56Z: Go's overload read as `rate-limited` cooled both Go seats, spent their
 recovery permits and answered 199 requests `429` while neither seat was out of anything.
 The prefill tag was observed later the same day at 14:56 / 15:06 / 15:07Z and had the same
@@ -808,37 +807,32 @@ cannot drift between their drivers; generic words such as "limit" or "capacity" 
 
 At the shared Claude concurrency gate (`providers/claude-sdk/concurrency.ts`) a Claude subscription request takes its account's permit and then the replica's global one. It queues for them for at most `CLAUDE_SDK_QUEUE_WAIT_MS`
 (default 60 000) **in total, per request**: one budget, drawn on by every later acquire of the same
-request (the next candidate, the fast transport's fallback to the SDK, a busy-session retry), so a walk
-over N full accounts answers after about one wait, never N of them. With nothing left, an acquire takes
-a slot that is free at once or fails at once. Only the two request paths pass a budget; the Test now
-probe (and through it the idle probe, the credential keepalive and `cooldown_recheck`) and the idle
-query (model list, usage gauge) keep the unbounded queue.
+request (the next candidate, the fast transport's fallback to the SDK, a busy-session retry). With
+nothing left, an acquire takes a slot that is free at once or fails at once. Only the two request
+paths pass a budget; the Test now probe (and through it the idle probe, the credential keepalive and
+`cooldown_recheck`) and the idle query (model list, usage gauge) keep the unbounded queue.
 
 Which half the caller was still queued on decides the failure kind:
 
 - **`account-full`**: the account's own in-flight limit. Retryable and **blameless**: no cooldown, no
   strike, no recovery probe, no model hold (`breaker.ts` leaves it untouched; no recovery permit
-  is consumed). The chain fails over to the next eligible account as for any retryable kind.
-  Recorded `no_healthy_account` with `errorClass: account-at-capacity` and no `httpStatus` (no
-  upstream was reached).
-- **`router-full`**: the replica's global ceiling. Same blameless treatment, and because that gate is
-  shared by every Claude subscription account the chain offers **no further subscription candidate** in
-  this request (the provider joins `refusedProviders`, the set whose untried candidates the planner skips, which a wire refusal joins too, and `gateRefusedProviders`, its router-full subset and the only set the overload wait reads: an account that said `overloaded` is asked again after a pause unless its provider is in that subset); an account of another kind is still tried.
-  Recorded `errorClass: router-at-capacity`.
+  is consumed). Recorded `no_healthy_account` with `errorClass: account-at-capacity` and no
+  `httpStatus` (no upstream was reached).
+- **`router-full`**: the replica's global ceiling. Same blameless treatment. Recorded
+  `errorClass: router-at-capacity`.
 
 Both fire before the upstream starts, so the chain takes the failure tail for them as a verdict
 (`isUnstartedVerdict`): a usage row, an attempt-failed log line, a fold into the held answer.
 
-The client hears the held answer after the walk. `account-full` is `429 account_at_capacity` (wall
-`clock`, scope `pool`, `signal: account-at-capacity`, `Retry-After`
-`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`: a full gate names no instant and the router invents
-none), ranked `70` beside `quota_exhausted` (the sooner wait wins between them). `router-full` is the
-existing `503 no_healthy_account` with wall `capacity`, scope `router`, `signal: router-at-capacity`,
-ranked `30`, so an `account-full` outranks it whichever the walk reached first.
+Wire shape. `account-full` is `429 account_at_capacity` (wall `clock`, scope `pool`,
+`signal: account-at-capacity`, `Retry-After` `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`: a full gate
+names no instant and the router invents none). `router-full` is the existing `503 no_healthy_account`
+with wall `capacity`, scope `router`, `signal: router-at-capacity`. Behaviour is pinned by
+`apps/api/test/integration/claude-account-full.test.ts`.
 
-This is a router-made `429` while eligible accounts are in scope, by design: a saturated account is
-still eligible (concurrency is not part of the Filter stage). The rule in `CLAUDE.md` is narrowed to
-allow exactly this capacity answer (developerz-ai/developerz.ai#10277).
+The `429` is a router-made answer while eligible accounts are in scope, by design: a saturated
+account is still eligible (concurrency is not part of the Filter stage). The rule in `CLAUDE.md` is
+narrowed to allow exactly this capacity answer (developerz-ai/developerz.ai#10277).
 
 `ROUTING_FAILURE_THRESHOLD`, `ROUTING_BASE_BACKOFF_MS`, and `ROUTING_MAX_BACKOFF_MS` are the
 operator's numbers for the two tables above, and the health store supplies them on **every**
