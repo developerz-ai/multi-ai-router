@@ -120,7 +120,10 @@ export async function assertAdminSignInConfigured(
 export function readEnv(): Env {
   try {
     const env = parseEnv(process.env)
-    return { ...env, poolRoster: loadPoolRoster(env.poolRosterPath) }
+    // Unset or blank `POOL_ROSTER_PATH` means no roster is configured: do not
+    // touch the filesystem at all, and report `poolRoster: null`.
+    const poolRoster = env.poolRosterPath && env.poolRosterPath.trim() !== "" ? loadPoolRoster(env.poolRosterPath) : null
+    return { ...env, poolRoster }
   } catch (error) {
     if (error instanceof EnvValidationError) {
       process.stderr.write(`${error.message}\n`)
