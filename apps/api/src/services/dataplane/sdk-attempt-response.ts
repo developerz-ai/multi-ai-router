@@ -155,20 +155,23 @@ function verdictOf(
   const kind = fast?.classification.kind
   if (fast === undefined || (kind !== "rate-limited" && kind !== "overloaded")) return {}
   const stated = parseRetryAfter(response.headers)
-  const usable = stated.seconds !== undefined || stated.at !== undefined
+  const header =
+    stated.at ??
+    (stated.seconds === undefined
+      ? undefined
+      : new Date(context.now.getTime() + stated.seconds * 1000))
   const verdict = toRouterError(fast.classification, {
     // A header the upstream stated is a reading for this verdict alone (see the note above).
-    signal: usable
-      ? {
-          limited: false,
-          windows: [],
-          ...rateLimit,
-          ...(stated.seconds === undefined ? {} : { retryAfterSeconds: stated.seconds }),
-          // The later of the reading's reset and the header's, as `latestResetDeadline` keeps.
-          ...(stated.at === undefined ? {} : { resetsAt: laterOf(stated.at, rateLimit?.resetsAt) }),
-          resetSource: rateLimit?.resetSource ?? "provider-reported",
-        }
-      : rateLimit,
+    signal:
+      header === undefined
+        ? rateLimit
+        : {
+            limited: false,
+            windows: [],
+            ...rateLimit,
+            ...(stated.seconds === undefined ? {} : { retryAfterSeconds: stated.seconds }),
+            ...winningReset(header, stated.at !== undefined, rateLimit),
+          },
     now: context.now,
     ...(context.unknownResetRetryAfterSeconds === undefined
       ? {}
@@ -178,8 +181,26 @@ function verdictOf(
   return verdict === null ? {} : { verdict }
 }
 
-function laterOf(left: Date, right: Date | undefined): Date {
-  return right !== undefined && right > left ? right : left
+/**
+ * The later of the reading's reset and the header's, as `latestResetDeadline` keeps, labelled by
+ * whichever won: the header is a reset the upstream stated, so it is `provider-reported` whatever
+ * the reading says of itself. A reading that names no blocking reset calls itself `unknown`
+ * (`quota-buckets.ts`). Only a reading whose own reset wins keeps its own source.
+ */
+function winningReset(
+  header: Date,
+  headerIsInstant: boolean,
+  reading: RateLimitSignal | null,
+): Pick<RateLimitSignal, "resetsAt" | "resetSource"> {
+  const own = reading?.resetsAt
+  if (reading !== null && own !== undefined && own > header)
+    return { resetsAt: own, resetSource: reading.resetSource }
+  // A delay-seconds header reaches the deadline through `retryAfterSeconds`; only a date replaces
+  // the reading's instant.
+  return {
+    ...(headerIsInstant ? { resetsAt: header } : {}),
+    resetSource: "provider-reported",
+  }
 }
 
 /**

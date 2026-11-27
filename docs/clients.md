@@ -287,7 +287,7 @@ its words, translated into your dialect when the account speaks another one. A r
 the router wrote and which are rendered as the router's own error: an `invalid-request` refusal and
 the request wall as `invalid_request` (`wall: request`), a `rate-limited` refusal as
 `quota_exhausted`, and an `overloaded` one as `upstream_overloaded` (both `wall: clock`, `scope: account`,
-`signal` the classifier's token, `Retry-After` the router's own). The `x-router-*` headers below still name the account that said it.
+`signal` the classifier's token, `Retry-After` the router's own). A relayed error's `x-router-*` headers below name the account that said it.
 
 During a restart, a request can also fail before it reaches the router, depending on what sits in
 front of it: connection refused, or a `502`/`503` from your ingress with no JSON body. Treat these

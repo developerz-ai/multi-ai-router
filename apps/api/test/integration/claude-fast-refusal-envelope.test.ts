@@ -23,8 +23,36 @@ import { bearer, harness, post, settle } from "./harness"
 const GATED =
   "Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going."
 const OUT_OF_EXTRA = "You're out of extra usage. Add more at claude.ai/settings/usage"
+// Fragments a router sentence must never echo. Each case's whole upstream sentence is checked too,
+// read off the fixture it served (`fastRouter`), so a new case cannot forget its own.
 const UPSTREAM_OWN_WORDS = ["Third-party apps", "out of extra usage", "Overloaded", "hit your"]
 const RESET_SECONDS = Math.floor(NOW.getTime() / 1000) + 3600
+
+const frame = (event: object) => `data: ${JSON.stringify(event)}\n\n`
+const servedStream = (model: string) =>
+  new Response(
+    [
+      {
+        type: "message_start",
+        message: {
+          id: "msg_served",
+          type: "message",
+          role: "assistant",
+          model,
+          content: [],
+          usage: { input_tokens: 2 },
+        },
+      },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ]
+      .map(frame)
+      .join(""),
+    { headers: { "content-type": "text/event-stream" } },
+  )
 
 const anthropicError = (
   status: number,
@@ -44,9 +72,10 @@ const spentWindow = {
 }
 
 function fastRouter(
-  upstream: (request: Request) => Response,
+  upstream: (model: string) => Response,
   options: { accounts?: number; unknownResetRetryAfterSeconds?: number } = {},
 ) {
+  const upstreamSentences: string[] = []
   const signal = new AbortController().signal
   const lease = {
     handle: (accountId: string) => ({
@@ -70,7 +99,15 @@ function fastRouter(
     }),
     resolveModel: (_, model) => model,
     sdk: async () => new Response("unexpected SDK fallback", { status: 500 }),
-    fetch: async (request) => upstream(request),
+    fetch: async (request) => {
+      const sent = (await request.json()) as { model: string }
+      const response = upstream(sent.model)
+      if (!response.ok) {
+        const refused = (await response.clone().json()) as { error: { message: string } }
+        upstreamSentences.push(refused.error.message)
+      }
+      return response
+    },
   })
   const quota = createSdkQuotaStore()
   const ids = Array.from({ length: options.accounts ?? 1 }, (_, index) =>
@@ -90,14 +127,11 @@ function fastRouter(
     invokeSdk: ownedInvoker(lease, fast),
     sdkQuota: quota,
   })
-  return { ...h, quota }
+  return { ...h, quota, upstreamSentences }
 }
 
-const messages = JSON.stringify({
-  model: "claude-opus-5-5",
-  max_tokens: 64,
-  messages: [{ role: "user", content: "hello" }],
-})
+const messages = (model = "claude-opus-5-5") =>
+  JSON.stringify({ model, max_tokens: 64, messages: [{ role: "user", content: "hello" }] })
 
 interface Router {
   readonly wall: string
@@ -110,16 +144,20 @@ interface Router {
 }
 
 async function ask(h: ReturnType<typeof fastRouter>) {
-  const response = await h.app.request("/v1/messages", post(messages, bearer()))
+  const response = await h.app.request("/v1/messages", post(messages(), bearer()))
   await settle()
   const body = (await response.json()) as {
     error: { type: string; message: string; router: Router }
   }
   const serialized = JSON.stringify(body)
-  for (const words of UPSTREAM_OWN_WORDS) expect(serialized).not.toContain(words)
+  expect(h.upstreamSentences.length).toBeGreaterThan(0)
+  for (const words of [...UPSTREAM_OWN_WORDS, ...h.upstreamSentences])
+    expect(serialized).not.toContain(words)
   return { response, error: body.error, router: body.error.router }
 }
 
+const OPUS = "claude-opus-5-5"
+const HAIKU = "claude-haiku-5-5"
 const sentence = (clientMessage: string, signal: string) => `${clientMessage} (${signal})`
 const breaker = (h: ReturnType<typeof fastRouter>, id = "sub") =>
   h.health.stateOf(id).breaker.status
@@ -212,13 +250,15 @@ describe("a spent plan window carries its reset", () => {
     })
   }
 
-  test("a model-family window holds that model and leaves the account active", async () => {
-    const h = fastRouter(() =>
-      anthropicError(429, "rate_limit_error", "You've hit your Opus limit", {
-        "anthropic-ratelimit-unified-status": "rejected",
-        "anthropic-ratelimit-unified-representative-claim": "seven_day_opus",
-        "anthropic-ratelimit-unified-reset": String(RESET_SECONDS),
-      }),
+  test("a model-family window holds that model and the account still serves another", async () => {
+    const h = fastRouter((model) =>
+      model === HAIKU
+        ? servedStream(HAIKU)
+        : anthropicError(429, "rate_limit_error", "You've hit your Opus limit", {
+            "anthropic-ratelimit-unified-status": "rejected",
+            "anthropic-ratelimit-unified-representative-claim": "seven_day_opus",
+            "anthropic-ratelimit-unified-reset": String(RESET_SECONDS),
+          }),
     )
     const { response, error, router } = await ask(h)
     expect(response.status).toBe(429)
@@ -237,8 +277,13 @@ describe("a spent plan window carries its reset", () => {
     })
     expect(response.headers.get("retry-after")).toBe(String(router.retry_after_s))
     expect(breaker(h)).toBe("active")
-    expect(h.health.stateOf("sub").refusedModels?.has("claude-opus-5-5")).toBe(true)
-    expect(h.health.stateOf("sub").refusedModels?.has("claude-sonnet-5")).toBe(false)
+    expect(h.health.stateOf("sub").refusedModels?.has(OPUS)).toBe(true)
+    // The same account serves a model outside that family.
+    const other = await h.app.request("/v1/messages", post(messages(HAIKU), bearer()))
+    await settle()
+    expect(other.status).toBe(200)
+    expect(((await other.json()) as { model: string }).model).toBe(HAIKU)
+    expect(h.health.stateOf("sub").refusedModels?.has(HAIKU)).toBe(false)
   })
 })
 
@@ -324,6 +369,55 @@ describe("a bare upstream throttle", () => {
     expect(response.headers.get("retry-after")).toBe("120")
     expect(h.quota.snapshot("sub", h.clock.now())).toBeNull()
   })
+
+  // Unified headers ride every fast answer (`claude-fast/quota.ts`). A reading that names no
+  // blocking reset is `unknown`, and must not label the reset the header stated.
+  test("a stated wait beside a reading that names no reset is provider-reported", async () => {
+    const h = fastRouter(() =>
+      anthropicError(429, "rate_limit_error", "Number of request tokens has exceeded.", {
+        "retry-after": "17",
+        "anthropic-ratelimit-unified-status": "allowed",
+        "anthropic-ratelimit-unified-5h-status": "allowed",
+        "anthropic-ratelimit-unified-5h-reset": String(RESET_SECONDS),
+      }),
+    )
+    const { router } = await ask(h)
+    expect(router).toMatchObject({
+      retry_after_s: 17,
+      reset_at: new Date(h.clock.now().getTime() + 17_000).toISOString(),
+      reset_source: "provider-reported",
+    })
+  })
+})
+
+describe("a stated retry-after beside a reading that names a reset", () => {
+  const limited = (retryAfter: Date) => () =>
+    anthropicError(429, "rate_limit_error", "Usage limit reached", {
+      ...spentWindow,
+      "retry-after": retryAfter.toUTCString(),
+    })
+
+  test("a header date later than the reading's reset is the reset", async () => {
+    const at = new Date(RESET_SECONDS * 1000 + 3_600_000)
+    const h = fastRouter(limited(at))
+    const { router } = await ask(h)
+    expect(router).toMatchObject({
+      reset_at: at.toISOString(),
+      retry_after_s: 7200,
+      reset_source: "provider-reported",
+    })
+  })
+
+  test("a reading's reset later than the header date is the reset, with its own source", async () => {
+    const h = fastRouter(limited(new Date(NOW.getTime() + 120_000)))
+    const { response, router } = await ask(h)
+    expect(router).toMatchObject({
+      reset_at: resetAt,
+      retry_after_s: 3600,
+      reset_source: "provider-reported",
+    })
+    expect(response.headers.get("retry-after")).toBe("3600")
+  })
 })
 
 describe("an overloaded upstream", () => {
@@ -354,6 +448,23 @@ describe("an overloaded upstream", () => {
     const { response, router } = await ask(h)
     expect(response.status).toBe(503)
     expect(router.retry_after_s).toBe(47)
+    expect(response.headers.get("retry-after")).toBe("47")
     expect(router.reset_at).toBeNull()
+  })
+
+  // Parity with the HTTP path: the overloaded verdict reads only a `delay-seconds` retry-after
+  // (`toRouterError`), so a stated date falls to the operator's wait on both transports.
+  test("an HTTP-date retry-after takes the operator's wait, as on the HTTP path", async () => {
+    const h = fastRouter(
+      () =>
+        anthropicError(529, "overloaded_error", "Overloaded", {
+          "retry-after": new Date(NOW.getTime() + 120_000).toUTCString(),
+        }),
+      { unknownResetRetryAfterSeconds: 47 },
+    )
+    const { response, router } = await ask(h)
+    expect(response.status).toBe(503)
+    expect(router.retry_after_s).toBe(47)
+    expect(response.headers.get("retry-after")).toBe("47")
   })
 })
