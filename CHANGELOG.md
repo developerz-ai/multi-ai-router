@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.81.0] — 2026-11-27
+
 ### Added
 
 - `CLAUDE_SDK_QUEUE_WAIT_MS` (default `60000`): the most one Claude subscription request waits at the shared Claude concurrency gate, in total (one budget per request, not per attempt). The gate's slots are taken by every Claude subscription turn, warm fast-mode HTTP turns as well as Agent-SDK subprocesses, so it can be full with no CLI child running: operators checking a full gate look at fast-mode traffic too. Test now, the idle probe, the credential keepalive, the model list and the usage-gauge read keep the unbounded queue. The caps (`CLAUDE_SDK_MAX_CONCURRENCY`, `…_PER_ACCOUNT`) do not change. The wait is bounded by one rule: with D the shorter of `UPSTREAM_TIMEOUT_MS` and `UPSTREAM_STREAM_TIMEOUT_MS`, a value the operator sets may be at most `min(240000, floor(D / 2))`; above it is refused at boot, naming the value and, unless the ceiling is the 240000 cap (D of 480000 ms or more), D and the knob that set D (a tie names both). When D is 2 ms or less the ceiling is `0`, so every explicit value is refused there. Only a value the operator sets is refused: unset, the wait is `min(60000, floor(D / 2))` (`0` when D is 2 ms or less), so an existing deployment that never chose this knob still boots.
@@ -2636,3 +2638,4 @@ your tooling config.
 [2.78.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.78.1
 [2.79.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.79.0
 [2.80.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.80.0
+[2.81.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.81.0
