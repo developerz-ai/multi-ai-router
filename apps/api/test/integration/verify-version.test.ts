@@ -129,7 +129,7 @@ async function fixture(tree: Tree): Promise<string> {
   // malformed version a test feeds the gate on purpose) is simply not tagged.
   for (const tag of new Set(tree.tags ?? linked)) {
     const valid = await Bun.$`git check-ref-format ${`refs/tags/v${tag}`}`.quiet().nothrow()
-    if (valid.exitCode === 0) await Bun.$`git -C ${root} tag v${tag}`.quiet()
+    if (valid.exitCode === 0) await Bun.$`git -C ${root} -c tag.gpgSign=false tag v${tag}`.quiet()
   }
   const origin = tree.unreachableOrigin ? join(root, "no-such-remote") : root
   await Bun.$`git -C ${root} remote add origin ${origin}`.quiet()

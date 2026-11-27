@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Groq's `400` "property '…' is unsupported" (`invalid_request_error`) is provider-scoped (`groq:unsupported-field`): the chain skips Groq's remaining accounts and tries the next vendor instead of answering the client `400`. Prod 2026-11-27: `reasoning` on `free` stopped at Groq and the vendors behind it were never asked. A malformed body still stops at Groq.
+
 ## [2.81.0] — 2026-11-27
 
 ### Added

@@ -748,7 +748,9 @@ Four vendors word more than a dead balance, and their drivers read all of it:
   code not in it is a `server-error`.
 - **Groq** limits are held per model. A `413` "Request too large for model" is provider-scoped: no
   wait clears it, another vendor may take the prompt
-  ([05-routing-and-failover.md](05-routing-and-failover.md)).
+  ([05-routing-and-failover.md](05-routing-and-failover.md)). So is a `400`
+  `invalid_request_error` "property '…' is unsupported" (`groq:unsupported-field`): Groq refuses a
+  body property it does not name, such as OpenRouter's `reasoning`, that another vendor may accept.
 - **Alibaba Model Studio** (a preset of `openai-compatible`): `AllocationQuota.FreeTierOnly` holds
   the model, `Arrearage` is `exhausted`, "Allocated quota exceeded" is a throttle.
 

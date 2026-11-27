@@ -596,6 +596,54 @@ describe("groq", () => {
     expect(result?.retryable).toBe(true)
   })
 
+  // Prod 2026-11-27: `reasoning` (OpenRouter-native) on `free` stopped the chain at Groq, and the
+  // vendors behind it were never asked.
+  test("an unsupported property is Groq's wire, so the chain moves to the next vendor", () => {
+    const result = groq?.classifyFailure(
+      response(400, {
+        body: {
+          error: { message: "property 'reasoning' is unsupported", type: "invalid_request_error" },
+        },
+      }),
+    )
+
+    expect(result?.kind).toBe("invalid-request")
+    expect(result?.signal).toBe("groq:unsupported-field")
+    expect(result?.providerScoped).toBe(true)
+  })
+
+  test("an unsupported property inside a message reads the same", () => {
+    const message =
+      "'messages.2' : for 'role:assistant' the following must be satisfied[('messages.2' : property 'reasoning' is unsupported, did you mean 'role'?)]"
+    const result = groq?.classifyFailure(
+      response(400, { body: { error: { message, type: "invalid_request_error" } } }),
+    )
+
+    expect(result?.signal).toBe("groq:unsupported-field")
+    expect(result?.providerScoped).toBe(true)
+  })
+
+  test("a malformed body is the client's mistake and stops at Groq", () => {
+    const message =
+      "'messages.0' : for 'role:user' the following must be satisfied[('messages.0.content' : value must be a string)]"
+    const result = groq?.classifyFailure(
+      response(400, { body: { error: { message, type: "invalid_request_error" } } }),
+    )
+
+    expect(result?.kind).toBe("invalid-request")
+    expect(result?.signal).toBe("http-status:400")
+    expect(result?.providerScoped).toBeUndefined()
+  })
+
+  test("the wording is read outside quotes only: a client-chosen value cannot fake it", () => {
+    const message = "'property is unsupported' is not a valid model"
+    const result = groq?.classifyFailure(
+      response(400, { body: { error: { message, type: "invalid_request_error" } } }),
+    )
+
+    expect(result?.providerScoped).toBeUndefined()
+  })
+
   test("a rejected key is this account's own problem", () => {
     const result = groq?.classifyFailure(
       response(401, {
