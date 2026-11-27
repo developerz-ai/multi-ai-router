@@ -494,13 +494,28 @@ describe("an overloaded upstream", () => {
     expect(router.reset_at).toBeNull()
   })
 
-  // Parity with the HTTP path: the overloaded verdict reads only a `delay-seconds` retry-after
-  // (`toRouterError`), so a stated date falls to the operator's wait on both transports.
-  test("an HTTP-date retry-after takes the operator's wait, as on the HTTP path", async () => {
+  // The fast path reads both `retry-after` forms (`rate-limit/parse.ts`): a date is converted to
+  // the seconds left against the attempt's clock.
+  test("an HTTP-date retry-after is the wait", async () => {
     const h = fastRouter(
       () =>
         anthropicError(529, "overloaded_error", "Overloaded", {
           "retry-after": new Date(NOW.getTime() + 120_000).toUTCString(),
+        }),
+      { unknownResetRetryAfterSeconds: 47 },
+    )
+    const { response, router } = await ask(h)
+    expect(response.status).toBe(503)
+    expect(router.retry_after_s).toBe(120)
+    expect(response.headers.get("retry-after")).toBe("120")
+    expect(router.reset_at).toBeNull()
+  })
+
+  test("an HTTP-date already past takes the operator's wait", async () => {
+    const h = fastRouter(
+      () =>
+        anthropicError(529, "overloaded_error", "Overloaded", {
+          "retry-after": new Date(NOW.getTime() - 120_000).toUTCString(),
         }),
       { unknownResetRetryAfterSeconds: 47 },
     )
