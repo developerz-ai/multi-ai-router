@@ -905,7 +905,7 @@ answered as `502` or an auth or payment refusal, keeps its status-shaped answer 
 | Out of extra usage, chain not walled | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:extra-usage-gated` | the later of the reading's reset and the stated wait, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
 | A spent plan or model window | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:rate-limited`, `plan-window-spent`, `model-window-spent`, `overage-required` | the later of the reading's reset and the stated wait, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
 | A bare upstream throttle | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:api-status-429` | the later of the reading's reset and the stated wait, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
-| Overloaded (`529`, or `503`) | `503 upstream_overloaded` | `clock` | `account` | `claude-sdk:overloaded` | the upstream's delay-seconds `retry-after` (an HTTP-date is not read, as on the HTTP path), else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`; `reset_at` null |
+| Overloaded (`529`, or `503`) | `503 upstream_overloaded` | `clock` | `account` | `claude-sdk:overloaded` | the upstream's `retry-after`, delay-seconds or an HTTP-date (the seconds left on the attempt's clock; a date already past states no wait), else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`; `reset_at` null |
 
 The upstream's own `retry-after` is read for the verdict alone: it never reaches the account's quota
 reading, so a bare `retry-after` on a throttle cools nothing the breaker would not have cooled. The

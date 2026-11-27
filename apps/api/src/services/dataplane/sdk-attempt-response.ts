@@ -155,7 +155,14 @@ function verdictOf(
   const kind = fast?.classification.kind
   if (fast === undefined || (kind !== "rate-limited" && kind !== "overloaded")) return {}
   const stated = parseRetryAfter(response.headers)
-  const seconds = stated.seconds
+  // The overloaded verdict reads only `retryAfterSeconds` (`toRouterError`), so a stated date is
+  // the seconds left on the attempt's clock. A date already past states no wait, and the
+  // operator's answers.
+  const seconds =
+    stated.seconds ??
+    (kind === "overloaded" && stated.at !== undefined
+      ? positiveSecondsUntil(stated.at, context.now)
+      : undefined)
   const header =
     stated.at ??
     (seconds === undefined ? undefined : new Date(context.now.getTime() + seconds * 1000))
@@ -189,6 +196,12 @@ function verdictOf(
     },
   )
   return verdict === null ? {} : { verdict }
+}
+
+/** Whole seconds from `now` to `at`, or undefined when `at` is not in the future. */
+function positiveSecondsUntil(at: Date, now: Date): number | undefined {
+  const seconds = Math.ceil((at.getTime() - now.getTime()) / 1000)
+  return seconds > 0 ? seconds : undefined
 }
 
 /**
