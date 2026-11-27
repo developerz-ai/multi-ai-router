@@ -12,7 +12,7 @@ import { runSdkAttempt } from "./sdk-attempt"
  * above, the health store, the records, and the relay below are written once — from here down,
  * nothing can tell a re-synthesized SDK `Response` from one relayed off a socket.
  */
-export function dispatch(
+export async function dispatch(
   ctx: ChainContext,
   servable: ServableCandidate,
   body: Uint8Array | null,
@@ -64,10 +64,14 @@ export function dispatch(
   )
   const namesConversation = servable.driver.sessionHeader?.(servable.account.driver) !== undefined
   const streamDeadlines = deadlinesFor(ctx, servable)
-  return runAttempt({
+  let started = false
+  const outcome = await runAttempt({
     plan: servable,
     beforeUpstreamStart,
-    onUpstreamStarted,
+    onUpstreamStarted: () => {
+      onUpstreamStarted?.()
+      started = true
+    },
     method: ctx.request.method,
     clientHeaders: ctx.request.headers,
     body,
@@ -86,6 +90,18 @@ export function dispatch(
     ...(streamDeadlines === undefined ? {} : { stream: streamDeadlines }),
     ...(runtime.silentHold === undefined ? {} : { silentHold: runtime.silentHold }),
   })
+  if (outcome.kind !== "failure") return outcome
+  // Read here, while the attempt still holds its own count: the chain gives it back
+  // (`lifetime.end()`) before the failure line is written, which would leave it out (#509).
+  const inFlight = started ? runtime.health.stateOf(servable.account.id).inFlight : undefined
+  return {
+    ...outcome,
+    evidence: {
+      model: servable.upstreamModel,
+      ...(inFlight === undefined ? {} : { inFlight }),
+      ...(outcome.upstream === null ? {} : { headers: outcome.upstream.headers }),
+    },
+  }
 }
 
 /**

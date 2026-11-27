@@ -169,10 +169,17 @@ export function createFastInvoker(deps: FastInvokerDeps): SdkInvoker {
         reportFastQuota(upstream.headers, input.onRateLimit, {
           requestAttributable: failure.classification.requestAttributable === true,
         })
-        input.onRefusal?.(failure)
+        // Still holding its slot, so the count includes it; the real headers exist only here (#509).
+        const inFlight = deps.concurrency.inFlightFor(input.accountId)
+        input.onRefusal?.(failure, { inFlight, headers: upstream.headers })
         return response
       }
       input.beforeUpstreamStart?.()
+      input.onTransport?.({
+        transport: "fast",
+        model: contextTag ? model.slice(0, -4) : model,
+        ...(prepared.scrubRules === undefined ? {} : { scrubRules: prepared.scrubRules }),
+      })
       input.onUpstreamStarted?.()
       const native = prepared.nativeSchema
       let outcome = await send(prepared, native === undefined ? undefined : nativeTimeoutMs)

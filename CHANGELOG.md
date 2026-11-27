@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `429 account_at_capacity` (wall `clock`, scope `pool`, `signal: account-at-capacity`, `Retry-After` 30 s from `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): the request waited the budget at its account gate. The replica's ceiling refusing is the existing `503 no_healthy_account` with wall `capacity`, scope `router`, `signal: router-at-capacity`. Behaviour is pinned by `apps/api/test/integration/claude-account-full.test.ts`.
 
+- The `upstream attempt failed` log line carries refusal evidence for every provider (#509): `inFlight` (the account's in-flight count with the refused request included; Claude fast `refuse()` and HTTP drivers only), `transport` (`fast` or `sdk`, the Claude invoker that produced the outcome), `model` (the model sent upstream), `upstreamRequestId`, `retryAfter` and `rateLimitHeaders` (the upstream's own headers, tokens-limiter values logged `[REDACTED]`), and `scrubRules` (the harness-fingerprint rules that changed the system prompt). A field that does not apply is absent. No prompt text, credential or routing decision changes. Spec: `docs/idea/08-observability.md`.
+
 ### Fixed
 
 - The request wall (`400`, `wall: request`) names the refusal that ended it in `error.router.signal` (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`) on both Claude transports; it was `null`. Pinned by `apps/api/test/integration/claude-fast-refusal-envelope.test.ts` and `claude-sdk-refusal-envelope.test.ts`.

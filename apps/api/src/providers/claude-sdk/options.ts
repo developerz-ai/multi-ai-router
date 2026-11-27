@@ -8,7 +8,7 @@ import type {
 import { isPermittedTool, PERMITTED_TOOLS, toolDenial } from "./allowlist"
 import { workspaceDir } from "./config-dir"
 import { QUERY_ENV_OVERRIDES, subprocessEnv } from "./env"
-import { scrubSystemPrompt } from "./scrub"
+import { type ScrubRuleName, scrubSystemPromptWithReport } from "./scrub"
 import type { SessionPlan } from "./session"
 import type { Passthrough } from "./tools"
 
@@ -122,6 +122,11 @@ export interface QueryLaunch {
   abort(reason?: unknown): void
   /** Drops the bridge without aborting. Call once the query has ended, or the signal retains us. */
   detach(): void
+  /**
+   * The scrub rules that changed the system prompt sent, for the attempt-failed line (#509).
+   * Absent when no system prompt was passed, so the scrub never ran.
+   */
+  readonly scrubRules?: readonly ScrubRuleName[]
 }
 
 export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
@@ -133,6 +138,7 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
 
   const detach = (): void => input.signal.removeEventListener("abort", onAbort)
 
+  const system = systemPromptOption(input.systemPrompt)
   const options: Options = {
     ...isolatedOptions({ ...input, controller }),
     model: input.model,
@@ -142,7 +148,7 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
     // assembled from the same events — one renderer, not one per response shape.
     includePartialMessages: true,
     ...(input.onStderr === undefined ? {} : { stderr: input.onStderr }),
-    ...systemPromptOption(input.systemPrompt),
+    ...system.option,
     ...(input.thinking == null ? {} : { thinking: input.thinking }),
     ...(input.effort == null ? {} : { effort: input.effort }),
     ...sessionOptions(input.session, input.busySessionFork === true),
@@ -158,6 +164,7 @@ export function createQueryLaunch(input: QueryLaunchInput): QueryLaunch {
       controller.abort(reason)
     },
     detach,
+    ...(system.rules === undefined ? {} : { scrubRules: system.rules }),
   }
 }
 
@@ -235,12 +242,18 @@ export function isolatedOptions(input: {
  * system prompt does: the SDK's default is *no* system prompt, and an empty one is a different
  * thing to send.
  */
-function systemPromptOption(prompt: string | readonly string[] | undefined): Partial<Options> {
-  if (prompt === undefined) return {}
-  const scrubbed = scrubSystemPrompt(prompt)
-  if (scrubbed === null) return {}
+function systemPromptOption(prompt: string | readonly string[] | undefined): {
+  readonly option: Partial<Options>
+  readonly rules?: readonly ScrubRuleName[]
+} {
+  if (prompt === undefined) return { option: {} }
+  const { prompt: scrubbed, rules } = scrubSystemPromptWithReport(prompt)
+  if (scrubbed === null) return { option: {}, rules }
   // The SDK takes a mutable array; ours is readonly, and a copy is cheaper than widening the type.
-  return { systemPrompt: typeof scrubbed === "string" ? scrubbed : [...scrubbed] }
+  return {
+    option: { systemPrompt: typeof scrubbed === "string" ? scrubbed : [...scrubbed] },
+    rules,
+  }
 }
 
 /**
