@@ -1,6 +1,8 @@
-import { InvalidRequestError } from "@multi-ai-router/core"
+import { InvalidRequestError, type RouterError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import type { RateLimitSignal, SdkFailure, SdkInvocation } from "../../providers"
+import { toRouterError } from "../../providers/failure/router-error"
+import { parseRetryAfter } from "../../providers/rate-limit/parse"
 import { type AttemptOutcome, failoverKind } from "./attempt"
 import type { SdkAttemptInput } from "./sdk-attempt"
 /**
@@ -72,15 +74,23 @@ export function releasingWith(response: Response, release: () => void): Response
  * the account's and cooled it (prod 2026-11-20, `claude-sdk:extra-usage-gated`). When that
  * classification is `invalid-request`, the attempt also gets a router verdict: the fast body is
  * only a sentence the router wrote, so it is rendered as the router's own `InvalidRequestError`,
- * which carries `error.router` with `wall: "request"`. Every other kind keeps its status-shaped
- * verdict: handing it to `classification` would render it through `toRouterError` instead
- * (`chain-error.ts`) and change what the client reads for a `429`, `401` or `402`.
+ * which carries `error.router` with `wall: "request"`. A `rate-limited` or `overloaded` refusal is
+ * rendered the same way, through `toRouterError`, so the client reads the router's own `429` or
+ * `503` with its `Retry-After` instead of a relayed sentence the router wrote (#508). Every other
+ * kind keeps its status-shaped verdict: handing it to `classification` would render it through
+ * `toRouterError` instead (`chain-error.ts`) and change what the client reads for a `401` or `402`.
+ *
+ * The refusal's own `retry-after` is read for this verdict alone, by the HTTP path's parser
+ * (`rate-limit/parse.ts`). It is never passed to `onRateLimit` (`rateLimitCapture`), so it does not
+ * reach the account's quota reading.
  */
 export async function errorResponseFailure(
   response: Response,
   rateLimit: RateLimitSignal | null,
   /** What the transport said of this very answer (`SdkInvocation.onRefusal`). */
   fast?: SdkFailure,
+  /** The attempt's clock and the operator's wait for a refusal that names none, for the verdict. */
+  verdictContext: VerdictContext = { now: new Date() },
 ): Promise<AttemptOutcome> {
   const reset = fast?.classification.rateLimit
   const refusal = fast?.classification.kind === "invalid-request" ? fast : undefined
@@ -100,6 +110,7 @@ export async function errorResponseFailure(
       // Router-authored (docs/idea/07-security.md): the SDK body is relayed as an *upstream*
       // answer where relaying is safe, but this sentence is what a router-shaped error renders.
       message: fast?.clientMessage ?? "the Claude Agent SDK turn ended in an upstream error",
+      ...(fast === undefined ? {} : { signal: fast.classification.signal }),
       ...(fast?.classification.requestAttributable === true ? { requestAttributable: true } : {}),
       ...(fast?.classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
       // A window that meters one model family holds that model, not the account.
@@ -119,13 +130,99 @@ export async function errorResponseFailure(
     ...(fast?.classification.message === undefined
       ? {}
       : { upstreamMessage: fast.classification.message }),
-    ...(refusal === undefined
-      ? {}
-      : {
-          verdict: new InvalidRequestError(refusal.clientMessage, {
-            detail: { scope: "account", signal: refusal.classification.signal },
-          }),
-        }),
+    ...verdictOf(refusal, fast, response, rateLimit, verdictContext),
+  }
+}
+
+export interface VerdictContext {
+  readonly now: Date
+  readonly unknownResetRetryAfterSeconds?: number
+}
+
+function verdictOf(
+  refusal: SdkFailure | undefined,
+  fast: SdkFailure | undefined,
+  response: Response,
+  rateLimit: RateLimitSignal | null,
+  context: VerdictContext,
+): { readonly verdict?: RouterError } {
+  if (refusal !== undefined)
+    return {
+      verdict: new InvalidRequestError(refusal.clientMessage, {
+        detail: { scope: "account", signal: refusal.classification.signal },
+      }),
+    }
+  const kind = fast?.classification.kind
+  if (fast === undefined || (kind !== "rate-limited" && kind !== "overloaded")) return {}
+  const stated = parseRetryAfter(response.headers)
+  // The overloaded verdict reads only `retryAfterSeconds` (`toRouterError`), so a stated date is
+  // the seconds left on the attempt's clock. A date already past states no wait, and the
+  // operator's answers.
+  const seconds =
+    stated.seconds ??
+    (kind === "overloaded" && stated.at !== undefined
+      ? positiveSecondsUntil(stated.at, context.now)
+      : undefined)
+  const header =
+    stated.at ??
+    (seconds === undefined ? undefined : new Date(context.now.getTime() + seconds * 1000))
+  // The classification's own reading when it has one. A model-scoped refusal without one (the text
+  // rule `claude-sdk:model-window-spent`, which names no reset) never takes the account's: that
+  // reading is another window, so the model hold waits for the stated retry-after, else the
+  // operator's wait. The reading is merged here and the classification's copy cleared, because
+  // `toRouterError` reads the classification's reading ahead of `context.signal`, and would
+  // otherwise drop the stated wait.
+  const reading =
+    fast.classification.rateLimit ?? (fast.classification.modelScoped === true ? null : rateLimit)
+  const verdict = toRouterError(
+    { ...fast.classification, rateLimit: null },
+    {
+      // A header the upstream stated is a reading for this verdict alone (see the note above).
+      signal:
+        header === undefined
+          ? reading
+          : {
+              limited: false,
+              windows: [],
+              ...reading,
+              ...(seconds === undefined ? {} : { retryAfterSeconds: seconds }),
+              ...winningReset(header, stated.at !== undefined, reading),
+            },
+      now: context.now,
+      ...(context.unknownResetRetryAfterSeconds === undefined
+        ? {}
+        : { unknownResetRetryAfterSeconds: context.unknownResetRetryAfterSeconds }),
+      clientMessage: fast.clientMessage,
+    },
+  )
+  return verdict === null ? {} : { verdict }
+}
+
+/** Whole seconds from `now` to `at`, or undefined when `at` is not in the future. */
+function positiveSecondsUntil(at: Date, now: Date): number | undefined {
+  const seconds = Math.ceil((at.getTime() - now.getTime()) / 1000)
+  return seconds > 0 ? seconds : undefined
+}
+
+/**
+ * The later of the reading's reset and the header's, as `latestResetDeadline` keeps, labelled by
+ * whichever won: the header is a reset the upstream stated, so it is `provider-reported` whatever
+ * the reading says of itself. A reading that names no blocking reset calls itself `unknown`
+ * (`quota-buckets.ts`). Only a reading whose own reset wins keeps its own source.
+ */
+function winningReset(
+  header: Date,
+  headerIsInstant: boolean,
+  reading: RateLimitSignal | null,
+): Pick<RateLimitSignal, "resetsAt" | "resetSource"> {
+  const own = reading?.resetsAt
+  if (reading !== null && own !== undefined && own > header)
+    return { resetsAt: own, resetSource: reading.resetSource }
+  // A delay-seconds header reaches the deadline through `retryAfterSeconds`; only a date replaces
+  // the reading's instant.
+  return {
+    ...(headerIsInstant ? { resetsAt: header } : {}),
+    resetSource: "provider-reported",
   }
 }
 

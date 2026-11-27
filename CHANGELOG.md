@@ -17,7 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `upstream attempt failed` log line carries refusal evidence for every provider (#509): `inFlight` (the account's in-flight count with the refused request included; Claude fast `refuse()` and HTTP drivers only), `transport` (`fast` or `sdk`, the Claude invoker that produced the outcome), `model` (the model sent upstream), `upstreamRequestId`, `retryAfter` and `rateLimitHeaders` (the upstream's own headers, tokens-limiter values logged `[REDACTED]`), and `scrubRules` (the harness-fingerprint rules that changed the system prompt). A field that does not apply is absent. No prompt text, credential or routing decision changes. Spec: `docs/idea/08-observability.md`.
 
+### Fixed
+
+- The request wall (`400`, `wall: request`) names the refusal that ended it in `error.router.signal` (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`) on both Claude transports; it was `null`. Pinned by `apps/api/test/integration/claude-fast-refusal-envelope.test.ts` and `claude-sdk-refusal-envelope.test.ts`.
+
 ### Changed
+
+- A Claude subscription's fast-transport refusals the router words itself, of the kinds below, now carry `error.router`, rendered through the same mapping the Agent-SDK path uses (developerz-ai/multi-ai-router#508). A spent plan or model window, a bare upstream throttle and an out-of-extra-usage refusal answer `429 quota_exhausted` (wall `clock`, scope `account`, `signal` the classifier's token, `Retry-After` and `reset_at` the later of the reading's reset and the upstream's stated `retry-after`; when neither names one, `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` sets only `Retry-After` and `retry_after_s`, and `reset_at` stays `null`). Only the `invalid-request`, `rate-limited` and `overloaded` kinds carry the envelope: any other rewritten refusal (a server error relayed as `502`, an auth or payment refusal) keeps its status and the router's sentence with no `error.router`. The upstream's `Retry-After` is no longer forwarded for these; the envelope's own replaces it. An upstream's own error body stays relayed unchanged.
+
+- A Claude subscription's overloaded answer (`529`, or the `503` beside it) is now `503 upstream_overloaded` with `Retry-After`, on both Claude transports, where it was an envelope-less `529`. The `claude-sdk:overloaded` rule's kind changes from `server-error` to `overloaded`: it is no longer a breaker strike, it gets the overload wait, and a recovery probe that reads it settles uncertain instead of striking, as an HTTP driver's `529` already does. `failureKind` in the audit detail and the Test now response reads `overloaded`.
 
 - The rule "a router-made `429` while an eligible account is in scope is a bug" (`CLAUDE.md`) is narrowed, with the owner's authorization (developerz-ai/developerz.ai#10277), to allow this one capacity answer after the bounded gate wait. The `concurrency.ts` header and `docs/clients.md` no longer say a capacity wait never fails a request.
 

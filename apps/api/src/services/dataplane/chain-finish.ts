@@ -26,7 +26,12 @@ export function finishChain(
   failIfRefused(held, lastFailure)
   // A request wall is the request's own: never a `429` a retry would hit again.
   if (ending.requestWall === true && lastFailure !== null)
-    throw new InvalidRequestError(lastFailure.message)
+    throw new InvalidRequestError(lastFailure.message, {
+      detail: {
+        scope: "request",
+        ...(lastFailure.signal === undefined ? {} : { signal: lastFailure.signal }),
+      },
+    })
   if (held !== null) {
     if (held.kind === "router") throw held.error
     const relayed = relayUpstreamError(held.upstream, held.dialect)

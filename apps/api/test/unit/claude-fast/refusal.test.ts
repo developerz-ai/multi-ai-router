@@ -172,7 +172,7 @@ describe("an error frame inside a 200, to a client still owed its whole answer",
     )
 
   for (const [type, status, kind] of [
-    ["overloaded_error", 529, "server-error"],
+    ["overloaded_error", 529, "overloaded"],
     ["rate_limit_error", 429, "rate-limited"],
     ["invalid_request_error", 400, "invalid-request"],
     ["a_type_nobody_named", 502, "server-error"],

@@ -93,6 +93,7 @@ export function invocationFailure(
       // Router-authored: this is the sentence a client reads when no account could serve, and the
       // SDK's own wording never becomes one (docs/idea/07-security.md).
       message: clientMessage,
+      signal: classification.signal,
       ...(classification.requestAttributable === true ? { requestAttributable: true } : {}),
       ...(classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
       ...(classification.modelScoped === true ? { modelScoped: true } : {}),

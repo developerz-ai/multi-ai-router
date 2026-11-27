@@ -259,7 +259,7 @@ up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total. The two answers a f
 
 | Status | `code` | `error.router.wall` | Meaning | Retry? |
 |---|---|---|---|---|
-| `400` | `invalid_request` (also an unknown `x-router-usage` value), `translation_failed` | `request` | The request is wrong, or cannot be translated faithfully into the account's dialect. Also the answer when two or more accounts in one chain refuse the request itself (e.g. a Claude subscription's "Extra Usage" gate): the request, not the pool, is the problem — never a `429` | No. Change the request |
+| `400` | `invalid_request` (also an unknown `x-router-usage` value), `translation_failed` | `request` | The request is wrong, or cannot be translated faithfully into the account's dialect. Also the answer when two or more accounts in one chain refuse the request itself (e.g. a Claude subscription's "Extra Usage" gate), or when the one account refuses it permanently: the request, not the pool, is the problem — never a `429`. `error.router.signal` names the refusal that ended the walk (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`) | No. Change the request |
 | `400` | relayed upstream refusal | none | The upstream refused the request. Its own words, relayed | No. A bad request is bad at every account |
 | `400` | `context_length_exceeded` (OpenAI shape) / `prompt is too long: …` (Anthropic shape) | none | The prompt does not fit the context window, whatever status the upstream used | Compact the transcript, then retry |
 | `401` | `key_revoked` | `human` | Router key revoked, unknown, expired, malformed or missing, or Bearer and `x-api-key` disagree | No. Ask the operator |
@@ -275,7 +275,7 @@ up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total. The two answers a f
 | `500` | none | `internal` | Unexpected router failure. The detail is logged, not returned | Once, with backoff |
 | `502` | `upstream_auth_failed` | `human` | Every candidate's upstream rejected the router's own credential. Your key is fine | No. The operator re-authenticates an account |
 | `502` | `translation_protocol_error` | `internal` | A non-streamed cross-dialect answer could not be translated faithfully (e.g. an upstream tool call whose `arguments` are not a JSON object). Never relayed as a tool call with `input: {}`. `retryable: false` | No automatic retry; the same request usually reproduces it. Report it |
-| `503` | `upstream_overloaded` | `clock` | The provider's shared backend is busy. Has `Retry-After` (the upstream's own value, or 30 s) | Yes, after `Retry-After` |
+| `503` | `upstream_overloaded` | `clock` | The provider's shared backend is busy. Has `Retry-After`: the upstream's own delay-seconds value (an HTTP-date is not read, except on a Claude subscription's fast transport, which reads delay-seconds or an HTTP-date), else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`, 30 s by default. Wait the `Retry-After` header (`error.router.retry_after_s`) the response carries, not a fixed 30 s. A Claude subscription's `529` answers this too (through 2.80.0 it was an envelope-less `529`), with `signal: claude-sdk:overloaded` | Yes, after `Retry-After` |
 | `503` | `key_verification_unavailable` | `capacity` | Key verification is briefly busy, or the router's database is unreachable and your key has no recently verified copy in memory (a warm key keeps working through a short outage). `Retry-After: 1` | Yes, a bounded number of times |
 | `503` | `no_healthy_account` | `capacity`, `human` or `scope` | Nothing in scope can serve. When **every attempt failed on capacity** (overloaded, server error, connection, timeout) it has `Retry-After` (and `error.router.retry_after_s`): the soonest account cooldown, or 30 s when unknown. Other `capacity` endings carry no `Retry-After`. The ending `scope: router`, `signal: router-at-capacity` is the replica's ceiling (`CLAUDE_SDK_MAX_CONCURRENCY`) refusing; it carries `Retry-After` (30 s by default) and is `retryable`. `human` (accounts disabled or needing re-auth) and `scope` (no account serves this operation) never carry one and will not clear on a retry | When `retryable` is `true`: after `Retry-After` if present, else bounded exponential backoff |
 | `503` | `router_shutdown`, `request_admission_unavailable` | `capacity` | The router is restarting, or its request admission is closed or full. No `Retry-After` | Yes, after a few seconds with backoff. A restart usually takes seconds |
@@ -283,8 +283,14 @@ up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total. The two answers a f
 
 Any other `4xx`/`5xx` that an upstream sends and the router relays keeps the upstream's status and
 its words, translated into your dialect when the account speaks another one. A relayed error has no
-`error.router`, except a Claude subscription's fast-transport refusal, which is rendered as the
-router's own `invalid_request` (`wall: request`, `scope: account`). The `x-router-*` headers below still name the account that said it.
+`error.router`, except these Claude subscription fast-transport refusals, whose body is a sentence
+the router wrote and which are rendered as the router's own error: an `invalid-request` refusal and
+the request wall as `invalid_request` (`wall: request`), a `rate-limited` refusal as
+`quota_exhausted`, and an `overloaded` one as `upstream_overloaded` (both `wall: clock`, `scope: account`,
+`signal` the classifier's token, `Retry-After` the router's own). Only those kinds: any other
+fast-transport refusal the router rewords (a server error answered as `502`, an auth or payment
+refusal) keeps its status and the router's sentence with no `error.router`, so handle a rewritten
+error without one. A relayed error's `x-router-*` headers below name the account that said it.
 
 During a restart, a request can also fail before it reaches the router, depending on what sits in
 front of it: connection refused, or a `502`/`503` from your ingress with no JSON body. Treat these

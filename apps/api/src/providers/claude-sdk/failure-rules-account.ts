@@ -87,12 +87,14 @@ export const SDK_ACCOUNT_FAILURE_RULES: readonly SdkRule[] = [
   },
   {
     // Anthropic's own overload answer (`529`, and the `503` beside it), which the SDK reports as
-    // `api_error_status` once it has retried and given up. Retryable on the next account — an
-    // overload is about the upstream, not this credential — and answered with Anthropic's code
-    // so a coding agent's retry policy reads it as the transient it is. Before this rule it fell
-    // to `unknown`, which is *not* retryable: one overloaded answer failed the request outright
-    // with four healthy accounts unasked.
-    kind: "server-error",
+    // `api_error_status` once it has retried and given up. Retryable on the next account, and
+    // blameless: an overload is about the upstream's shared backend, not this credential, so no
+    // breaker strike and the overload wait applies. The client reads `503 upstream_overloaded`
+    // with a `Retry-After`, as it does for an HTTP driver's overload (`router-error.ts`); the
+    // classification keeps Anthropic's own `529`. Before this rule it fell to `unknown`, which is
+    // *not* retryable: one overloaded answer failed the request outright with four healthy
+    // accounts unasked.
+    kind: "overloaded",
     signal: "claude-sdk:overloaded",
     status: 529,
     clientMessage: "the upstream is overloaded; retry shortly",
