@@ -249,7 +249,7 @@ failure (for example a `429`, a `5xx`, a timeout, a refused credential) fails ov
 account: a terminal error, such as an upstream `4xx` that is not flagged as account- or
 vendor-specific (a bad request is bad at every account), ends the walk at the account that returned
 it, and the client gets the chain's highest-ranked held answer (an earlier `429` `quota_exhausted`
-or `account_at_capacity` outranks a relayed upstream `4xx`, unless a recovering account was refused for its recovery permit in the same walk: a held `429` then becomes the awaiting-recovery-permit `429`; see the `RECOVERY_REQUEST_WAIT_MS` row of the timeouts table). Further limits end a walk of retryable
+or `account_at_capacity` outranks a relayed upstream `4xx`, unless a recovering account was refused for its recovery permit in the same walk: a held `429` then becomes the `429 quota_exhausted` with signal `awaiting-recovery-permit`; see the `RECOVERY_REQUEST_WAIT_MS` row of the timeouts table). Further limits end a walk of retryable
 failures early: the request wall, a full replica (which ends the walk over Claude subscription
 accounts, below), and with a `ROUTING_MAX_ATTEMPTS` of 1 a failed first attempt leaves
 its eligible siblings untried. A Claude subscription request queues for a slot at the shared Claude concurrency gate (fast-mode and Agent-SDK turns alike) for
@@ -257,7 +257,7 @@ up to `CLAUDE_SDK_QUEUE_WAIT_MS` (60 s by default) in total, then tries the next
 account stayed at its in-flight limit through the wait and nothing could serve the request, the
 answer is `429 account_at_capacity`, unless a higher-or-equal-ranked answer from another candidate
 wins (for example another account's `quota_exhausted` with a sooner retry, a request wall `400`, or
-an awaiting-recovery-permit `429`). When the replica's own ceiling refused a candidate, the remaining Claude
+a `429 quota_exhausted` with signal `awaiting-recovery-permit`). When the replica's own ceiling refused a candidate, the remaining Claude
 accounts are not asked (an account of another kind still is). When only the replica's ceiling
 refused, the answer is `503 no_healthy_account` with signal `router-at-capacity`; a higher-ranked
 answer from another candidate (an account at its limit, or a relayed upstream answer) wins over it. Either
@@ -323,7 +323,7 @@ The OpenAI dialects use the same object: `{"error":{"message":…,"type":…,"pa
 | `reset_at`, `reset_source` | A `429`'s refill instant and whether it was `provider-reported`, `estimated` or `unknown` |
 | `scope` | Who the verdict is about: `pool`, `account`, `session`, `key`, `request`, `router` |
 | `accounts`, `pools` | Opaque account references (`acct_…`) and pool names, for the operator |
-| `signal` | The machine token that decided it (`anthropic:rate_limit_error`, `cooling-down`, `account-at-capacity`, `router-at-capacity`, …) |
+| `signal` | The machine token that decided it (`anthropic:rate_limit_error`, `cooling-down`, `account-at-capacity`, `router-at-capacity`, `awaiting-recovery-permit`, …) |
 | `attempts`, `request_id` | Candidates attempted, and the id to quote to the operator. It counts a candidate refused by the router's own Claude gate (`account-at-capacity`, `router-at-capacity`) before any upstream was contacted, so it can exceed the number of upstream calls made |
 | `reconnect` | Accounts in your scope that lost their login and must be reconnected by a router admin, as `{account, label, provider, url}` (`url` is the console's Accounts page, `null` without `PUBLIC_URL`); `[]` when none. The message ends with the same instruction in words, so relay it to your human |
 

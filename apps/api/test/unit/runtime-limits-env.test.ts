@@ -132,6 +132,10 @@ test("CLAUDE_SDK_QUEUE_WAIT_MS refusal names D and its knob below the 240000 cap
   expect(() => parseEnv(deadlines("400000", "3600000"))).toThrow(
     /300000 must be at most 200000.*deadline of 400000 ms \(set by UPSTREAM_TIMEOUT_MS\)/s,
   )
+  // One ms under the cap's D: the ceiling is floor(479999 / 2) = 239999, so D and its knob are named.
+  expect(() => parseEnv(deadlines("479999", "3600000"))).toThrow(
+    /300000 must be at most 239999.*deadline of 479999 ms \(set by UPSTREAM_TIMEOUT_MS\)/s,
+  )
   for (const [attempt, stream] of [
     ["480000", "3600000"],
     ["3600000", "480000"],

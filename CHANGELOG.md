@@ -21,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `x-router-attempts` and `error.router.attempts` now count a candidate the router's own gate refused before an upstream was contacted, so they can exceed the number of upstream calls made (see `docs/clients.md`).
 
-
 ## [2.80.0] — 2026-11-26
 
 ### Fixed
