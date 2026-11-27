@@ -15,7 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `429 account_at_capacity` (wall `clock`, scope `pool`, `signal: account-at-capacity`, `Retry-After` 30 s from `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): the request waited the budget at its account gate. The replica's ceiling refusing is the existing `503 no_healthy_account` with wall `capacity`, scope `router`, `signal: router-at-capacity`. Behaviour is pinned by `apps/api/test/integration/claude-account-full.test.ts`.
 
+### Fixed
+
+- The request wall (`400`, `wall: request`) names the refusal that ended it in `error.router.signal` (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`) on both Claude transports; it was `null`. Pinned by `apps/api/test/integration/claude-fast-refusal-envelope.test.ts` and `claude-sdk-refusal-envelope.test.ts`.
+
 ### Changed
+
+- A Claude subscription's fast-transport refusals the router words itself now carry `error.router`, rendered through the same mapping the Agent-SDK path uses (developerz-ai/multi-ai-router#508). A spent plan or model window, a bare upstream throttle and an out-of-extra-usage refusal answer `429 quota_exhausted` (wall `clock`, scope `account`, `signal` the classifier's token, `Retry-After` and `reset_at` from the account's quota reading, or the upstream's own `retry-after` for a bare throttle, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`). The upstream's `Retry-After` is no longer forwarded for these; the envelope's own replaces it. An upstream's own error body stays relayed unchanged.
+
+- A Claude subscription's overloaded answer (`529`, or the `503` beside it) is now `503 upstream_overloaded` with `Retry-After`, on both Claude transports, where it was an envelope-less `529`. The `claude-sdk:overloaded` rule's kind changes from `server-error` to `overloaded`: it is no longer a breaker strike, it gets the overload wait, and a recovery probe or `cooldown_recheck` that reads it settles uncertain instead of striking, as an HTTP driver's `529` already does. `failureKind` in the audit detail and the Test now response reads `overloaded`.
 
 - The rule "a router-made `429` while an eligible account is in scope is a bug" (`CLAUDE.md`) is narrowed, with the owner's authorization (developerz-ai/developerz.ai#10277), to allow this one capacity answer after the bounded gate wait. The `concurrency.ts` header and `docs/clients.md` no longer say a capacity wait never fails a request.
 

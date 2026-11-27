@@ -58,6 +58,8 @@ export interface SdkAttemptInput {
   }
   /** Stamps a `rate_limit_event` reading. Unused when `quota` is undefined. Defaults to the clock. */
   readonly now?: () => Date
+  /** The wait a refusal that names none is answered with (`ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`). */
+  readonly unknownResetRetryAfterSeconds?: number
   readonly beforeUpstreamStart?: UpstreamStartGuard
   readonly onUpstreamStarted?: () => void
   readonly timeoutMs: number
@@ -188,7 +190,12 @@ export async function runSdkAttempt(input: SdkAttemptInput): Promise<AttemptOutc
     clocks?.release()
     turn.release("failed")
     try {
-      return await errorResponseFailure(response, rateLimit.signal(), refusal)
+      return await errorResponseFailure(response, rateLimit.signal(), refusal, {
+        now: input.now?.() ?? new Date(),
+        ...(input.unknownResetRetryAfterSeconds === undefined
+          ? {}
+          : { unknownResetRetryAfterSeconds: input.unknownResetRetryAfterSeconds }),
+      })
     } finally {
       rateLimit.close()
     }

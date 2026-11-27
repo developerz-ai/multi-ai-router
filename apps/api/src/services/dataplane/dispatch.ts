@@ -36,6 +36,9 @@ export function dispatch(
       session: runtime.session,
       quota: runtime.quota,
       now: runtime.clock.now,
+      ...(runtime.unknownResetRetryAfterSeconds === undefined
+        ? {}
+        : { unknownResetRetryAfterSeconds: runtime.unknownResetRetryAfterSeconds }),
       timeoutMs: runtime.timeoutMs,
       ...(runtime.gateWait === undefined ? {} : { gateWait: runtime.gateWait() }),
       ...(ctx.streamRequested === true && runtime.sdkStreamDeadlines !== undefined

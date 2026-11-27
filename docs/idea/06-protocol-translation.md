@@ -889,12 +889,28 @@ upstream broke after its first byte (below). Additive: the sentence is unchanged
 `test/unit/errors/frozen-sentences.test.ts` until developerz.ai reads this object alone. Not on an
 upstream's own error the router relays — those are the provider's words, in-stream or not — nor on
 a translator's rendering of one, nor on the HTML sign-in callback pages; the `x-router-*` headers
-below name the account. One relayed refusal does carry it: a Claude subscription's fast-transport
-`invalid-request` (an upstream `400`/`413`/`422`, 2.55.0). That body never holds the provider's own
-words, because `claude-fast/response.ts` replaces them with a router sentence. So it is rendered as the
-router's own `InvalidRequestError`, in every dialect: `wall: request`, `scope: account`, and `signal`
-set to the classifier's token (e.g. `claude-sdk:api-status-400`). Anthropic's scrubbed text goes to the
-attempt log as `upstreamMessage` and nowhere else.
+below name the account. The Claude subscription fast transport's refusals do carry it, because that
+body never holds the provider's own words: `claude-fast/response.ts` replaces them with a router
+sentence. So each is rendered as the router's own error, in every dialect, through the same
+`toRouterError` mapping the Agent-SDK path uses for the same rule. Anthropic's scrubbed text goes to the
+attempt log as `upstreamMessage` and nowhere else. The classes (an upstream's own error body stays
+byte-faithful and envelope-less):
+
+| Refusal | Answer | `wall` | `scope` | `signal` | `Retry-After` |
+|---|---|---|---|---|---|
+| `invalid-request` (an upstream `400`/`413`/`422`, 2.55.0) | `400 invalid_request` | `request` | `account` | the classifier's token (e.g. `claude-sdk:api-status-400`) | none |
+| The request wall: a permanent refusal on a one-account chain, or two request-attributable refusals in one chain | `400 invalid_request` | `request` | `request` | the walled refusal's own token (`claude-sdk:extra-usage-gated`, `claude-sdk:structured-output-unsupported`); both transports | none |
+| Out of extra usage, chain not walled | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:extra-usage-gated` | the reading's reset, else the stated wait |
+| A spent plan or model window | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:rate-limited`, `plan-window-spent`, `model-window-spent`, `overage-required` | the reset the quota headers name |
+| A bare upstream throttle | `429 quota_exhausted` | `clock` | `account` | `claude-sdk:api-status-429` | the upstream's `retry-after` (`reset_at` is now plus that, source `provider-reported`), else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS` |
+| Overloaded (`529`, or `503`) | `503 upstream_overloaded` | `clock` | `account` | `claude-sdk:overloaded` | the upstream's `retry-after`, else `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`; `reset_at` null |
+
+The upstream's own `retry-after` is read for the verdict alone: it never reaches the account's quota
+reading, so a bare `retry-after` on a throttle cools nothing the breaker would not have cooled. The
+router no longer forwards the upstream's `Retry-After` for these classes; the envelope's own header
+replaces it. Two rows share `claude-sdk:extra-usage-gated`: a client tells them apart by `wall`
+(`request`: change the request; `clock`: wait). Still relayed envelope-less: `401`/`403`, `402`, the `404`
+model rows and the `502` rows.
 
 **A stream that broke after its first byte** (an upstream reset, its idle deadline, the router
 shutting down) cannot fail over, so it ends with one router event and a clean close

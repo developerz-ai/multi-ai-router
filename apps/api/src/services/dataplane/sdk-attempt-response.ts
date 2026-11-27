@@ -1,6 +1,7 @@
-import { InvalidRequestError } from "@multi-ai-router/core"
+import { InvalidRequestError, type RouterError } from "@multi-ai-router/core"
 import type { Logger } from "../../logging/logger"
 import type { RateLimitSignal, SdkFailure, SdkInvocation } from "../../providers"
+import { toRouterError } from "../../providers/failure/router-error"
 import { type AttemptOutcome, failoverKind } from "./attempt"
 import type { SdkAttemptInput } from "./sdk-attempt"
 /**
@@ -72,15 +73,23 @@ export function releasingWith(response: Response, release: () => void): Response
  * the account's and cooled it (prod 2026-11-20, `claude-sdk:extra-usage-gated`). When that
  * classification is `invalid-request`, the attempt also gets a router verdict: the fast body is
  * only a sentence the router wrote, so it is rendered as the router's own `InvalidRequestError`,
- * which carries `error.router` with `wall: "request"`. Every other kind keeps its status-shaped
- * verdict: handing it to `classification` would render it through `toRouterError` instead
- * (`chain-error.ts`) and change what the client reads for a `429`, `401` or `402`.
+ * which carries `error.router` with `wall: "request"`. A `rate-limited` or `overloaded` refusal is
+ * rendered the same way, through `toRouterError`, so the client reads the router's own `429` or
+ * `503` with its `Retry-After` instead of a relayed sentence the router wrote (#508). Every other
+ * kind keeps its status-shaped verdict: handing it to `classification` would render it through
+ * `toRouterError` instead (`chain-error.ts`) and change what the client reads for a `401` or `402`.
+ *
+ * The verdict is the only consumer of the refusal's own `retry-after`: it is read into a local
+ * reading and never assigned to `rateLimit`, which `recordChainFailure` feeds to the limiter, so a
+ * bare `retry-after` on a throttle cools nothing it did not already.
  */
 export async function errorResponseFailure(
   response: Response,
   rateLimit: RateLimitSignal | null,
   /** What the transport said of this very answer (`SdkInvocation.onRefusal`). */
   fast?: SdkFailure,
+  /** The attempt's clock and the operator's wait for a refusal that names none, for the verdict. */
+  verdictContext: VerdictContext = { now: new Date() },
 ): Promise<AttemptOutcome> {
   const reset = fast?.classification.rateLimit
   const refusal = fast?.classification.kind === "invalid-request" ? fast : undefined
@@ -100,6 +109,7 @@ export async function errorResponseFailure(
       // Router-authored (docs/idea/07-security.md): the SDK body is relayed as an *upstream*
       // answer where relaying is safe, but this sentence is what a router-shaped error renders.
       message: fast?.clientMessage ?? "the Claude Agent SDK turn ended in an upstream error",
+      ...(fast === undefined ? {} : { signal: fast.classification.signal }),
       ...(fast?.classification.requestAttributable === true ? { requestAttributable: true } : {}),
       ...(fast?.classification.permanentForRequest === true ? { permanentForRequest: true } : {}),
       // A window that meters one model family holds that model, not the account.
@@ -119,14 +129,50 @@ export async function errorResponseFailure(
     ...(fast?.classification.message === undefined
       ? {}
       : { upstreamMessage: fast.classification.message }),
-    ...(refusal === undefined
-      ? {}
-      : {
-          verdict: new InvalidRequestError(refusal.clientMessage, {
-            detail: { scope: "account", signal: refusal.classification.signal },
-          }),
-        }),
+    ...verdictOf(refusal, fast, response, rateLimit, verdictContext),
   }
+}
+
+export interface VerdictContext {
+  readonly now: Date
+  readonly unknownResetRetryAfterSeconds?: number
+}
+
+function verdictOf(
+  refusal: SdkFailure | undefined,
+  fast: SdkFailure | undefined,
+  response: Response,
+  rateLimit: RateLimitSignal | null,
+  context: VerdictContext,
+): { readonly verdict?: RouterError } {
+  if (refusal !== undefined)
+    return {
+      verdict: new InvalidRequestError(refusal.clientMessage, {
+        detail: { scope: "account", signal: refusal.classification.signal },
+      }),
+    }
+  const kind = fast?.classification.kind
+  if (fast === undefined || (kind !== "rate-limited" && kind !== "overloaded")) return {}
+  const stated = Number(response.headers.get("retry-after"))
+  const usable = Number.isFinite(stated) && stated > 0
+  const verdict = toRouterError(fast.classification, {
+    // A header the upstream stated is a reading for this verdict alone (see the note above).
+    signal: usable
+      ? {
+          limited: false,
+          windows: [],
+          ...rateLimit,
+          retryAfterSeconds: stated,
+          resetSource: rateLimit?.resetSource ?? "provider-reported",
+        }
+      : rateLimit,
+    now: context.now,
+    ...(context.unknownResetRetryAfterSeconds === undefined
+      ? {}
+      : { unknownResetRetryAfterSeconds: context.unknownResetRetryAfterSeconds }),
+    clientMessage: fast.clientMessage,
+  })
+  return verdict === null ? {} : { verdict }
 }
 
 /**

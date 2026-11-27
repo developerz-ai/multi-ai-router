@@ -54,6 +54,12 @@ export interface AttemptFailure {
   readonly resetSource?: ResetSource
   readonly message: string
   /**
+   * The classifier token that decided this failure (`claude-sdk:extra-usage-gated`), where the
+   * transport has one. Carried so a chain that ends as the request wall can name the refusal that
+   * ended it in `error.router.signal` (`dataplane/chain-finish.ts`).
+   */
+  readonly signal?: string
+  /**
    * The refusal is provoked by this **request's** content, not by the account (the Agent SDK's
    * `claude-sdk:extra-usage-gated`: an unscrubbed harness preamble every subscription refuses
    * alike). Retryable once, blameless — `breaker.ts` never strikes for it — and a second such
