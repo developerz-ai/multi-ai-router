@@ -194,7 +194,7 @@ describe("requests no account can serve, and upstreams no account can reach", ()
       resultError("service unavailable", 503),
     ]) {
       const { classification } = classifySdkFailure(error)
-      expect(classification.kind).toBe("server-error")
+      expect(classification.kind).toBe("overloaded")
       expect(classification.status).toBe(529)
       expect(classification.retryable).toBe(true)
       expect(classification.signal).toBe("claude-sdk:overloaded")
