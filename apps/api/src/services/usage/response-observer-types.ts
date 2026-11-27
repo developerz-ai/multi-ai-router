@@ -33,6 +33,12 @@ export interface ResponseObservationFacts {
    * measurement at all, which is different from a measured zero (`usage-unread.ts`).
    */
   readonly usageStated: boolean
+  /**
+   * The dollars the upstream itself says it billed (`ResponseObservationDescriptor.reportedCost`),
+   * or null when it stated none this driver trusts. Optional so a hand-built facts object stays
+   * valid; the observer always states it.
+   */
+  readonly reportedCost?: number | null
   readonly evidenceUnavailable: boolean
   /**
    * What the first lost evidence was lost to, or null when none was. Optional so a hand-built facts

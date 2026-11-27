@@ -173,7 +173,7 @@ export class UpstreamOverloadedError extends RetryableRouterError {
  * request. It is the account gate's verdict, not proof that every account was full throughout: a
  * later candidate may have been refused by the replica's own ceiling instead, and this answer
  * outranks that one. `429` plus a `Retry-After`: a clock clears it. The gate refusal itself cools
- * nothing and puts no account out of anything; another account earlier in the same walk may have
+ * nothing and puts no account out of anything; another account in the same walk may have
  * been cooled.
  *
  * The router's own answer while eligible accounts are in scope, by design and by an owner-authorized

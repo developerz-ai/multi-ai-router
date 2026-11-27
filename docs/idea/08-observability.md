@@ -115,8 +115,8 @@ request fact; it never invents an upstream account or a token charge.
 
 ## Cost estimation
 
-A response the router writes (translated, or folded from a forced stream) also states the estimate as
-`usage.cost`, `cost_source` and `cost_basis`; a byte relay cannot, so it states none. See
+A response the router writes (translated, or folded from a forced stream) also states the attempt's
+cost as `usage.cost`, `cost_source` and `cost_basis`; a byte relay cannot, so it states none. See
 [06-protocol-translation.md](06-protocol-translation.md).
 
 What the three fields mean to a client that books them (wire shape:
@@ -124,8 +124,8 @@ What the three fields mean to a client that books them (wire shape:
 
 | Field | Meaning |
 |---|---|
-| `usage.cost` | Dollars this router's price book assigns the attempt that served the answer: the shipped table under the operator's overrides, priced on the upstream model. When the basis is `unknown` all three fields are **absent** (`dataplane/relay-cost.ts`) — never `0` for "nobody knows" |
-| `cost_source` | Always `estimated`: computed from token counts and the price book, never an upstream's invoice line |
+| `usage.cost` | Dollars for the attempt that served the answer, the row's own `cost_estimate`. A rate prices it when one is known — the operator's override first, then the shipped table, on the upstream (post-alias) model; with no rate, the figure the upstream itself reported billing ([below](#a-cost-the-upstream-reports)). When the basis is `unknown` all three fields are **absent** (`dataplane/relay-cost.ts`) — never `0` for "nobody knows". A rate-priced attempt with zero counts states none; a reported `0` is stated |
+| `cost_source` | `estimated` — computed from token counts and a rate (override or shipped). `reported` — the upstream's own statement of what it billed (OpenRouter's `usage.cost`), used only when no rate is known, so an override always shows as `estimated` |
 | `cost_basis` | `metered` — a pay-per-token account; the figure estimates real spend at the book's rate. `notional` — a **subscription** account; the figure is an *attribution* at the vendor's API list price, **not spend**: the subscription's flat fee is the spend. A consumer billing its own customers must not book a `notional` figure as a measured upstream charge |
 
 Which provider served the answer is `x-router-provider`, not the presence of a cost: a client that
@@ -145,7 +145,7 @@ reads as a promise. Every rule names the module that owns it.
 | Every retained row is pinned | Each shipped row's expected card is written out in an independent test file, so a changed rate fails the suite rather than a report |
 | Which model | The **upstream** model, after the Account's alias map — that is the name the upstream billed. A dated snapshot prices as its family, which is how the provider prices the pin; a snapshot the vendor prices apart from its family is named in full in its table, and the exact name is tried first (`services/cost/rates.ts`, `modelLookupKeys`) |
 | Long-context tiers | A tiered model carries a second card that **replaces** the standard card for the *whole request*, not just tokens beyond the threshold. Total prompt is `tokensIn + cacheReadTokens + cacheWriteTokens`, including cache reads and writes. Each vendor table names its own threshold; the selection is the router's implementation convention, not a verbatim vendor-page rule. An **override is deliberately flat**: one written for a tiered model replaces both tiers, which is the operator saying "this is the rate, whatever the prompt" |
-| Override | Operator rates are scoped to an Account or apply to a provider globally. Account exact/family overrides precede provider exact/family overrides, then eligible shipped rates. Account-scoped rows cascade on deletion and never become global. The warm book refresh after a successful settings edit includes a post-commit snapshot before returning. Settings shows unpriced configured upstream models and unknown model catalogs |
+| Override | Operator rates are scoped to an Account or apply to a provider globally. Account exact/family overrides precede provider exact/family overrides, then eligible shipped rates. Account-scoped rows cascade on deletion and never become global. The warm book refresh after a successful settings edit includes a post-commit snapshot before returning. Settings shows unpriced configured upstream models and unknown model catalogs, except for a provider that reports its own cost per response ([below](#a-cost-the-upstream-reports)), which needs no rate (`services/cost/coverage.ts`) |
 | Unknown model | `costEstimate` is null and `costBasis` is `unknown` — never silently zero, never guessed. A family released after the image was built, or an older snapshot the vendor no longer lists, prices as unknown rather than as the nearest thing to it |
 | Priced, no tokens | `0` with a real basis. Zero tokens against a known rate is a measurement, not an admission |
 | Cache rates | A model whose vendor publishes no cached-input price bills cached tokens at the **full input rate** — a discount nobody published is not assumed. A missing cache-*write* price is zero, because every vendor here except Anthropic bills the write as ordinary input on the call that created it, and charging again would double-count it. Anthropic's are derived from the published multiples its pricing page states (read 0.1x, or the footnoted lower multiple; write 1.25x for the 5-minute TTL, 2x for the 1-hour TTL), rather than restated per row. The usage object states the TTL split (`usage.cache_creation.ephemeral_1h_input_tokens`), so a 1-hour write is priced at 2x at estimate time; the split is not persisted — the row keeps one `cacheWriteTokens` counter and its `cost_estimate` already carries the split. A write with no stated split, and any operator override (which has no 1-hour field), prices at the 5-minute rate, so writes read low, never high |
@@ -187,15 +187,36 @@ rather than approximated from a sibling model.
 ### The providers that ship no price
 
 Absent from the table and staying absent, because for each of them a shipped number would be a
-fiction rather than a stale fact. Their attempts report `costBasis: "unknown"`, and the operator's
-own override is the way to price them.
+fiction rather than a stale fact. Their attempts report `costBasis: "unknown"` unless the upstream
+reports its own figure ([below](#a-cost-the-upstream-reports)), and the operator's own override is
+the way to price them.
 
 | Provider | Why no shipped rate |
 |---|---|
-| `openrouter` | The price is whichever upstream it routed to, decided per request. One table would price every route as one. The lookup already runs on the upstream model after the alias map, so a vendor-prefixed name (`openai/gpt-6-luna`) is not borrowed from another provider's table either: that would book OpenRouter's fee-bearing price as the vendor's list price. Until the router reads the cost OpenRouter itself reports, an override per routed model is the way to price it |
+| `openrouter` | The price is whichever upstream it routed to, decided per request. One table would price every route as one. The lookup already runs on the upstream model after the alias map, so a vendor-prefixed name (`openai/gpt-6-luna`) is not borrowed from another provider's table either: that would book OpenRouter's fee-bearing price as the vendor's list price. Its attempts are priced from the cost OpenRouter itself reports instead ([below](#a-cost-the-upstream-reports)); one with no readable figure stays `unknown` |
 | `kilo`, `nvidia` | Their free models cost nothing and neither publishes a card for them; a funded Kilo key is billed per route. An operator who wants a hard zero in the reports sets a price override |
 | `ollama` | The operator's own hardware. There is no per-token price to state, and `0` would claim electricity is free rather than that nobody billed for tokens |
 | `openai-compatible` / `anthropic-compatible` | The operator's own contract with whatever sits behind the base URL they supplied. Only they know the rate — which is what overrides are for |
+
+### A cost the upstream reports
+
+An upstream that bills each request at a price no table can know states what it billed, and that
+figure is the attempt's cost. Today that is `openrouter` alone: every completion's `usage` carries
+`cost`, USD credits, on a JSON body and on the final chunk of a stream.
+
+| Rule | Where it lives |
+|---|---|
+| Who reports | A driver declares `responseObservation.reportedCost`, a pure reader of one `usage` object (`providers/drivers/openrouter-cost.ts`). No declaration, no reading: a `cost` some other upstream writes is ignored |
+| Read where tokens are read | The response observer already parses each usage-bearing frame (and salvages an over-cap JSON body's `usage`) to count tokens; the figure is read off that same object (`services/usage/response-observer.ts`). No frame is parsed for it, no byte of a passthrough body changes, nothing is buffered |
+| What counts | A finite, non-negative number; anything else is ignored and the attempt stays `unknown`. On BYOK (`is_byok: true`) `cost` is OpenRouter's fee alone, so the figure is the fee plus `cost_details.upstream_inference_cost`; a BYOK statement without a readable share is `unknown`, never the fee passed off as the bill. A reported `0` (a `:free` route) is a measured zero |
+| Precedence | A rate, when one is known, prices the attempt; the reported figure prices it otherwise (`services/cost/estimate.ts`). A provider that reports ships no table, so a rate there is the **operator's override**, and the operator's explicit word wins. An override written as the old workaround for OpenRouter keeps pricing until it is deleted |
+| Basis | The Account's, as for every priced attempt: `metered` on a pay-per-token account, which is what OpenRouter's balance is. The figure is what was billed, so it is spend, not an estimate |
+| On the wire | A response the router writes states it with `cost_source: "reported"` ([06](06-protocol-translation.md#per-call-cost-on-the-wire)); a same-dialect relay is OpenRouter's own bytes and already carries it |
+| Coverage | Settings' unpriced list omits a reporting provider's models and catalog (`providerReportsCost`): without a rate they are still priced. An override written for one still wins over the reported figure |
+| Not persisted apart | The row keeps `cost_estimate` and `cost_basis`; no column says the figure was reported rather than estimated. While an override exists, an `openrouter` row priced after it took effect is override-estimated and any other is reported. Once the override is deleted, stored rows **cannot** be told apart: an override-estimated row and a reported one read the same, and nothing records which source priced which row. Only the wire's `cost_source` said so, at the time |
+
+Prod, 2026-11-19..26: 144k attempts on one OpenRouter account — 784M input, 153M output, 7.99B
+cache-read tokens, Nemotron 3 Ultra among them — recorded `unknown`, so their spend was invisible.
 
 ### Metered, notional, unknown
 
@@ -205,7 +226,7 @@ Three bases, and the third is a feature.
 |---|---|---|
 | `metered` | A priced model on a pay-per-token account | Real spend |
 | `notional` | A priced model on a **subscription** account. A flat fee has no per-request charge, so the figure is an attribution — "what these tokens would have cost on that vendor's API" | A separate total, **never summed with metered** |
-| `unknown` | No rate for that provider + model, or no provider at all, or a completion whose upstream never stated usage the router could read | NULL, never zero |
+| `unknown` | No rate for that provider + model and no figure the upstream reported, or no provider at all, or a completion whose upstream never stated usage the router could read | NULL, never zero |
 
 **Usage nobody stated is unknown, not free.** Zero token columns mean one of two things: a measured
 zero, or no measurement at all. Only the first is a free completion. A successful completion whose

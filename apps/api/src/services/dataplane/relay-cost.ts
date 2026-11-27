@@ -23,8 +23,11 @@ import { responseObject } from "../usage/response-usage"
 export interface UsageCostFields {
   /** USD. OpenRouter's field name and unit, which is what makes it readable by existing callers. */
   readonly cost: number
-  /** The router prices from a table; nothing here was measured. */
-  readonly cost_source: "estimated"
+  /**
+   * `estimated`: the router priced the counts from a rate. `reported`: the upstream's own figure for
+   * what it billed (OpenRouter's `usage.cost`), carried onto a response the router writes.
+   */
+  readonly cost_source: "estimated" | "reported"
   /** `notional` is what a flat-fee call would have cost on the API: an attribution, not a spend. */
   readonly cost_basis: "metered" | "notional"
 }
@@ -43,10 +46,13 @@ export function usageCostFields(facts: CountFacts, estimate: CostEstimate): Usag
   if (estimate.costEstimate === null || estimate.costBasis === "unknown") return null
   if (facts.usageInvalid || facts.evidenceUnavailable) return null
   const { tokensIn, tokensOut, cacheReadTokens, cacheWriteTokens } = facts.counts
-  if (tokensIn + tokensOut + cacheReadTokens + cacheWriteTokens === 0) return null
+  // Zero counts priced at a rate are a zero nobody billed; a reported zero is the upstream's own
+  // statement that it billed nothing, and the row records it as such.
+  const total = tokensIn + tokensOut + cacheReadTokens + cacheWriteTokens
+  if (total === 0 && estimate.source !== "reported") return null
   return {
     cost: Number(estimate.costEstimate),
-    cost_source: "estimated",
+    cost_source: estimate.source ?? "estimated",
     cost_basis: estimate.costBasis,
   }
 }

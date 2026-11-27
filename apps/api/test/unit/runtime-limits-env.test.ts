@@ -120,6 +120,33 @@ test("CLAUDE_SDK_QUEUE_WAIT_MS is bounded by UPSTREAM_STREAM_TIMEOUT_MS too", ()
   ).toBe(30_000)
 })
 
+// The refusal names D and the knob that set it, except when the ceiling is the 240000 cap
+// (D of 480000 ms or more): then it only says why 240000 is the limit.
+test("CLAUDE_SDK_QUEUE_WAIT_MS refusal names D and its knob below the 240000 cap, and omits them at it", () => {
+  const deadlines = (attempt: string, stream: string) => ({
+    ...base,
+    UPSTREAM_TIMEOUT_MS: attempt,
+    UPSTREAM_STREAM_TIMEOUT_MS: stream,
+    CLAUDE_SDK_QUEUE_WAIT_MS: "300000",
+  })
+  expect(() => parseEnv(deadlines("400000", "3600000"))).toThrow(
+    /300000 must be at most 200000.*deadline of 400000 ms \(set by UPSTREAM_TIMEOUT_MS\)/s,
+  )
+  for (const [attempt, stream] of [
+    ["480000", "3600000"],
+    ["3600000", "480000"],
+  ] as const) {
+    let message = ""
+    try {
+      parseEnv(deadlines(attempt, stream))
+    } catch (err) {
+      message = String(err instanceof Error ? err.message : err)
+    }
+    expect(message).toMatch(/300000 must be at most 240000: clients cut a silent call at 300 s/)
+    expect(message).not.toMatch(/deadline of|set by UPSTREAM/)
+  }
+})
+
 // An existing deployment that only lowered the attempt deadline never chose the new knob's default:
 // refusing its boot would be a regression. Only a value the operator SET is refused.
 test("an unset CLAUDE_SDK_QUEUE_WAIT_MS never refuses boot: the default yields to a short deadline", () => {

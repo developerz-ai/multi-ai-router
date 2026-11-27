@@ -42,7 +42,7 @@ export function claudeQueueWaitCeilingMs(deadlineMs: number): number {
 /**
  * Refuses a wait above {@link claudeQueueWaitCeilingMs}: past 240000 the client is gone before the
  * answer, and past half of D the deadline can end the request first, so the budget never expires and
- * nothing is ever told the gate was full. The message names the value, and, except above 240000, D and the knob that set D.
+ * nothing is ever told the gate was full. The message names the value and, unless the ceiling is the 240000 cap (D of 480000 ms or more), D and the knob that set D (a tie names both).
  * (A value past the timer range is already refused by `numeric-bounds.ts`.)
  *
  * The refusal is for a value the operator SET. An unset knob is a default the operator never chose,

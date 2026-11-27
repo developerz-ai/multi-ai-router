@@ -23,6 +23,8 @@ import {
   type VerifiedKey,
 } from "../../src/services/dataplane"
 import type { RecoveryProbeSend } from "../../src/services/dataplane/recovery-probe"
+import { selectAccounts } from "../../src/services/routing"
+import { pool, account as routingAccount, snapshot } from "../unit/routing/fixtures"
 
 /**
  * Prod, 2026-11-05: zai and MiniMax sat `uncertain` because each recovery permit waited exactly
@@ -98,6 +100,7 @@ async function routerProbeFixture(
     cooldownMs?: number
     reach?: "all" | "none"
     testNowCooldownSeconds?: number
+    backoffMs?: number
     provider?: "zai" | "anthropic-oauth"
     supportedModels?: string[]
   } = {},
@@ -120,7 +123,7 @@ async function routerProbeFixture(
   const lines: string[] = []
   const logger = createLogger({ level: "info", write: (line) => lines.push(line) })
   // A breaker clock far longer than any wait below, so only a real hold-off can explain silence.
-  const health = createHealthStore({ jitter: () => 0, baseBackoffMs: 60_000 })
+  const health = createHealthStore({ jitter: () => 0, baseBackoffMs: options.backoffMs ?? 60_000 })
   let components: ReturnType<typeof createRecoveryComponents> | undefined
   const catalog = createRoutingCatalog({
     load: () => loadCatalog(createCatalogSnapshotRepository(handle.db)),
@@ -241,6 +244,102 @@ async function routerProbeFixture(
     },
   }
 }
+
+function expireCooldown(f: Awaited<ReturnType<typeof routerProbeFixture>>) {
+  const now = Date.now()
+  f.health.recordFailure(
+    f.account.id,
+    { kind: "rate-limited", status: 429, message: "limited", resetsAt: new Date(now - 1) },
+    new Date(now - 60_000),
+  )
+}
+
+function selected(f: Awaited<ReturnType<typeof routerProbeFixture>>): string | undefined {
+  const primary = f.components.access.currentSnapshot(f.account.id)
+  if (primary === undefined) throw new Error("missing primary")
+  const fallback = routingAccount("fallback", { priority: 10, provider: primary.provider })
+  const choice = selectAccounts(
+    snapshot(
+      [primary, fallback],
+      [pool("team", [primary.id, fallback.id], { policy: "priority-failover" })],
+      new Date(),
+    ),
+    { sessionKey: "new", model: "glm-4.6", keyScope: { kind: "pools", poolIds: ["team"] } },
+  )
+  return choice.ok ? choice.candidates[0]?.account.id : undefined
+}
+
+test.skipIf(!databaseUrl)(
+  "expired primary is automatically probed and wins priority failover",
+  async () => {
+    let starts = 0
+    const f = await routerProbeFixture(async () => {
+      starts++
+      return completion()
+    })
+    try {
+      expireCooldown(f)
+      expect(await f.recovery()).toBeUndefined()
+      expect(selected(f)).toBe("fallback")
+      await f.components.coordinator.tick()
+      await probeSettled(f)
+      expect(starts).toBe(1)
+      expect((await f.recovery())?.state).toBe("succeeded")
+      expect(selected(f)).toBe(f.account.id)
+    } finally {
+      await f.close()
+    }
+  },
+  20_000,
+)
+
+test.skipIf(!databaseUrl)(
+  "an expired cooldown's 429 is durably bounded before retry",
+  async () => {
+    let starts = 0
+    const f = await routerProbeFixture(
+      async () => {
+        starts++
+        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        })
+      },
+      { cooldownMs: 3_000, backoffMs: 50 },
+    )
+    try {
+      expireCooldown(f)
+      expect(await f.recovery()).toBeUndefined()
+      await f.components.coordinator.tick()
+      await probeSettled(f)
+      const failed = await f.recovery()
+      expect(failed?.state).toBe("failed")
+      expect(failed?.nextAllowedAt.getTime()).toBeGreaterThan(Date.now())
+      for (let i = 0; i < 3; i++) await f.components.coordinator.tick()
+      expect(starts).toBe(1)
+      const breakerUntil = f.health.stateOf(f.account.id).breaker.cooldownUntil
+      expect(breakerUntil).toBeDefined()
+      if (breakerUntil === undefined || failed === undefined)
+        throw new Error("missing retry clocks")
+      await sleep(Math.max(0, breakerUntil.getTime() - Date.now()) + 50)
+      expect(Date.now()).toBeGreaterThanOrEqual(breakerUntil.getTime())
+      expect(Date.now()).toBeLessThan(failed.nextAllowedAt.getTime())
+      await f.components.coordinator.tick()
+      await sleep(QUIET_MS)
+      expect(Date.now()).toBeLessThan(failed.nextAllowedAt.getTime())
+      expect((await f.recovery())?.state).toBe("failed")
+      expect(starts).toBe(1)
+      await sleep(Math.max(0, (failed?.nextAllowedAt.getTime() ?? 0) - Date.now()) + 50)
+      await f.components.coordinator.tick()
+      await until("second probe verdict", () => f.verdicts() === 2)
+      await f.components.coordinator.tick()
+      expect(starts).toBe(2)
+    } finally {
+      await f.close()
+    }
+  },
+  20_000,
+)
 
 /** An operator re-check, then the tick that issues and installs its permit. */
 async function openPermit(f: Awaited<ReturnType<typeof routerProbeFixture>>) {

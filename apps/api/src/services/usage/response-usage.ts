@@ -14,13 +14,15 @@ export function responseObject(value: unknown): Record<string, unknown> | undefi
 function isCount(value: unknown): boolean {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= COUNT_MAX
 }
-/** Complete samples are atomic; Anthropic explicitly splits input/start and output/delta. */
-export function readResponseUsage(
+/**
+ * The `usage` member of one parsed frame, wherever its dialect keeps it: on the root, inside
+ * Anthropic's `message_start.message`, or inside a Responses event's `response`.
+ */
+export function statedUsage(
   dialect: Dialect,
   payload: unknown,
   event: string | undefined,
-  previous: TokenCounts,
-): { readonly counts: TokenCounts; readonly invalid: boolean } {
+): unknown {
   const root = responseObject(payload)
   const type = root?.type ?? event
   const parent =
@@ -29,9 +31,20 @@ export function readResponseUsage(
       : dialect === "openai-responses" && typeof type === "string" && type.startsWith("response.")
         ? responseObject(root?.response)
         : root
-  if (parent?.usage === undefined || parent.usage === null)
-    return { counts: previous, invalid: false }
-  const usage = responseObject(parent.usage)
+  return parent?.usage
+}
+
+/** Complete samples are atomic; Anthropic explicitly splits input/start and output/delta. */
+export function readResponseUsage(
+  dialect: Dialect,
+  payload: unknown,
+  event: string | undefined,
+  previous: TokenCounts,
+): { readonly counts: TokenCounts; readonly invalid: boolean } {
+  const stated = statedUsage(dialect, payload, event)
+  if (stated === undefined || stated === null) return { counts: previous, invalid: false }
+  const type = responseObject(payload)?.type ?? event
+  const usage = responseObject(stated)
   if (!usage) return { counts: previous, invalid: true }
   const fields =
     dialect === "openai-chat"

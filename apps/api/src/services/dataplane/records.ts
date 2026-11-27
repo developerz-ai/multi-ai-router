@@ -110,6 +110,8 @@ export interface AttemptRecordInput {
   readonly billing?: AccountBilling
   /** The operator's price book, when one is wired. Absent prices off the shipped table. */
   readonly prices?: RateLookup
+  /** Dollars the upstream said it billed (`ResponseObservationFacts.reportedCost`), if any. */
+  readonly reportedCost?: number | null
   readonly timing: AttemptTiming
   readonly outcome: UsageOutcome
   readonly streamed: boolean
@@ -127,7 +129,14 @@ export interface AttemptRecordInput {
 export function attemptCost(
   input: Pick<
     AttemptRecordInput,
-    "priced" | "usageRead" | "provider" | "upstreamModel" | "accountId" | "billing" | "prices"
+    | "priced"
+    | "usageRead"
+    | "provider"
+    | "upstreamModel"
+    | "accountId"
+    | "billing"
+    | "prices"
+    | "reportedCost"
   > & { readonly tokens: TokenCounts },
 ): CostEstimate {
   if (input.priced === false || input.usageRead === false || input.upstreamModel === null)
@@ -139,6 +148,7 @@ export function attemptCost(
     tokens: input.tokens,
     ...(input.billing === undefined ? {} : { billing: input.billing }),
     ...(input.prices === undefined ? {} : { prices: input.prices }),
+    ...(input.reportedCost === undefined ? {} : { reportedCost: input.reportedCost }),
   })
 }
 
@@ -169,6 +179,8 @@ function recordedCounts(
 
 export function attemptRecord(input: AttemptRecordInput): UsageRecord {
   const ttfbMs = input.timing.ttfbMs
+  // Pricing is unchanged by the null record: an attempt with no response prices zero tokens.
+  const cost = attemptCost({ ...input, tokens: input.tokens ?? ZERO_TOKENS })
   return {
     eventId: input.eventId ?? crypto.randomUUID(),
     responseStatus: input.responseStatus ?? null,
@@ -185,8 +197,8 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     ingressDialect: input.ingressDialect ?? null,
     egressMode: input.egressMode ?? null,
     ...recordedCounts(input.tokens, input.usageRead),
-    // Pricing is unchanged by the null record: an attempt with no response prices zero tokens.
-    ...attemptCost({ ...input, tokens: input.tokens ?? ZERO_TOKENS }),
+    costEstimate: cost.costEstimate,
+    costBasis: cost.costBasis,
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
     routerOverheadMs: Math.max(
