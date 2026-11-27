@@ -1,7 +1,11 @@
 import { InvalidRequestError } from "@multi-ai-router/core"
 import { z } from "zod"
 import type { DropSink } from "../../services/translate/shared/drops"
-import { scrubSystemPrompt } from "../claude-sdk/scrub"
+import {
+  type ScrubRuleName,
+  scrubSystemPromptWithReport,
+  unionScrubRules,
+} from "../claude-sdk/scrub"
 import { placeCacheBreakpoints } from "./cache"
 import type { FastCredential } from "./credential"
 import { CLAUDE_FAST_CLI_VERSION, stableUuid, stampIntegrity, versionSuffix } from "./integrity"
@@ -83,6 +87,8 @@ export function prepareFastRequest(input: {
   const nativeText = typeof nativeBilling?.text === "string" ? nativeBilling.text : null
   const nativeVersion = nativeText && /\bcc_version=(\d+\.\d+\.\d+)\./.exec(nativeText)?.[1]
   if (nativeVersion && nativeVersion !== CLAUDE_FAST_CLI_VERSION) return null
+  // One report per text entry scrubbed; none at all means the scrub never ran (#509).
+  const scrubbed: (readonly ScrubRuleName[])[] = []
   const clientSystem = system
     .filter(
       (entry) =>
@@ -94,7 +100,8 @@ export function prepareFastRequest(input: {
       // `system` blocks: the duplicate `<env>` preamble (and other harness identity lines) is the
       // `claude-sdk:extra-usage-gated` tell on this egress too. Scrub exactly as the SDK path
       // does; `null` drops the whole block rather than sending an empty one.
-      const text = scrubSystemPrompt(entry.text)
+      const { prompt: text, rules } = scrubSystemPromptWithReport(entry.text)
+      scrubbed.push(rules)
       return typeof text === "string" ? [{ ...entry, text }] : []
     })
   const firstUser = original.messages.find((message) => message.role === "user")
@@ -222,6 +229,8 @@ export function prepareFastRequest(input: {
     forcedTool: adaptation.adapted,
     /** Set when the schema travels natively: the invoker's key for remembering a refusal. */
     nativeSchema: adaptation.nativeSchema,
+    /** The scrub rules that changed the system text sent; absent when no text was scrubbed. */
+    scrubRules: scrubbed.length === 0 ? undefined : unionScrubRules(scrubbed),
   }
 }
 

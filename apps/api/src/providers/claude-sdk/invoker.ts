@@ -8,7 +8,7 @@ import { classifySdkFailure } from "./errors"
 import { FORCED_TOOL_UNMET } from "./failure-rules-request"
 import type { SdkInvocation, SdkInvoker } from "./invoke"
 import { createQueryLaunch, type QueryLaunch } from "./options"
-import { type OwnerLaunchFactory, ownedQuery } from "./owned-query"
+import { type OwnerLaunchFactory, ownedQuery, reportingStart } from "./owned-query"
 import { buildSdkPrompt } from "./prompt"
 import type { IgnoredOption } from "./reasoning"
 import { renderSdkResponse, type StreamPacing, type Ticker } from "./render"
@@ -178,6 +178,8 @@ export function createSdkInvoker(deps: SdkInvokerDeps): SdkInvoker {
       try {
         const messages = await ownedQuery({
           ...invocation,
+          // Wrapped here, not inside `ownedQuery`, so both of its branches report (#509).
+          onUpstreamStarted: reportingStart(invocation, started.scrubRules),
           options: started.options,
           ownerLaunch: deps.ownerLaunch,
           run: (options) => runQuery({ prompt: held.prompt, options }),

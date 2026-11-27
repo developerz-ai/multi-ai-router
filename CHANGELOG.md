@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `429 account_at_capacity` (wall `clock`, scope `pool`, `signal: account-at-capacity`, `Retry-After` 30 s from `ROUTING_UNKNOWN_RESET_RETRY_AFTER_SECONDS`): the request waited the budget at its account gate. The replica's ceiling refusing is the existing `503 no_healthy_account` with wall `capacity`, scope `router`, `signal: router-at-capacity`. Behaviour is pinned by `apps/api/test/integration/claude-account-full.test.ts`.
 
+- The `upstream attempt failed` log line carries refusal evidence for every provider (#509): `inFlight` (the account's in-flight count with the refused request included; Claude fast `refuse()` and HTTP drivers only), `transport` (`fast` or `sdk`, the Claude invoker that produced the outcome), `model` (the model sent upstream), `upstreamRequestId`, `retryAfter` and `rateLimitHeaders` (the upstream's own headers, tokens-limiter values logged `[REDACTED]`), and `scrubRules` (the harness-fingerprint rules that changed the system prompt). A field that does not apply is absent. No prompt text, credential or routing decision changes. Spec: `docs/idea/08-observability.md`.
+
 ### Changed
 
 - The rule "a router-made `429` while an eligible account is in scope is a bug" (`CLAUDE.md`) is narrowed, with the owner's authorization (developerz-ai/developerz.ai#10277), to allow this one capacity answer after the bounded gate wait. The `concurrency.ts` header and `docs/clients.md` no longer say a capacity wait never fails a request.

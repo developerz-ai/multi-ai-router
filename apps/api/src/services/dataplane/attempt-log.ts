@@ -1,6 +1,7 @@
 import type { Logger } from "../../logging/logger"
 import { REDACTED, redactValue } from "../../logging/redact"
 import type { AttemptOutcome } from "./attempt"
+import { evidenceFields } from "./attempt-evidence"
 
 /**
  * The one line an operator reads when an attempt fails.
@@ -33,6 +34,8 @@ export function logAttemptFailure(
       outcome.classification?.message ?? outcome.upstreamMessage,
       reasonMaxChars,
     ),
+    // In-flight count, transport, model, upstream headers and scrub rules, where they apply (#509).
+    ...evidenceFields(outcome.evidence),
   })
 }
 
