@@ -5,13 +5,13 @@ on:
     branches: [main]
   pull_request:
 
-# One CI run per ref. On a PR, a force-push or a new commit cancels the
-# in-flight run — the older result is already stale by definition. On main it
-# never does: release.yml's gate waits for this run's checks on the exact commit
+# One CI run per PR; every push to main has its own run. On a PR, a force-push or
+# a new commit cancels the in-flight run — the older result is already stale by
+# definition. On main it never does: release.yml's gate waits for this run's checks on the exact commit
 # a tag names, and a second merge cancelling them would leave that commit with
 # no verdict.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
