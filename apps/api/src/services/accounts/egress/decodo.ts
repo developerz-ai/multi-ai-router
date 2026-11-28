@@ -3,7 +3,7 @@ import { readJsonCapped } from "../../models/capped-json"
 import type { ProxyVendor, VendorProxy } from "./vendor"
 
 /**
- * Decodo residential backconnect. Provenance: bank-integrations `exits/decodo.ts`
+ * Decodo residential backconnect. Provenance: a private egress client already in production
  * (`api.decodo.com/v2`, gateway `gate.decodo.com:7000`), 2026-11-27. Blast radius: a change here
  * empties the console's proxy picker and stops dead-proxy repair for Decodo; an account already
  * given a proxy keeps its own sealed copy.

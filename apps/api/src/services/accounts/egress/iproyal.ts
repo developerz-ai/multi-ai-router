@@ -3,7 +3,7 @@ import { readJsonCapped } from "../../models/capped-json"
 import type { ProxyVendor, VendorProxy } from "./vendor"
 
 /**
- * ITRoyal residential backconnect. Provenance: bank-integrations `exits/iproyal.ts`
+ * ITRoyal residential backconnect. Provenance: a private egress client already in production
  * (`resi-api.iproyal.com/v1/residential-subusers`, gateway `geo.iproyal.com:12321`), cross-checked
  * against a live sub-user list 2026-11-27. Blast radius: a change here empties the console's proxy
  * picker and stops dead-proxy repair for ITRoyal; an account already given a proxy keeps its own
