@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.82.0] — 2026-11-28
+
 ### Added
 
 - Two residential backconnect egress proxy vendors, ITRoyal and Decodo, join Webshare as one the console can list and give to an Account (`services/accounts/egress/iproyal.ts`, `decodo.ts`; one is a file implementing the proxy-vendor interface and one line in `egress/index.ts`). ITRoyal answers its sub-user list with the password so its gateway URL is buildable here; Decodo lists usernames only, so its gateway credential is a second, explicit secret, and a sub-user that is no longer active yields an empty but ok listing so the probe still validates the URL. Both offer one country-targeted address per country (fifteen) so an on-failure swap rotates through different IP pools. A vendor is off until its key is set; a rejected key is `unauthorized`, a bad shape `unreadable`, a hang a timeout, and nothing a vendor answered reaches a log. The backconnect ones page once, so they take only the byte cap, not Webshare's page cap. New env: `IPROYAL_API_TOKEN` / `IPROYAL_TIMEOUT_MS`, `DECODO_API_KEY` / `DECODO_GW_USERNAME` / `DECODO_GW_PASSWORD` / `DECODO_TIMEOUT_MS`, all defaulted. No migration. Rollback pins the prior image; a vendor's absence changes nothing and an account already given a proxy keeps its own sealed copy.
@@ -2648,3 +2650,4 @@ your tooling config.
 [2.79.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.79.0
 [2.80.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.80.0
 [2.81.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.81.0
+[2.82.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.82.0
