@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.83.1] — 2026-11-28
+
+### Fixed
+
+- A model throttle hold stays one a request can wait out. Prod 2026-11-28, the first hour of 2.83.0: the holds on one free key's models climbed to two to five minutes, past `ROUTING_MODEL_THROTTLE_WAIT_MS`, and the router itself refused 241 of 756 `/v1/messages` on them (the `429` share stayed at 36%, now mostly router-made: vendor `429`s fell from about 160 to 79 an hour). Two causes, both fixed: a request already in flight when a hold formed came back `429` inside it and stepped it again (a `429` inside a standing hold is now the same incident and steps nothing, unless it names a reset of its own), and an estimated hold had no ceiling but `ROUTING_MAX_BACKOFF_MS` (it now stops at `ROUTING_MODEL_THROTTLE_WAIT_MS` when that is above zero, so a fresh selection can always wait one out; a provider's own reset keeps its own ceiling). A throttle retry lands one millisecond past the hold it waited for. Pinned by `test/unit/dataplane/model-throttle-memory.test.ts`.
+
 ## [2.83.0] — 2026-11-28
 
 ### Fixed
@@ -2675,3 +2681,4 @@ your tooling config.
 [2.82.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.82.0
 [2.82.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.82.1
 [2.83.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.83.0
+[2.83.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.83.1

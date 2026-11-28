@@ -6,6 +6,7 @@ import {
   type ModelRefusal,
   recordFailure,
 } from "../routing"
+import { boundedReportedReset } from "../routing/backoff"
 import type { AccountHealthState, HealthStore } from "./health"
 import type { HealthStoreOptions } from "./health-options"
 
@@ -49,15 +50,27 @@ export function throttleHeld(
   failure: AttemptFailure,
   now: Date,
   options: BreakerOptions,
+  maxHoldMs?: number,
 ): Map<string, ModelRefusal> {
   const kept = liveRefusals(state, now, options)
   const prior = kept.get(upstreamModel)
-  const strikes = prior?.reason === "rate-limited" ? (prior.strikes ?? 0) : 0
+  const throttled = prior?.reason === "rate-limited"
+  // One incident per hold: a sibling already in flight when it formed comes back `429` inside it and
+  // steps nothing, unless it names a reset of its own (prod 2026-11-28: concurrent refusals walked
+  // the holds to minutes and the router refused 241 of 756 requests on them).
+  if (throttled && prior.until > now && boundedReportedReset(failure, now) === null) return kept
+  const strikes = throttled ? (prior.strikes ?? 0) : 0
+  // An estimated hold stays one a request can wait out (`ROUTING_MODEL_THROTTLE_WAIT_MS`); a
+  // provider's own reset is bounded by its own ceiling, not this.
+  const capped =
+    maxHoldMs === undefined
+      ? options
+      : { ...options, maxBackoffMs: Math.min(options.maxBackoffMs ?? maxHoldMs, maxHoldMs) }
   const tripped = recordFailure(
     { ...HEALTHY, consecutiveFailures: strikes },
     { ...failure, kind: "rate-limited" },
     now,
-    options,
+    capped,
   )
   if (tripped.cooldownUntil === undefined) return kept
   // A hold still standing is never shortened by a later, shorter one (the breaker's own rule).
@@ -143,7 +156,14 @@ export function modelHoldMethods(
     throttleModel(accountId, upstreamModel, failure, now, caller) {
       const state = read(accountId)
       write(accountId, {
-        refusedModels: throttleHeld(state, upstreamModel, failure, now, breakerOptions(caller)),
+        refusedModels: throttleHeld(
+          state,
+          upstreamModel,
+          failure,
+          now,
+          breakerOptions(caller),
+          options.modelThrottleMaxHoldMs,
+        ),
       })
     },
     modelServed(accountId, upstreamModel, now) {

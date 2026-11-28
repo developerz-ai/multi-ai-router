@@ -26,6 +26,11 @@ export interface HealthStoreOptions {
    * that step its hold down one strike. Absent: three.
    */
   readonly modelThrottleSuccessesPerStep?: number
+  /**
+   * `ROUTING_MODEL_THROTTLE_WAIT_MS` when above zero: the longest estimated model throttle hold, so
+   * a request can always wait one out. Absent: `maxBackoffMs`.
+   */
+  readonly modelThrottleMaxHoldMs?: number
   readonly failureThreshold?: number
   readonly baseBackoffMs?: number
   readonly maxBackoffMs?: number

@@ -64,7 +64,9 @@ export function recordChainFailure(
     recovery?.finish("uncertain")
     const held = ctx.runtime.health.stateOf(servable.account.id).refusedModels
     const until = held?.get(servable.upstreamModel)?.until
-    return until === undefined ? null : Math.max(0, until.getTime() - now.getTime())
+    // One millisecond past the instant: a timer may fire a hair early, and a retry refused inside
+    // the hold it waited for reads as a sibling of the first refusal (`throttleHeld`).
+    return until === undefined ? null : Math.max(0, until.getTime() - now.getTime()) + 1
   }
 
   ctx.runtime.health.recordFailure(
