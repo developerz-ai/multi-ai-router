@@ -92,10 +92,11 @@ schedules:
     hours_utc: [6]
     brief_file: .dz/schedules/free-providers.md
 
-# devops: advisories (decision of record 2026-11-28): the router is deployed, so the platform watches
-# published advisories itself; this replaces the retired daily security-release schedule.
+# devops: off (owner, 2026-11-26: one PR per advisory was too much noise). Advisories arrive through
+# Dependabot instead: version bumps weekly, security bumps grouped into one PR per ecosystem
+# (.github/dependabot.yml).
 devops:
-  watch: advisories
+  watch: off
 
 # care: docs_drift off (47 tasks -> 8 docs-only merges, 33 failed over 30 days, both accounts).
 care:
