@@ -100,6 +100,7 @@ export function evaluateCandidate(
   if (held && refused.reason === "rate-limited")
     return drop({
       reason: "cooling-down",
+      modelHold: true,
       resetsAt: refused.until,
       ...(refused.resetSource === undefined ? {} : { resetSource: refused.resetSource }),
     })

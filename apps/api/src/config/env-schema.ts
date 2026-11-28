@@ -239,6 +239,11 @@ export const ENV_FIELDS = {
   ROUTING_MAX_ATTEMPTS: atLeastOne.optional(),
   ROUTING_OVERLOAD_RETRIES: wholeNumber.optional(),
   ROUTING_OVERLOAD_RETRY_BASE_MS: atLeastOne.optional(),
+  ROUTING_MODEL_THROTTLE_WAIT_MS: wholeNumber
+    .refine((value) => value <= 2_147_483_647, "must fit a timer")
+    .optional(),
+  // Refuses zero: a hold stepped down on every success never paces anything.
+  ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP: atLeastOne.optional(),
   ROUTING_FAILURE_THRESHOLD: atLeastOne.optional(),
   ROUTING_BASE_BACKOFF_MS: atLeastOne.optional(),
   ROUTING_MAX_BACKOFF_MS: atLeastOne.optional(),

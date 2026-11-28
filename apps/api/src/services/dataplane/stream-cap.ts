@@ -39,6 +39,10 @@ export function createEventTally() {
       const item = itemType(payload)
       if (item !== undefined) count(`item.${item}`)
     },
+    /** A frame whose evidence was lost, by its `event:` name: which frame a stream lost. */
+    lost(event: string | undefined): void {
+      count(event === undefined ? "lost" : `lost.${event}`)
+    },
     counts: (): Readonly<Record<string, number>> => Object.fromEntries(counts),
   }
 }

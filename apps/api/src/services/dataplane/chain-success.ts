@@ -28,6 +28,12 @@ export function finishSuccessfulAttempt(
   /** Why this turn may have lost its bound session, or undefined when it never had one to lose. */
   restart: string | undefined,
 ): Promise<Response> | Response {
+  // The model served: a run of these steps its throttle hold down (`health-model-holds.ts`).
+  ctx.runtime.health.modelServed(
+    servable.account.id,
+    servable.upstreamModel,
+    ctx.runtime.clock.now(),
+  )
   if (servable.kind !== "sdk")
     ctx.runtime.health.applyRateLimit(
       servable.account.id,

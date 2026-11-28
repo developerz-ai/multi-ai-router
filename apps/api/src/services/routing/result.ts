@@ -68,6 +68,12 @@ export interface RejectedCandidate {
    * id that left, when and by whom — the cause of the refusal, in the refusal (prod 2026-11-15).
    */
   readonly removedFromList?: { readonly model: string } & ModelRemoval
+  /**
+   * `cooling-down` on the requested model alone, the router's own throttle hold for this
+   * (account, model) (`types.ts`, `ModelRefusal`): a request may wait it out
+   * (`dataplane/recovery-wait.ts`, `awaitsModelHold`). Absent: the account's own state.
+   */
+  readonly modelHold?: true
 }
 
 /** What a policy wants the operator and the logs to know about the ordering it produced. */

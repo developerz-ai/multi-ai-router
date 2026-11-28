@@ -2,6 +2,7 @@ import {
   type AttemptFailure,
   type FailoverProgress,
   noteGateFull,
+  noteModelThrottle,
   noteOverload,
   noteProviderScoped,
   noteRequestAttributable,
@@ -17,17 +18,22 @@ import type { ServableCandidate } from "./plan"
 import { attemptRecord, failureOutcome } from "./records"
 import { HOOK_SIGNAL } from "./relay-terminal"
 
-/** What one failed attempt teaches the planner about the rest of this chain. */
+/**
+ * What one failed attempt teaches the planner about the rest of this chain. `throttleDelayMs`: how
+ * long the model hold the attempt took has to run (`chain-recovery.ts`), `null` when it took none.
+ */
 export function noteFailure(
   progress: FailoverProgress,
   servable: ServableCandidate,
   failure: AttemptFailure,
+  throttleDelayMs: number | null = null,
 ): FailoverProgress {
   const { account } = servable
   const attributed = noteRequestAttributable(progress, failure)
   const scoped = noteProviderScoped(attributed, account.driver.provider, failure)
   const gated = noteGateFull(scoped, account.driver.provider, failure)
-  return noteOverload(gated, account.id, failure.kind)
+  const overload = noteOverload(gated, account.id, failure.kind)
+  return noteModelThrottle(overload, account.id, throttleDelayMs)
 }
 
 /**

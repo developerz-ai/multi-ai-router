@@ -80,6 +80,11 @@ export interface RecoveryWaitOptions {
    * Absent, or not above `budgetMs`, rides nothing.
    */
   readonly probeBudgetMs?: number
+  /**
+   * `ROUTING_MODEL_THROTTLE_WAIT_MS`. Total wait per request for a model throttle hold that is the
+   * only thing between it and an account (`recovery-wait.ts`, `awaitsModelHold`). Absent or `0`: none.
+   */
+  readonly modelThrottleBudgetMs?: number
 }
 
 export interface LogOptions {

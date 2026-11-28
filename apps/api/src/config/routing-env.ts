@@ -38,6 +38,8 @@ export function readRoutingEnv(raw: ParsedEnv): {
       maxAttempts: raw.ROUTING_MAX_ATTEMPTS,
       overloadRetries: raw.ROUTING_OVERLOAD_RETRIES ?? 2,
       overloadRetryBaseMs: raw.ROUTING_OVERLOAD_RETRY_BASE_MS ?? 1_000,
+      modelThrottleWaitMs: raw.ROUTING_MODEL_THROTTLE_WAIT_MS ?? 30_000,
+      modelThrottleSuccessesPerStep: raw.ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP ?? 3,
       failureThreshold: raw.ROUTING_FAILURE_THRESHOLD ?? 3,
       baseBackoffMs: raw.ROUTING_BASE_BACKOFF_MS ?? 1_000,
       maxBackoffMs: raw.ROUTING_MAX_BACKOFF_MS ?? 300_000,

@@ -21,6 +21,11 @@ export interface HealthStoreOptions {
   /** `MODEL_REFUSAL_TTL_SECONDS` in ms: how long a `model-unsupported` answer keeps that upstream
    * model off the account (10.16). Absent: refusals are not remembered. */
   readonly modelRefusalTtlMs?: number
+  /**
+   * `ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP`: successes in a row on a throttled (account, model)
+   * that step its hold down one strike. Absent: three.
+   */
+  readonly modelThrottleSuccessesPerStep?: number
   readonly failureThreshold?: number
   readonly baseBackoffMs?: number
   readonly maxBackoffMs?: number

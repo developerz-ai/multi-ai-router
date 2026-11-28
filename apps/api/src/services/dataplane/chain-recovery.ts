@@ -7,7 +7,11 @@ import type { HealthObservation } from "./health-observation"
 import type { ServableCandidate } from "./plan"
 import type { RecoveryAttempt } from "./recovery-access"
 
-/** Failure verdict precedes quota readings; a recovered account cannot erase billing exhaustion. */
+/**
+ * Failure verdict precedes quota readings; a recovered account cannot erase billing exhaustion.
+ * Returns how long the model hold this failure took has to run from `now`, `null` when it took none:
+ * the chain may wait that out and ask the account again (`routing/failover-progress.ts`).
+ */
 export function recordChainFailure(
   ctx: ChainContext,
   servable: ServableCandidate,
@@ -16,9 +20,9 @@ export function recordChainFailure(
   observation: HealthObservation,
   recovery: RecoveryAttempt | undefined,
   applyQuota = true,
-) {
+): number | null {
   // SDK preparation can fail before the final start guard consumes any provider authority.
-  if (recovery !== undefined && !recovery.started()) return
+  if (recovery !== undefined && !recovery.started()) return null
 
   // A `client-error` or `model-unsupported` is the upstream judging the *request*, not the account
   // (`routing/breaker.ts` leaves the breaker untouched for both). A designated recovery probe that
@@ -33,7 +37,7 @@ export function recordChainFailure(
   if (outcome.failure.kind === "client-error" || outcome.failure.kind === "model-unsupported") {
     recovery?.finish("succeeded")
     ctx.runtime.health.recordSuccess(servable.account.id, observation)
-    return
+    return null
   }
 
   // The provider's shared backend was busy: nothing about this account either way. No strike, no
@@ -43,7 +47,7 @@ export function recordChainFailure(
   // settlement. No strike, no limiter reading, and a designated probe's permit is not spent on it.
   if (outcome.failure.kind === "overloaded" || isGateFull(outcome.failure.kind)) {
     recovery?.finish("uncertain")
-    return
+    return null
   }
 
   // A throttle on this model alone (OpenRouter's upstream-provider 429, any `:free` variant): hold
@@ -58,7 +62,9 @@ export function recordChainFailure(
       breakerOptionsFor(servable.driver.authKind),
     )
     recovery?.finish("uncertain")
-    return
+    const held = ctx.runtime.health.stateOf(servable.account.id).refusedModels
+    const until = held?.get(servable.upstreamModel)?.until
+    return until === undefined ? null : Math.max(0, until.getTime() - now.getTime())
   }
 
   ctx.runtime.health.recordFailure(
@@ -85,6 +91,7 @@ export function recordChainFailure(
       now,
       observation,
     )
+  return null
 }
 
 function modelThrottle(servable: ServableCandidate, failure: AttemptFailure): boolean {

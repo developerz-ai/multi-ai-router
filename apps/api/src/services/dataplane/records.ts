@@ -59,6 +59,12 @@ export interface AttemptTiming {
    * started buffering would barely move it.
    */
   readonly ttfbMs?: number
+  /**
+   * This attempt's own time to its first relayed byte: from the attempt's start, so no earlier
+   * failover, selection or recovery wait — only the account's answer time plus this attempt's
+   * request preparation. Feeds `router_upstream_ttfb_seconds`; `ttfbMs` above stays the client's.
+   */
+  readonly attemptTtfbMs?: number
 }
 
 /**
@@ -178,7 +184,7 @@ function recordedCounts(
 }
 
 export function attemptRecord(input: AttemptRecordInput): UsageRecord {
-  const ttfbMs = input.timing.ttfbMs
+  const { ttfbMs, attemptTtfbMs } = input.timing
   // Pricing is unchanged by the null record: an attempt with no response prices zero tokens.
   const cost = attemptCost({ ...input, tokens: input.tokens ?? ZERO_TOKENS })
   return {
@@ -201,6 +207,7 @@ export function attemptRecord(input: AttemptRecordInput): UsageRecord {
     costBasis: cost.costBasis,
     latencyMs: Math.max(0, Math.round(input.timing.latencyMs)),
     ttfbMs: ttfbMs === undefined ? null : Math.max(0, Math.round(ttfbMs)),
+    attemptTtfbMs: attemptTtfbMs === undefined ? null : Math.max(0, Math.round(attemptTtfbMs)),
     routerOverheadMs: Math.max(
       0,
       Math.round(

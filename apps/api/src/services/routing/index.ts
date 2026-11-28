@@ -62,6 +62,7 @@ export {
   inPlaceReason,
   markStreamed,
   noteGateFull,
+  noteModelThrottle,
   noteOverload,
   noteProviderScoped,
   noteRequestAttributable,

@@ -238,7 +238,13 @@ export function createRuntime(input: RuntimeInput): DispatchRuntime {
         upstreamMs,
         // Measured from when the request entered the router, not from when this attempt began:
         // what the client experiences includes every failover that preceded the byte.
-        ...(firstByteAt === undefined ? {} : { ttfbMs: firstByteAt - input.requestStarted }),
+        ...(firstByteAt === undefined
+          ? {}
+          : {
+              ttfbMs: firstByteAt - input.requestStarted,
+              // The account's half alone, for the per-model series (`records.ts`).
+              attemptTtfbMs: firstByteAt - attemptStarted,
+            }),
       }
     },
   }

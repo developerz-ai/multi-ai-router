@@ -23,10 +23,11 @@
  *   that sets `ROUTING_MAX_ATTEMPTS`; nothing raises the bound past the candidates that exist.
  * - **Each attempt is a distinct account.** Never retry the same account inside one request —
  *   except the one in-place replay a stale SDK session earns, which is recovery on the *same*
- *   account and explicitly not a failover.
+ *   account and explicitly not a failover, and the two waits once the walk ran out: an
+ *   `overloaded` backend (`waitOutOverload`) and a model hold lapsing (`waitOutThrottle`).
  */
 
-import { waitOutOverload } from "./failover-progress"
+import { replayInPlace, waitOutOverload } from "./failover-progress"
 import { type AttemptFailure, isRetryable } from "./failure-kind"
 import type { Candidate } from "./types"
 
@@ -47,6 +48,8 @@ export interface FailoverOptions {
   readonly overloadRetries?: number
   /** `ROUTING_OVERLOAD_RETRY_BASE_MS`: the first of those waits. */
   readonly overloadRetryBaseMs?: number
+  /** `ROUTING_MODEL_THROTTLE_WAIT_MS`: this chain's total wait on model holds. Absent: none. */
+  readonly modelThrottleWaitMs?: number
   /** The account this session is bound to, when it has a binding. */
   readonly boundAccountId?: string
   /** Request-attributable refusals in one chain that end it as a request wall. Default 2. */
@@ -87,6 +90,10 @@ export interface FailoverProgress {
   readonly refusedProviders?: readonly string[]
   /** The gate-full subset of `refusedProviders` ({@link noteGateFull}): only it stops an overload wait. */
   readonly gateRefusedProviders?: readonly string[]
+  /** The account whose last answer held the model off it, and that hold's remaining run. */
+  readonly throttled?: { readonly accountId: string; readonly delayMs: number }
+  /** Time this chain has already waited out model holds. Absent: none. */
+  readonly throttleWaitedMs?: number
 }
 
 export const NO_ATTEMPTS: FailoverProgress = {
@@ -129,8 +136,10 @@ export type FailoverDecision =
       readonly action: "retry-in-place"
       readonly candidate: Candidate
       readonly attempt: number
-      /** Wait this long before sending: set only on an `overloaded` retry. */
+      /** Wait this long before sending: set only on an `overloaded` or model-throttle retry. */
       readonly delayMs?: number
+      /** The wait is a model hold lapsing ({@link waitOutThrottle}), not an overloaded backend. */
+      readonly throttle?: true
     }
   | { readonly action: "stop"; readonly reason: FailoverStopReason }
 
@@ -256,25 +265,6 @@ function firstAttempt(ordered: readonly Candidate[], progress: FailoverProgress)
     invalidateBinding: false,
     sessionRestart: false,
   }
-}
-
-/**
- * A stale session is recovery in place, not a hop: the mapping is evicted and the request is
- * replayed once on the **same** account. The router never retries a `resume` against another one.
- */
-function replayInPlace(
-  ordered: readonly Candidate[],
-  progress: FailoverProgress,
-  options: FailoverOptions,
-): FailoverDecision {
-  const cap = options.maxInPlaceRetries ?? DEFAULT_MAX_IN_PLACE_RETRIES
-  if (progress.inPlaceRetries >= cap) return { action: "stop", reason: "not-retryable" }
-
-  const lastId = progress.attemptedAccountIds[progress.attemptedAccountIds.length - 1]
-  const candidate = ordered.find((entry) => entry.account.id === lastId)
-  if (candidate === undefined) return { action: "stop", reason: "candidates-exhausted" }
-
-  return { action: "retry-in-place", candidate, attempt: progress.attemptedAccountIds.length }
 }
 
 function attemptOn(

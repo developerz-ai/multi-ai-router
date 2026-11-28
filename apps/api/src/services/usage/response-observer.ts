@@ -60,10 +60,11 @@ export function createResponseObserver(spec: ResponseObservationSpec): ResponseO
     contentType: spec.contentType,
     maximumBytes: spec.maximumObservationBytes,
     skip: responseFrameSkip(spec),
-    unavailable: (reason) => {
+    unavailable: (reason, event) => {
       changed()
       evidenceUnavailable = true
       unavailableReason ??= reason
+      spec.descriptor?.lost?.(event)
     },
     done: () => {
       changed()
