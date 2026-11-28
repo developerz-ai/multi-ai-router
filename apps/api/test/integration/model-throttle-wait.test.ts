@@ -32,13 +32,21 @@ function throttle(): Response {
 }
 
 function setup(responses: (() => Response)[], modelThrottleWaitMs: number) {
-  return harness({
+  // The harness clock stands still; each upstream answer moves it one step, as real time would
+  // across a pause, so a retry after its hold is not read as a sibling inside it.
+  let advance = (_ms: number) => {}
+  const h = harness({
     accounts: [account("nv", { provider: "nvidia", cipher: CRYPTOR })],
-    responses,
+    responses: responses.map((respond) => () => {
+      advance(100)
+      return respond()
+    }),
     // Millisecond steps so the suite does not sleep for real seconds; the rule is the same.
     health: { baseBackoffMs: 20, maxBackoffMs: 1_000 },
     failover: { modelThrottleWaitMs },
   })
+  advance = (ms) => h.clock.advance(ms)
+  return h
 }
 
 describe("a model throttle on the only account, failure case first", () => {

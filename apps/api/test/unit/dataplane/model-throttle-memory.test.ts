@@ -75,3 +75,35 @@ describe("a model throttle interleaved with successes, failure case first", () =
     expect(hold(health)?.strikes).toBe(2)
   })
 })
+
+/**
+ * Prod 2026-11-28, the first hour of 2.83.0: the holds climbed to two to five minutes and 241 of 756
+ * `/v1/messages` were refused by the router itself on them. Two causes: requests already in flight
+ * when a hold formed each came back `429` and each stepped it again, and a hold longer than
+ * `ROUTING_MODEL_THROTTLE_WAIT_MS` is one no request waits for.
+ */
+describe("a model hold stays one a request can wait out, failure case first", () => {
+  test("429s landing while the hold stands are one incident: one strike", () => {
+    const health = store()
+    health.throttleModel("a", MODEL, THROTTLE, at(0))
+    // Two siblings started before the hold, refused inside it.
+    health.throttleModel("a", MODEL, THROTTLE, at(0.2))
+    health.throttleModel("a", MODEL, THROTTLE, at(0.5))
+    expect(hold(health)?.strikes).toBe(1)
+    expect(hold(health)?.until).toEqual(at(1))
+  })
+
+  test("an estimated hold never outgrows the request wait budget", () => {
+    const health = createHealthStore({
+      jitter: () => 0,
+      baseBackoffMs: 1_000,
+      maxBackoffMs: 300_000,
+      modelThrottleMaxHoldMs: 30_000,
+    })
+    for (let second = 0; second < 600; second += 60)
+      health.throttleModel("a", MODEL, THROTTLE, at(second))
+    const held = hold(health)
+    expect(held?.strikes).toBe(10)
+    expect(held?.until).toEqual(at(540 + 30))
+  })
+})

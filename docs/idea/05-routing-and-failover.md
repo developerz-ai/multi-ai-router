@@ -193,7 +193,11 @@ backoff schedule, a run of `ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP` successes
 pair steps it one down, and the strikes are forgotten only once a whole `ROUTING_MAX_BACKOFF_MS`
 span has passed since the last hold lapsed. A lapsed hold refuses nothing; it only remembers. Through 2.82.1 the strikes went
 with the hold, so with requests seconds apart every `429` restarted at the first one-second step and
-nothing was paced. Interleaved successes do not reset it: a strict alternation still climbs.
+nothing was paced. Interleaved successes do not reset it: a strict alternation still climbs. A
+`429` that lands while the hold stands (a request already in flight when it formed) is the same
+incident and steps nothing unless it names a reset of its own, and an estimated hold stops at
+`ROUTING_MODEL_THROTTLE_WAIT_MS` when that is above zero, so a request can always wait one out
+(2.83.0's first hour in prod: holds of two to five minutes, 241 of 756 requests refused on them).
 
 **A request waits a model hold out instead of answering `429`.** Within `ROUTING_MODEL_THROTTLE_WAIT_MS`
 (default 30000, one budget per chain and one per request's re-selections; `0` disables both):
