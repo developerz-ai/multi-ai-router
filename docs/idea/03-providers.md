@@ -1095,9 +1095,13 @@ fresh login, refresh, inference and tool/cache behavior still require a live can
 ## Egress proxy
 
 An operator may give one Account one HTTP proxy: a corporate egress, an address a vendor allow-lists,
-a region: an `http(s)://user:password@host:port` URL, or one of your own Webshare proxies when
-`WEBSHARE_API_KEY` is set (`services/accounts/egress/webshare.ts`, the only file that knows Webshare; a second vendor is one
-file and one line in `egress/index.ts`).
+a region: an `http(s)://user:password@host:port` URL, or one of the proxies a vendor lists when
+its key is set — Webshare (`WEBSHARE_API_KEY`, `services/accounts/egress/webshare.ts`), and the two
+residential backconnect vendors, ITRoyal (`IPROYAL_API_TOKEN`) and Decodo (`DECODO_API_KEY`, plus
+Decodo's separate gateway credential). A vendor is one file implementing the proxy-vendor interface
+and one line in `egress/index.ts`; the backconnect ones page once, so they take only the byte cap,
+not Webshare's page cap, and offer one country-targeted address per country so an on-failure swap
+rotates through different IP pools.
 Account → **Edit** → **Change egress proxy** sets, tests or removes one Account's proxy and its
 replacement mode. **Settings → Egress proxies** shows every Account behind one, what the router's
 checks say, why a dead one was not replaced, and each vendor's inventory with who uses it. A proxy

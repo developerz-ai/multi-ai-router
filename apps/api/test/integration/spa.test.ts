@@ -417,6 +417,8 @@ describe("the full app, mounted end to end", () => {
           now,
           coherence: { refreshCatalog: async () => {} },
           webshare: { apiKey: null, timeoutMs: 1000 },
+          iproyal: { token: null, timeoutMs: 1000 },
+          decodo: { apiKey: null, username: null, password: null, timeoutMs: 1000 },
           env: { ...readEgressProxyEnv({}), accountTestNowCooldownSeconds: 0 },
         }),
         accounts: createAccountsService({

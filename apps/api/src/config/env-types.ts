@@ -3,7 +3,7 @@ import type { readBackgroundEnv } from "./background"
 import type { ClaudeLoginConfig } from "./claude-login"
 import type { ClaudeSdkPacingConfig } from "./claude-sdk-pacing"
 import type { readCliOwnershipEnv } from "./cli-ownership"
-import type { EgressProxyEnv, WebshareEnv } from "./egress-proxy"
+import type { DecodoEnv, EgressProxyEnv, IproyalEnv, WebshareEnv } from "./egress-proxy"
 import type { AdminAuthConfig, AdminOidcConfig } from "./env-admin-types"
 import type { LogLevel } from "./env-defaults"
 import type { DataPlaneConfig, FailoverConfig, TranslationConfig } from "./env-routing-types"
@@ -263,6 +263,10 @@ export interface Env {
   readonly usageReport: UsageReportConfig
   /** Webshare, the one proxy vendor the console can list. A null key turns the listing off. */
   readonly webshare: WebshareEnv
+  /** ITRoyal, the residential backconnect vendor. A null token turns it off. */
+  readonly iproyal: IproyalEnv
+  /** Decodo, the residential backconnect vendor. A null secret turns it off. */
+  readonly decodo: DecodoEnv
   /** Dead-proxy checks and repair — `config/egress-proxy.ts`. */
   readonly egressProxy: EgressProxyEnv
   readonly oauthRefresh: OAuthRefreshConfig

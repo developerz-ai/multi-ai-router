@@ -218,6 +218,9 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
   const onCommitted: KeysServiceDeps["onCommitted"] = (id, kind) =>
     keyMutationCommitted(deps.coherence, id, kind)
 
+  // The egress vendor envs (Webshare plus the two backconnect vendors), each off until its key is set.
+  const egressVendors = { webshare: env.webshare, iproyal: env.iproyal, decodo: env.decodo }
+
   return {
     refresher,
     services: {
@@ -226,7 +229,7 @@ export function createAdminPlane(deps: AdminPlaneDeps): AdminPlane {
       // request path, `withAvailability` answers a read with what the router currently observes
       // rather than with the row the operator last wrote.
       accounts: decoratedAccounts,
-      egressProxies: createEgressProxyService({ ...deps, audit, webshare: env.webshare }),
+      egressProxies: createEgressProxyService({ ...deps, audit, ...egressVendors }),
       pools: createPoolsService({
         pools: deps.pools,
         accounts,

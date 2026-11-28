@@ -4,6 +4,15 @@ import { atLeastOne, nonEmpty } from "./fields"
 export const EGRESS_PROXY_ENV_FIELDS = {
   WEBSHARE_API_KEY: nonEmpty.optional(),
   WEBSHARE_TIMEOUT_MS: atLeastOne.optional(),
+  // Backconnect vendors (IPRoyal / Decodo). A null token/apiKey turns that vendor off; the
+  // timeout covers the whole listing. Decodo lists sub-user *usernames* only, so its gateway
+  // credential (username + password) is a second, separate secret: the API never returns a password.
+  IPROYAL_API_TOKEN: nonEmpty.optional(),
+  IPROYAL_TIMEOUT_MS: atLeastOne.optional(),
+  DECODO_API_KEY: nonEmpty.optional(),
+  DECODO_GW_USERNAME: nonEmpty.optional(),
+  DECODO_GW_PASSWORD: nonEmpty.optional(),
+  DECODO_TIMEOUT_MS: atLeastOne.optional(),
   EGRESS_PROXY_CHECK_INTERVAL_MINUTES: atLeastOne.optional(),
   EGRESS_PROXY_CHECK_TIMEOUT_MS: atLeastOne.optional(),
   EGRESS_PROXY_CHECK_BATCH_SIZE: atLeastOne.optional(),
@@ -20,6 +29,12 @@ export const EGRESS_PROXY_ENV_FIELDS = {
 interface RawEgressProxyEnv {
   readonly WEBSHARE_API_KEY?: string | undefined
   readonly WEBSHARE_TIMEOUT_MS?: number | undefined
+  readonly IPROYAL_API_TOKEN?: string | undefined
+  readonly IPROYAL_TIMEOUT_MS?: number | undefined
+  readonly DECODO_API_KEY?: string | undefined
+  readonly DECODO_GW_USERNAME?: string | undefined
+  readonly DECODO_GW_PASSWORD?: string | undefined
+  readonly DECODO_TIMEOUT_MS?: number | undefined
   readonly EGRESS_PROXY_CHECK_INTERVAL_MINUTES?: number | undefined
   readonly EGRESS_PROXY_CHECK_TIMEOUT_MS?: number | undefined
   readonly EGRESS_PROXY_CHECK_BATCH_SIZE?: number | undefined
@@ -32,6 +47,27 @@ interface RawEgressProxyEnv {
 /** Webshare's listing. A null key turns it off; the deadline covers the whole listing. */
 export interface WebshareEnv {
   readonly apiKey: string | null
+  readonly timeoutMs: number
+}
+
+/**
+ * IPRoyal's listing. The sub-user API returns each sub-user's own password, so the gateway URL is
+ * buildable here (see `services/accounts/egress/iproyal.ts`). A null token turns it off.
+ */
+export interface IproyalEnv {
+  readonly token: string | null
+  readonly timeoutMs: number
+}
+
+/**
+ * Decodo's listing. The API returns sub-user *usernames* only, so the gateway URL needs a second,
+ * explicit credential (`username` + `password`) — the sub-user the operator rents traffic on. All
+ * three must be set for the vendor to be on.
+ */
+export interface DecodoEnv {
+  readonly apiKey: string | null
+  readonly username: string | null
+  readonly password: string | null
   readonly timeoutMs: number
 }
 
@@ -54,12 +90,24 @@ export interface EgressProxyEnv {
 
 export function readEgressProxyEnv(raw: RawEgressProxyEnv): {
   readonly webshare: WebshareEnv
+  readonly iproyal: IproyalEnv
+  readonly decodo: DecodoEnv
   readonly egressProxy: EgressProxyEnv
 } {
   return {
     webshare: {
       apiKey: raw.WEBSHARE_API_KEY ?? null,
       timeoutMs: raw.WEBSHARE_TIMEOUT_MS ?? 10_000,
+    },
+    iproyal: {
+      token: raw.IPROYAL_API_TOKEN ?? null,
+      timeoutMs: raw.IPROYAL_TIMEOUT_MS ?? 10_000,
+    },
+    decodo: {
+      apiKey: raw.DECODO_API_KEY ?? null,
+      username: raw.DECODO_GW_USERNAME ?? null,
+      password: raw.DECODO_GW_PASSWORD ?? null,
+      timeoutMs: raw.DECODO_TIMEOUT_MS ?? 10_000,
     },
     egressProxy: {
       checkIntervalMinutes: raw.EGRESS_PROXY_CHECK_INTERVAL_MINUTES ?? 5,

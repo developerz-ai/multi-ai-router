@@ -27,7 +27,10 @@ describe("the free presets", () => {
     // z.ai's pinned surfaces are the coding plan's; the free Flash models live on the metered one.
     const overlaps = FREE_PRESETS.filter((preset) => pinned.includes(new URL(preset.baseUrl).host))
 
-    expect(overlaps.map((preset) => preset.id)).toEqual(["zai-free"])
+    // Three rows reuse a driver's own host on purpose: they are one-click quick-adds that declare
+    // the vendor's free model ids and key page, not new drivers. zai-free shares `api.z.ai`;
+    // nvidia-free and gemini-free share the router's own `nvidia` / `gemini` driver hosts.
+    expect(overlaps.map((preset) => preset.id)).toEqual(["zai-free", "nvidia-free", "gemini-free"])
   })
 
   test("what the console submits from a row is an account the API accepts", () => {

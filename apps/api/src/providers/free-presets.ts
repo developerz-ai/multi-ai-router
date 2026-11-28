@@ -171,4 +171,32 @@ export const FREE_PRESETS: readonly FreePreset[] = [
     note: "1M tokens a day for 30 days.",
     kind: "trial",
   },
+  {
+    // https://build.nvidia.com/ free developer allowance, models list read live, 2026-11-24.
+    // Base URL is the same one the router's own `nvidia` driver hits.
+    id: "nvidia-free",
+    name: "NVIDIA NIM (free developer allowance)",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+    keyUrl: "https://build.nvidia.com/",
+    models: [
+      "openai/gpt-oss-120b",
+      "openai/gpt-oss-20b",
+      "meta/llama-3.1-8b-instant",
+      "meta/llama-3.3-70b-instant",
+      "microsoft/phi-3-mini-128k",
+    ],
+    note: "Free developer allowance, varies by model (a 429 holds only the model it was for). Ids are `vendor/model` with no `:free` suffix.",
+    kind: "standing",
+  },
+  {
+    // Generative Language API free tier, OpenAI-compatible surface, read 2026-11-24. Base matches
+    // the router's own `gemini` driver (`/v1beta/openai`), so this preset builds the same URLs it does.
+    id: "gemini-free",
+    name: "Google Gemini (free tier)",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    keyUrl: "https://ai.google.dev/api-keys",
+    models: ["gemini-2.0-flash", "gemini-1.5-flash"],
+    note: "Free per-model daily + token quota (resets midnight Pacific). A project with billing never enabled is a permanent stop, not a cooldown.",
+    kind: "standing",
+  },
 ]

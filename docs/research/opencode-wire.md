@@ -8,6 +8,23 @@ Source cross-check: local upstream checkout `fe04656465` (2026-11-03),
 
 ## Captured inference
 
+A follow-up on 2026-11-27 local time used native OpenCode v2.4.2 and loopback
+mitmproxy. The anonymous `opencode/deepseek-v4.1-flash-free` request sent
+`POST /inference/openai/v1/chat/completions` with `Bearer public`, the same
+session headers listed below, system and user messages, `stream: true`,
+`stream_options.include_usage: true`, and `max_completion_tokens: 32000`.
+This run sent no tool definitions. The server returned HTTP 429
+`FreeUsageLimitError` with `Retry-After: 75879` seconds. The request identifies
+the public model alias. The response provides no evidence of the served checkpoint
+or successful inference.
+
+A second v2.4.2 run used the same synthetic prompt on stdin with a trailing
+newline and no positional message. It sent the same HTTP/1.1 endpoint, model,
+message roles, and streaming options. The redacted user message was one
+character longer, consistent with the newline reaching the request. The server
+returned the same typed 429 with `Retry-After: 75778` seconds. Both captures
+ended at the quota error, so neither shows a successful SSE response.
+
 Three isolated standalone CLI runs requested `TRACE_42`, with all tool permissions denied:
 
 | Identity | Explicit model | Endpoint | Result |
