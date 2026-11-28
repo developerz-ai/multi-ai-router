@@ -21,6 +21,7 @@ import { createFailoverTracker } from "./failovers"
 import { createInventoryMetrics } from "./inventory"
 import { createSelfMetrics } from "./self-metrics"
 import { createSeries } from "./series"
+import { createUpstreamTtfb } from "./upstream-ttfb"
 
 /**
  * The router's metrics, expressed as a mapping from things that already happen onto the series in
@@ -91,6 +92,7 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
     help: "Desired-versus-live pool roster drift items, by pool and kind.",
     labels: ["pool_id", "kind"],
   })
+  const upstreamTtfb = createUpstreamTtfb(s.registry, label)
   const self = createSelfMetrics(s.registry)
   countDropped = self.seriesDropped
   const settleFailover = createFailoverTracker((hop) => s.failovers.inc(hop))
@@ -168,6 +170,7 @@ export function createMetrics(options: MetricsOptions = {}): RouterMetrics {
         record.latencyMs / 1_000,
       )
       observeTokens(record, provider, account_id)
+      upstreamTtfb(record)
       // Every attempt that reached an account, priced or not — the ratio is the point, and a
       // counter that only moved for the priced ones would report 100% coverage of whatever it
       // happened to cover. The attempts excluded by the early return above never chose a provider,

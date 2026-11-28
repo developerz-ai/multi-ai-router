@@ -251,8 +251,15 @@ A last SSE frame the upstream closed without its blank line is still a frame, an
 it exactly as the translator's parser does (through 2.76.1 it discarded one: the client got its
 completion and the row said `usage_unobservable`). Evidence is lost only when a frame is not whole,
 and the `upstream usage unread` line names why in `lostTo`: `trailing` a stream cut inside its last frame,
-`json` a frame that is not JSON, `decode` bytes that are not UTF-8, `salvage` an over-cap frame the
-scanner could not close, `content-type` a body that is neither SSE nor JSON.
+small or over the observation cap, `json` a frame that is not JSON, `decode` bytes that are not UTF-8,
+`salvage` an over-cap frame that ended (its blank line arrived) but was not one closed object,
+`content-type` a body that is neither SSE nor JSON. Where the line carries `eventTypes`, a lost
+frame also counts there as `lost.<event>` (`lost` when it named no event), so the tally says which
+frame was lost. Until this change an over-cap frame the stream ended inside read `salvage`, which looked
+like a scanner fault. It was a cut: one Codex account showed about 4% of passthrough rows as
+`usage_unobservable` with a tally that stopped at `response.output_item.added`, the stream having
+ended inside the over-cap `response.completed` that carries the usage. No reader can take usage
+from half an object, so those rows stay unknown usage, priced `unknown`, and are still written.
 
 These rows used to be priced `0.000000`. Prod, 2026-11-10/11: 1,644
 ChatGPT/Codex attempts translated from `/v1/chat/completions` read as free completions.
@@ -1069,6 +1076,7 @@ identity beyond its label.
 | `router_request_duration_seconds` | histogram | `ingress_dialect`, `model`, `streamed` | End-to-end client request latency, upstream time included |
 | **`router_overhead_seconds`** | histogram | `ingress_dialect`, `path` (`passthrough`\|`translate`\|`agent_sdk`) | **Time spent in the router, excluding upstream.** First-class: shown on the dashboard next to upstream latency, because "the router is slow" and "the provider is slow" are different problems. A regression here is a bug, not a tuning opportunity ([06-protocol-translation.md](06-protocol-translation.md)) |
 | `router_upstream_duration_seconds` | histogram | `provider`, `account_id`, `streamed` | Upstream time alone. Together with the above, the two halves always add up |
+| `router_upstream_ttfb_seconds` | histogram | `provider`, `model` | An account's time to its first relayed byte, measured from the attempt's start: no earlier failover, selection or recovery wait, only the account's answer time plus that attempt's own request preparation (decrypt, header build, a translated body's conversion; all of it already counted in `router_overhead_seconds`). The row's `ttfbMs` is measured from the request entering the router, so it is the client's wait and cannot separate the two; this series can. `model` is the name the router sent (`upstreamModel`, after the alias map). **Successful attempts only**, so every `model` value is one an account in this deployment served: a client's typo sent to an account that refused it mints no series. Buckets 0.1 s to 120 s |
 | `router_upstream_attempts_total` | counter | `provider`, `account_id`, `outcome` | Upstream attempts — one per `UsageRecord` row |
 | `router_tokens_total` | counter | `provider`, `account_id`, `model`, `direction` (`input`\|`output`\|`cache_read`\|`cache_creation`) | Tokens consumed. `input` is the uncached remainder — sum all three input directions for prompt size |
 | `router_cost_basis_total` | counter | `provider`, `model`, `basis` (`metered`\|`notional`\|`unknown`) | **How much of this deployment's traffic the price table can see.** Every attempt that reached an account, priced or not — a counter that moved only for the priced ones would report 100% coverage of whatever it happened to cover. `basis="unknown"` over the total is the coverage ratio: the fraction of spend nobody here can report. Counted per attempt rather than in dollars, because a dollar sum would answer the question with the very number that is missing. Labelled by model (the name the client asked for, as on `router_tokens_total`) so a table gone stale against a renamed family shows up as one model going unknown rather than as a total quietly drifting |
@@ -1107,7 +1115,9 @@ deployment's own inventory; `session_id`, `request_id`, and user-supplied string
 metric labels — they live on the `UsageRecord` and in logs. `model` is the one label a client can
 influence: on the request series it is the requested name only when the routing catalog resolved
 it, else `other`, so a typo loop or a hostile key cannot mint series; it is also truncated to 64
-characters. As a backstop every metric stops adding series at `METRICS_MAX_SERIES_PER_METRIC`
+characters. `router_upstream_ttfb_seconds` labels the upstream model name only on a successful
+attempt, which bounds it by the models the deployment's accounts actually serve, under the same
+64-character cut. As a backstop every metric stops adding series at `METRICS_MAX_SERIES_PER_METRIC`
 (default 4096) rather than growing without bound. The first refusal logs a `warn` naming the
 metric; every refusal counts on `router_metric_series_dropped_total{metric}`.
 

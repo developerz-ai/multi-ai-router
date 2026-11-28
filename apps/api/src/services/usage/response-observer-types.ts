@@ -7,9 +7,13 @@ import type { TokenCounts } from "./tokens"
  * `contentFrames`: whether the `inspectPayload` hook needs content frames (deltas, block start/stop,
  * ping). Absent means it does, which keeps every frame parsed. Read per frame, so a getter may flip
  * it once the hook has seen what it needed.
+ *
+ * `lost`: told the SSE `event:` name of each frame whose evidence was lost (undefined when the frame
+ * named none), so a diagnostic tally can say which frame a stream lost. Must not throw.
  */
 export type ObservationDescriptor = ResponseObservationDescriptor & {
   readonly contentFrames?: "inspect" | "skip"
+  readonly lost?: (event: string | undefined) => void
 }
 export interface ResponseObservationSpec {
   readonly dialect: Dialect

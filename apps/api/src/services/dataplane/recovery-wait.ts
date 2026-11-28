@@ -4,6 +4,7 @@ import type { RejectedCandidate, SelectionDecision, SelectionResult } from "../r
 import type { ActiveRequestLease } from "./active-requests"
 import { isAwaitingRecoveryPermit, owesRefusalRecord } from "./chain-refusals"
 import type { RecoveryWaitOptions } from "./dispatcher-config"
+import { awaitsModelHold } from "./model-hold-wait"
 import type { DataPlaneClock } from "./types"
 
 /**
@@ -75,6 +76,10 @@ export interface RecoveryWaiter {
    * without sleeping, once `probeBudgetMs` since the first pause is spent.
    */
   pauseForProbe(): Promise<boolean>
+  /** Wall-clock instant the model-throttle budget reaches, read from `now`. */
+  modelDeadline(now: Date): Date
+  /** Sleeps one interval within the model-throttle budget; false, without sleeping, once spent. */
+  pauseForModel(): Promise<boolean>
 }
 
 /** One budget per request, shared by every re-selection and chain retry it makes. */
@@ -88,6 +93,8 @@ export function createRecoveryWaiter(deps: {
   readonly onWaited?: (milliseconds: number) => void
 }): RecoveryWaiter {
   const budgetMs = deps.options?.budgetMs ?? 0
+  const modelBudgetMs = deps.options?.modelThrottleBudgetMs ?? 0
+  let modelWaitedMs = 0
   const probeBudgetMs = Math.max(budgetMs, deps.options?.probeBudgetMs ?? 0)
   const intervalMs = Math.max(1, deps.options?.intervalMs ?? 250)
   let started: number | undefined
@@ -115,6 +122,26 @@ export function createRecoveryWaiter(deps: {
     deadline: (now) => new Date(now.getTime() + left(budgetMs)),
     pause: () => sleepWithin(budgetMs, "waiting for a recovery permit"),
     pauseForProbe: () => sleepWithin(probeBudgetMs, "riding a recovery probe in flight"),
+    // Its own budget, measured in time asleep, so a recovery wait before it does not spend it.
+    modelDeadline: (now) => new Date(now.getTime() + Math.max(0, modelBudgetMs - modelWaitedMs)),
+    pauseForModel: async () => {
+      const remaining = modelBudgetMs - modelWaitedMs
+      if (remaining <= 0) return false
+      if (!logged.has("model")) {
+        logged.add("model")
+        deps.log?.info("waiting out a model throttle hold", { budgetMs: modelBudgetMs })
+      }
+      const interval = Math.min(intervalMs, remaining)
+      // Spent by the interval asked for, not the clock read, so the loop ends on any clock.
+      modelWaitedMs += interval
+      const before = deps.clock.elapsed()
+      try {
+        await deps.sleep(interval, deps.signal)
+      } finally {
+        deps.onWaited?.(Math.max(0, deps.clock.elapsed() - before))
+      }
+      return true
+    },
   }
 }
 
@@ -147,6 +174,9 @@ export async function selectThroughRecovery(
     if (selection.ok) return selection
     if (awaitsRouterRecovery(selection.decision, waiter.deadline(now()))) {
       if (await waiter.pause()) continue
+    }
+    if (awaitsModelHold(selection.decision, waiter.modelDeadline(now()))) {
+      if (await waiter.pauseForModel()) continue
     }
     if (!ridesProbe(selection.decision, probing) || !(await waiter.pauseForProbe()))
       return selection

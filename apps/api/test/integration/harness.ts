@@ -59,8 +59,12 @@ export interface HarnessOptions {
   readonly health?: HealthStoreOptions
   /** Overrides the default `sticky` policy, for a suite that needs a deterministic chain order. */
   readonly selection?: SelectionOptions
-  /** Extra failover knobs (overload retries); `maxAttempts` stays its own option. */
-  readonly failover?: { readonly overloadRetries?: number; readonly overloadRetryBaseMs?: number }
+  /** Extra failover knobs (overload retries, model-throttle wait); `maxAttempts` stays its own option. */
+  readonly failover?: {
+    readonly overloadRetries?: number
+    readonly overloadRetryBaseMs?: number
+    readonly modelThrottleWaitMs?: number
+  }
   /** `CLAUDE_SDK_QUEUE_WAIT_MS`. Omitted, the shared Claude concurrency gate queues without a bound. */
   readonly claudeQueueWaitMs?: number
   /**

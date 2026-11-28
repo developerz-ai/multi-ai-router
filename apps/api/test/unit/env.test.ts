@@ -577,6 +577,8 @@ describe("parseEnv", () => {
         maxAttempts: undefined,
         overloadRetries: 2,
         overloadRetryBaseMs: 1_000,
+        modelThrottleWaitMs: 30_000,
+        modelThrottleSuccessesPerStep: 3,
         failureThreshold: 3,
         baseBackoffMs: 1_000,
         maxBackoffMs: 300_000,

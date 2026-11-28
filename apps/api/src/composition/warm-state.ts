@@ -82,6 +82,8 @@ export function createWarmState(
     failureThreshold: env.failover.failureThreshold,
     baseBackoffMs: env.failover.baseBackoffMs,
     maxBackoffMs: env.failover.maxBackoffMs,
+    // A run of this many successes steps a model's throttle hold down one strike.
+    modelThrottleSuccessesPerStep: env.failover.modelThrottleSuccessesPerStep,
     authFailureCooldownMs: env.failover.authFailureCooldownMs,
     authFailureMaxCooldownMs: env.failover.authFailureMaxCooldownMs,
     probeHoldMs: env.failover.halfOpenHoldMs,

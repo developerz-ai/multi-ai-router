@@ -54,7 +54,7 @@ export function observingModelOutput(
   const tally = descriptor?.streamCap === undefined ? undefined : createEventTally()
   let seen = false
   return {
-    ...(tally === undefined ? {} : { eventTypes: tally.counts }),
+    ...(tally === undefined ? {} : { eventTypes: tally.counts, lost: tally.lost }),
     ...(descriptor?.reportedCost === undefined ? {} : { reportedCost: descriptor.reportedCost }),
     terminalPolicy: descriptor?.terminalPolicy ?? "evidence-only",
     get contentFrames() {

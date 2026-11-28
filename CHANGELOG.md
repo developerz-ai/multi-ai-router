@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.83.0] — 2026-11-28
+
+### Fixed
+
+- A model-scoped `429` (a vendor throttling one model on an account, such as a free NVIDIA key) paces that (account, model) instead of restarting its backoff on every refusal. The hold's strikes outlive the hold: each `429` steps it one doubling up the breaker's backoff schedule, a run of `ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP` successes (default 3) steps it one down, and they are forgotten only after a whole `ROUTING_MAX_BACKOFF_MS` span with no `429`. Through 2.82.1 a lapsed hold took its strikes with it, so with requests seconds apart every `429` restarted at the one-second first step. Prod 2026-11-28: one free key answered 36% of `/v1/messages` `429` (520 of 1,430 in three hours), and a model's `429` rate rose from 0.16 with nothing started in the minute before to 0.58 with seven. Pinned by `test/unit/dataplane/model-throttle-memory.test.ts` (an interleaved `429`/`200` sequence keeps stepping).
+
+### Added
+
+- `ROUTING_MODEL_THROTTLE_WAIT_MS` (default `30000`, `0` disables): a request waits a model throttle hold out instead of answering `429`. A chain whose walk ran out right after such a `429` asks the same account again once the hold it just took lapses, before any byte is on the wire; a fresh selection refused while an in-scope account holds the requested model re-selects every `RECOVERY_COORDINATOR_INTERVAL_MS` until the hold lapses. One budget per chain and one per request's re-selections; a hold past the budget is answered at once with its `Retry-After`. The model is never changed (non-negotiable 4). Pinned by `test/unit/routing/model-throttle-wait.test.ts` and `test/integration/model-throttle-wait.test.ts`. Spec: `docs/idea/05-routing-and-failover.md`.
+- `ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP` (default `3`, `0` refused at boot).
+- New `router_upstream_ttfb_seconds` histogram (`provider`, `model`): an account's time to its first relayed byte, measured from the attempt's start. Earlier failovers, selection and recovery waits are not in it, so a slow first token can be told apart from router overhead (`router_overhead_seconds`). The row's `ttfbMs` stays the client's wait from request entry. `model` is the name the router sent upstream, after the alias map, and only successful attempts are observed, so every label value is a model an account in the deployment served, cut at 64 characters, under the per-metric series ceiling. Fed from the usage drain, so no request pays for it. Spec: `docs/idea/08-observability.md`.
+
+### Changed
+
+- The `upstream usage unread` line tells a cut stream from a scanner refusal. An over-cap SSE frame the stream ended inside, before its JSON object closed, logs `lostTo: "trailing"`, as a small frame cut the same way already did; it logged `salvage`, which read as a salvage-scanner fault. `salvage` now means only an over-cap frame that ended but was not one closed object. Where the line carries `eventTypes`, the lost frame counts there as `lost.<event>`, so a Codex stream cut inside its over-cap `response.completed` reads `"lost.response.completed": 1`. These rows are still written as unknown usage (null tokens, cost basis `unknown`, `usage_unobservable`): no usage was salvageable from them.
+
 ## [2.82.1] — 2026-11-28
 
 ### Fixed
@@ -2658,3 +2674,4 @@ your tooling config.
 [2.81.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.81.0
 [2.82.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.82.0
 [2.82.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.82.1
+[2.83.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.83.0

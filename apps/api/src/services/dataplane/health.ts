@@ -13,7 +13,7 @@ import {
 import { type KeyCapRefusal, keyCapResetFor } from "../routing/plan-reset"
 import { mergeQuotaWindows } from "../routing/quota"
 import { createHealthDurability } from "./health-durability"
-import { refuseHeld, throttleHeld } from "./health-model-holds"
+import { modelHoldMethods } from "./health-model-holds"
 import {
   createHealthObservations,
   type HealthAccountFacts,
@@ -80,6 +80,8 @@ export interface HealthStore {
     now: Date,
     caller?: BreakerOptions,
   ): void
+  /** `upstreamModel` served here: a run of these steps its throttle hold down (`servedHeld`). */
+  modelServed(accountId: string, upstreamModel: string, now: Date): void
   admitProbe(accountId: string, now: Date): ProbeAdmission
   releaseProbe(accountId: string, token?: number): void
   /** The live probe hold's own expiry, else a whole fresh hold from `now`: the honest wait. */
@@ -228,22 +230,7 @@ export function createHealthStore(options: HealthStoreOptions = {}): HealthStore
       }
     },
 
-    refuseModel(accountId, upstreamModel, now) {
-      const ttlMs = options.modelRefusalTtlMs
-      if (ttlMs === undefined) return
-      write(accountId, { refusedModels: refuseHeld(read(accountId), upstreamModel, now, ttlMs) })
-    },
-
-    throttleModel(accountId, upstreamModel, failure, now, caller) {
-      const held = throttleHeld(
-        read(accountId),
-        upstreamModel,
-        failure,
-        now,
-        breakerOptions(caller),
-      )
-      write(accountId, { refusedModels: held })
-    },
+    ...modelHoldMethods(read, write, options, configured, breakerOptions),
 
     admitProbe(accountId, now) {
       const state = read(accountId)

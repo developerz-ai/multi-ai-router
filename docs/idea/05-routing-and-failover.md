@@ -184,6 +184,32 @@ upstream-provider throttle and every `:free` variant this way; a key-level `429`
 still cools the account (prod 2026-11-14: one `google/gemma-4-31b-it:free` `429` cooled
 `openrouter-dz-coding-30d` and its next, paid, request was refused).
 
+**The hold is the model's pace.** A free tier that throttles softly answers `429` to a share of
+requests and `200` to the rest, with no `Retry-After`, and the share rises with the requests started
+in the last minute (prod 2026-11-28, one NVIDIA free key: 36% of `/v1/messages` answered `429`; the
+`429` rate on one model went from 0.16 with nothing started in the minute before to 0.58 with seven).
+So a throttle's strikes outlive its hold: each `429` steps the hold one doubling up the breaker's
+backoff schedule, a run of `ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP` successes (default 3) on that
+pair steps it one down, and the strikes are forgotten only after a whole `ROUTING_MAX_BACKOFF_MS`
+span with no `429`. A lapsed hold refuses nothing; it only remembers. Through 2.82.1 the strikes went
+with the hold, so with requests seconds apart every `429` restarted at the first one-second step and
+nothing was paced. Interleaved successes do not reset it: a strict alternation still climbs.
+
+**A request waits a model hold out instead of answering `429`.** Within `ROUTING_MODEL_THROTTLE_WAIT_MS`
+(default 30000, one budget per chain and one per request's re-selections; `0` disables both):
+
+- a chain whose walk ran out right after such a `429` asks that same account again once the hold it
+  just took lapses (`routing/failover-progress.ts`, `waitOutThrottle`), always before a byte is on
+  the wire; a hold longer than what is left of the budget is not waited, and the client hears the
+  `429` with its `Retry-After`;
+- a selection refused while some in-scope account holds the requested model off itself on such a
+  hold (`RejectedCandidate.modelHold`) re-selects every `RECOVERY_COORDINATOR_INTERVAL_MS` until the
+  hold lapses inside the budget (`dataplane/model-hold-wait.ts`). A provider-reported reset past the
+  budget, or any other rejection, is answered at once as before.
+
+The client picks the model (non-negotiable 4): no wait moves a request onto another model. A client
+that wants a different model when its pinned one is throttled names it on its next request.
+
 ### Context tags — a client hint, not part of the name
 
 Claude Code appends a context-window tag to the model it sends — `opus[1m]`, `claude-opus-5-5[1m]`,

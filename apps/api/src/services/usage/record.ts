@@ -65,6 +65,11 @@ export interface UsageRecord {
   readonly latencyMs: number
   /** Time to the first relayed byte. Null when no byte was relayed. */
   readonly ttfbMs: number | null
+  /**
+   * The same first byte measured from this attempt's start: the account's answer time. Metrics
+   * only (`router_upstream_ttfb_seconds`), so it has no column; null or absent when none relayed.
+   */
+  readonly attemptTtfbMs?: number | null
   /** Time inside the router, excluding upstream. Budgeted at <5 ms p99. */
   readonly routerOverheadMs: number
   readonly outcome: UsageOutcome
@@ -101,7 +106,8 @@ export function errorClassOf(error: unknown): string | null {
  * The persistence shape. Kept here rather than in a repository because the mapping is pure and
  * `packages/db` owns SQL, not translation.
  *
- * Every field on {@link UsageRecord} now has a column. Four of them did not: `upstreamModel`,
+ * Every field on {@link UsageRecord} has a column except `attemptTtfbMs`, which exists only to feed
+ * a metric from the drain. Four once had none: `upstreamModel`,
  * `streamed`, `httpStatus`, and `errorClass` were assembled on the request path and silently
  * dropped here, so the record's own doc comments described data that existed nowhere.
  */

@@ -1,14 +1,16 @@
 /**
- * The failover chain's progress folding and its overload wait, split from the planner
- * (`failover.ts`) because they change for a different reason: the planner decides *where* the next
+ * The failover chain's progress folding and its in-place retries (a stale-session replay, the
+ * overload and model-throttle waits), split from the planner (`failover.ts`) because they change for
+ * a different reason: the planner decides *where* the next
  * attempt goes; these fold what an attempt said into the state it decides on. All pure.
  */
 
-import type {
-  FailoverDecision,
-  FailoverOptions,
-  FailoverProgress,
-  FailoverStopReason,
+import {
+  DEFAULT_MAX_IN_PLACE_RETRIES,
+  type FailoverDecision,
+  type FailoverOptions,
+  type FailoverProgress,
+  type FailoverStopReason,
 } from "./failover"
 import type { AttemptFailure, FailureKind } from "./failure-kind"
 import type { Candidate } from "./types"
@@ -33,7 +35,7 @@ export function waitOutOverload(
     lastFailure.kind === "overloaded"
       ? progress.attemptedAccountIds[progress.attemptedAccountIds.length - 1]
       : progress.overloadedAccountId
-  if (busyId === undefined) return { action: "stop", reason: exhausted }
+  if (busyId === undefined) return waitOutThrottle(ordered, progress, options, exhausted)
   const cap = Math.max(0, Math.trunc(options.overloadRetries ?? 0))
   if (progress.overloadRetries >= cap) return { action: "stop", reason: exhausted }
   const candidate = ordered.find((entry) => entry.account.id === busyId)
@@ -53,12 +55,83 @@ export function waitOutOverload(
   }
 }
 
-/** Why an attempt went to the same account again: a session replay, or a wait on a busy provider. */
-export type InPlaceReason = "replay" | "overload"
+/**
+ * A stale session is recovery in place, not a hop: the mapping is evicted and the request is
+ * replayed once on the **same** account. The router never retries a `resume` against another one.
+ */
+export function replayInPlace(
+  ordered: readonly Candidate[],
+  progress: FailoverProgress,
+  options: FailoverOptions,
+): FailoverDecision {
+  const cap = options.maxInPlaceRetries ?? DEFAULT_MAX_IN_PLACE_RETRIES
+  if (progress.inPlaceRetries >= cap) return { action: "stop", reason: "not-retryable" }
+
+  const lastId = progress.attemptedAccountIds[progress.attemptedAccountIds.length - 1]
+  const candidate = ordered.find((entry) => entry.account.id === lastId)
+  if (candidate === undefined) return { action: "stop", reason: "candidates-exhausted" }
+
+  return { action: "retry-in-place", candidate, attempt: progress.attemptedAccountIds.length }
+}
+
+/**
+ * The walk ran out and the account that last answered held the requested model off itself
+ * ({@link noteModelThrottle}): no other candidate serves the name, and the hold is the router's own
+ * pace for that (account, model), seconds long. So that account is asked again once the hold lapses
+ * — before any byte is on the wire — while the waits fit `modelThrottleWaitMs`, one budget per
+ * chain. A hold past what is left is not waited: the client hears the `429` and its `Retry-After`.
+ * Prod 2026-11-28: a soft free-tier throttle answered a third of one model's requests `429`, and
+ * each one reached the client in ~350 ms while a retry seconds later was likelier to serve.
+ */
+function waitOutThrottle(
+  ordered: readonly Candidate[],
+  progress: FailoverProgress,
+  options: FailoverOptions,
+  exhausted: FailoverStopReason,
+): FailoverDecision {
+  const throttled = progress.throttled
+  if (throttled === undefined) return { action: "stop", reason: exhausted }
+  const budget = Math.max(0, options.modelThrottleWaitMs ?? 0)
+  if ((progress.throttleWaitedMs ?? 0) + throttled.delayMs > budget)
+    return { action: "stop", reason: exhausted }
+  const candidate = ordered.find((entry) => entry.account.id === throttled.accountId)
+  if (candidate === undefined) return { action: "stop", reason: exhausted }
+  return {
+    action: "retry-in-place",
+    candidate,
+    attempt: progress.attemptedAccountIds.length,
+    delayMs: throttled.delayMs,
+    throttle: true,
+  }
+}
+
+/**
+ * Folds one failed attempt's model hold into the progress: `delayMs` is how long the hold it just
+ * took (or extended) has to run, `null` when the attempt took none, which forgets an earlier one
+ * from that same account. Pure; returns a new value.
+ */
+export function noteModelThrottle(
+  progress: FailoverProgress,
+  accountId: string,
+  delayMs: number | null,
+): FailoverProgress {
+  if (delayMs !== null)
+    return { ...progress, throttled: { accountId, delayMs: Math.max(0, delayMs) } }
+  if (progress.throttled?.accountId !== accountId) return progress
+  const { throttled: _forgotten, ...rest } = progress
+  return rest
+}
+
+/**
+ * Why an attempt went to the same account again: a session replay, a wait on a busy provider, or a
+ * wait for a model hold to lapse.
+ */
+export type InPlaceReason = "replay" | "overload" | "throttle"
 
 /**
  * Folds one dispatched attempt into the progress. Returns a new value; nothing mutates. `true` is a
- * replay, as it was before the two in-place reasons had their own counters.
+ * replay, as it was before the in-place reasons had their own counters. A `throttle` retry spends
+ * the hold it was planned on ({@link waitOutThrottle} waits exactly `throttled.delayMs`).
  */
 export function recordAttempt(
   progress: FailoverProgress,
@@ -67,14 +140,19 @@ export function recordAttempt(
 ): FailoverProgress {
   if (inPlace === false)
     return { ...progress, attemptedAccountIds: [...progress.attemptedAccountIds, accountId] }
+  if (inPlace === "throttle") {
+    const waited = (progress.throttleWaitedMs ?? 0) + (progress.throttled?.delayMs ?? 0)
+    return { ...progress, throttleWaitedMs: waited }
+  }
   return inPlace === "overload"
     ? { ...progress, overloadRetries: progress.overloadRetries + 1 }
     : { ...progress, inPlaceRetries: progress.inPlaceRetries + 1 }
 }
 
-/** The in-place reason a planned retry carries: only an overload wait states a delay. */
+/** The in-place reason a planned retry carries: a replay states no delay. */
 export function inPlaceReason(decision: FailoverDecision): InPlaceReason | false {
   if (decision.action !== "retry-in-place") return false
+  if (decision.throttle === true) return "throttle"
   return decision.delayMs === undefined ? "replay" : "overload"
 }
 
