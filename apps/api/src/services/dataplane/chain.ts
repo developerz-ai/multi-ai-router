@@ -259,7 +259,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
     }
 
     quota?.close()
-    recordChainFailure(
+    const throttleDelayMs = recordChainFailure(
       ctx,
       servable,
       outcome,
@@ -277,7 +277,7 @@ export async function runChain(ctx: ChainContext): Promise<Response> {
 
     lastFailure = outcome.failure
     failureKinds.push(outcome.failure.kind)
-    progress = noteFailure(progress, servable, outcome.failure)
+    progress = noteFailure(progress, servable, outcome.failure, throttleDelayMs)
     held = finishFailedAttempt(
       ctx,
       servable,

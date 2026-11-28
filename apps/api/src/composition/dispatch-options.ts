@@ -32,6 +32,7 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
       ...(failover.maxAttempts === undefined ? {} : { maxAttempts: failover.maxAttempts }),
       overloadRetries: failover.overloadRetries,
       overloadRetryBaseMs: failover.overloadRetryBaseMs,
+      modelThrottleWaitMs: failover.modelThrottleWaitMs,
     },
     selection: {
       boundAccountCoolingDown: failover.boundAccountCoolingDown,
@@ -46,6 +47,7 @@ export function dispatchOptionsFromEnv(env: Env): DispatchOptions {
     recoveryWait: {
       budgetMs: env.recovery.requestWaitMs,
       probeBudgetMs: env.recovery.probeWaitMs,
+      modelThrottleBudgetMs: failover.modelThrottleWaitMs,
       intervalMs: env.recovery.intervalMs,
     },
     bufferedBodyMaxBytes: env.upstreamBufferedBodyMaxBytes,

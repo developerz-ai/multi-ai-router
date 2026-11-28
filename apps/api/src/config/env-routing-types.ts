@@ -110,6 +110,13 @@ export interface FailoverConfig {
   readonly overloadRetries: number
   /** The first wait before such a retry; doubles per retry. */
   readonly overloadRetryBaseMs: number
+  /**
+   * Once the walk runs out after a `429` that held one model off its account, the most one chain
+   * waits, in total, for such holds to lapse before asking that account again. `0` waits none.
+   */
+  readonly modelThrottleWaitMs: number
+  /** Successes in a row on a throttled (account, model) that step its hold down one strike. */
+  readonly modelThrottleSuccessesPerStep: number
   /** Consecutive 5xx or connection failures before an account's breaker trips. */
   readonly failureThreshold: number
   /** First cooldown step. Doubles per consecutive failure. */

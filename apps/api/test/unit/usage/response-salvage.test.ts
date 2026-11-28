@@ -619,3 +619,27 @@ test("an expanded numeric repeat keeps the slot the literal spellings filled (2.
   expect(scanner.retainedBytes).toBeLessThanOrEqual(64)
   expect(scanner.finish()).toEqual({ usage: 1, status: "completed" })
 })
+
+test("an over-cap frame the stream ends inside reads as trailing; one that ends malformed, as salvage", () => {
+  const lost: (string | undefined)[] = []
+  const observe = (text: string) => {
+    const observer = createResponseObserver({
+      dialect: "openai-responses",
+      operation: "messages",
+      contentType: "text/event-stream",
+      maximumObservationBytes: 1024,
+      descriptor: { terminalPolicy: "evidence-only", lost: (event) => lost.push(event) },
+    })
+    feed(observer, text, 333)
+    return observer.finish()
+  }
+  const completed = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { instructions: PADDING.slice(0, 5000), usage: { input_tokens: 1 } } })}`
+  expect(observe(completed.slice(0, 3000))).toMatchObject({
+    evidenceUnavailable: true,
+    unavailableReason: "trailing",
+    terminal: "none",
+    usageStated: false,
+  })
+  expect(observe(`${completed.slice(0, 3000)}\n\n`)).toMatchObject({ unavailableReason: "salvage" })
+  expect(lost).toEqual(["response.completed", "response.completed"])
+})

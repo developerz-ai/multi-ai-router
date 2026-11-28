@@ -186,3 +186,71 @@ describe("a translated Codex success whose usage was never read", () => {
     })
   })
 })
+
+/**
+ * Prod (Codex OAuth, about 4% of one account's passthrough `/v1/responses` requests): `success` +
+ * `usage_unobservable` with `"terminal":"none"`, `"lostTo":"salvage"` and an event tally that
+ * stops at `response.output_item.added` / `item.function_call`. A Codex `response.completed`
+ * echoes instructions, tools and output, so it is over the observation cap and read by the
+ * bounded salvage scanner; the scanner reads such a frame whole (`response-salvage.test.ts`). It
+ * loses one only when the bytes stop before the frame closes: the stream ended inside it, and no
+ * reader could take usage from a half object. The line used to call that `salvage`, which reads
+ * as a scanner fault; it now says `trailing`, as for a small frame cut the same way, and the tally
+ * names the frame that was lost.
+ */
+describe("a same-dialect Codex stream that ends inside its over-cap response.completed", () => {
+  test("keeps the row as unknown usage and names the cut frame on the log line", async () => {
+    sequence = 0
+    const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "shell" }
+    const whole = frame("response.completed", {
+      response: {
+        ...RESPONSE,
+        status: "completed",
+        instructions: "i".repeat(100_000),
+        output: [{ ...call, arguments: "{}" }],
+        usage: USAGE,
+      },
+    })
+    const body = [
+      frame("response.created", { response: { ...RESPONSE, status: "in_progress" } }),
+      frame("response.in_progress", { response: { ...RESPONSE, status: "in_progress" } }),
+      frame("response.output_item.added", { output_index: 0, item: call }),
+      // Cut after the bytes passed the cap and before the object closed.
+      whole.slice(0, 90_000),
+    ].join("")
+    const lines: Record<string, unknown>[] = []
+    const logger = createLogger({
+      level: "warn",
+      write: (line) => void lines.push(JSON.parse(line) as Record<string, unknown>),
+    })
+    const { app, usage } = harness({
+      accounts: [codexAccount()],
+      responses: [
+        () => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      ],
+      logger,
+    })
+    const request = { model: "gpt-5.6-terra", stream: true, store: false, input: "hi" }
+    const res = await app.request("/v1/responses", post(JSON.stringify(request), bearer()))
+    expect(res.status).toBe(200)
+    await res.text()
+    await settle()
+    expect(usage.rows).toHaveLength(1)
+    expect(usage.rows[0]).toMatchObject({
+      ...UNKNOWN_USAGE,
+      egressMode: "passthrough",
+      errorClass: "usage_unobservable",
+    })
+    const line = lines.find((entry) => entry.msg === "upstream usage unread")
+    expect(line).toMatchObject({
+      reason: "usage_unobservable",
+      terminal: "none",
+      lostTo: "trailing",
+    })
+    expect(line?.eventTypes).toMatchObject({
+      "response.output_item.added": 1,
+      "item.function_call": 1,
+      "lost.response.completed": 1,
+    })
+  })
+})

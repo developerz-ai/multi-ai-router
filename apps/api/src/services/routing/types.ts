@@ -288,11 +288,13 @@ export interface ScopeGroup {
 /**
  * One model held off one account. `unsupported`: the provider said it does not serve the name (until
  * `MODEL_REFUSAL_TTL_SECONDS` lapses). `rate-limited`: it throttled that model only, until `until` —
- * the provider's reset or the breaker's own backoff, `strikes` stepping it while the hold stands.
+ * the provider's reset or the breaker's own backoff, `strikes` stepping it; its strikes outlive
+ * `until`, which alone refuses (`dataplane/health-model-holds.ts`).
  */
 export interface ModelRefusal {
   readonly until: Date
   readonly reason: "unsupported" | "rate-limited"
   readonly resetSource?: ResetSource
   readonly strikes?: number
+  readonly served?: number // successes in a row; a full run steps `strikes` down one
 }
