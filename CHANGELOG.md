@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.82.1] — 2026-11-28
+
+### Fixed
+
+- `main` is green again: two egress vendor provenance comments (`egress/iproyal.ts`, `egress/decodo.ts`) named a private deployment, which the public-tree guard refuses (`apps/api/test/integration/public-tree.test.ts`). They now say where the values came from without naming it; the guard is unchanged. The `v2.82.0` tag was refused by the release gate for this failure and published no image, so 2.82.1 is the first published release carrying the 2.82.0 changes below.
+
 ## [2.82.0] — 2026-11-28
 
 ### Added
@@ -2651,3 +2657,4 @@ your tooling config.
 [2.80.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.80.0
 [2.81.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.81.0
 [2.82.0]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.82.0
+[2.82.1]: https://github.com/developerz-ai/multi-ai-router/releases/tag/v2.82.1
