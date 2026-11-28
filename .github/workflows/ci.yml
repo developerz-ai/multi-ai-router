@@ -11,7 +11,7 @@ on:
 # a tag names, and a second merge cancelling them would leave that commit with
 # no verdict.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
