@@ -79,19 +79,10 @@ schedules:
     days: [mon]
     hours_utc: [3]
     brief_file: .dz/schedules/release-due.md
-  # The one exception, so a published high/critical or KEV-listed advisory fix does not wait up to a week for the
-  # slot above. It only files an ask on the strict criteria in its brief (owner, 2026-11-26).
-  - name: security-release
-    days: [tue, wed, thu, fri, sat, sun]
-    hours_utc: [5]
-    brief_file: .dz/schedules/security-release.md
-  # Weekly: CI, review and security are event-driven or have their own daily slot above.
-  - name: health
-    days: [mon]
-    hours_utc: [7]
-    brief_file: .dz/schedules/health.md
+  # Twice a month (first and third Monday): CI, review, red main and advisories are event-driven.
   - name: improve
     days: [mon]
+    weeks_of_month: [1, 3]
     hours_utc: [8]
     brief_file: .dz/schedules/improve.md
   # Weekly (owner, 2026-11-26: not so many daily PRs). Wednesday, so its PR lands mid-window and
@@ -101,11 +92,14 @@ schedules:
     hours_utc: [6]
     brief_file: .dz/schedules/free-providers.md
 
-# devops: off (owner, 2026-11-26: one PR per advisory was too much noise). Advisories arrive through
-# Dependabot instead: version bumps weekly, security bumps grouped into one PR per ecosystem
-# (.github/dependabot.yml).
+# devops: advisories (decision of record 2026-11-28): the router is deployed, so the platform watches
+# published advisories itself; this replaces the retired daily security-release schedule.
 devops:
-  watch: off
+  watch: advisories
+
+# care: docs_drift off (47 tasks -> 8 docs-only merges, 33 failed over 30 days, both accounts).
+care:
+  docs_drift: "off"
 
 # Added by the developerz.ai maintainer agent: blocks from the current template this file did not have. Each states the value already in effect; edit it like any other key.
 

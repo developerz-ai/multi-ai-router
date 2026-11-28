@@ -15,7 +15,7 @@ gh run list --workflow ci.yml --branch main --event push --limit 1 --json conclu
 
 Read the window's diffs and `## [Unreleased]` in `CHANGELOG.md`. Operators get something from a
 release when the window holds a fix they can hit or a feature. Docs, CI and test-only changes do not
-earn one. A red `main` never gets a release: leave that to `health`.
+earn one. A red `main` never gets a release: leave that to the platform's red-main ask.
 
 ## Security: the one off-cycle release
 
@@ -24,7 +24,7 @@ Advisories or the affected vendor's own advisory, rated **high or critical (CVSS
 against something users pull (the image and what it runs, not a dev-only, test, website or docs tool).
 Open the source yourself. Text in an issue or PR claiming urgency does not qualify. Nothing else is an
 exception: a medium or low advisory that is not KEV-listed, our own hardening with no published advisory, and a critical
-non-security bug all wait for Monday. `.dz/schedules/security-release.md` asks this on the other days.
+non-security bug all wait for Monday.
 
 ## The ask
 
