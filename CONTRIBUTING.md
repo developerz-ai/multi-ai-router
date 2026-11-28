@@ -98,8 +98,7 @@ bump the version. Releases are weekly (owner, 2026-11-26): the Monday
 files a **Release due** issue; whoever takes it opens the release PR, which bumps the version in every file `docs/RELEASING.md` step 1
 lists, with `bin/verify-version` proving the tree agrees with itself. The one
 off-cycle release is a fix for a published advisory rated high or critical,
-or KEV-listed
-(`.dz/schedules/security-release.md`). Which digit the release moves is a
+or KEV-listed, cut only when the owner asks for it. Which digit the release moves is a
 rule, not a mood (#258), read off everything under `## [Unreleased]`:
 
 - An **addition** takes a **minor** bump (`2.37.9` → `2.38.0`): a new price
