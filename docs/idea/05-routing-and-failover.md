@@ -190,8 +190,8 @@ in the last minute (prod 2026-11-28, one NVIDIA free key: 36% of `/v1/messages` 
 `429` rate on one model went from 0.16 with nothing started in the minute before to 0.58 with seven).
 So a throttle's strikes outlive its hold: each `429` steps the hold one doubling up the breaker's
 backoff schedule, a run of `ROUTING_MODEL_THROTTLE_SUCCESSES_PER_STEP` successes (default 3) on that
-pair steps it one down, and the strikes are forgotten only after a whole `ROUTING_MAX_BACKOFF_MS`
-span with no `429`. A lapsed hold refuses nothing; it only remembers. Through 2.82.1 the strikes went
+pair steps it one down, and the strikes are forgotten only once a whole `ROUTING_MAX_BACKOFF_MS`
+span has passed since the last hold lapsed. A lapsed hold refuses nothing; it only remembers. Through 2.82.1 the strikes went
 with the hold, so with requests seconds apart every `429` restarted at the first one-second step and
 nothing was paced. Interleaved successes do not reset it: a strict alternation still climbs.
 

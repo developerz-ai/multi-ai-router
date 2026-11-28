@@ -21,8 +21,9 @@ export function refuseHeld(
   upstreamModel: string,
   now: Date,
   ttlMs: number,
+  options: BreakerOptions = {},
 ): Map<string, ModelRefusal> {
-  const kept = liveRefusals(state, now)
+  const kept = liveRefusals(state, now, options)
   kept.set(upstreamModel, { until: new Date(now.getTime() + ttlMs), reason: "unsupported" })
   return kept
 }
@@ -39,8 +40,8 @@ export const DEFAULT_MODEL_THROTTLE_SUCCESSES_PER_STEP = 3
  * requests and `200` to the rest, so its `429`s arrive seconds after the last hold lapsed; through
  * 2.82.1 a lapsed hold was dropped with its strikes and every `429` restarted the backoff at its
  * first step, which paced nothing (prod 2026-11-28, 36% of one NVIDIA key's requests). A strike is
- * now forgotten only by a run of successes ({@link servedHeld}) or a whole `maxBackoffMs` span with
- * no `429`; the hold length is what the model is paced to.
+ * now forgotten only by a run of successes ({@link servedHeld}) or a whole `maxBackoffMs` span past
+ * the last hold's lapse; the hold length is what the model is paced to.
  */
 export function throttleHeld(
   state: AccountHealthState,
@@ -60,14 +61,13 @@ export function throttleHeld(
   )
   if (tripped.cooldownUntil === undefined) return kept
   // A hold still standing is never shortened by a later, shorter one (the breaker's own rule).
-  const until =
-    prior !== undefined && prior.until.getTime() > tripped.cooldownUntil.getTime()
-      ? prior.until
-      : tripped.cooldownUntil
+  const standing = prior !== undefined && prior.until.getTime() > tripped.cooldownUntil.getTime()
+  // The label travels with the instant that wins.
+  const resetSource = standing ? prior.resetSource : tripped.cooldownSource
   kept.set(upstreamModel, {
-    until,
+    until: standing ? prior.until : tripped.cooldownUntil,
     reason: "rate-limited",
-    ...(tripped.cooldownSource === undefined ? {} : { resetSource: tripped.cooldownSource }),
+    ...(resetSource === undefined ? {} : { resetSource }),
     strikes: tripped.consecutiveFailures,
   })
   return kept
@@ -136,7 +136,9 @@ export function modelHoldMethods(
     refuseModel(accountId, upstreamModel, now) {
       const ttlMs = options.modelRefusalTtlMs
       if (ttlMs === undefined) return
-      write(accountId, { refusedModels: refuseHeld(read(accountId), upstreamModel, now, ttlMs) })
+      write(accountId, {
+        refusedModels: refuseHeld(read(accountId), upstreamModel, now, ttlMs, configured),
+      })
     },
     throttleModel(accountId, upstreamModel, failure, now, caller) {
       const state = read(accountId)

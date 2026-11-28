@@ -44,8 +44,11 @@ function setup(responses: (() => Response)[], modelThrottleWaitMs: number) {
 describe("a model throttle on the only account, failure case first", () => {
   test("the request waits the hold out and is served by the same account", async () => {
     const { app, upstream, health } = setup([throttle, throttle, ok], 5_000)
+    const started = performance.now()
     const served = await app.request("/v1/chat/completions", post(chat(), bearer()))
     expect(served.status).toBe(200)
+    // The retries really waited the holds out: 20 ms, then 40 ms.
+    expect(performance.now() - started).toBeGreaterThanOrEqual(55)
     await served.text()
     expect(upstream.calls).toHaveLength(3)
     // The account itself never cooled: only the model was held, and its strikes are kept.
